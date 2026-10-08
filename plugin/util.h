@@ -15,8 +15,9 @@ struct Config {
     std::string name = "Player";
     std::string joinAddress = "127.0.0.1";
     uint16_t port = 27960;
-    float snapDistance = 300.0f;    // client: teleport a puppet when further than this from host state
-    float destEpsilon = 5.0f;       // client: re-issue a destination when it moved more than this
+    float snapDistance = 50.0f;     // client: teleport a character when further than this from host state
+    float destEpsilon = 2.0f;       // client: re-issue a destination when it moved more than this
+    float interestRadius = 1500.0f; // host: NPCs this close to the squad are replicated
     bool overlay = true;
 };
 Config LoadConfig(const std::wstring& iniPath);   // creates the file with defaults if missing

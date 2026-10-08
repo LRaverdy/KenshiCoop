@@ -19,6 +19,7 @@ inline constexpr char kSupportedExeSha256[] = "A596AB4E407C67B58599C54FFB32DC1BF
 namespace rva {
 inline constexpr uintptr_t GameWorldInstance = 0x2134110;   // global `GameWorld ou` object
 inline constexpr uintptr_t HandleTable = 0x2133f90;         // first arg of the hand resolver
+inline constexpr uintptr_t GameClockOwner = 0x21303d0;      // pointer; +0xA0 = in-game hours (double)
 
 inline constexpr uintptr_t VtCharacter = 0x16f9eb8;
 inline constexpr uintptr_t VtCharacterHuman = 0x16f2848;
@@ -49,6 +50,10 @@ enum Fn : int {
     FnSetFrameSpeedMultiplier,  // void GameWorld::setFrameSpeedMultiplier(float)
     FnUserPause,                // void GameWorld::userPause(bool)
     FnHandleResolve,            // RootObject* resolve(HandleTable*, const hand*, bool)
+    FnTogglePause,              // void GameWorld::togglePause(bool)
+    FnMedApplyDamage,           // void MedicalSystem::applyDamage(HealthPartStatus*, const Damages&, bool loadingSavestate, bool canSever, const Vector3& force)
+    FnMedKnockout,              // void MedicalSystem::knockout(float skill01)
+    FnDeclareDead,              // void Character::declareDead()
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -59,6 +64,8 @@ namespace off {
 inline constexpr uintptr_t GW_frameSpeedMult = 0x700;  // float
 inline constexpr uintptr_t GW_player = 0x580;          // PlayerInterface*
 inline constexpr uintptr_t GW_paused = 0x8B9;          // bool
+inline constexpr uintptr_t GW_charUpdateList = 0x750;  // boost::unordered_set<Character*>: every active character
+inline constexpr uintptr_t Clock_hours = 0xA0;         // double, in the object at rva::GameClockOwner
 
 // PlayerInterface
 inline constexpr uintptr_t PI_selectedCharacters = 0x208;  // boost::unordered_set<hand>
@@ -88,6 +95,19 @@ inline constexpr uintptr_t RO_handle = 0x58;      // hand
 inline constexpr uintptr_t RO_rot = 0xB0;         // Ogre::Quaternion (w,x,y,z)
 inline constexpr uintptr_t CH_movement = 0x640;   // CharMovement*
 inline constexpr uintptr_t CH_ai = 0x650;         // AI*
+inline constexpr uintptr_t CH_medical = 0x458;    // MedicalSystem (inline)
+
+// MedicalSystem
+inline constexpr uintptr_t MS_blood = 0x70;          // float
+inline constexpr uintptr_t MS_koTimer = 0xA0;        // float
+inline constexpr uintptr_t MS_me = 0xE0;             // Character*
+inline constexpr uintptr_t MS_unconscious = 0x161;  // bool
+inline constexpr uintptr_t MS_dead = 0x164;          // bool
+inline constexpr uintptr_t MS_anatomy = 0x190;       // lektor<HealthPartStatus*>
+// HealthPartStatus
+inline constexpr uintptr_t HP_flesh = 0x40;
+inline constexpr uintptr_t HP_stun = 0x44;
+inline constexpr uintptr_t HP_bandage = 0x48;
 
 // CharMovement
 inline constexpr uintptr_t CM_currentlyMoving = 0x24;  // bool
@@ -130,6 +150,8 @@ PlayerInterface* Player();             // null when no game is loaded
 bool IsCharacter(const void* obj);
 
 void PlayerCharacters(std::vector<Character*>& out);
+void ActiveCharacters(std::vector<Character*>& out);   // every character the game is updating
+Character* Resolve(const kc::Handle& h);               // game handle -> live character (or null)
 void SelectedHandles(std::vector<kc::Handle>& out);
 bool GetHandle(const Character* c, kc::Handle& out);
 bool GetPosition(Character* c, kc::Vec3& out);
@@ -137,6 +159,13 @@ bool GetRotation(const Character* c, kc::Quat& out);
 bool GetMovement(const Character* c, kc::Vec3& dest, bool& moving, float& speed);
 bool IsDown(Character* c);
 Character* AICharacter(const AI* ai);
+Character* MedicalCharacter(const void* medical);
+bool ReadVitals(Character* c, kc::EntityVitals& out);
+bool IsDead(Character* c);
+bool IsUnconscious(Character* c);
+
+bool GetGameHours(double& out);
+bool SetGameHours(double hours);
 
 float GetFrameSpeed();
 bool GetPaused();
@@ -147,5 +176,11 @@ bool SetDestination(Character* c, const kc::Vec3& dest);
 bool Halt(Character* c);
 bool CallSetFrameSpeed(float speed);
 bool CallUserPause(bool paused);
+bool CallTogglePause(bool paused);
+// Writes host health into the local copy (does not trigger death/knockout by itself).
+bool WriteVitals(Character* c, const kc::EntityVitals& v);
+// The irreversible transitions; callers must hold a HostCallScope on clients.
+bool CallDeclareDead(Character* c);
+bool CallKnockout(Character* c);
 
 } // namespace kenshi

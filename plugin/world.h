@@ -14,19 +14,14 @@
 
 namespace kcp {
 
-struct HandleHash {
-    size_t operator()(const kc::Handle& h) const {
-        return std::hash<uint64_t>()((uint64_t(h.index) << 32) ^ h.serial ^ (uint64_t(h.type) << 48) ^ h.container);
-    }
-};
+using kc::HandleHash;
 
-// Immutable view published by the game thread each frame and read lock-free by hooks that may
-// run on other game threads (AI updates).
+// Immutable view published by the game thread each frame and read by hooks that may run on other
+// game threads (AI updates).
 struct HookView {
     bool active = false;   // a session is running
-    bool client = false;   // we are a client: replicated characters are puppets
-    std::unordered_set<const void*> replicated;    // client: characters driven by the host
-    std::unordered_set<const void*> foreign;       // characters this machine may not command
+    bool client = false;   // we are a client: the host simulates everything
+    std::unordered_set<const void*> squadForeign;  // squad members this machine may not command
     std::unordered_set<kc::Handle, HandleHash> controllable;  // handles this machine may command
 };
 
@@ -34,7 +29,7 @@ class KenshiWorld final : public kc::IWorld {
 public:
     explicit KenshiWorld(const Config& cfg);
 
-    void BeginFrame();   // refresh the character cache (game thread, once per tick)
+    void BeginFrame();   // refresh caches (game thread, once per tick)
     void EndFrame();     // enforce host time on clients, publish the hook view
 
     // IWorld
@@ -43,9 +38,12 @@ public:
     uint64_t GameBuild() override { return build_; }
     uint64_t ModsHash() override;
     void PlayerCharacters(std::vector<kc::Handle>& out) override;
-    bool Exists(const kc::Handle& h) override { return chars_.count(h) != 0; }
+    void NearbyCharacters(const std::vector<kc::Vec3>& centers, float radius, std::vector<kc::Handle>& out) override;
+    bool Exists(const kc::Handle& h) override { return Find(h) != nullptr; }
     bool Read(const kc::Handle& h, kc::EntityState& out) override;
+    bool ReadVitals(const kc::Handle& h, kc::EntityVitals& out) override;
     void Apply(const kc::Handle& h, const kc::EntityState& target, const kc::EntityState& latest) override;
+    void ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) override;
     bool Order(const kc::Handle& h, const kc::Command& c) override;
     void TakeLocalOrders(std::vector<std::pair<kc::Handle, kc::Command>>& out) override;
     kc::TimeState GetTime() override;
@@ -54,8 +52,9 @@ public:
     void SetControllable(const std::vector<kc::Handle>& handles) override;
 
     void SetGameBuild(uint64_t b) { build_ = b; }
-    kenshi::Character* Find(const kc::Handle& h) const;
-    size_t CharacterCount() const { return chars_.size(); }
+    kenshi::Character* Find(const kc::Handle& h);   // squad first, then any live character
+    kenshi::Character* FindSquad(const kc::Handle& h) const;
+    size_t CharacterCount() const { return squad_.size(); }
 
     // Called from hooks (game thread).
     void QueueLocalOrder(const kc::Handle& h, const kc::Command& c);
@@ -63,13 +62,14 @@ public:
     std::vector<std::string> TakeToasts();
 
     static std::shared_ptr<const HookView> View() { return view_.load(std::memory_order_acquire); }
-    // Cheap pre-check for very hot hooks (AI updates run for every character every frame).
+    // Cheap check for very hot hooks (AI and damage run for every character every frame).
     static bool ClientActive() { return clientActive_.load(std::memory_order_relaxed); }
 
 private:
     Config cfg_;
     uint64_t build_ = 0;
-    std::unordered_map<kc::Handle, kenshi::Character*, HandleHash> chars_;
+    std::unordered_map<kc::Handle, kenshi::Character*, HandleHash> squad_;      // this frame's squad
+    std::unordered_map<kc::Handle, kenshi::Character*, HandleHash> resolved_;   // this frame's lookups
     std::unordered_set<kc::Handle, HandleHash> controllable_;
     std::unordered_map<kc::Handle, kc::Vec3, HandleHash> lastDest_;   // client: destination last issued
     std::mutex ordersMutex_;

@@ -9,9 +9,13 @@ namespace {
 
 constexpr size_t kMaxChatLines = 50;
 constexpr double kBufferSeconds = 1.0;       // client keeps this much interpolation history
-constexpr double kBindSyncInterval = 0.5;
+constexpr double kInterestInterval = 0.5;
 constexpr double kPingInterval = 1.0;
 constexpr double kConnectTimeout = 10.0;
+constexpr double kPresenceInterval = 1.0;
+constexpr double kVitalsRefresh = 2.0;
+constexpr double kVitalsReapply = 0.25;      // client re-imposes host vitals this often
+constexpr float kInterestHysteresis = 1.25f; // NPCs are dropped only beyond radius * this
 
 float Dist(const Vec3& a, const Vec3& b) {
     const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
@@ -20,6 +24,7 @@ float Dist(const Vec3& a, const Vec3& b) {
 Vec3 Lerp(const Vec3& a, const Vec3& b, float t) {
     return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t};
 }
+float QuatDot(const Quat& a, const Quat& b) { return std::fabs(a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z); }
 Quat Nlerp(Quat a, const Quat& b, float t) {
     // take the short way round
     if (a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z < 0) { a.w = -a.w; a.x = -a.x; a.y = -a.y; a.z = -a.z; }
@@ -27,6 +32,13 @@ Quat Nlerp(Quat a, const Quat& b, float t) {
     const float len = std::sqrt(q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z);
     if (len > 1e-6f) { q.w /= len; q.x /= len; q.y /= len; q.z /= len; } else q = b;
     return q;
+}
+
+bool StateChanged(const EntityState& a, const EntityState& b) {
+    return Dist(a.pos, b.pos) > 0.02f || Dist(a.dest, b.dest) > 0.25f || a.flags != b.flags || QuatDot(a.rot, b.rot) < 0.99995f;
+}
+bool VitalsChanged(const EntityVitals& a, const EntityVitals& b) {
+    return std::fabs(a.blood - b.blood) > 0.05f || std::fabs(a.koTimer - b.koTimer) > 0.5f || a.flags != b.flags || a.parts != b.parts;
 }
 
 } // namespace
@@ -71,7 +83,7 @@ bool Session::Host(std::string* err) {
     lastError_.clear();
     world_.SetRole(false, true);
     controllableDirty_ = true;
-    nextBindSync_ = 0;
+    nextInterest_ = 0;
     log_("hosting on UDP port " + std::to_string(cfg_.port));
     return true;
 }
@@ -96,10 +108,12 @@ void Session::Leave() {
                            state_ == SessionState::Handshake || state_ == SessionState::Connecting;
     net_.Close();
     entities_.clear();
+    byHandle_.clear();
     players_.clear();
+    sync_.clear();
     pendingPeers_.clear();
     owners_.clear();
-    missing_ = 0;
+    missingSquad_ = 0;
     localId_ = 0;
     if (wasActive) {
         world_.SetRole(false, false);
@@ -136,9 +150,9 @@ void Session::HostTick(double now) {
         else ++it;
     }
 
-    if (now >= nextBindSync_) {
-        nextBindSync_ = now + kBindSyncInterval;
-        SyncBindings();
+    if (now >= nextInterest_) {
+        nextInterest_ = now + kInterestInterval;
+        UpdateInterest();
     }
     if (controllableDirty_) PushControllable();
 
@@ -155,20 +169,15 @@ void Session::HostTick(double now) {
         BroadcastReliable(w);
     }
 
-    if (now >= nextSnapshot_ && !players_.empty()) {
-        nextSnapshot_ = std::max(nextSnapshot_ + 1.0 / cfg_.snapshotRate, now - 0.5 / cfg_.snapshotRate);
-        Snapshot s;
-        s.tick = ++tick_;
-        s.hostTime = now;
-        s.entities.reserve(entities_.size());
-        for (auto& [id, e] : entities_) {
-            EntityState st;
-            if (!world_.Read(e.handle, st)) continue;
-            st.netId = id;
-            s.entities.push_back(st);
+    if (!players_.empty()) {
+        if (now >= nextSnapshot_) {
+            nextSnapshot_ = std::max(nextSnapshot_ + 1.0 / cfg_.snapshotRate, now - 0.5 / cfg_.snapshotRate);
+            SendSnapshots(now);
         }
-        for (const auto& pkt : EncodeSnapshot(s))
-            for (auto& [pid, p] : players_) net_.Send(p.peer, kChanSnapshot, pkt.data(), pkt.size(), false);
+        if (now >= nextVitals_) {
+            nextVitals_ = std::max(nextVitals_ + 1.0 / cfg_.vitalsRate, now - 0.5 / cfg_.vitalsRate);
+            SendVitals(now);
+        }
     }
 
     if (now >= nextPing_) {
@@ -177,34 +186,111 @@ void Session::HostTick(double now) {
     }
 }
 
-void Session::SyncBindings() {
-    scratchHandles_.clear();
-    world_.PlayerCharacters(scratchHandles_);
+void Session::UpdateInterest() {
+    for (auto& [id, e] : entities_) e.keep = false;
 
-    // unbind characters that left the player faction or no longer exist
-    for (auto it = entities_.begin(); it != entities_.end();) {
-        const Handle h = it->second.handle;
-        const bool keep = world_.Exists(h) &&
-                          std::find(scratchHandles_.begin(), scratchHandles_.end(), h) != scratchHandles_.end();
-        if (!keep) {
-            Writer w;
-            Encode(w, Unbind{it->first});
-            BroadcastReliable(w);
-            it = entities_.erase(it);
-            controllableDirty_ = true;
-        } else ++it;
-    }
-    // bind new ones
-    for (const Handle& h : scratchHandles_) {
-        if (!h.valid() || entityByHandle(h)) continue;
+    auto ensure = [this](const Handle& h, bool squad) -> Entity& {
+        auto it = byHandle_.find(h);
+        if (it != byHandle_.end()) {
+            Entity& e = entities_[it->second];
+            e.keep = true;
+            return e;
+        }
         Entity e;
         e.netId = nextNetId_++;
         e.handle = h;
-        e.owner = hostId_;
-        for (const auto& [oh, pid] : owners_) if (oh == h) e.owner = pid;
-        auto& ref = entities_[e.netId] = std::move(e);
+        e.squad = squad;
+        e.owner = squad ? hostId_ : 0;
+        if (squad)
+            for (const auto& [oh, pid] : owners_) if (oh == h) e.owner = pid;
+        e.keep = true;
+        byHandle_[h] = e.netId;
+        Entity& ref = entities_[e.netId] = std::move(e);
         for (auto& [pid, p] : players_) SendBind(ref, p.peer);
-        controllableDirty_ = true;
+        if (squad) controllableDirty_ = true;
+        return ref;
+    };
+
+    // The squad is always replicated, and its members are the centres of interest.
+    scratchHandles_.clear();
+    world_.PlayerCharacters(scratchHandles_);
+    std::vector<Vec3> centers;
+    for (const Handle& h : scratchHandles_) {
+        if (!h.valid()) continue;
+        ensure(h, true);
+        EntityState st;
+        if (world_.Read(h, st)) centers.push_back(st.pos);
+    }
+
+    if (!centers.empty()) {
+        scratchHandles_.clear();
+        world_.NearbyCharacters(centers, cfg_.interestRadius, scratchHandles_);
+        for (const Handle& h : scratchHandles_) if (h.valid()) ensure(h, false);
+        // hysteresis: an NPC slightly outside the radius stays bound, to avoid bind/unbind flapping
+        const float outer = cfg_.interestRadius * kInterestHysteresis;
+        for (auto& [id, e] : entities_) {
+            if (e.keep || e.squad) continue;
+            EntityState st;
+            if (!world_.Read(e.handle, st)) continue;
+            for (const Vec3& c : centers) if (Dist(c, st.pos) <= outer) { e.keep = true; break; }
+        }
+    }
+
+    for (auto it = entities_.begin(); it != entities_.end();) {
+        if (it->second.keep) { ++it; continue; }
+        Writer w;
+        Encode(w, Unbind{it->first});
+        BroadcastReliable(w);
+        if (it->second.squad) controllableDirty_ = true;
+        for (auto& [pid, s] : sync_) s.sent.erase(it->first);
+        byHandle_.erase(it->second.handle);
+        it = entities_.erase(it);
+    }
+}
+
+void Session::SendSnapshots(double now) {
+    stateCache_.clear();
+    for (auto& [id, e] : entities_) {
+        EntityState st;
+        if (world_.Read(e.handle, st)) { st.netId = id; stateCache_[id] = st; }
+    }
+    for (auto& [pid, p] : players_) {
+        auto& sent = sync_[pid].sent;
+        Snapshot s;
+        s.tick = ++tick_;
+        s.hostTime = now;
+        for (const auto& [id, st] : stateCache_) {
+            Sent& last = sent[id];
+            const bool moving = (st.flags & kFlagMoving) != 0;
+            if (!moving && !StateChanged(st, last.state) && now - last.at < cfg_.refreshInterval) continue;
+            last.state = st;
+            last.at = now;
+            s.entities.push_back(st);
+        }
+        if (s.entities.empty()) continue;
+        for (const auto& pkt : EncodeSnapshot(s)) net_.Send(p.peer, kChanSnapshot, pkt.data(), pkt.size(), false);
+    }
+}
+
+void Session::SendVitals(double now) {
+    vitalsCache_.clear();
+    for (auto& [id, e] : entities_) {
+        EntityVitals v;
+        if (world_.ReadVitals(e.handle, v)) { v.netId = id; vitalsCache_[id] = std::move(v); }
+    }
+    for (auto& [pid, p] : players_) {
+        auto& sent = sync_[pid].sent;
+        VitalsMsg m;
+        m.tick = tick_;
+        for (const auto& [id, v] : vitalsCache_) {
+            Sent& last = sent[id];
+            if (!VitalsChanged(v, last.vitals) && now - last.vitalsAt < kVitalsRefresh) continue;
+            last.vitals = v;
+            last.vitalsAt = now;
+            m.entities.push_back(v);
+        }
+        if (m.entities.empty()) continue;
+        for (const auto& pkt : EncodeVitals(m)) net_.Send(p.peer, kChanVitals, pkt.data(), pkt.size(), false);
     }
 }
 
@@ -213,6 +299,7 @@ void Session::SendBind(const Entity& e, PeerId to) {
     b.netId = e.netId;
     b.handle = e.handle;
     b.owner = e.owner;
+    b.squad = e.squad;
     Writer w;
     Encode(w, b);
     SendReliable(to, w);
@@ -223,7 +310,7 @@ void Session::Assign(const Handle& h, uint8_t playerId) {
     if (playerId != hostId_ && !players_.count(playerId)) return;
     auto it = std::find_if(owners_.begin(), owners_.end(), [&](auto& o) { return o.first == h; });
     if (it != owners_.end()) it->second = playerId; else owners_.emplace_back(h, playerId);
-    if (Entity* e = entityByHandle(h)) {
+    if (Entity* e = entityByHandle(h); e && e->squad) {
         e->owner = playerId;
         for (auto& [pid, p] : players_) SendBind(*e, p.peer);  // Bind doubles as an ownership update
     }
@@ -233,7 +320,7 @@ void Session::Assign(const Handle& h, uint8_t playerId) {
 void Session::PushControllable() {
     controllableDirty_ = false;
     std::vector<Handle> mine;
-    for (auto& [id, e] : entities_) if (e.owner == localId_) mine.push_back(e.handle);
+    for (auto& [id, e] : entities_) if (e.squad && e.owner == localId_) mine.push_back(e.handle);
     world_.SetControllable(mine);
 }
 
@@ -279,6 +366,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         np.name = h.name;
         np.peer = peer;
         players_[id] = np;
+        sync_[id] = PlayerSync{};
         for (auto& [nid, e] : entities_) SendBind(e, peer);
         Writer t;
         Encode(t, world_.GetTime());
@@ -321,7 +409,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
 void Session::ApplyCommand(uint8_t from, const Command& c) {
     auto it = entities_.find(c.netId);
     if (it == entities_.end()) return;
-    if (it->second.owner != from) {
+    if (!it->second.squad || it->second.owner != from) {
         log_("ignored command for a character player " + std::to_string(from) + " does not own");
         return;
     }
@@ -338,13 +426,19 @@ void Session::ClientTick(double now) {
     if (!world_.Ready()) { Fail("world unloaded"); return; }
     if (controllableDirty_) PushControllable();
 
+    // NPCs stream in and out of the local world as zones load: re-resolve the missing ones.
+    if (now >= nextPresenceCheck_) {
+        nextPresenceCheck_ = now + kPresenceInterval;
+        for (auto& [id, e] : entities_) e.present = world_.Exists(e.handle);
+    }
+
     // Local orders never execute locally: they become commands, the host runs them, and the
     // result comes back through snapshots.
     scratchOrders_.clear();
     world_.TakeLocalOrders(scratchOrders_);
     for (auto& [h, cmd] : scratchOrders_) {
         Entity* e = entityByHandle(h);
-        if (!e || e->owner != localId_) continue;
+        if (!e || !e->squad || e->owner != localId_) continue;
         Command c = cmd;
         c.seq = ++cmdSeq_;
         c.netId = e->netId;
@@ -358,6 +452,12 @@ void Session::ClientTick(double now) {
     for (auto& [id, e] : entities_) {
         if (!e.present || e.buf.empty()) continue;
         world_.Apply(e.handle, Interpolate(e, renderTime), e.buf.back().s);
+    }
+    // Local simulation (bleeding, healing...) keeps nudging health: re-impose the host's values.
+    if (now >= nextVitalsApply_) {
+        nextVitalsApply_ = now + kVitalsReapply;
+        for (auto& [id, e] : entities_)
+            if (e.present && e.haveVitals) world_.ApplyVitals(e.handle, e.vitals);
     }
 
     if (now >= nextPing_) {
@@ -433,17 +533,20 @@ void Session::ClientPacket(Msg type, Reader& r) {
         if (!Decode(r, m)) break;
         Entity& e = entities_[m.netId];
         const bool isNew = e.netId == 0;
+        if (!isNew && e.handle != m.handle) byHandle_.erase(e.handle);
         e.netId = m.netId;
         e.handle = m.handle;
         e.owner = m.owner;
+        e.squad = m.squad;
+        byHandle_[m.handle] = m.netId;
         if (isNew) {
             e.present = world_.Exists(m.handle);
-            if (!e.present) {
-                ++missing_;
-                log_("host character not found in local world (save mismatch?) netId=" + std::to_string(m.netId));
+            if (!e.present && e.squad) {
+                ++missingSquad_;
+                log_("host squad member not found in local world (save mismatch?) netId=" + std::to_string(m.netId));
             }
         }
-        controllableDirty_ = true;
+        if (e.squad) controllableDirty_ = true;
         break;
     }
     case Msg::Unbind: {
@@ -451,9 +554,12 @@ void Session::ClientPacket(Msg type, Reader& r) {
         if (!Decode(r, m)) break;
         auto it = entities_.find(m.netId);
         if (it == entities_.end()) break;
-        if (!it->second.present && missing_) --missing_;
+        if (it->second.squad) {
+            controllableDirty_ = true;
+            if (!it->second.present && missingSquad_) --missingSquad_;
+        }
+        byHandle_.erase(it->second.handle);
         entities_.erase(it);
-        controllableDirty_ = true;
         break;
     }
     case Msg::Snapshot: {
@@ -469,8 +575,24 @@ void Session::ClientPacket(Msg type, Reader& r) {
             if (it == entities_.end()) continue;  // snapshot raced ahead of its Bind
             auto& buf = it->second.buf;
             if (!buf.empty() && buf.back().t >= s.hostTime) continue;  // stale or duplicate
+            // Unchanged entities are only refreshed now and then: after such a gap, assume the
+            // entity stood still until just before this sample instead of sliding across the gap.
+            const double step = 1.0 / cfg_.snapshotRate;
+            if (!buf.empty() && s.hostTime - buf.back().t > 1.5 * step) buf.push_back({s.hostTime - step, buf.back().s});
             buf.push_back({s.hostTime, st});
             while (buf.size() > 2 && buf.front().t < s.hostTime - kBufferSeconds) buf.pop_front();
+        }
+        break;
+    }
+    case Msg::Vitals: {
+        VitalsMsg m;
+        if (!Decode(r, m)) break;
+        for (auto& v : m.entities) {
+            auto it = entities_.find(v.netId);
+            if (it == entities_.end()) continue;
+            it->second.vitals = std::move(v);
+            it->second.haveVitals = true;
+            if (it->second.present) world_.ApplyVitals(it->second.handle, it->second.vitals);
         }
         break;
     }
@@ -490,8 +612,9 @@ void Session::OnPacket(PeerId peer, uint8_t chan, const uint8_t* data, size_t si
     Reader r(data, size);
     const auto type = PeekType(r);
     if (!type) return;
-    // Snapshots only travel on the snapshot channel, everything else on the reliable one.
-    if ((*type == Msg::Snapshot) != (chan == kChanSnapshot)) return;
+    // Each message type travels on exactly one channel.
+    const uint8_t expected = *type == Msg::Snapshot ? kChanSnapshot : *type == Msg::Vitals ? kChanVitals : kChanReliable;
+    if (chan != expected) return;
     if (net_.isServer()) HostPacket(peer, *type, r);
     else ClientPacket(*type, r);
 }
@@ -507,6 +630,7 @@ void Session::OnDisconnect(PeerId peer) {
     const uint8_t id = pl->id;
     const std::string name = pl->name;
     players_.erase(id);
+    sync_.erase(id);
     // the leaver's characters go back to the host so they are never left uncontrolled
     for (auto& o : owners_) if (o.second == id) o.second = hostId_;
     for (auto& [nid, e] : entities_) {
@@ -558,13 +682,29 @@ RemotePlayer* Session::playerByPeer(PeerId p) {
 }
 
 Session::Entity* Session::entityByHandle(const Handle& h) {
-    for (auto& [id, e] : entities_) if (e.handle == h) return &e;
-    return nullptr;
+    auto it = byHandle_.find(h);
+    if (it == byHandle_.end()) return nullptr;
+    auto e = entities_.find(it->second);
+    return e == entities_.end() ? nullptr : &e->second;
 }
 
 uint8_t Session::ownerOf(const Handle& h) const {
-    for (auto& [id, e] : entities_) if (e.handle == h) return e.owner;
-    return 0;
+    auto it = byHandle_.find(h);
+    if (it == byHandle_.end()) return 0;
+    auto e = entities_.find(it->second);
+    return e == entities_.end() ? 0 : e->second.owner;
+}
+
+size_t Session::npcCount() const {
+    size_t n = 0;
+    for (auto& [id, e] : entities_) if (!e.squad) ++n;
+    return n;
+}
+
+uint32_t Session::missingNpcs() const {
+    uint32_t n = 0;
+    for (auto& [id, e] : entities_) if (!e.squad && !e.present) ++n;
+    return n;
 }
 
 uint32_t Session::pingMs() const {

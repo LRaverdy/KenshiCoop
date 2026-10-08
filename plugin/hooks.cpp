@@ -25,6 +25,9 @@ using SetOrderFn = void (*)(void* pi, int order);
 using StopMoveFn = void (*)(void* pi);
 using MoveOrderFn = void (*)(void* chr, void* building, void* subject, const float* loc);
 using AIUpdateFn = void (*)(void* ai, float t);
+using MedDamageFn = void (*)(void* med, void* part, const void* damage, bool loadingSavestate, bool canSever, const float* force);
+using MedKnockoutFn = void (*)(void* med, float skill01);
+using DeclareDeadFn = void (*)(void* chr);
 
 MainLoopFn o_mainLoop = nullptr;
 PlayerMoveFn o_playerMove = nullptr;
@@ -35,6 +38,9 @@ StopMoveFn o_stopMove = nullptr;
 MoveOrderFn o_moveOrder = nullptr;
 AIUpdateFn o_aiUpdate4 = nullptr;
 AIUpdateFn o_aiPeriodic = nullptr;
+MedDamageFn o_medDamage = nullptr;
+MedKnockoutFn o_medKnockout = nullptr;
+DeclareDeadFn o_declareDead = nullptr;
 
 void SafeTick() {
     // C++ exceptions must never unwind into game code.
@@ -148,24 +154,32 @@ void hk_stopMove(void* pi) {
 void hk_moveOrder(void* chr, void* building, void* subject, const float* loc) {
     if (!g_hostCall) {
         auto v = KenshiWorld::View();
-        if (v->active && (v->foreign.count(chr) || (v->client && v->replicated.count(chr)))) return;
+        if (v->active && (v->client || v->squadForeign.count(chr))) return;
     }
     o_moveOrder(chr, building, subject, loc);
 }
 
-// Clients: replicated characters have no local brain; the host decides everything they do.
-bool SkipAI(void* ai) {
-    if (!KenshiWorld::ClientActive()) return false;
-    auto v = KenshiWorld::View();
-    if (!v->active || !v->client || v->replicated.empty()) return false;
-    const void* c = kenshi::AICharacter(static_cast<kenshi::AI*>(ai));
-    return c && v->replicated.count(c);
-}
+// Clients have no brains at all: the host's world decides what every character does.
 void hk_aiUpdate4(void* ai, float t) {
-    if (!SkipAI(ai)) o_aiUpdate4(ai, t);
+    if (!KenshiWorld::ClientActive()) o_aiUpdate4(ai, t);
 }
 void hk_aiPeriodic(void* ai, float t) {
-    if (!SkipAI(ai)) o_aiPeriodic(ai, t);
+    if (!KenshiWorld::ClientActive()) o_aiPeriodic(ai, t);
+}
+
+// Clients never decide damage, knockouts or deaths: only the host's values (applied by
+// KenshiCoop inside a HostCallScope) and save-game loading may change health.
+void hk_medDamage(void* med, void* part, const void* damage, bool loadingSavestate, bool canSever, const float* force) {
+    if (KenshiWorld::ClientActive() && !g_hostCall && !loadingSavestate) return;
+    o_medDamage(med, part, damage, loadingSavestate, canSever, force);
+}
+void hk_medKnockout(void* med, float skill01) {
+    if (KenshiWorld::ClientActive() && !g_hostCall) return;
+    o_medKnockout(med, skill01);
+}
+void hk_declareDead(void* chr) {
+    if (KenshiWorld::ClientActive() && !g_hostCall) return;
+    o_declareDead(chr);
 }
 
 bool CallMoveOrderSEH(void* chr, const float* pos) {
@@ -209,6 +223,9 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnPlayerMoveOrderDefault, reinterpret_cast<void*>(&hk_moveOrder), reinterpret_cast<void**>(&o_moveOrder)},
         {kenshi::FnAIUpdate4Frame, reinterpret_cast<void*>(&hk_aiUpdate4), reinterpret_cast<void**>(&o_aiUpdate4)},
         {kenshi::FnAIPeriodicUpdate, reinterpret_cast<void*>(&hk_aiPeriodic), reinterpret_cast<void**>(&o_aiPeriodic)},
+        {kenshi::FnMedApplyDamage, reinterpret_cast<void*>(&hk_medDamage), reinterpret_cast<void**>(&o_medDamage)},
+        {kenshi::FnMedKnockout, reinterpret_cast<void*>(&hk_medKnockout), reinterpret_cast<void**>(&o_medKnockout)},
+        {kenshi::FnDeclareDead, reinterpret_cast<void*>(&hk_declareDead), reinterpret_cast<void**>(&o_declareDead)},
     };
     const MH_STATUS init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {

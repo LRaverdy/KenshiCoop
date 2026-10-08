@@ -21,6 +21,10 @@ const FunctionSig kFunctions[FnCount] = {
     {"GameWorld::setFrameSpeedMultiplier", 0x787CB0, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48}},
     {"GameWorld::userPause", 0x787FB0, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x48, 0x89}},
     {"HandleTable::resolve", 0x2676E0, {0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B}},
+    {"GameWorld::togglePause", 0x787D40, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48}},
+    {"MedicalSystem::applyDamage", 0x64F300, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
+    {"MedicalSystem::knockout", 0x644980, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0xF3, 0x0F, 0x10, 0x05, 0xA6, 0xF4}},
+    {"Character::declareDead", 0x7A6200, {0x48, 0x8B, 0xC4, 0x55, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48}},
 };
 
 namespace {
@@ -120,6 +124,47 @@ bool CallBoolArg(void* fn, void* self, bool v) {
     }
 }
 
+using FnResolve = void* (*)(void* table, const void* hand, bool flag);
+void* CallResolve(void* fn, void* table, const void* hand) {
+    __try {
+        return reinterpret_cast<FnResolve>(fn)(table, hand, true);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+using FnMedFloat = void (*)(void* med, float v);
+bool CallMedFloat(void* fn, void* med, float v) {
+    __try {
+        reinterpret_cast<FnMedFloat>(fn)(med, v);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+template <class T>
+bool Wr(void* p, uintptr_t offset, const T& v) {
+    if (!p) return false;
+    return SafeCopy(reinterpret_cast<uint8_t*>(p) + offset, &v, sizeof(T));
+}
+
+// Reads a boost::unordered_set of pointers (Kenshi's layout: see off::US_*).
+void ReadPointerSet(const void* set, std::vector<void*>& out, size_t cap) {
+    uint64_t size = 0, bucketCount = 0;
+    void** buckets = nullptr;
+    if (!Rd(set, off::US_size, size) || size == 0 || size > cap) return;
+    if (!Rd(set, off::US_bucketCount, bucketCount) || !Rd(set, off::US_buckets, buckets) || !buckets || bucketCount > (1u << 24)) return;
+    void* node = nullptr;
+    if (!Rd(buckets, bucketCount * sizeof(void*), node)) return;
+    for (uint64_t i = 0; node && i < size; ++i) {
+        void* v = nullptr;
+        if (!Rd(node, off::USNode_value, v)) return;
+        out.push_back(v);
+        if (!Rd(node, off::USNode_next, node)) return;
+    }
+}
+
 void* VSlot(const void* obj, uintptr_t slotOffset) {
     const uintptr_t vt = Vtable(obj);
     if (!vt) return nullptr;
@@ -128,6 +173,10 @@ void* VSlot(const void* obj, uintptr_t slotOffset) {
 }
 
 bool Finite(const kc::Vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
+
+void* Medical(const Character* c) {
+    return IsCharacter(c) ? reinterpret_cast<uint8_t*>(const_cast<Character*>(c)) + off::CH_medical : nullptr;
+}
 
 void* Movement(const Character* c) {
     void* m = nullptr;
@@ -217,6 +266,36 @@ void SelectedHandles(std::vector<kc::Handle>& out) {
     }
 }
 
+void ActiveCharacters(std::vector<Character*>& out) {
+    out.clear();
+    GameWorld* w = World();
+    if (!w) return;
+    std::vector<void*> raw;
+    ReadPointerSet(reinterpret_cast<const uint8_t*>(w) + off::GW_charUpdateList, raw, 65536);
+    for (void* p : raw) if (IsCharacter(p)) out.push_back(static_cast<Character*>(p));
+}
+
+Character* Resolve(const kc::Handle& h) {
+    // Build a real `hand` (its vtable pointer is copied from a live one) and ask the game.
+    static uintptr_t handVtable = 0;
+    if (!handVtable) {
+        std::vector<Character*> squad;
+        PlayerCharacters(squad);
+        if (squad.empty() || !Rd(squad.front(), off::RO_handle, handVtable) || !handVtable) return nullptr;
+    }
+    alignas(8) uint8_t raw[off::HandSize] = {};
+    std::memcpy(raw, &handVtable, 8);
+    std::memcpy(raw + off::H_type, &h.type, 4);
+    std::memcpy(raw + off::H_container, &h.container, 4);
+    std::memcpy(raw + off::H_containerSerial, &h.containerSerial, 4);
+    std::memcpy(raw + off::H_index, &h.index, 4);
+    std::memcpy(raw + off::H_serial, &h.serial, 4);
+    void* obj = CallResolve(FnAddr(FnHandleResolve), reinterpret_cast<void*>(Addr(rva::HandleTable)), raw);
+    if (!IsCharacter(obj)) return nullptr;
+    kc::Handle check;   // the resolver must hand back exactly that object
+    return GetHandle(static_cast<Character*>(obj), check) && check == h ? static_cast<Character*>(obj) : nullptr;
+}
+
 bool GetHandle(const Character* c, kc::Handle& out) {
     return IsCharacter(c) && ReadHandle(reinterpret_cast<const uint8_t*>(c) + off::RO_handle, out);
 }
@@ -257,6 +336,94 @@ Character* AICharacter(const AI* ai) {
     return IsCharacter(c) ? c : nullptr;
 }
 
+Character* MedicalCharacter(const void* medical) {
+    Character* c = nullptr;
+    if (!medical || !Rd(medical, off::MS_me, c) || !IsCharacter(c)) return nullptr;
+    return Medical(c) == medical ? c : nullptr;
+}
+
+bool ReadVitals(Character* c, kc::EntityVitals& out) {
+    void* m = Medical(c);
+    if (!m) return false;
+    bool unc = false, dead = false;
+    if (!Rd(m, off::MS_blood, out.blood) || !Rd(m, off::MS_koTimer, out.koTimer) ||
+        !Rd(m, off::MS_unconscious, unc) || !Rd(m, off::MS_dead, dead))
+        return false;
+    if (!std::isfinite(out.blood) || !std::isfinite(out.koTimer)) return false;
+    out.flags = uint8_t((unc ? kc::kVitUnconscious : 0) | (dead ? kc::kVitDead : 0));
+    out.parts.clear();
+    const auto* lk = reinterpret_cast<const uint8_t*>(m) + off::MS_anatomy;
+    uint32_t count = 0;
+    void** data = nullptr;
+    if (!Rd(lk, off::LK_count, count) || !Rd(lk, off::LK_data, data) || !data || count > kc::kMaxBodyParts) return true;
+    for (uint32_t i = 0; i < count; ++i) {
+        void* part = nullptr;
+        kc::PartVitals pv;
+        if (!Rd(data, i * sizeof(void*), part) || !part || !Rd(part, off::HP_flesh, pv.flesh) ||
+            !Rd(part, off::HP_stun, pv.stun) || !Rd(part, off::HP_bandage, pv.bandage) ||
+            !std::isfinite(pv.flesh) || !std::isfinite(pv.stun) || !std::isfinite(pv.bandage)) {
+            out.parts.clear();
+            return true;
+        }
+        out.parts.push_back(pv);
+    }
+    return true;
+}
+
+bool WriteVitals(Character* c, const kc::EntityVitals& v) {
+    void* m = Medical(c);
+    if (!m) return false;
+    Wr(m, off::MS_blood, v.blood);
+    Wr(m, off::MS_koTimer, v.koTimer);
+    const auto* lk = reinterpret_cast<const uint8_t*>(m) + off::MS_anatomy;
+    uint32_t count = 0;
+    void** data = nullptr;
+    // same save + same race => same anatomy; anything else is left alone
+    if (!Rd(lk, off::LK_count, count) || !Rd(lk, off::LK_data, data) || !data || count != v.parts.size()) return true;
+    for (uint32_t i = 0; i < count; ++i) {
+        void* part = nullptr;
+        if (!Rd(data, i * sizeof(void*), part) || !part) continue;
+        Wr(part, off::HP_flesh, v.parts[i].flesh);
+        Wr(part, off::HP_stun, v.parts[i].stun);
+        Wr(part, off::HP_bandage, v.parts[i].bandage);
+    }
+    return true;
+}
+
+bool IsDead(Character* c) {
+    bool v = false;
+    void* m = Medical(c);
+    return m && Rd(m, off::MS_dead, v) && v;
+}
+
+bool IsUnconscious(Character* c) {
+    bool v = false;
+    void* m = Medical(c);
+    return m && Rd(m, off::MS_unconscious, v) && v;
+}
+
+bool CallDeclareDead(Character* c) {
+    return IsCharacter(c) && CallVoid(FnAddr(FnDeclareDead), c);
+}
+
+bool CallKnockout(Character* c) {
+    void* m = Medical(c);
+    return m && CallMedFloat(FnAddr(FnMedKnockout), m, 0.0f);
+}
+
+bool GetGameHours(double& out) {
+    void* clock = nullptr;
+    if (!Rd(reinterpret_cast<void*>(Addr(rva::GameClockOwner)), 0, clock) || !clock) return false;
+    return Rd(clock, off::Clock_hours, out) && std::isfinite(out) && out >= 0;
+}
+
+bool SetGameHours(double hours) {
+    void* clock = nullptr;
+    if (!std::isfinite(hours) || hours < 0) return false;
+    if (!Rd(reinterpret_cast<void*>(Addr(rva::GameClockOwner)), 0, clock) || !clock) return false;
+    return Wr(clock, off::Clock_hours, hours);
+}
+
 float GetFrameSpeed() {
     float v = 1.0f;
     GameWorld* w = World();
@@ -295,6 +462,11 @@ bool Halt(Character* c) {
 bool CallSetFrameSpeed(float speed) {
     GameWorld* w = World();
     return w && std::isfinite(speed) && CallFloat(FnAddr(FnSetFrameSpeedMultiplier), w, speed);
+}
+
+bool CallTogglePause(bool paused) {
+    GameWorld* w = World();
+    return w && CallBoolArg(FnAddr(FnTogglePause), w, paused);
 }
 
 bool CallUserPause(bool paused) {

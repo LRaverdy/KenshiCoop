@@ -112,6 +112,7 @@ void Encode(Writer& w, const Bind& m) {
     w.u8(uint8_t(m.kind));
     PutHandle(w, m.handle);
     w.u8(m.owner);
+    w.boolean(m.squad);
 }
 bool Decode(Reader& r, Bind& m) {
     m.netId = GetU32Var(r);
@@ -120,6 +121,7 @@ bool Decode(Reader& r, Bind& m) {
     m.kind = EntityKind(k);
     m.handle = GetHandle(r);
     m.owner = r.u8();
+    m.squad = r.boolean();
     return Done(r) && m.netId != 0;
 }
 
@@ -187,11 +189,72 @@ bool Decode(Reader& r, Command& m) {
     return Done(r) && m.netId != 0;
 }
 
-void Encode(Writer& w, const TimeState& m) { w.u8(uint8_t(Msg::TimeState)); w.f32(m.speed); w.boolean(m.paused); }
+void Encode(Writer& w, const TimeState& m) {
+    w.u8(uint8_t(Msg::TimeState));
+    w.f32(m.speed);
+    w.boolean(m.paused);
+    w.f64(m.gameHours);
+}
 bool Decode(Reader& r, TimeState& m) {
     m.speed = r.f32();
     m.paused = r.boolean();
-    return Done(r) && m.speed >= 0.0f && m.speed <= 16.0f;
+    m.gameHours = r.f64();
+    return Done(r) && m.speed >= 0.0f && m.speed <= 16.0f && m.gameHours >= 0.0;
+}
+
+namespace {
+void PutVitals(Writer& w, const EntityVitals& e) {
+    w.varint(e.netId);
+    w.f32(e.blood);
+    w.f32(e.koTimer);
+    w.u8(e.flags);
+    w.u8(uint8_t(e.parts.size()));
+    for (const auto& p : e.parts) { w.f32(p.flesh); w.f32(p.stun); w.f32(p.bandage); }
+}
+constexpr size_t kMinVitalsBytes = 1 + 4 + 4 + 1 + 1;
+} // namespace
+
+std::vector<std::vector<uint8_t>> EncodeVitals(const VitalsMsg& v, size_t budget) {
+    std::vector<std::vector<uint8_t>> out;
+    size_t i = 0;
+    do {
+        Writer w(budget + 64);
+        w.u8(uint8_t(Msg::Vitals));
+        w.u32(v.tick);
+        const size_t countAt = w.size();
+        w.u16(0);
+        uint16_t n = 0;
+        Writer tmp(256);
+        while (i < v.entities.size() && n < kMaxEntitiesPerMsg) {
+            tmp.clear();
+            PutVitals(tmp, v.entities[i]);
+            if (n > 0 && w.size() + tmp.size() > budget) break;
+            w.bytes(tmp.data(), tmp.size());
+            ++n; ++i;
+        }
+        std::memcpy(w.vec().data() + countAt, &n, 2);
+        out.push_back(std::move(w.vec()));
+    } while (i < v.entities.size());
+    return out;
+}
+
+bool Decode(Reader& r, VitalsMsg& m) {
+    m.tick = r.u32();
+    const uint16_t n = r.u16();
+    if (n > kMaxEntitiesPerMsg || size_t(n) * kMinVitalsBytes > r.remaining()) return false;
+    m.entities.resize(n);
+    for (auto& e : m.entities) {
+        e.netId = GetU32Var(r);
+        e.blood = r.f32();
+        e.koTimer = r.f32();
+        e.flags = r.u8();
+        const uint8_t np = r.u8();
+        if (np > kMaxBodyParts || size_t(np) * 12 > r.remaining()) return false;
+        e.parts.resize(np);
+        for (auto& p : e.parts) { p.flesh = r.f32(); p.stun = r.f32(); p.bandage = r.f32(); }
+        if (!r.ok() || e.netId == 0) return false;
+    }
+    return Done(r);
 }
 
 void EncodePing(Writer& w, const Ping& m, bool pong) { w.u8(uint8_t(pong ? Msg::Pong : Msg::Ping)); w.f64(m.t); }
@@ -199,7 +262,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Pong)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Vitals)) return std::nullopt;
     return Msg(t);
 }
 

@@ -84,8 +84,10 @@ Config LoadConfig(const std::wstring& ini) {
             "\r\n"
             "[sync]\r\n"
             "; a remote character further than this from the host position is teleported\r\n"
-            "snap_distance=300\r\n"
-            "destination_epsilon=5\r\n"
+            "snap_distance=50\r\n"
+            "destination_epsilon=2\r\n"
+            "; NPCs within this distance of the squad are replicated to clients\r\n"
+            "interest_radius=1500\r\n"
             "\r\n"
             "[ui]\r\n"
             "overlay=1\r\n";
@@ -110,6 +112,7 @@ Config LoadConfig(const std::wstring& ini) {
     if (port >= 1 && port <= 65535) c.port = uint16_t(port);
     c.snapDistance = float(num(L"sync", L"snap_distance", c.snapDistance));
     c.destEpsilon = float(num(L"sync", L"destination_epsilon", c.destEpsilon));
+    c.interestRadius = float(num(L"sync", L"interest_radius", c.interestRadius));
     c.overlay = num(L"ui", L"overlay", 1) != 0;
     return c;
 }

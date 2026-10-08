@@ -8,6 +8,7 @@
 // Transport: ENet, one message per packet.
 //   channel 0  reliable, ordered      : session, binding, commands, events
 //   channel 1  unreliable, sequenced  : snapshots (newest wins, stale ones are dropped by ENet)
+//   channel 2  unreliable, sequenced  : vitals (health), on its own channel so it never races snapshots
 #pragma once
 #include <array>
 #include <cstdint>
@@ -20,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 1;
+constexpr uint16_t kProtocolVersion = 2;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -29,7 +30,7 @@ constexpr size_t kMaxPacketSize = 64 * 1024;   // ENet refuses anything larger o
 constexpr size_t kSnapshotBudget = 1100;       // bytes per snapshot packet, stays under one MTU
 constexpr uint32_t kMaxEntitiesPerMsg = 512;
 
-enum Channel : uint8_t { kChanReliable = 0, kChanSnapshot = 1, kChannelCount = 2 };
+enum Channel : uint8_t { kChanReliable = 0, kChanSnapshot = 1, kChanVitals = 2, kChannelCount = 3 };
 
 enum class Msg : uint8_t {
     Hello = 1,        // C->S
@@ -45,6 +46,7 @@ enum class Msg : uint8_t {
     TimeState = 11,   // S->C
     Ping = 12,        // both
     Pong = 13,        // both
+    Vitals = 14,      // S->C  (unreliable)
 };
 
 enum class RejectReason : uint8_t {
@@ -113,7 +115,8 @@ struct Bind {
     uint32_t netId = 0;
     EntityKind kind = EntityKind::Character;
     Handle handle;
-    uint8_t owner = 0;  // player id that may command it, 0 = host/world
+    uint8_t owner = 0;     // player id that may command it, 0 = nobody (world NPC)
+    bool squad = false;    // member of the shared player squad (must exist on every machine)
 };
 struct Unbind {
     uint32_t netId = 0;
@@ -154,8 +157,28 @@ struct Command {
 };
 
 struct TimeState {
-    float speed = 1.0f;   // GameWorld::frameSpeedMult
-    bool paused = false;
+    float speed = 1.0f;     // GameWorld::frameSpeedMult
+    bool paused = false;    // GameWorld::paused
+    double gameHours = 0;   // in-game clock (total hours since the world began)
+};
+
+// Health of one character, authoritative on the host.
+constexpr uint32_t kMaxBodyParts = 16;
+enum VitalFlags : uint8_t { kVitUnconscious = 1 << 0, kVitDead = 1 << 1 };
+struct PartVitals {
+    float flesh = 0, stun = 0, bandage = 0;
+    bool operator==(const PartVitals& o) const { return flesh == o.flesh && stun == o.stun && bandage == o.bandage; }
+};
+struct EntityVitals {
+    uint32_t netId = 0;
+    float blood = 0;
+    float koTimer = 0;
+    uint8_t flags = 0;
+    std::vector<PartVitals> parts;
+};
+struct VitalsMsg {
+    uint32_t tick = 0;
+    std::vector<EntityVitals> entities;
 };
 
 struct Ping {
@@ -179,6 +202,7 @@ void EncodePing(Writer& w, const Ping& m, bool pong);
 
 // Snapshots are split into packets that each fit `budget` bytes; every packet is self-contained.
 std::vector<std::vector<uint8_t>> EncodeSnapshot(const Snapshot& s, size_t budget = kSnapshotBudget);
+std::vector<std::vector<uint8_t>> EncodeVitals(const VitalsMsg& v, size_t budget = kSnapshotBudget);
 
 std::optional<Msg> PeekType(Reader& r);
 bool Decode(Reader& r, Hello& m);
@@ -192,6 +216,7 @@ bool Decode(Reader& r, Unbind& m);
 bool Decode(Reader& r, Snapshot& m);
 bool Decode(Reader& r, Command& m);
 bool Decode(Reader& r, TimeState& m);
+bool Decode(Reader& r, VitalsMsg& m);
 bool Decode(Reader& r, Ping& m);
 
 // Name rules: 1..kMaxNameLen printable ASCII, no leading/trailing spaces.

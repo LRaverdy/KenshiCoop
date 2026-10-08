@@ -34,6 +34,8 @@ static double Now() {
 struct FakeChar {
     Vec3 pos, dest;
     Quat rot;
+    bool squad = true;
+    EntityVitals vit;   // netId unused
 };
 struct FakeWorld : IWorld {
     bool ready = true;
@@ -51,7 +53,26 @@ struct FakeWorld : IWorld {
     uint64_t Fingerprint() override { return fp; }
     uint64_t GameBuild() override { return build; }
     uint64_t ModsHash() override { return mods; }
-    void PlayerCharacters(std::vector<Handle>& out) override { for (auto& [s, c] : chars) out.push_back(H(s)); }
+    void PlayerCharacters(std::vector<Handle>& out) override { for (auto& [s, c] : chars) if (c.squad) out.push_back(H(s)); }
+    void NearbyCharacters(const std::vector<Vec3>& centers, float radius, std::vector<Handle>& out) override {
+        for (auto& [s, c] : chars) {
+            if (c.squad) continue;
+            for (auto& ctr : centers) {
+                const float dx = c.pos.x - ctr.x, dy = c.pos.y - ctr.y, dz = c.pos.z - ctr.z;
+                if (dx * dx + dy * dy + dz * dz <= radius * radius) { out.push_back(H(s)); break; }
+            }
+        }
+    }
+    bool ReadVitals(const Handle& h, EntityVitals& out) override {
+        auto it = chars.find(h.serial);
+        if (it == chars.end()) return false;
+        out = it->second.vit;
+        return true;
+    }
+    void ApplyVitals(const Handle& h, const EntityVitals& v) override {
+        auto it = chars.find(h.serial);
+        if (it != chars.end()) { it->second.vit = v; it->second.vit.netId = 0; }
+    }
     bool Exists(const Handle& h) override { return chars.count(h.serial) != 0; }
     bool Read(const Handle& h, EntityState& out) override {
         auto it = chars.find(h.serial);
@@ -197,7 +218,8 @@ static void TestFuzz() {
     add([](Writer& w) { Bind b; b.netId = 5; b.handle.serial = 9; Encode(w, b); });
     add([](Writer& w) { Encode(w, Unbind{5}); });
     add([](Writer& w) { Command c; c.netId = 3; Encode(w, c); });
-    add([](Writer& w) { Encode(w, TimeState{2.0f, true}); });
+    add([](Writer& w) { Encode(w, TimeState{2.0f, true, 10.0}); });
+    { VitalsMsg v; v.entities.resize(2); for (auto& e : v.entities) { e.netId = 4; e.parts.resize(3); } seeds.push_back(EncodeVitals(v)[0]); }
     { Snapshot s; s.entities.resize(3); for (auto& e : s.entities) e.netId = 7; seeds.push_back(EncodeSnapshot(s)[0]); }
 
     auto decodeAll = [](const std::vector<uint8_t>& p) {
@@ -217,6 +239,7 @@ static void TestFuzz() {
         case Msg::Command: { Command m; Decode(r, m); break; }
         case Msg::TimeState: { TimeState m; Decode(r, m); break; }
         case Msg::Ping: case Msg::Pong: { Ping m; Decode(r, m); break; }
+        case Msg::Vitals: { VitalsMsg m; Decode(r, m); break; }
         }
     };
     for (int i = 0; i < 200000; ++i) {
@@ -224,7 +247,7 @@ static void TestFuzz() {
         if (i % 2) {
             p.resize(rng() % 64);
             for (auto& b : p) b = uint8_t(rng());
-            if (!p.empty()) p[0] = uint8_t(1 + rng() % 13);
+            if (!p.empty()) p[0] = uint8_t(1 + rng() % 14);
         } else {
             p = seeds[rng() % seeds.size()];
             const int muts = 1 + rng() % 4;
@@ -260,7 +283,7 @@ static void TestSessionReplication() {
     CHECK(cli.state() == SessionState::Connected);
     CHECK(cli.localId() == 2);
     CHECK(cli.entityCount() == 3);
-    CHECK(cli.missingEntities() == 0);
+    CHECK(cli.missingSquad() == 0);
     CHECK(cw.client && cw.active);
     CHECK(host.players().size() == 1);
     CHECK(cw.controllable.empty());     // nothing assigned yet
@@ -375,6 +398,53 @@ static void TestRejections() {
     }
 }
 
+static void TestWorldAuthority() {
+    std::printf("session: NPC interest, health authority, clock and pause\n");
+    FakeWorld hw, cw;
+    SetupWorlds(hw, cw);
+    // an NPC near the squad, one far away; both exist in both worlds (same save)
+    FakeChar near; near.squad = false; near.pos = {150, 0, 30}; near.dest = near.pos; near.vit.blood = 100;
+    FakeChar far; far.squad = false; far.pos = {90000, 0, 0}; far.dest = far.pos;
+    hw.chars[10] = near; cw.chars[10] = near;
+    hw.chars[11] = far;  cw.chars[11] = far;
+    for (uint32_t i = 1; i <= 3; ++i) { hw.chars[i].vit.blood = 100; cw.chars[i].vit.blood = 100; hw.chars[i].vit.parts = {{50, 0, 0}, {40, 0, 0}}; cw.chars[i].vit.parts = hw.chars[i].vit.parts; }
+    SessionConfig hc; hc.port = ++g_port; hc.interestRadius = 1000; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    cli.Join("127.0.0.1", hc.port, &err);
+    Run({{&host, &hw}, {&cli, &cw}}, 5.0, [&] { return cli.entityCount() == 4; });
+    CHECK(cli.entityCount() == 4);          // 3 squad + the near NPC, not the far one
+    CHECK(cli.npcCount() == 1);
+
+    // the host's NPC walks; the client copy follows exactly
+    hw.chars[10].dest = {300, 0, 60};
+    // the client locally "hurts" a squad member (stray local simulation); the host's value must win
+    cw.chars[2].vit.blood = 3; cw.chars[2].vit.flags = kVitDead;
+    // the host's character really takes damage
+    hw.chars[1].vit.parts[0].flesh = 12; hw.chars[1].vit.flags = kVitUnconscious; hw.chars[1].vit.koTimer = 30;
+    hw.time = TimeState{1.0f, true, 1234.5};
+    Run({{&host, &hw}, {&cli, &cw}}, 6.0, [&] {
+        return Dist(cw.chars[10].pos, hw.chars[10].pos) < 1e-3f && Dist(hw.chars[10].pos, {300, 0, 60}) < 1e-3f &&
+               cw.chars[2].vit.blood == 100 && cw.chars[1].vit.parts[0].flesh == 12 && cw.time.paused;
+    });
+    CHECK(Dist(cw.chars[10].pos, hw.chars[10].pos) < 1e-3f);
+    CHECK(cw.chars[2].vit.blood == 100 && cw.chars[2].vit.flags == 0);   // local death undone
+    CHECK(cw.chars[1].vit.parts[0].flesh == 12 && (cw.chars[1].vit.flags & kVitUnconscious));
+    CHECK(cw.time.paused && cw.time.gameHours == 1234.5);
+
+    // the NPC wanders out of range: it is unbound on the client
+    hw.chars[10].pos = {50000, 0, 0}; hw.chars[10].dest = hw.chars[10].pos;
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cli.npcCount() == 0; });
+    CHECK(cli.npcCount() == 0);
+    // clients cannot command NPCs
+    Command c; c.kind = CommandKind::MoveTo; c.pos = {0, 0, 0};
+    cw.localOrders.push_back({FakeWorld::H(11), c});
+    Run({{&host, &hw}, {&cli, &cw}}, 0.5);
+    CHECK(Dist(hw.chars[11].pos, {90000, 0, 0}) < 1e-3f);
+}
+
 static void TestManyPlayers() {
     std::printf("session: 1 host + 4 clients, 120 characters\n");
     FakeWorld hw;
@@ -430,6 +500,7 @@ int main() {
     TestSessionReplication();
     TestDivergenceIsCorrected();
     TestRejections();
+    TestWorldAuthority();
     TestManyPlayers();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

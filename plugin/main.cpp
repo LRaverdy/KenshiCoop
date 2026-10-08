@@ -74,7 +74,7 @@ void GiveSelectedToNextPlayer() {
     std::vector<kc::Handle> sel;
     kenshi::SelectedHandles(sel);
     std::vector<kc::Handle> mine;
-    for (auto& h : sel) if (g_world->Find(h)) mine.push_back(h);
+    for (auto& h : sel) if (g_world->FindSquad(h)) mine.push_back(h);
     if (mine.empty()) { Toast("Select one of your squad members first."); return; }
     // cycle owner: host -> each connected player -> host
     std::vector<uint8_t> order{g_session->localId()};
@@ -103,7 +103,18 @@ void DumpDiagnostics(const char* why) {
     std::vector<kc::Handle> sel;
     kenshi::SelectedHandles(sel);
     Log("  selected: %zu", sel.size());
-    for (const auto& h : sel) Log("    hand{type=%u idx=%u ser=%u} known=%d", h.type, h.index, h.serial, int(g_world->Find(h) != nullptr));
+    for (const auto& h : sel) Log("    hand{type=%u idx=%u ser=%u} known=%d", h.type, h.index, h.serial, int(g_world->FindSquad(h) != nullptr));
+    std::vector<kenshi::Character*> active;
+    kenshi::ActiveCharacters(active);
+    double hours = -1;
+    kenshi::GetGameHours(hours);
+    Log("  active characters: %zu, game clock: %.3f h", active.size(), hours);
+    for (const auto& h : hs) {
+        kc::EntityVitals v;
+        if (g_world->ReadVitals(h, v))
+            Log("  vitals idx=%u blood=%.1f ko=%.1f flags=%u parts=%zu first=(%.1f, %.1f, %.1f)", h.index, v.blood, v.koTimer, unsigned(v.flags),
+                v.parts.size(), v.parts.empty() ? 0.f : v.parts[0].flesh, v.parts.empty() ? 0.f : v.parts[0].stun, v.parts.empty() ? 0.f : v.parts[0].bandage);
+    }
     Log("  world fingerprint %016llx, mods hash %016llx", (unsigned long long)g_world->Fingerprint(), (unsigned long long)g_world->ModsHash());
 }
 
@@ -149,8 +160,10 @@ void PublishOverlay() {
         g_world->PlayerCharacters(hs);
         for (auto& h : hs) if (g_session->ownerOf(h) == g_session->localId()) ++mine;
         m.lines.push_back("Squad: " + std::to_string(hs.size()) + " characters, " + std::to_string(mine) + " yours");
-        if (g_session->missingEntities())
-            m.lines.push_back("WARNING: " + std::to_string(g_session->missingEntities()) + " host characters missing here - load the host's save!");
+        m.lines.push_back("World: " + std::to_string(g_session->npcCount()) + " NPCs synced" +
+                          (g_session->isClient() && g_session->missingNpcs() ? " (" + std::to_string(g_session->missingNpcs()) + " not spawned here yet)" : ""));
+        if (g_session->missingSquad())
+            m.lines.push_back("WARNING: " + std::to_string(g_session->missingSquad()) + " squad members missing here - load the host's save!");
         if (g_session->isHost()) m.lines.push_back("Ctrl+Shift+G  give selected to next player");
         m.lines.push_back("Ctrl+Shift+L  leave");
     }
@@ -204,6 +217,7 @@ bool Start() {
     sc.name = g_cfg.name;
     sc.port = g_cfg.port;
     sc.snapDistance = g_cfg.snapDistance;
+    sc.interestRadius = g_cfg.interestRadius;
     g_session = std::make_unique<kc::Session>(*g_world, sc, NowSeconds, [](const std::string& s) { Log("%s", s.c_str()); });
 
     if (!InstallHooks(&TickEntry, &err)) { Log("disabled: %s", err.c_str()); g_session.reset(); g_world.reset(); return false; }
