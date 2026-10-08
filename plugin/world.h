@@ -88,6 +88,8 @@ private:
     bool holding_ = false, pausedByHold_ = false;
     bool exporting_ = false;
     std::string exportFolder_;
+    uint64_t exportLastSize_ = 0;      // the save is complete once its size stops changing
+    double exportStableSince_ = 0;
     bool haveHostTime_ = false;
     kc::TimeState hostTime_;
     std::mutex toastMutex_;

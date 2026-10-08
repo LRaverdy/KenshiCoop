@@ -220,7 +220,7 @@ void Session::HostJoinFlow(double now, bool live) {
     if (live && !holding_) { world_.HoldForJoin(true); holding_ = true; }
 
     for (uint8_t id : joining) {
-        if (now - sync_[id].joinedAt > cfg_.loadTimeout) Kick(players_[id], RejectReason::NotReady);
+        if (now - sync_[id].joinedAt > cfg_.loadTimeout) Kick(players_[id], RejectReason::Timeout);
     }
 
     bool needWorld = false;
@@ -234,7 +234,7 @@ void Session::HostJoinFlow(double now, bool live) {
                 log_("saving the world for joining players");
             } else {
                 log_("cannot save the world for joining players: " + err);
-                for (auto& [pid, p] : players_) if (!p.inGame) Kick(p, RejectReason::NotReady);
+                for (auto& [pid, p] : players_) if (!p.inGame) Kick(p, RejectReason::HostSaveFailed);
                 return;
             }
         }
@@ -251,7 +251,7 @@ void Session::HostJoinFlow(double now, bool live) {
             } else if (st == ExportStatus::Failed || now - exportStarted_ > cfg_.exportTimeout) {
                 exporting_ = false;
                 log_("saving the world failed: " + (err.empty() ? std::string("timeout") : err));
-                for (auto& [pid, p] : players_) if (!p.inGame) Kick(p, RejectReason::NotReady);
+                for (auto& [pid, p] : players_) if (!p.inGame) Kick(p, RejectReason::HostSaveFailed);
                 return;
             }
         }

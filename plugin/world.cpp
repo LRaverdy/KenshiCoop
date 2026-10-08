@@ -254,17 +254,36 @@ bool KenshiWorld::BeginWorldExport(std::string* err) {
     }
     exportFolder_ = folder;
     exporting_ = true;
+    exportLastSize_ = 0;
+    exportStableSince_ = 0;
     return true;
 }
 
 kc::ExportStatus KenshiWorld::PollWorldExport(std::vector<kc::WorldFile>& files, std::string* err) {
     if (!exporting_) { if (err) *err = "no save in progress"; return kc::ExportStatus::Failed; }
     if (kenshi::SaveManagerBusy()) return kc::ExportStatus::Pending;
-    exporting_ = false;
-    files.clear();
+    // Kenshi clears its request before the files are all on disk (it copies its working folder
+    // into the slot afterwards): wait until quick.save exists and the folder stops growing.
     std::error_code ec;
     const fs::path dir = FromGamePath(exportFolder_) / kExportSlot;
-    if (!fs::is_directory(dir, ec)) { if (err) *err = "save folder not found: " + ToUtf8(dir); return kc::ExportStatus::Failed; }
+    uint64_t size = 0;
+    bool haveMain = false;
+    if (fs::is_directory(dir, ec)) {
+        for (auto it = fs::recursive_directory_iterator(dir, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+            if (!it->is_regular_file(ec)) continue;
+            size += it->file_size(ec);
+            if (it->path().filename() == "quick.save") haveMain = true;
+        }
+    }
+    const double now = NowSeconds();
+    if (!haveMain || size != exportLastSize_) {
+        exportLastSize_ = size;
+        exportStableSince_ = now;
+        return kc::ExportStatus::Pending;   // the session's export timeout bounds this wait
+    }
+    if (now - exportStableSince_ < 1.0) return kc::ExportStatus::Pending;
+    exporting_ = false;
+    files.clear();
     uint64_t total = 0;
     for (auto it = fs::recursive_directory_iterator(dir, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
         if (!it->is_regular_file(ec)) continue;

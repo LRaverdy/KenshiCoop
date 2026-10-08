@@ -67,6 +67,8 @@ enum class RejectReason : uint8_t {
     Full = 5,
     BadName = 6,
     NotReady = 7,       // host has not loaded a world yet
+    HostSaveFailed = 8, // host could not save its world for the joiner
+    Timeout = 9,        // joining took too long
 };
 const char* ToString(RejectReason r);
 
