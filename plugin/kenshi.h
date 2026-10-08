@@ -1,0 +1,151 @@
+// Kenshi 1.0.68 (Steam, x64) memory layout and functions used by KenshiCoop.
+//
+// Every address here was located by static analysis of kenshi_x64.exe (SHA-256 below):
+// RTTI vtables, string cross-references, and KenshiLib's 1.0.65 layout translated through 693
+// vtable anchors. Each hooked/called function also carries its first prologue bytes, which are
+// re-checked at startup; on any mismatch the plugin stays disabled instead of risking a crash.
+#pragma once
+#include <cstdint>
+#include <vector>
+
+#include "kc/protocol.h"
+
+namespace kenshi {
+
+// SHA-256 of the supported kenshi_x64.exe ("Kenshi 1.0.68 - x64 (Newland)", Steam).
+inline constexpr char kSupportedExeSha256[] = "A596AB4E407C67B58599C54FFB32DC1BF2B64510CDEBD3FA9359EF05A576AEB1";
+
+// ---------------------------------------------------------------- RVAs
+namespace rva {
+inline constexpr uintptr_t GameWorldInstance = 0x2134110;   // global `GameWorld ou` object
+inline constexpr uintptr_t HandleTable = 0x2133f90;         // first arg of the hand resolver
+
+inline constexpr uintptr_t VtCharacter = 0x16f9eb8;
+inline constexpr uintptr_t VtCharacterHuman = 0x16f2848;
+inline constexpr uintptr_t VtCharacterAnimal = 0x16f2208;
+inline constexpr uintptr_t VtGameWorld = 0x1722608;
+inline constexpr uintptr_t VtPlayerInterface = 0x171a2b8;
+inline constexpr uintptr_t VtCharMovement = 0x16fcc88;
+inline constexpr uintptr_t VtAI = 0x16fa3e8;
+} // namespace rva
+
+struct FunctionSig {
+    const char* name;
+    uintptr_t rva;
+    uint8_t prologue[12];
+};
+
+// Functions we hook or call. Index into this table with the Fn enum.
+enum Fn : int {
+    FnMainLoop,                 // void GameWorld::mainLoop_GPUSensitiveStuff(float)
+    FnPlayerMove,               // void PlayerInterface::playerMove(const Vector3&, Building*)
+    FnAddOrderSelected,         // void PlayerInterface::addOrderSelectedCharacters(Building*, TaskType, RootObject*, bool, bool, const Vector3&)
+    FnNewPlayerTaskSelected,    // void PlayerInterface::newPlayerTaskSelectedCharacters(TaskType, const hand&, Building*, const Vector3&, bool)
+    FnSetOrderSelected,         // void PlayerInterface::setOrderSelectedCharacters(StandingOrder)
+    FnStopCharactersMovement,   // void PlayerInterface::stopCharactersMovement()
+    FnPlayerMoveOrderDefault,   // void Character::playerMoveOrderDefault(Building*, RootObject*, const Vector3&)
+    FnAIUpdate4Frame,           // void AI::update4Frame(float)
+    FnAIPeriodicUpdate,         // void AI::periodicUpdate(float)
+    FnSetFrameSpeedMultiplier,  // void GameWorld::setFrameSpeedMultiplier(float)
+    FnUserPause,                // void GameWorld::userPause(bool)
+    FnHandleResolve,            // RootObject* resolve(HandleTable*, const hand*, bool)
+    FnCount
+};
+extern const FunctionSig kFunctions[FnCount];
+
+// ---------------------------------------------------------------- field offsets
+namespace off {
+// GameWorld
+inline constexpr uintptr_t GW_frameSpeedMult = 0x700;  // float
+inline constexpr uintptr_t GW_player = 0x580;          // PlayerInterface*
+inline constexpr uintptr_t GW_paused = 0x8B9;          // bool
+
+// PlayerInterface
+inline constexpr uintptr_t PI_selectedCharacters = 0x208;  // boost::unordered_set<hand>
+inline constexpr uintptr_t PI_playerCharacters = 0x2B0;    // lektor<Character*>
+
+// boost::unordered_set (relative to the set)
+inline constexpr uintptr_t US_bucketCount = 0x18;
+inline constexpr uintptr_t US_size = 0x20;
+inline constexpr uintptr_t US_buckets = 0x38;
+inline constexpr uintptr_t USNode_next = 0x0;
+inline constexpr uintptr_t USNode_value = 0x10;
+
+// lektor<T> (Kenshi's vector)
+inline constexpr uintptr_t LK_count = 0x8;   // uint32
+inline constexpr uintptr_t LK_data = 0x10;   // T*
+
+// hand (0x20 bytes)
+inline constexpr uintptr_t H_type = 0x8;
+inline constexpr uintptr_t H_container = 0xC;
+inline constexpr uintptr_t H_containerSerial = 0x10;
+inline constexpr uintptr_t H_index = 0x14;
+inline constexpr uintptr_t H_serial = 0x18;
+inline constexpr size_t HandSize = 0x20;
+
+// RootObjectBase / RootObject / Character
+inline constexpr uintptr_t RO_handle = 0x58;      // hand
+inline constexpr uintptr_t RO_rot = 0xB0;         // Ogre::Quaternion (w,x,y,z)
+inline constexpr uintptr_t CH_movement = 0x640;   // CharMovement*
+inline constexpr uintptr_t CH_ai = 0x650;         // AI*
+
+// CharMovement
+inline constexpr uintptr_t CM_currentlyMoving = 0x24;  // bool
+inline constexpr uintptr_t CM_currentSpeed = 0xB8;     // float
+inline constexpr uintptr_t CM_destination = 0xDC;      // Ogre::Vector3
+
+// AI
+inline constexpr uintptr_t AI_me = 0x2F8;  // Character*
+} // namespace off
+
+// vtable slots (byte offsets)
+namespace slot {
+inline constexpr uintptr_t RO_getPosition = 0x40;                 // Vector3 getPosition()  (ret via hidden ptr)
+inline constexpr uintptr_t RO_isUnconcious = 0x30;                // bool isUnconcious() const
+inline constexpr uintptr_t CM_setDestination = 0x90;              // void setDestination(const Vector3&, UpdatePriority, bool)
+inline constexpr uintptr_t CM_halt = 0x98;                        // void halt()
+inline constexpr uintptr_t CM_setPositionDirectionAndTeleport = 0xC0;  // (const Vector3&, const Quaternion&)
+} // namespace slot
+
+inline constexpr uint32_t kItemTypeCharacter = 1;
+inline constexpr uint32_t kItemTypeAnimalCharacter = 0x5B;
+enum UpdatePriority : int { LOW_PRIORITY = 0, MED_PRIORITY = 1, HIGH_PRIORITY = 2 };
+
+// ---------------------------------------------------------------- runtime access
+// All accessors are exception-safe (SEH) and validate object types by vtable before use.
+// They must only be called from the game thread (inside the main loop hook).
+
+bool Init(std::string* err);   // resolves module base, verifies prologues
+uintptr_t Base();
+uintptr_t Addr(uintptr_t rva);
+void* FnAddr(Fn f);
+
+struct Character;  // opaque game objects
+struct PlayerInterface;
+struct GameWorld;
+struct AI;
+
+GameWorld* World();
+PlayerInterface* Player();             // null when no game is loaded
+bool IsCharacter(const void* obj);
+
+void PlayerCharacters(std::vector<Character*>& out);
+void SelectedHandles(std::vector<kc::Handle>& out);
+bool GetHandle(const Character* c, kc::Handle& out);
+bool GetPosition(Character* c, kc::Vec3& out);
+bool GetRotation(const Character* c, kc::Quat& out);
+bool GetMovement(const Character* c, kc::Vec3& dest, bool& moving, float& speed);
+bool IsDown(Character* c);
+Character* AICharacter(const AI* ai);
+
+float GetFrameSpeed();
+bool GetPaused();
+
+// Game calls (game thread only). Return false if the call faulted or the object was invalid.
+bool Teleport(Character* c, const kc::Vec3& pos, const kc::Quat& rot);
+bool SetDestination(Character* c, const kc::Vec3& dest);
+bool Halt(Character* c);
+bool CallSetFrameSpeed(float speed);
+bool CallUserPause(bool paused);
+
+} // namespace kenshi
