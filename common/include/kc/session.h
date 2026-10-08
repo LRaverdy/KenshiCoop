@@ -55,6 +55,12 @@ public:
     virtual bool Exists(const Handle& h) = 0;
     virtual bool Read(const Handle& h, EntityState& out) = 0;      // pos/rot/dest/flags (netId ignored)
     virtual bool ReadVitals(const Handle& h, EntityVitals& out) = 0;
+    // Host: what a client needs to recreate this character if its world lacks it.
+    virtual bool ReadSpawnInfo(const Handle& h, SpawnInfo& out) = 0;
+    // Client: create a local stand-in for host character `h` (later found through Exists/Read/...
+    // under the host's handle), and remove it again.
+    virtual bool Spawn(const Handle& h, const SpawnInfo& info, const EntityState& at) = 0;
+    virtual void Despawn(const Handle& h) = 0;
 
     // Client side: drive a replicated character toward the host state.
     // `target` is the interpolated state for "now - delay", `latest` the newest received one.
@@ -89,7 +95,7 @@ struct SessionConfig {
     uint16_t port = kDefaultPort;
     double snapshotRate = 20.0;        // Hz
     double vitalsRate = 5.0;           // Hz
-    double interpDelay = 0.10;         // seconds of buffering on clients
+    double interpDelay = 0.05;         // seconds of buffering on clients (one snapshot interval)
     double timeStateInterval = 0.5;    // host re-sends TimeState at least this often
     double refreshInterval = 1.0;      // unchanged entities are still re-sent this often
     double handshakeTimeout = 10.0;    // seconds a peer may stay connected without a valid Hello
@@ -97,7 +103,7 @@ struct SessionConfig {
     double loadTimeout = 300.0;        // client: downloading + loading the host's world
     double worldLostTimeout = 5.0;     // seconds without a live world before the session ends
     float snapDistance = 50.0f;        // samples further apart than this are not interpolated
-    float interestRadius = 1500.0f;    // NPCs within this distance of the squad are replicated
+    float interestRadius = 0.0f;       // NPCs within this distance of the squad are replicated (0 = all active)
 };
 
 enum class SessionState { Idle, Hosting, Connecting, Handshake, Downloading, Loading, Connected, Failed };
@@ -144,8 +150,12 @@ public:
     size_t npcCount() const;
     uint32_t missingSquad() const { return missingSquad_; }   // client: squad members not found locally
     uint32_t missingNpcs() const;                             // client: NPCs the host has but we do not
+    uint32_t spawnedNpcs() const;                             // client: stand-ins created for them
     uint32_t pingMs() const;
     double downloadProgress() const;                          // client: 0..1 while Downloading
+    void ForEachEntity(const std::function<void(uint32_t netId, const Handle& h, uint8_t owner, bool squad, bool present)>& fn) const;
+    // client (diagnostics): newest state received from the host and the state being rendered now
+    bool TargetOf(const Handle& h, EntityState& latest, EntityState& rendered) const;
     size_t joiningPlayers() const;                            // host: players still loading the world
 
 private:
@@ -162,6 +172,11 @@ private:
         bool haveVitals = false;
         bool vitalsDirty = false;
         EntityVitals vitals;
+        bool hasSpawn = false;               // host sent how to recreate it
+        SpawnInfo spawn;
+        bool spawned = false;                // client created a stand-in for it
+        int spawnAttempts = 0;
+        double nextSpawnTry = 0;
         // host
         bool keep = false;                   // scratch flag for interest updates
     };
@@ -240,6 +255,7 @@ private:
     double connectStarted_ = 0;
     std::map<PeerId, double> pendingPeers_;          // host: connected, Hello not received yet
     std::vector<std::pair<uint8_t, Command>> pendingCommands_;  // host: run on the next live tick
+    std::vector<Handle> despawnQueue_;               // client: stand-ins to remove on the next live tick
 
     // host world export (shared by everyone joining at the same time)
     bool holding_ = false;

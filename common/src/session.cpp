@@ -109,6 +109,7 @@ void Session::Leave() {
     sync_.clear();
     pendingPeers_.clear();
     pendingCommands_.clear();
+    despawnQueue_.clear();
     owners_.clear();
     exportFiles_.clear();
     exportFiles_.shrink_to_fit();
@@ -338,6 +339,7 @@ void Session::UpdateInterest() {
         e.handle = h;
         e.squad = squad;
         e.owner = squad ? hostId_ : 0;
+        e.hasSpawn = world_.ReadSpawnInfo(h, e.spawn);
         if (squad)
             for (const auto& [oh, pid] : owners_) if (oh == h) e.owner = pid;
         e.keep = true;
@@ -366,7 +368,7 @@ void Session::UpdateInterest() {
         // hysteresis: an NPC slightly outside the radius stays bound, to avoid bind/unbind flapping
         const float outer = cfg_.interestRadius * kInterestHysteresis;
         for (auto& [id, e] : entities_) {
-            if (e.keep || e.squad) continue;
+            if (e.keep || e.squad || cfg_.interestRadius <= 0) continue;
             EntityState st;
             if (!world_.Read(e.handle, st)) continue;
             for (const Vec3& c : centers) if (Dist(c, st.pos) <= outer) { e.keep = true; break; }
@@ -439,6 +441,8 @@ void Session::SendBind(const Entity& e, PeerId to) {
     b.handle = e.handle;
     b.owner = e.owner;
     b.squad = e.squad;
+    b.hasSpawn = e.hasSpawn;
+    b.spawn = e.spawn;
     Writer w;
     Encode(w, b);
     SendReliable(to, w);
@@ -615,6 +619,8 @@ void Session::ClientTick(double now, bool live) {
     if (!live) return;
 
     if (haveTime_) world_.SetTime(hostTime_);
+    for (const Handle& h : despawnQueue_) world_.Despawn(h);
+    despawnQueue_.clear();
     if (controllableDirty_) PushControllable();
 
     // NPCs stream in and out of the local world as zones load: re-resolve them regularly.
@@ -625,6 +631,16 @@ void Session::ClientTick(double now, bool live) {
         if (fullCheck || !e.checked) {
             e.present = world_.Exists(e.handle);
             e.checked = true;
+        }
+        // Not in our world (the host spawned it after the save): create a stand-in where the host
+        // has it. Squad members are never recreated: a missing one means a different save.
+        if (!e.present && !e.squad && e.hasSpawn && !e.buf.empty() && e.spawnAttempts < 3 && now >= e.nextSpawnTry) {
+            ++e.spawnAttempts;
+            e.nextSpawnTry = now + 2.0;
+            if (world_.Spawn(e.handle, e.spawn, e.buf.back().s)) {
+                e.spawned = true;
+                e.present = world_.Exists(e.handle);
+            }
         }
         if (e.squad && !e.present) ++missing;
     }
@@ -775,6 +791,8 @@ void Session::ClientPacket(Msg type, Reader& r) {
         e.handle = m.handle;
         e.owner = m.owner;
         e.squad = m.squad;
+        e.hasSpawn = m.hasSpawn;
+        e.spawn = m.spawn;
         byHandle_[m.handle] = m.netId;
         if (e.squad) controllableDirty_ = true;
         break;
@@ -785,6 +803,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
         auto it = entities_.find(m.netId);
         if (it == entities_.end()) break;
         if (it->second.squad) controllableDirty_ = true;
+        if (it->second.spawned) despawnQueue_.push_back(it->second.handle);   // removed on the next live tick
         byHandle_.erase(it->second.handle);
         entities_.erase(it);
         break;
@@ -934,6 +953,12 @@ uint32_t Session::missingNpcs() const {
     return n;
 }
 
+uint32_t Session::spawnedNpcs() const {
+    uint32_t n = 0;
+    for (auto& [id, e] : entities_) if (e.spawned) ++n;
+    return n;
+}
+
 uint32_t Session::pingMs() const {
     if (isHost()) return 0;
     return rttMs_;
@@ -942,6 +967,20 @@ uint32_t Session::pingMs() const {
 double Session::downloadProgress() const {
     if (state_ != SessionState::Downloading || dlInfo_.totalBytes == 0) return 0;
     return double(dlBytes_) / double(dlInfo_.totalBytes);
+}
+
+void Session::ForEachEntity(const std::function<void(uint32_t, const Handle&, uint8_t, bool, bool)>& fn) const {
+    for (const auto& [id, e] : entities_) fn(id, e.handle, e.owner, e.squad, isHost() ? true : e.present);
+}
+
+bool Session::TargetOf(const Handle& h, EntityState& latest, EntityState& rendered) const {
+    auto it = byHandle_.find(h);
+    if (it == byHandle_.end()) return false;
+    auto e = entities_.find(it->second);
+    if (e == entities_.end() || e->second.buf.empty()) return false;
+    latest = e->second.buf.back().s;
+    rendered = Interpolate(e->second, clock_() + offset_ - cfg_.interpDelay);
+    return true;
 }
 
 size_t Session::joiningPlayers() const {

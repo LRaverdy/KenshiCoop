@@ -43,6 +43,9 @@ public:
     bool Exists(const kc::Handle& h) override { return Find(h) != nullptr; }
     bool Read(const kc::Handle& h, kc::EntityState& out) override;
     bool ReadVitals(const kc::Handle& h, kc::EntityVitals& out) override;
+    bool ReadSpawnInfo(const kc::Handle& h, kc::SpawnInfo& out) override;
+    bool Spawn(const kc::Handle& h, const kc::SpawnInfo& info, const kc::EntityState& at) override;
+    void Despawn(const kc::Handle& h) override;
     void Apply(const kc::Handle& h, const kc::EntityState& target, const kc::EntityState& latest) override;
     void ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) override;
     bool Order(const kc::Handle& h, const kc::Command& c) override;
@@ -59,6 +62,11 @@ public:
     void SetGameBuild(uint64_t b) { build_ = b; }
     kenshi::Character* Find(const kc::Handle& h);   // squad first, then any live character
     kenshi::Character* FindSquad(const kc::Handle& h) const;
+    // client: the host handle a local stand-in replaces (or `local` itself)
+    kc::Handle HostHandleOf(const kc::Handle& local) const {
+        for (const auto& [host, l] : alias_) if (l == local) return host;
+        return local;
+    }
     size_t CharacterCount() const { return squad_.size(); }
 
     // Called from hooks (game thread).
@@ -76,6 +84,8 @@ private:
     std::unordered_map<kc::Handle, kenshi::Character*, HandleHash> squad_;      // this frame's squad
     std::unordered_map<kc::Handle, kenshi::Character*, HandleHash> resolved_;   // this frame's lookups
     std::unordered_set<kc::Handle, HandleHash> controllable_;
+    // client: host handle -> handle of the local stand-in we created for it
+    std::unordered_map<kc::Handle, kc::Handle, HandleHash> alias_;
     std::unordered_map<kc::Handle, kc::Vec3, HandleHash> lastDest_;   // client: destination last issued
     std::mutex ordersMutex_;
     std::vector<std::pair<kc::Handle, kc::Command>> orders_;

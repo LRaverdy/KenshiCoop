@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "debug.h"
 #include "hooks.h"
 #include "kc/session.h"
 #include "kenshi.h"
@@ -199,6 +200,7 @@ void Tick(bool live) {
         Log("world unloaded (menu or loading)");
     }
     HandleHotkeys();
+    if (g_cfg.debugCommands) DebugPoll(*g_session, *g_world, live);
     g_session->Tick(live);
     if (live) g_world->EndFrame();
     PublishOverlay();

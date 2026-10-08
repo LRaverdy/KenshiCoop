@@ -60,6 +60,7 @@ struct FakeWorld : IWorld {
     std::vector<WorldFile> pendingImport;
     bool corruptImport = false;
     int imports = 0;
+    int spawns = 0, despawns = 0;
 
     static Handle H(uint32_t serial) { Handle h; h.type = 3; h.index = serial; h.serial = serial; return h; }
 
@@ -111,6 +112,7 @@ struct FakeWorld : IWorld {
     void NearbyCharacters(const std::vector<Vec3>& centers, float radius, std::vector<Handle>& out) override {
         for (auto& [s, c] : chars) {
             if (c.squad) continue;
+            if (radius <= 0) { out.push_back(H(s)); continue; }   // 0 = every active character
             for (auto& ctr : centers) if (Dist(c.pos, ctr) <= radius) { out.push_back(H(s)); break; }
         }
     }
@@ -132,6 +134,28 @@ struct FakeWorld : IWorld {
         auto it = chars.find(h.serial);
         if (it == chars.end()) return;
         it->second.pos = target.pos; it->second.rot = target.rot; it->second.dest = latest.dest;
+    }
+    bool ReadSpawnInfo(const Handle& h, SpawnInfo& out) override {
+        auto it = chars.find(h.serial);
+        if (it == chars.end() || it->second.squad) return false;
+        out.templateSid = "tmpl-" + std::to_string(h.serial);
+        out.factionSid = "bandits";
+        out.name = "Npc";
+        out.age = 30;
+        return true;
+    }
+    bool Spawn(const Handle& h, const SpawnInfo& info, const EntityState& at) override {
+        if (chars.count(h.serial) || info.templateSid != "tmpl-" + std::to_string(h.serial)) return false;
+        FakeChar c;
+        c.squad = false;
+        c.pos = at.pos;
+        c.dest = at.pos;
+        chars[h.serial] = c;
+        ++spawns;
+        return true;
+    }
+    void Despawn(const Handle& h) override {
+        if (chars.erase(h.serial)) ++despawns;
     }
     void ApplyVitals(const Handle& h, const EntityVitals& v) override {
         auto it = chars.find(h.serial);
@@ -303,6 +327,7 @@ static void TestFuzz() {
     add([](Writer& w) { Encode(w, PlayerInfo{3, "x"}); });
     add([](Writer& w) { Encode(w, Chat{1, "hi"}); });
     add([](Writer& w) { Bind b; b.netId = 5; b.handle.serial = 9; Encode(w, b); });
+    add([](Writer& w) { Bind b; b.netId = 5; b.hasSpawn = true; b.spawn.templateSid = "123-x.mod"; b.spawn.factionSid = "f"; b.spawn.name = "Bob"; Encode(w, b); });
     add([](Writer& w) { Encode(w, Unbind{5}); });
     add([](Writer& w) { Command c; c.netId = 3; Encode(w, c); });
     add([](Writer& w) { Encode(w, TimeState{2.0f, true, 10.0}); });
@@ -560,6 +585,43 @@ static void TestWorldAuthority() {
     CHECK(Dist(hw.chars[11].pos, {90000, 0, 0}) < 1e-3f);
 }
 
+static void TestSpawnReplication() {
+    std::printf("session: characters the client lacks are recreated, and removed with the host's\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    AtMenu(cw);
+    SessionConfig hc; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    // the host's world spawns a wandering squad after the client joined
+    for (uint32_t i = 50; i < 53; ++i) {
+        FakeChar c; c.squad = false; c.pos = {120.0f + i, 0, 40}; c.dest = {200.0f + i, 0, 90}; c.vit.blood = 77;
+        hw.chars[i] = c;
+    }
+    Run({{&host, &hw}, {&cli, &cw}}, 8.0, [&] {
+        for (uint32_t i = 50; i < 53; ++i)
+            if (!cw.chars.count(i) || Dist(cw.chars[i].pos, hw.chars[i].pos) > 1e-3f || Dist(hw.chars[i].pos, hw.chars[i].dest) > 1e-3f) return false;
+        return true;
+    });
+    CHECK(cw.spawns == 3);
+    for (uint32_t i = 50; i < 53; ++i) {
+        CHECK(cw.chars.count(i) == 1);
+        if (cw.chars.count(i)) { CHECK(Dist(cw.chars[i].pos, hw.chars[i].pos) < 1e-3f); CHECK(cw.chars[i].vit.blood == 77); }
+    }
+    CHECK(cli.spawnedNpcs() == 3 && cli.missingNpcs() == 0);
+    // they die / leave the area on the host: their stand-ins go away too
+    hw.chars.erase(50);
+    hw.chars[51].pos = {1e6f, 0, 0}; hw.chars[51].dest = hw.chars[51].pos;
+    SessionConfig dummy; (void)dummy;
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return !cw.chars.count(50); });
+    CHECK(!cw.chars.count(50));
+    CHECK(cw.despawns >= 1);
+    CHECK(cw.chars.count(52) == 1);
+}
+
 static void TestManyPlayers() {
     std::printf("session: 1 host + 4 clients joining at once, 120 characters\n");
     FakeWorld hw;
@@ -617,6 +679,7 @@ int main() {
     TestDivergenceIsCorrected();
     TestRejections();
     TestWorldAuthority();
+    TestSpawnReplication();
     TestManyPlayers();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

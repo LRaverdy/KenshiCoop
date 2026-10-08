@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 3;
+constexpr uint16_t kProtocolVersion = 4;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -123,12 +123,27 @@ struct Chat {
 // ---- replication ----
 enum class EntityKind : uint8_t { Character = 1 };
 
+// How to recreate a character the client's world does not have (spawned on the host after the
+// save was made: wandering squads, reinforcements...).
+constexpr size_t kMaxSidLen = 160;
+struct SpawnInfo {
+    std::string templateSid;   // GameData string id of the character template
+    std::string factionSid;    // GameData string id of its faction
+    std::string name;
+    float age = 0;
+    bool operator==(const SpawnInfo& o) const {
+        return templateSid == o.templateSid && factionSid == o.factionSid && name == o.name && age == o.age;
+    }
+};
+
 struct Bind {
     uint32_t netId = 0;
     EntityKind kind = EntityKind::Character;
     Handle handle;
     uint8_t owner = 0;     // player id that may command it, 0 = nobody (world NPC)
     bool squad = false;    // member of the shared player squad (must exist on every machine)
+    bool hasSpawn = false;
+    SpawnInfo spawn;
 };
 struct Unbind {
     uint32_t netId = 0;

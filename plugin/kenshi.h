@@ -58,6 +58,8 @@ enum Fn : int {
     FnSaveManagerGet,           // static SaveManager* SaveManager::getSingleton()
     FnSaveManagerSave,          // void SaveManager::save(const std::string& name, bool autosave)   (deferred)
     FnSaveManagerLoad,          // void SaveManager::load(const std::string& name)                  (deferred)
+    FnCreateRandomCharacter,    // RootObject* RootObjectFactory::createRandomCharacter(Faction*, Vector3, RootObjectContainer*, GameData*, Building*, float age)
+    FnWorldDestroy,             // bool GameWorld::destroy(RootObject*, bool justUnloaded, const char* debugInfo)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -69,6 +71,13 @@ inline constexpr uintptr_t GW_frameSpeedMult = 0x700;  // float
 inline constexpr uintptr_t GW_player = 0x580;          // PlayerInterface*
 inline constexpr uintptr_t GW_paused = 0x8B9;          // bool
 inline constexpr uintptr_t GW_charUpdateList = 0x750;  // boost::unordered_set<Character*>: every active character
+inline constexpr uintptr_t GW_gamedataBySid = 0xF0;    // GameDataManager(+0x20)::gamedataSID: boost::unordered_map<std::string, GameData*>
+inline constexpr uintptr_t GW_factory = 0x4A0;         // RootObjectFactory*
+inline constexpr uintptr_t GW_factionMgr = 0x4A8;      // FactionManager*: +0 lektor<Faction*> participants
+inline constexpr uintptr_t MapNode_key = 0x10;         // boost unordered_map<std::string, T*> node: key string
+inline constexpr uintptr_t MapNode_mapped = 0x38;      //                                          mapped pointer
+inline constexpr uintptr_t GD_stringID = 0x58;         // GameData: std::string
+inline constexpr uintptr_t FAC_data = 0x240;           // Faction: GameData*
 inline constexpr uintptr_t Clock_hours = 0xA0;         // double, in the object at rva::GameClockOwner
 
 // PlayerInterface
@@ -95,6 +104,9 @@ inline constexpr uintptr_t H_serial = 0x18;
 inline constexpr size_t HandSize = 0x20;
 
 // RootObjectBase / RootObject / Character
+inline constexpr uintptr_t RO_owner = 0x10;       // Faction*
+inline constexpr uintptr_t RO_name = 0x18;        // std::string (display name)
+inline constexpr uintptr_t RO_data = 0x40;        // GameData* (template)
 inline constexpr uintptr_t RO_handle = 0x58;      // hand
 inline constexpr uintptr_t RO_rot = 0xB0;         // Ogre::Quaternion (w,x,y,z)
 inline constexpr uintptr_t CH_movement = 0x640;   // CharMovement*
@@ -131,9 +143,12 @@ inline constexpr uintptr_t AI_me = 0x2F8;  // Character*
 namespace slot {
 inline constexpr uintptr_t RO_getPosition = 0x40;                 // Vector3 getPosition()  (ret via hidden ptr)
 inline constexpr uintptr_t RO_isUnconcious = 0x30;                // bool isUnconcious() const
+inline constexpr uintptr_t RO_setName = 0x10;                     // void setName(const std::string&)
+inline constexpr uintptr_t CH_getAge = 0x390;                     // float getAge() const
 inline constexpr uintptr_t CM_setDestination = 0x90;              // void setDestination(const Vector3&, UpdatePriority, bool)
 inline constexpr uintptr_t CM_halt = 0x98;                        // void halt()
-inline constexpr uintptr_t CM_setPositionDirectionAndTeleport = 0xC0;  // (const Vector3&, const Quaternion&)
+inline constexpr uintptr_t CM_setPositionDirectionAndTeleport = 0xC0;  // (const Vector3&, const Quaternion&) - halts first
+inline constexpr uintptr_t CM_setPositionSimple = 0xC8;  // (const Vector3&): moves body + physics capsule, keeps walking
 } // namespace slot
 
 inline constexpr uint32_t kItemTypeCharacter = 1;
@@ -179,6 +194,12 @@ bool SaveManagerBusy();                                     // a save/load is pe
 bool RequestSave(const std::string& name, std::string* folderOut);   // folder = where it will be written
 bool RequestLoad(const std::string& name);
 bool SaveFolder(std::string& out);                          // where this machine's saves live
+
+// Character creation / removal (game thread, live world only).
+bool ReadSpawnSource(Character* c, kc::SpawnInfo& out);    // template + faction string ids, name, age
+void ResetLookupCaches();                                  // call when a new world loads
+Character* CreateCharacter(const kc::SpawnInfo& info, const kc::Vec3& pos, std::string* err);
+bool DestroyObject(void* obj);
 bool SetGameHours(double hours);
 
 float GetFrameSpeed();
@@ -187,6 +208,8 @@ bool GetPaused();
 // Game calls (game thread only). Return false if the call faulted or the object was invalid.
 bool Teleport(Character* c, const kc::Vec3& pos, const kc::Quat& rot);
 bool SetDestination(Character* c, const kc::Vec3& dest);
+bool SetPositionSimple(Character* c, const kc::Vec3& pos);
+bool IsMoving(const Character* c);
 bool Halt(Character* c);
 bool CallSetFrameSpeed(float speed);
 bool CallUserPause(bool paused);

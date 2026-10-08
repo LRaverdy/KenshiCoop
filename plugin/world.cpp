@@ -56,7 +56,11 @@ void KenshiWorld::BeginFrame(bool live) {
     // A (re)loaded world: a new generation, which tells a joining client its load completed.
     void* player = kenshi::Player();
     const bool ready = player && !squad_.empty();
-    if (ready && (!wasReady_ || player != lastPlayer_)) ++generation_;
+    if (ready && (!wasReady_ || player != lastPlayer_)) {
+        ++generation_;
+        alias_.clear();                  // stand-ins belonged to the previous world
+        kenshi::ResetLookupCaches();
+    }
     wasReady_ = ready;
     lastPlayer_ = player;
 }
@@ -65,12 +69,13 @@ void KenshiWorld::EndFrame() {
     // Clients run the host's clock: speed and pause are imposed every frame, so local keys
     // (space, F2/F3/F4) have no lasting effect.
     if (active_ && client_ && haveHostTime_) {
-        if (std::fabs(kenshi::GetFrameSpeed() - hostTime_.speed) > 1e-3f) kenshi::CallSetFrameSpeed(hostTime_.speed);
-        if (kenshi::GetPaused() != hostTime_.paused) kenshi::CallTogglePause(hostTime_.paused);
+        // Same calls as the space bar / speed keys, so the game's own speed UI follows too.
+        if (kenshi::GetPaused() != hostTime_.paused) kenshi::CallUserPause(hostTime_.paused);
+        if (!hostTime_.paused && std::fabs(kenshi::GetFrameSpeed() - hostTime_.speed) > 1e-3f) kenshi::CallSetFrameSpeed(hostTime_.speed);
     }
     // While players join, the host's world stays frozen even if someone presses unpause.
     if (holding_ && !kenshi::GetPaused()) {
-        kenshi::CallTogglePause(true);
+        kenshi::CallUserPause(true);
         pausedByHold_ = true;
     }
     auto v = std::make_shared<HookView>();
@@ -113,7 +118,7 @@ void KenshiWorld::NearbyCharacters(const std::vector<kc::Vec3>& centers, float r
     for (kenshi::Character* c : scratch_) {
         kc::Vec3 p;
         if (!kenshi::GetPosition(c, p)) continue;
-        bool inRange = false;
+        bool inRange = radius <= 0;   // 0 = every character the game keeps active
         for (const auto& ctr : centers) if (Dist(ctr, p) <= radius) { inRange = true; break; }
         if (!inRange) continue;
         kc::Handle h;
@@ -133,9 +138,43 @@ kenshi::Character* KenshiWorld::Find(const kc::Handle& h) {
     if (kenshi::Character* c = FindSquad(h)) return c;
     auto it = resolved_.find(h);
     if (it != resolved_.end()) return it->second;
-    kenshi::Character* c = kenshi::Resolve(h);   // null when the character is not loaded here
+    // a host character we recreated locally lives under its own local handle
+    auto a = alias_.find(h);
+    kenshi::Character* c = kenshi::Resolve(a != alias_.end() ? a->second : h);   // null when not loaded here
     resolved_[h] = c;
     return c;
+}
+
+bool KenshiWorld::ReadSpawnInfo(const kc::Handle& h, kc::SpawnInfo& out) {
+    kenshi::Character* c = Find(h);
+    return c && kenshi::ReadSpawnSource(c, out);
+}
+
+bool KenshiWorld::Spawn(const kc::Handle& h, const kc::SpawnInfo& info, const kc::EntityState& at) {
+    if (alias_.count(h)) return false;
+    std::string err;
+    HostCallScope scope;
+    kenshi::Character* c = kenshi::CreateCharacter(info, at.pos, &err);
+    kc::Handle local;
+    if (!c || !kenshi::GetHandle(c, local)) {
+        Log("cannot recreate host character %s: %s", info.templateSid.c_str(), err.c_str());
+        return false;
+    }
+    kenshi::Teleport(c, at.pos, at.rot);
+    alias_[h] = local;
+    resolved_.erase(h);
+    return true;
+}
+
+void KenshiWorld::Despawn(const kc::Handle& h) {
+    auto a = alias_.find(h);
+    if (a == alias_.end()) return;
+    if (kenshi::Character* c = kenshi::Resolve(a->second)) {
+        HostCallScope scope;
+        kenshi::DestroyObject(c);
+    }
+    alias_.erase(a);
+    resolved_.erase(h);
 }
 
 bool KenshiWorld::Read(const kc::Handle& h, kc::EntityState& out) {
@@ -165,20 +204,31 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     kc::Vec3 local;
     if (!kenshi::GetPosition(c, local)) return;
 
+    const float err = Dist(local, target.pos);
+    HostCallScope scope;
     // Far off (late join, lag spike, teleport on the host): snap straight to the host state.
-    if (Dist(local, target.pos) > cfg_.snapDistance) {
-        HostCallScope scope;
+    if (err > cfg_.snapDistance) {
         kenshi::Teleport(c, target.pos, target.rot);
         lastDest_.erase(h);
         return;
     }
-    // Otherwise let the game's own locomotion walk the character, so animations stay natural:
-    // follow the host's destination while it moves, and settle on its exact position when idle.
-    const kc::Vec3 want = (latest.flags & kc::kFlagMoving) ? latest.dest : target.pos;
+    // The game's own locomotion animates the character (walking toward the host's destination)...
+    const bool hostMoving = (latest.flags & kc::kFlagMoving) != 0;
     auto it = lastDest_.find(h);
-    if (it == lastDest_.end() || Dist(it->second, want) > cfg_.destEpsilon) {
-        HostCallScope scope;
-        if (kenshi::SetDestination(c, want)) lastDest_[h] = want;
+    if (hostMoving) {
+        if (it == lastDest_.end() || Dist(it->second, latest.dest) > cfg_.destEpsilon) {
+            if (kenshi::SetDestination(c, latest.dest)) lastDest_[h] = latest.dest;
+        }
+    } else if (it != lastDest_.end() || kenshi::IsMoving(c)) {
+        kenshi::Halt(c);   // the host stopped: stop walking, the correction below settles it exactly
+        lastDest_.erase(h);
+    }
+    // ...while its position is continuously pulled onto the host's: no drift, even when paused.
+    if (err > 0.01f) {
+        const float k = err > 2.0f ? 0.5f : 0.25f;
+        const kc::Vec3 p{local.x + (target.pos.x - local.x) * k, local.y + (target.pos.y - local.y) * k,
+                         local.z + (target.pos.z - local.z) * k};
+        kenshi::SetPositionSimple(c, err < 0.05f ? target.pos : p);
     }
 }
 
@@ -237,10 +287,10 @@ void KenshiWorld::HoldForJoin(bool hold) {
     holding_ = hold;
     if (hold) {
         pausedByHold_ = !kenshi::GetPaused();
-        if (pausedByHold_) kenshi::CallTogglePause(true);
+        if (pausedByHold_) kenshi::CallUserPause(true);   // the real pause: game speed 0
         Toast("A player is joining: the game is paused until they are in.");
     } else {
-        if (pausedByHold_ && kenshi::GetPaused()) kenshi::CallTogglePause(false);
+        if (pausedByHold_ && kenshi::GetPaused()) kenshi::CallUserPause(false);
         pausedByHold_ = false;
     }
 }

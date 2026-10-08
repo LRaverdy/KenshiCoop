@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 
 namespace kenshi {
 
@@ -28,6 +29,8 @@ const FunctionSig kFunctions[FnCount] = {
     {"SaveManager::getSingleton", 0x37DD00, {0x48, 0x83, 0xEC, 0x38, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF}},
     {"SaveManager::save", 0x47B920, {0x40, 0x57, 0x48, 0x81, 0xEC, 0x00, 0x01, 0x00, 0x00, 0x48, 0xC7, 0x44}},
     {"SaveManager::load", 0x47B480, {0x4C, 0x8B, 0xDC, 0x57, 0x48, 0x81, 0xEC, 0x70, 0x01, 0x00, 0x00, 0x48}},
+    {"RootObjectFactory::createRandomCharacter", 0x5836E0, {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41}},
+    {"GameWorld::destroy(RootObject*)", 0x799AF0, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
 };
 
 namespace {
@@ -514,6 +517,133 @@ bool RequestLoad(const std::string& name) {
     return CallStr(FnAddr(FnSaveManagerLoad), sm, gs.raw);
 }
 
+namespace {
+std::unordered_map<std::string, void*> g_gameDataBySid;   // built once per world
+bool g_gameDataBuilt = false;
+
+using FnCreateChar = void* (*)(void* factory, void* faction, const float* pos, void* owner, void* data, void* home, float age);
+void* CallCreateChar(void* fn, void* factory, void* faction, const float* pos, void* data, float age) {
+    __try {
+        return reinterpret_cast<FnCreateChar>(fn)(factory, faction, pos, nullptr, data, nullptr, age);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+using FnDestroy = bool (*)(void* world, void* obj, bool justUnloaded, const char* info);
+bool CallDestroy(void* fn, void* world, void* obj) {
+    __try {
+        return reinterpret_cast<FnDestroy>(fn)(world, obj, false, "KenshiCoop");
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+using VirtFloatRet = float (*)(void* self);
+bool CallFloatRet(void* fn, void* self, float& out) {
+    __try {
+        out = reinterpret_cast<VirtFloatRet>(fn)(self);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool GameDataSid(const void* gd, std::string& out) {
+    return gd && ReadGameString(reinterpret_cast<const uint8_t*>(gd) + off::GD_stringID, out) && !out.empty();
+}
+
+void BuildGameDataIndex() {
+    g_gameDataBuilt = true;
+    g_gameDataBySid.clear();
+    GameWorld* w = World();
+    if (!w) return;
+    const auto* map = reinterpret_cast<const uint8_t*>(w) + off::GW_gamedataBySid;
+    uint64_t size = 0, bucketCount = 0;
+    void** buckets = nullptr;
+    if (!Rd(map, off::US_size, size) || size == 0 || size > 2000000) return;
+    if (!Rd(map, off::US_bucketCount, bucketCount) || !Rd(map, off::US_buckets, buckets) || !buckets) return;
+    void* node = nullptr;
+    if (!Rd(buckets, bucketCount * sizeof(void*), node)) return;
+    size_t bad = 0;
+    std::string key, sid;
+    for (uint64_t i = 0; node && i < size; ++i) {
+        void* gd = nullptr;
+        if (ReadGameString(reinterpret_cast<uint8_t*>(node) + off::MapNode_key, key) && Rd(node, off::MapNode_mapped, gd) && gd) {
+            // the GameData must agree with its key: a cheap layout self-check
+            if (GameDataSid(gd, sid) && sid == key) g_gameDataBySid.emplace(key, gd);
+            else ++bad;
+        }
+        if (!Rd(node, off::USNode_next, node)) break;
+    }
+    if (bad > g_gameDataBySid.size() / 10) g_gameDataBySid.clear();   // layout not as expected: refuse to use it
+}
+
+void* FindGameData(const std::string& sid) {
+    if (!g_gameDataBuilt) BuildGameDataIndex();
+    auto it = g_gameDataBySid.find(sid);
+    return it == g_gameDataBySid.end() ? nullptr : it->second;
+}
+
+void* FindFaction(const std::string& sid) {
+    GameWorld* w = World();
+    void* mgr = nullptr;
+    if (!w || !Rd(w, off::GW_factionMgr, mgr) || !mgr) return nullptr;
+    uint32_t count = 0;
+    void** data = nullptr;
+    if (!Rd(mgr, off::LK_count, count) || !Rd(mgr, off::LK_data, data) || !data || count > 10000) return nullptr;
+    std::string s;
+    for (uint32_t i = 0; i < count; ++i) {
+        void* f = nullptr;
+        void* gd = nullptr;
+        if (Rd(data, i * sizeof(void*), f) && f && Rd(f, off::FAC_data, gd) && GameDataSid(gd, s) && s == sid) return f;
+    }
+    return nullptr;
+}
+} // namespace
+
+size_t GameDataIndexSize() { return g_gameDataBySid.size(); }
+
+void ResetLookupCaches() {
+    g_gameDataBuilt = false;
+    g_gameDataBySid.clear();
+}
+
+bool ReadSpawnSource(Character* c, kc::SpawnInfo& out) {
+    if (!IsCharacter(c)) return false;
+    void* gd = nullptr;
+    void* faction = nullptr;
+    void* fgd = nullptr;
+    if (!Rd(c, off::RO_data, gd) || !GameDataSid(gd, out.templateSid)) return false;
+    if (!Rd(c, off::RO_owner, faction) || !faction || !Rd(faction, off::FAC_data, fgd) || !GameDataSid(fgd, out.factionSid)) return false;
+    if (!ReadGameString(reinterpret_cast<uint8_t*>(c) + off::RO_name, out.name)) out.name.clear();
+    out.age = 0;
+    if (void* fn = VSlot(c, slot::CH_getAge)) CallFloatRet(fn, c, out.age);
+    if (!std::isfinite(out.age)) out.age = 0;
+    return out.templateSid.size() <= kc::kMaxSidLen && out.factionSid.size() <= kc::kMaxSidLen;
+}
+
+Character* CreateCharacter(const kc::SpawnInfo& info, const kc::Vec3& pos, std::string* err) {
+    GameWorld* w = World();
+    void* factory = nullptr;
+    if (!w || !Rd(w, off::GW_factory, factory) || !factory) { if (err) *err = "no factory"; return nullptr; }
+    void* gd = FindGameData(info.templateSid);
+    if (!gd) { if (err) *err = "unknown template " + info.templateSid; return nullptr; }
+    void* faction = FindFaction(info.factionSid);
+    if (!faction) { if (err) *err = "unknown faction " + info.factionSid; return nullptr; }
+    const float p[3] = {pos.x, pos.y, pos.z};
+    void* obj = CallCreateChar(FnAddr(FnCreateRandomCharacter), factory, faction, p, gd, info.age);
+    if (!IsCharacter(obj)) { if (err) *err = "factory did not return a character"; return nullptr; }
+    // Same name as on the host when it fits an inline string (the game never frees it).
+    GameString gs;
+    if (!info.name.empty() && MakeGameString(info.name, gs))
+        if (void* fn = VSlot(obj, slot::RO_setName)) CallStr(fn, obj, gs.raw);
+    return static_cast<Character*>(obj);
+}
+
+bool DestroyObject(void* obj) {
+    GameWorld* w = World();
+    return w && IsCharacter(obj) && CallDestroy(FnAddr(FnWorldDestroy), w, obj);
+}
+
 float GetFrameSpeed() {
     float v = 1.0f;
     GameWorld* w = World();
@@ -541,6 +671,30 @@ bool SetDestination(Character* c, const kc::Vec3& dest) {
     void* fn = VSlot(m, slot::CM_setDestination);
     const float p[3] = {dest.x, dest.y, dest.z};
     return fn && CallSetDest(fn, m, p, HIGH_PRIORITY);
+}
+
+using VirtVec = void (*)(void* self, const float* v);
+bool CallVec(void* fn, void* self, const float* v) {
+    __try {
+        reinterpret_cast<VirtVec>(fn)(self, v);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool SetPositionSimple(Character* c, const kc::Vec3& pos) {
+    void* m = Movement(c);
+    if (!m || !Finite(pos)) return false;
+    void* fn = VSlot(m, slot::CM_setPositionSimple);
+    const float p[3] = {pos.x, pos.y, pos.z};
+    return fn && CallVec(fn, m, p);
+}
+
+bool IsMoving(const Character* c) {
+    void* m = Movement(c);
+    bool moving = false;
+    return m && Rd(m, off::CM_currentlyMoving, moving) && moving;
 }
 
 bool Halt(Character* c) {

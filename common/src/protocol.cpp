@@ -116,6 +116,13 @@ void Encode(Writer& w, const Bind& m) {
     PutHandle(w, m.handle);
     w.u8(m.owner);
     w.boolean(m.squad);
+    w.boolean(m.hasSpawn);
+    if (m.hasSpawn) {
+        w.str(m.spawn.templateSid);
+        w.str(m.spawn.factionSid);
+        w.str(m.spawn.name);
+        w.f32(m.spawn.age);
+    }
 }
 bool Decode(Reader& r, Bind& m) {
     m.netId = GetU32Var(r);
@@ -125,6 +132,13 @@ bool Decode(Reader& r, Bind& m) {
     m.handle = GetHandle(r);
     m.owner = r.u8();
     m.squad = r.boolean();
+    m.hasSpawn = r.boolean();
+    if (m.hasSpawn) {
+        m.spawn.templateSid = r.str(kMaxSidLen);
+        m.spawn.factionSid = r.str(kMaxSidLen);
+        m.spawn.name = r.str(kMaxNameLen * 4);
+        m.spawn.age = r.f32();
+    }
     return Done(r) && m.netId != 0;
 }
 

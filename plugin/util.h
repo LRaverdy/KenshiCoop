@@ -15,10 +15,11 @@ struct Config {
     std::string name = "Player";
     std::string joinAddress = "127.0.0.1";
     uint16_t port = 27960;
-    float snapDistance = 50.0f;     // client: teleport a character when further than this from host state
+    float snapDistance = 15.0f;     // client: teleport a character when further than this from host state
     float destEpsilon = 2.0f;       // client: re-issue a destination when it moved more than this
-    float interestRadius = 1500.0f; // host: NPCs this close to the squad are replicated
+    float interestRadius = 0.0f;    // host: NPCs this close to the squad are replicated (0 = every active one)
     bool overlay = true;
+    bool debugCommands = false;     // [debug] commands=1: enable the scripted test channel (debug.h)
 };
 Config LoadConfig(const std::wstring& iniPath);   // creates the file with defaults if missing
 
