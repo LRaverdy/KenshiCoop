@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 2;
+constexpr uint16_t kProtocolVersion = 3;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -47,7 +47,17 @@ enum class Msg : uint8_t {
     Ping = 12,        // both
     Pong = 13,        // both
     Vitals = 14,      // S->C  (unreliable)
+    WorldBegin = 15,  // S->C  the host's world (a fresh save) is about to be streamed
+    WorldChunk = 16,  // S->C  a piece of one save file
+    WorldEnd = 17,    // S->C  all files sent
+    Ready = 18,       // C->S  the client loaded the host's world
 };
+
+// World transfer limits (a Kenshi save is a few MB).
+constexpr uint64_t kMaxWorldBytes = 256ull << 20;
+constexpr uint32_t kMaxWorldFiles = 20000;
+constexpr size_t kWorldChunkSize = 16 * 1024;
+constexpr size_t kMaxWorldPathLen = 240;
 
 enum class RejectReason : uint8_t {
     BadProtocol = 1,
@@ -185,6 +195,33 @@ struct Ping {
     double t = 0;  // sender clock, echoed back in Pong
 };
 
+// ---- world transfer ----
+struct WorldFile {
+    std::string path;            // relative, '/'-separated, validated by ValidWorldPath
+    std::vector<uint8_t> data;
+};
+struct WorldBegin {
+    uint64_t totalBytes = 0;
+    uint32_t fileCount = 0;
+};
+struct WorldChunk {
+    uint32_t file = 0;           // index in [0, fileCount)
+    std::string path;            // only in the first chunk of a file (offset == 0)
+    uint64_t fileSize = 0;       // only in the first chunk of a file
+    uint64_t offset = 0;
+    std::vector<uint8_t> data;
+};
+struct WorldEnd {
+    uint64_t worldHash = 0;      // fingerprint the client must see once it has loaded the world
+};
+struct ReadyMsg {
+    uint64_t worldHash = 0;
+};
+
+// A save-relative path coming from the network: no traversal, no absolute paths, no drive or
+// stream syntax, printable characters only. Anything else is refused.
+bool ValidWorldPath(const std::string& p);
+
 // ---- encoding ----
 // Encoders append the message id byte first. Decoders expect the id byte to have been consumed
 // (see PeekType) and fail on trailing garbage.
@@ -199,6 +236,10 @@ void Encode(Writer& w, const Unbind& m);
 void Encode(Writer& w, const Command& m);
 void Encode(Writer& w, const TimeState& m);
 void EncodePing(Writer& w, const Ping& m, bool pong);
+void Encode(Writer& w, const WorldBegin& m);
+void Encode(Writer& w, const WorldChunk& m);
+void Encode(Writer& w, const WorldEnd& m);
+void Encode(Writer& w, const ReadyMsg& m);
 
 // Snapshots are split into packets that each fit `budget` bytes; every packet is self-contained.
 std::vector<std::vector<uint8_t>> EncodeSnapshot(const Snapshot& s, size_t budget = kSnapshotBudget);
@@ -217,6 +258,10 @@ bool Decode(Reader& r, Snapshot& m);
 bool Decode(Reader& r, Command& m);
 bool Decode(Reader& r, TimeState& m);
 bool Decode(Reader& r, VitalsMsg& m);
+bool Decode(Reader& r, WorldBegin& m);
+bool Decode(Reader& r, WorldChunk& m);
+bool Decode(Reader& r, WorldEnd& m);
+bool Decode(Reader& r, ReadyMsg& m);
 bool Decode(Reader& r, Ping& m);
 
 // Name rules: 1..kMaxNameLen printable ASCII, no leading/trailing spaces.

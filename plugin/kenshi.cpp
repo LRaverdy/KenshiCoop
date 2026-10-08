@@ -25,6 +25,9 @@ const FunctionSig kFunctions[FnCount] = {
     {"MedicalSystem::applyDamage", 0x64F300, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
     {"MedicalSystem::knockout", 0x644980, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0xF3, 0x0F, 0x10, 0x05, 0xA6, 0xF4}},
     {"Character::declareDead", 0x7A6200, {0x48, 0x8B, 0xC4, 0x55, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48}},
+    {"SaveManager::getSingleton", 0x37DD00, {0x48, 0x83, 0xEC, 0x38, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF}},
+    {"SaveManager::save", 0x47B920, {0x40, 0x57, 0x48, 0x81, 0xEC, 0x00, 0x01, 0x00, 0x00, 0x48, 0xC7, 0x44}},
+    {"SaveManager::load", 0x47B480, {0x4C, 0x8B, 0xDC, 0x57, 0x48, 0x81, 0xEC, 0x70, 0x01, 0x00, 0x00, 0x48}},
 };
 
 namespace {
@@ -162,6 +165,59 @@ void ReadPointerSet(const void* set, std::vector<void*>& out, size_t cap) {
         if (!Rd(node, off::USNode_value, v)) return;
         out.push_back(v);
         if (!Rd(node, off::USNode_next, node)) return;
+    }
+}
+
+// std::string as compiled by Visual Studio 2010 (Kenshi's compiler): 40 bytes,
+// { char buf[16] | char* ptr; size_t size; size_t capacity; allocator (1 byte, padded) }.
+// Strings shorter than 16 chars live inline, so building one never allocates, and the game
+// never has to free memory owned by a different C runtime.
+struct GameString {
+    alignas(8) uint8_t raw[0x28] = {};
+};
+static_assert(sizeof(GameString) == 0x28, "VS2010 std::string is 40 bytes");
+bool MakeGameString(const std::string& s, GameString& out) {
+    if (s.size() > 15) return false;
+    std::memset(out.raw, 0, sizeof(out.raw));
+    std::memcpy(out.raw, s.data(), s.size());
+    const uint64_t size = s.size(), cap = 15;
+    std::memcpy(out.raw + 0x10, &size, 8);
+    std::memcpy(out.raw + 0x18, &cap, 8);
+    return true;
+}
+bool ReadGameString(const void* p, std::string& out) {
+    uint64_t size = 0, cap = 0;
+    if (!Rd(p, 0x10, size) || !Rd(p, 0x18, cap) || size > cap || cap > 4096) return false;
+    const void* chars = p;
+    if (cap >= 16 && !Rd(p, 0, chars)) return false;
+    out.resize(size_t(size));
+    return size == 0 || SafeCopy(out.data(), chars, size_t(size));
+}
+
+using FnNoArgPtr = void* (*)();
+void* CallNoArgPtr(void* fn) {
+    __try {
+        return reinterpret_cast<FnNoArgPtr>(fn)();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+using FnStrBool = void (*)(void* self, const void* str, bool b);
+bool CallStrBool(void* fn, void* self, const void* str, bool b) {
+    __try {
+        reinterpret_cast<FnStrBool>(fn)(self, str, b);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+using FnStr = void (*)(void* self, const void* str);
+bool CallStr(void* fn, void* self, const void* str) {
+    __try {
+        reinterpret_cast<FnStr>(fn)(self, str);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
     }
 }
 
@@ -422,6 +478,40 @@ bool SetGameHours(double hours) {
     if (!std::isfinite(hours) || hours < 0) return false;
     if (!Rd(reinterpret_cast<void*>(Addr(rva::GameClockOwner)), 0, clock) || !clock) return false;
     return Wr(clock, off::Clock_hours, hours);
+}
+
+namespace {
+void* SaveManagerInstance() { return CallNoArgPtr(FnAddr(FnSaveManagerGet)); }
+}
+
+bool SaveManagerBusy() {
+    void* sm = SaveManagerInstance();
+    int signal = 0;
+    return !sm || !Rd(sm, off::SM_signal, signal) || signal != 0;
+}
+
+bool SaveFolder(std::string& out) {
+    void* sm = SaveManagerInstance();
+    bool user = false;
+    if (!sm || !Rd(reinterpret_cast<void*>(Addr(rva::SaveUsesUserPath)), 0, user)) return false;
+    return ReadGameString(reinterpret_cast<uint8_t*>(sm) + (user ? off::SM_userSavePath : off::SM_localSavePath), out) && !out.empty();
+}
+
+bool RequestSave(const std::string& name, std::string* folderOut) {
+    void* sm = SaveManagerInstance();
+    GameString gs;
+    if (!sm || !MakeGameString(name, gs) || SaveManagerBusy()) return false;
+    if (!CallStrBool(FnAddr(FnSaveManagerSave), sm, gs.raw, false)) return false;
+    // save() silently refuses in some states (editor, another operation): it then leaves no request
+    if (!SaveManagerBusy()) return false;
+    return !folderOut || ReadGameString(reinterpret_cast<uint8_t*>(sm) + off::SM_location, *folderOut);
+}
+
+bool RequestLoad(const std::string& name) {
+    void* sm = SaveManagerInstance();
+    GameString gs;
+    if (!sm || !MakeGameString(name, gs) || SaveManagerBusy()) return false;
+    return CallStr(FnAddr(FnSaveManagerLoad), sm, gs.raw);
 }
 
 float GetFrameSpeed() {

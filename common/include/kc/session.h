@@ -2,10 +2,13 @@
 // The game is reached only through IWorld, so the whole multiplayer logic is unit-testable with a
 // fake world (see tests/). Everything here runs on the game thread, inside Session::Tick().
 //
-// The host's game is the server: it alone simulates. Clients render the host's world:
-//  - every character near the squad (squad members and NPCs) is replicated, by game handle;
-//  - position/movement go in snapshots, health in vitals, clock/pause/speed in TimeState;
-//  - only what changed is sent, plus a periodic refresh so unreliable losses heal by themselves.
+// The host's game is the server: it alone simulates. Joining = receiving the host's world:
+//  1. the client connects (from the main menu or from any loaded game);
+//  2. the host holds its world still, saves it, and streams the save to the client;
+//  3. the client loads that save and reports Ready; from then on it renders the host's world:
+//     every character near the squad is replicated by game handle (positions in snapshots,
+//     health in vitals, clock/pause/speed in TimeState), and local simulation is switched off.
+// Only what changed is sent, plus a periodic refresh so unreliable losses heal by themselves.
 #pragma once
 #include <cstdint>
 #include <deque>
@@ -30,13 +33,17 @@ struct HandleHash {
     }
 };
 
+enum class ExportStatus { Pending, Done, Failed };
+
 // What the session needs from the game. Implemented by the Kenshi layer and by tests.
+// Methods that touch the game world are only called on ticks where the world is live.
 class IWorld {
 public:
     virtual ~IWorld() = default;
 
     virtual bool Ready() = 0;                  // a world is loaded and running
-    virtual uint64_t Fingerprint() = 0;        // identifies the loaded save (same on host/client)
+    virtual uint32_t WorldGeneration() = 0;    // changes every time a (new) world finishes loading
+    virtual uint64_t Fingerprint() = 0;        // identifies the loaded world (same on host/client)
     virtual uint64_t GameBuild() = 0;
     virtual uint64_t ModsHash() = 0;
 
@@ -63,6 +70,14 @@ public:
     virtual TimeState GetTime() = 0;
     virtual void SetTime(const TimeState& t) = 0;
 
+    // Host: freeze the world while players join (true), release it afterwards (false).
+    virtual void HoldForJoin(bool hold) = 0;
+    // Host: save the current world for transfer; poll until Done (files filled) or Failed.
+    virtual bool BeginWorldExport(std::string* err) = 0;
+    virtual ExportStatus PollWorldExport(std::vector<WorldFile>& files, std::string* err) = 0;
+    // Client: write the host's save locally and start loading it (may be called from a menu).
+    virtual bool BeginWorldImport(const std::vector<WorldFile>& files, std::string* err) = 0;
+
     // Role hooks: on clients, the world must stop simulating anything (the host owns it all).
     virtual void SetRole(bool client, bool active) = 0;
     // Which squad members the local player may command.
@@ -78,17 +93,21 @@ struct SessionConfig {
     double timeStateInterval = 0.5;    // host re-sends TimeState at least this often
     double refreshInterval = 1.0;      // unchanged entities are still re-sent this often
     double handshakeTimeout = 10.0;    // seconds a peer may stay connected without a valid Hello
+    double exportTimeout = 120.0;      // host: saving the world for a joiner may take this long
+    double loadTimeout = 300.0;        // client: downloading + loading the host's world
+    double worldLostTimeout = 5.0;     // seconds without a live world before the session ends
     float snapDistance = 50.0f;        // samples further apart than this are not interpolated
     float interestRadius = 1500.0f;    // NPCs within this distance of the squad are replicated
 };
 
-enum class SessionState { Idle, Hosting, Connecting, Handshake, Connected, Failed };
+enum class SessionState { Idle, Hosting, Connecting, Handshake, Downloading, Loading, Connected, Failed };
 
 struct RemotePlayer {
     uint8_t id = 0;
     std::string name;
     PeerId peer = kNoPeer;   // host side only
     uint32_t rttMs = 0;
+    bool inGame = true;      // host side: finished loading the world
 };
 
 class Session {
@@ -103,7 +122,8 @@ public:
     bool Join(const std::string& address, uint16_t port, std::string* err);
     void Leave();
 
-    void Tick();  // call once per game frame
+    // Call once per frame. `worldLive`: the game world is loaded and safe to touch this frame.
+    void Tick(bool worldLive = true);
 
     // Host: hand a squad member to a player (host id = back to the host).
     void Assign(const Handle& h, uint8_t playerId);
@@ -111,7 +131,10 @@ public:
 
     SessionState state() const { return state_; }
     bool isHost() const { return state_ == SessionState::Hosting; }
-    bool isClient() const { return state_ == SessionState::Connected || state_ == SessionState::Handshake || state_ == SessionState::Connecting; }
+    bool isClient() const {
+        return state_ == SessionState::Connected || state_ == SessionState::Handshake || state_ == SessionState::Connecting ||
+               state_ == SessionState::Downloading || state_ == SessionState::Loading;
+    }
     uint8_t localId() const { return localId_; }
     const std::string& lastError() const { return lastError_; }
     const std::map<uint8_t, RemotePlayer>& players() const { return players_; }
@@ -122,6 +145,8 @@ public:
     uint32_t missingSquad() const { return missingSquad_; }   // client: squad members not found locally
     uint32_t missingNpcs() const;                             // client: NPCs the host has but we do not
     uint32_t pingMs() const;
+    double downloadProgress() const;                          // client: 0..1 while Downloading
+    size_t joiningPlayers() const;                            // host: players still loading the world
 
 private:
     struct Sample { double t; EntityState s; };
@@ -131,9 +156,11 @@ private:
         uint8_t owner = 0;
         bool squad = false;
         // client
-        bool present = true;                 // handle resolved in the local world
+        bool present = false;                // handle resolved in the local world
+        bool checked = false;                // presence evaluated at least once
         std::deque<Sample> buf;              // interpolation buffer, oldest first
         bool haveVitals = false;
+        bool vitalsDirty = false;
         EntityVitals vitals;
         // host
         bool keep = false;                   // scratch flag for interest updates
@@ -146,24 +173,33 @@ private:
     };
     struct PlayerSync {
         std::unordered_map<uint32_t, Sent> sent;
+        bool worldSent = false;              // the world save was streamed to this player
+        double joinedAt = 0;
+        uint64_t readyHash = 0;              // pending Ready to verify on the next live tick
+        bool readyPending = false;
+        bool kicked = false;
     };
 
-    void HostTick(double now);
-    void ClientTick(double now);
+    void HostTick(double now, bool live);
+    void ClientTick(double now, bool live);
     void OnPacket(PeerId peer, uint8_t chan, const uint8_t* data, size_t size);
     void HostPacket(PeerId peer, Msg type, Reader& r);
     void ClientPacket(Msg type, Reader& r);
     void OnDisconnect(PeerId peer);
 
+    void HostJoinFlow(double now, bool live);
+    void StreamWorld(const RemotePlayer& p);
+    void FinishJoin(RemotePlayer& p);
     void UpdateInterest();                   // host: (un)bind squad members and nearby NPCs
     void SendSnapshots(double now);
     void SendVitals(double now);
     void SendBind(const Entity& e, PeerId to);
     void SendReliable(PeerId to, const Writer& w);
-    void BroadcastReliable(const Writer& w, PeerId except = kNoPeer);
+    void BroadcastReliable(const Writer& w, bool inGameOnly, PeerId except = kNoPeer);
     void PushControllable();
     void Fail(const std::string& why);
     void AddChat(const std::string& line);
+    void Kick(RemotePlayer& p, RejectReason why);
     RemotePlayer* playerByPeer(PeerId p);
     Entity* entityByHandle(const Handle& h);
     void ApplyCommand(uint8_t from, const Command& c);
@@ -181,7 +217,7 @@ private:
     uint8_t localId_ = 0;
     const uint8_t hostId_ = 1;
     std::map<uint8_t, RemotePlayer> players_;      // excludes the local player
-    std::map<uint8_t, PlayerSync> sync_;           // host: per-player delta state
+    std::map<uint8_t, PlayerSync> sync_;           // host: per-player state
     std::deque<std::string> chat_;
 
     std::unordered_map<uint32_t, Entity> entities_;  // netId -> entity
@@ -197,11 +233,37 @@ private:
     double nextPing_ = 0;
     double nextPresenceCheck_ = 0;
     double nextVitalsApply_ = 0;
+    double lastLive_ = 0;
     TimeState lastTime_;
     bool controllableDirty_ = true;
     uint32_t missingSquad_ = 0;
     double connectStarted_ = 0;
     std::map<PeerId, double> pendingPeers_;          // host: connected, Hello not received yet
+    std::vector<std::pair<uint8_t, Command>> pendingCommands_;  // host: run on the next live tick
+
+    // host world export (shared by everyone joining at the same time)
+    bool holding_ = false;
+    bool exporting_ = false;
+    double exportStarted_ = 0;
+    std::vector<WorldFile> exportFiles_;
+    bool exportReady_ = false;
+    uint64_t exportHash_ = 0;
+
+    // client world download
+    WorldBegin dlInfo_;
+    std::vector<WorldFile> dlFiles_;
+    uint64_t dlBytes_ = 0;
+    uint64_t dlHash_ = 0;
+    bool dlComplete_ = false;
+    bool importStarted_ = false;
+    uint32_t importGeneration_ = 0;
+    double loadStarted_ = 0;
+    double loadStableSince_ = 0;
+    bool sawOtherWorld_ = false;
+
+    // client: latest host time, applied on live ticks
+    bool haveTime_ = false;
+    TimeState hostTime_;
 
     // client clock sync: hostTime ~= localTime + offset_
     double offset_ = 0;

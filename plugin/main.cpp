@@ -33,6 +33,8 @@ const char* StateName(kc::SessionState s) {
     case kc::SessionState::Hosting: return "hosting";
     case kc::SessionState::Connecting: return "connecting...";
     case kc::SessionState::Handshake: return "handshaking...";
+    case kc::SessionState::Downloading: return "receiving the host's world...";
+    case kc::SessionState::Loading: return "loading the host's world...";
     case kc::SessionState::Connected: return "connected";
     case kc::SessionState::Failed: return "disconnected";
     }
@@ -90,6 +92,7 @@ void GiveSelectedToNextPlayer() {
 
 // Writes everything KenshiCoop reads from the game to the log, to validate the memory layout.
 void DumpDiagnostics(const char* why) {
+    if (!g_world->Ready()) { Log("---- diagnostics (%s): no world loaded", why); return; }
     std::vector<kc::Handle> hs;
     g_world->PlayerCharacters(hs);
     Log("---- diagnostics (%s): %zu player characters, speed=%.2f paused=%d", why, hs.size(), kenshi::GetFrameSpeed(), int(kenshi::GetPaused()));
@@ -145,10 +148,14 @@ void PublishOverlay() {
     m.visible = g_overlayVisible;
     m.title = std::string("KenshiCoop ") + kVersion + "  -  " + StateName(g_session->state());
     const auto st = g_session->state();
-    if (st == kc::SessionState::Idle || st == kc::SessionState::Failed) {
+    if (st == kc::SessionState::Downloading) {
+        m.lines.push_back("Receiving the host's world: " + std::to_string(int(g_session->downloadProgress() * 100)) + "%");
+    } else if (st == kc::SessionState::Loading || st == kc::SessionState::Connecting || st == kc::SessionState::Handshake) {
+        m.lines.push_back("Please wait...");
+    } else if (st == kc::SessionState::Idle || st == kc::SessionState::Failed) {
         if (st == kc::SessionState::Failed && !g_session->lastError().empty()) m.lines.push_back(g_session->lastError());
         m.lines.push_back("Ctrl+Shift+H  host this game");
-        m.lines.push_back("Ctrl+Shift+J  join " + g_cfg.joinAddress + ":" + std::to_string(g_cfg.port));
+        m.lines.push_back("Ctrl+Shift+J  join " + g_cfg.joinAddress + ":" + std::to_string(g_cfg.port) + " (works from the main menu)");
         m.lines.push_back("Ctrl+Shift+O  hide this panel");
     } else {
         m.lines.push_back("You: " + g_cfg.name + " (player " + std::to_string(g_session->localId()) + ")" +
@@ -164,6 +171,8 @@ void PublishOverlay() {
                           (g_session->isClient() && g_session->missingNpcs() ? " (" + std::to_string(g_session->missingNpcs()) + " not spawned here yet)" : ""));
         if (g_session->missingSquad())
             m.lines.push_back("WARNING: " + std::to_string(g_session->missingSquad()) + " squad members missing here - load the host's save!");
+        if (g_session->isHost() && g_session->joiningPlayers())
+            m.lines.push_back(std::to_string(g_session->joiningPlayers()) + " player(s) joining - game paused");
         if (g_session->isHost()) m.lines.push_back("Ctrl+Shift+G  give selected to next player");
         m.lines.push_back("Ctrl+Shift+L  leave");
     }
@@ -175,23 +184,68 @@ void PublishOverlay() {
     OverlayPublish(std::move(m));
 }
 
-void Tick() {
-    g_world->BeginFrame();
+void Tick(bool live) {
+    g_world->BeginFrame(live);
     for (auto& t : g_world->TakeToasts()) Toast(t);
 
     const bool ready = g_world->Ready();
-    if (ready != g_wasReady) {
+    if (live && ready != g_wasReady) {
         g_wasReady = ready;
         Log(ready ? "world ready: %zu player characters" : "world unloaded", g_world->CharacterCount());
         if (ready) DumpDiagnostics("world loaded");
+    } else if (!live && g_wasReady && NowSeconds() - LastLiveTick() > 1.0) {
+        g_wasReady = false;
+        Log("world unloaded (menu or loading)");
     }
     HandleHotkeys();
-    g_session->Tick();
-    g_world->EndFrame();
+    g_session->Tick(live);
+    if (live) g_world->EndFrame();
     PublishOverlay();
 }
 
-void TickEntry() { Tick(); }
+void TickEntry(bool live) { Tick(live); }
+
+// ---- Ogre frame listener: keeps KenshiCoop running in menus and loading screens, where the
+// game's main loop (and therefore our main-loop tick) does not run. Its vtable must match the
+// FrameListener of Kenshi's Ogre build, verified in OgreMain_x64.dll (Root::_fireFrame*):
+// [0] frameStarted, [1] frameRenderingQueued, [2] (extra slot, unused), [3] frameEnded, [4] dtor.
+struct FrameEvent {
+    float timeSinceLastEvent;
+    float timeSinceLastFrame;
+};
+class CoopFrameListener {
+public:
+    virtual bool frameStarted(const FrameEvent&) {
+        if (NowSeconds() - LastLiveTick() > 0.2) RunTick(false);
+        return true;
+    }
+    virtual bool frameRenderingQueued(const FrameEvent&) { return true; }
+    virtual bool extraSlot(const void*) { return true; }
+    virtual bool frameEnded(const FrameEvent&) { return true; }
+    virtual ~CoopFrameListener() = default;
+};
+CoopFrameListener g_frameListener;
+
+bool AddFrameListenerSEH(void* getSingleton, void* addListener) {
+    using GetRootFn = void* (*)();
+    using AddFn = void (*)(void* root, void* listener);
+    __try {
+        void* root = reinterpret_cast<GetRootFn>(getSingleton)();
+        if (!root) return false;
+        reinterpret_cast<AddFn>(addListener)(root, &g_frameListener);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool InstallFrameListener() {
+    HMODULE ogre = GetModuleHandleW(L"OgreMain_x64.dll");
+    if (!ogre) return false;
+    void* get = reinterpret_cast<void*>(GetProcAddress(ogre, "?getSingleton@Root@Ogre@@SAAEAV12@XZ"));
+    void* add = reinterpret_cast<void*>(GetProcAddress(ogre, "?addFrameListener@Root@Ogre@@QEAAXPEAVFrameListener@2@@Z"));
+    return get && add && AddFrameListenerSEH(get, add);
+}
 
 bool Start() {
     const std::wstring dir = GameDir();
@@ -222,6 +276,7 @@ bool Start() {
 
     if (!InstallHooks(&TickEntry, &err)) { Log("disabled: %s", err.c_str()); g_session.reset(); g_world.reset(); return false; }
     if (!OverlayInstall(&err)) Log("overlay unavailable: %s (multiplayer still works, see this log)", err.c_str());
+    if (!InstallFrameListener()) Log("frame listener unavailable: joining from the main menu will not work");
     Log("ready. name='%s' port=%u join=%s", g_cfg.name.c_str(), g_cfg.port, g_cfg.joinAddress.c_str());
     return true;
 }

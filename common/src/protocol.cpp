@@ -1,6 +1,7 @@
 #include "kc/protocol.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 
 namespace kc {
@@ -262,8 +263,69 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Vitals)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Ready)) return std::nullopt;
     return Msg(t);
+}
+
+void Encode(Writer& w, const WorldBegin& m) { w.u8(uint8_t(Msg::WorldBegin)); w.u64(m.totalBytes); w.varint(m.fileCount); }
+bool Decode(Reader& r, WorldBegin& m) {
+    m.totalBytes = r.u64();
+    m.fileCount = GetU32Var(r);
+    return Done(r) && m.totalBytes <= kMaxWorldBytes && m.fileCount <= kMaxWorldFiles;
+}
+
+void Encode(Writer& w, const WorldChunk& m) {
+    w.u8(uint8_t(Msg::WorldChunk));
+    w.varint(m.file);
+    w.varint(m.offset);
+    if (m.offset == 0) { w.str(m.path); w.varint(m.fileSize); }
+    w.varint(m.data.size());
+    w.bytes(m.data.data(), m.data.size());
+}
+bool Decode(Reader& r, WorldChunk& m) {
+    m.file = GetU32Var(r);
+    m.offset = r.varint();
+    if (m.offset == 0) {
+        m.path = r.str(kMaxWorldPathLen);
+        m.fileSize = r.varint();
+        if (!r.ok() || !ValidWorldPath(m.path) || m.fileSize > kMaxWorldBytes) return false;
+    }
+    const uint64_t n = r.varint();
+    if (!r.ok() || n > kWorldChunkSize || n > r.remaining()) return false;
+    m.data.resize(size_t(n));
+    r.bytes(m.data.data(), size_t(n));
+    return Done(r) && m.file < kMaxWorldFiles && m.offset <= kMaxWorldBytes;
+}
+
+void Encode(Writer& w, const WorldEnd& m) { w.u8(uint8_t(Msg::WorldEnd)); w.u64(m.worldHash); }
+bool Decode(Reader& r, WorldEnd& m) { m.worldHash = r.u64(); return Done(r); }
+
+void Encode(Writer& w, const ReadyMsg& m) { w.u8(uint8_t(Msg::Ready)); w.u64(m.worldHash); }
+bool Decode(Reader& r, ReadyMsg& m) { m.worldHash = r.u64(); return Done(r); }
+
+bool ValidWorldPath(const std::string& p) {
+    if (p.empty() || p.size() > kMaxWorldPathLen || p.front() == '/' || p.back() == '/') return false;
+    size_t segStart = 0;
+    for (size_t i = 0; i <= p.size(); ++i) {
+        if (i < p.size()) {
+            const unsigned char c = static_cast<unsigned char>(p[i]);
+            // no control chars, no Windows-reserved characters, no backslash or drive/stream colon
+            if (c < 0x20 || c == 0x7F || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' ||
+                c == '>' || c == '|')
+                return false;
+            if (c != '/') continue;
+        }
+        const std::string seg = p.substr(segStart, i - segStart);
+        if (seg.empty() || seg == "." || seg == ".." || seg.back() == '.' || seg.back() == ' ' || seg.front() == ' ') return false;
+        // Windows device names (CON, NUL, COM1, ...) are refused whatever their extension
+        std::string base = seg.substr(0, seg.find('.'));
+        for (char& ch : base) ch = char(std::toupper(static_cast<unsigned char>(ch)));
+        static const char* kDevices[] = {"CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+                                         "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"};
+        for (const char* d : kDevices) if (base == d) return false;
+        segStart = i + 1;
+    }
+    return true;
 }
 
 bool ValidName(const std::string& s) {

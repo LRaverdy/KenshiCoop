@@ -14,6 +14,8 @@ namespace kcp {
 namespace {
 
 TickFn g_tick = nullptr;
+double g_lastLiveTick = -1e9;
+bool g_inTick = false;
 thread_local int g_hostCall = 0;   // >0 while KenshiCoop itself is calling into the game
 
 // ---- originals
@@ -42,10 +44,10 @@ MedDamageFn o_medDamage = nullptr;
 MedKnockoutFn o_medKnockout = nullptr;
 DeclareDeadFn o_declareDead = nullptr;
 
-void SafeTick() {
+void SafeTick(bool live) {
     // C++ exceptions must never unwind into game code.
     try {
-        g_tick();
+        g_tick(live);
     } catch (const std::exception& e) {
         Log("tick exception: %s", e.what());
     } catch (...) {
@@ -53,9 +55,9 @@ void SafeTick() {
     }
 }
 
-void TickSEH() {
+void TickSEH(bool live) {
     __try {
-        SafeTick();
+        SafeTick(live);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         static int reported = 0;
         if (reported++ < 5) Log("tick: access violation caught (code %08lx)", GetExceptionCode());
@@ -64,7 +66,8 @@ void TickSEH() {
 
 void hk_mainLoop(void* gw, float t) {
     o_mainLoop(gw, t);
-    if (g_tick) TickSEH();
+    g_lastLiveTick = NowSeconds();
+    RunTick(true);
 }
 
 // Classifies the current selection: are all selected characters ours to command?
@@ -200,6 +203,15 @@ struct HookDef {
 std::vector<void*> g_installed;
 
 } // namespace
+
+void RunTick(bool live) {
+    if (!g_tick || g_inTick) return;   // the game can render (and call us) from inside a tick
+    g_inTick = true;
+    TickSEH(live);
+    g_inTick = false;
+}
+
+double LastLiveTick() { return g_lastLiveTick; }
 
 HostCallScope::HostCallScope() { ++g_hostCall; }
 HostCallScope::~HostCallScope() { --g_hostCall; }

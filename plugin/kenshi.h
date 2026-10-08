@@ -20,6 +20,7 @@ namespace rva {
 inline constexpr uintptr_t GameWorldInstance = 0x2134110;   // global `GameWorld ou` object
 inline constexpr uintptr_t HandleTable = 0x2133f90;         // first arg of the hand resolver
 inline constexpr uintptr_t GameClockOwner = 0x21303d0;      // pointer; +0xA0 = in-game hours (double)
+inline constexpr uintptr_t SaveUsesUserPath = 0x2133573;    // bool: SaveManager uses userSavePath, else localSavePath
 
 inline constexpr uintptr_t VtCharacter = 0x16f9eb8;
 inline constexpr uintptr_t VtCharacterHuman = 0x16f2848;
@@ -54,6 +55,9 @@ enum Fn : int {
     FnMedApplyDamage,           // void MedicalSystem::applyDamage(HealthPartStatus*, const Damages&, bool loadingSavestate, bool canSever, const Vector3& force)
     FnMedKnockout,              // void MedicalSystem::knockout(float skill01)
     FnDeclareDead,              // void Character::declareDead()
+    FnSaveManagerGet,           // static SaveManager* SaveManager::getSingleton()
+    FnSaveManagerSave,          // void SaveManager::save(const std::string& name, bool autosave)   (deferred)
+    FnSaveManagerLoad,          // void SaveManager::load(const std::string& name)                  (deferred)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -104,6 +108,11 @@ inline constexpr uintptr_t MS_me = 0xE0;             // Character*
 inline constexpr uintptr_t MS_unconscious = 0x161;  // bool
 inline constexpr uintptr_t MS_dead = 0x164;          // bool
 inline constexpr uintptr_t MS_anatomy = 0x190;       // lektor<HealthPartStatus*>
+// SaveManager
+inline constexpr uintptr_t SM_localSavePath = 0x50;  // std::string (VS2010 layout)
+inline constexpr uintptr_t SM_userSavePath = 0x78;   // std::string
+inline constexpr uintptr_t SM_signal = 0xA0;         // int: pending save/load operation, 0 = idle
+inline constexpr uintptr_t SM_location = 0xD8;       // std::string: folder of the last save/load request
 // HealthPartStatus
 inline constexpr uintptr_t HP_flesh = 0x40;
 inline constexpr uintptr_t HP_stun = 0x44;
@@ -165,6 +174,11 @@ bool IsDead(Character* c);
 bool IsUnconscious(Character* c);
 
 bool GetGameHours(double& out);
+// Save management (deferred operations, executed by the game a frame later).
+bool SaveManagerBusy();                                     // a save/load is pending or running
+bool RequestSave(const std::string& name, std::string* folderOut);   // folder = where it will be written
+bool RequestLoad(const std::string& name);
+bool SaveFolder(std::string& out);                          // where this machine's saves live
 bool SetGameHours(double hours);
 
 float GetFrameSpeed();

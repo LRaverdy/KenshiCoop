@@ -8,11 +8,15 @@
 
 namespace kcp {
 
-// Called once per game frame, on the game thread, right after GameWorld's main loop.
-using TickFn = void (*)();
+// Called on the game thread: `live` = right after GameWorld's main loop (the world may be touched);
+// otherwise from the frame listener while no world is running (menus, loading screens).
+using TickFn = void (*)(bool live);
 
 bool InstallHooks(TickFn tick, std::string* err);
 void RemoveHooks();
+// Runs the tick with exception barriers; never lets an exception reach game code.
+void RunTick(bool live);
+double LastLiveTick();   // NowSeconds() of the last main-loop tick
 
 // Our own calls into the game pass through the order-blocking hooks while this is alive.
 struct HostCallScope {

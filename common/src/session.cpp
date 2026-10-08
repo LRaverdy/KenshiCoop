@@ -53,7 +53,6 @@ Session::Session(IWorld& world, SessionConfig cfg, ClockFn clock, LogFn log)
             Hello h;
             h.gameBuild = world_.GameBuild();
             h.modsHash = world_.ModsHash();
-            h.worldHash = world_.Fingerprint();
             h.name = cfg_.name;
             Writer w;
             Encode(w, h);
@@ -81,6 +80,7 @@ bool Session::Host(std::string* err) {
     state_ = SessionState::Hosting;
     localId_ = hostId_;
     lastError_.clear();
+    lastLive_ = clock_();
     world_.SetRole(false, true);
     controllableDirty_ = true;
     nextInterest_ = 0;
@@ -90,10 +90,6 @@ bool Session::Host(std::string* err) {
 
 bool Session::Join(const std::string& address, uint16_t port, std::string* err) {
     Leave();
-    if (!world_.Ready()) {
-        if (err) *err = "load the host's save before joining";
-        return false;
-    }
     if (!net_.Connect(address, port, err)) return false;
     state_ = SessionState::Connecting;
     lastError_.clear();
@@ -104,22 +100,34 @@ bool Session::Join(const std::string& address, uint16_t port, std::string* err) 
 }
 
 void Session::Leave() {
-    const bool wasActive = state_ == SessionState::Hosting || state_ == SessionState::Connected ||
-                           state_ == SessionState::Handshake || state_ == SessionState::Connecting;
+    const bool wasActive = state_ != SessionState::Idle && state_ != SessionState::Failed;
+    const bool roleWasSet = state_ == SessionState::Hosting || state_ == SessionState::Connected;
     net_.Close();
     entities_.clear();
     byHandle_.clear();
     players_.clear();
     sync_.clear();
     pendingPeers_.clear();
+    pendingCommands_.clear();
     owners_.clear();
+    exportFiles_.clear();
+    exportFiles_.shrink_to_fit();
+    exporting_ = exportReady_ = false;
+    dlFiles_.clear();
+    dlFiles_.shrink_to_fit();
+    dlComplete_ = importStarted_ = false;
+    haveTime_ = false;
     missingSquad_ = 0;
     localId_ = 0;
-    if (wasActive) {
+    if (holding_) {
+        holding_ = false;
+        world_.HoldForJoin(false);
+    }
+    if (roleWasSet) {
         world_.SetRole(false, false);
         world_.SetControllable({});
-        log_("session closed");
     }
+    if (wasActive) log_("session closed");
     if (state_ != SessionState::Failed) state_ = SessionState::Idle;
 }
 
@@ -130,25 +138,30 @@ void Session::Fail(const std::string& why) {
     state_ = SessionState::Failed;
 }
 
-void Session::Tick() {
+void Session::Tick(bool worldLive) {
     if (state_ == SessionState::Idle || state_ == SessionState::Failed) return;
     const double now = clock_();
     net_.Poll(cb_);
     if (state_ == SessionState::Idle || state_ == SessionState::Failed) return;  // poll may have ended it
-    if (isHost()) HostTick(now);
-    else ClientTick(now);
+    const bool live = worldLive && world_.Ready();
+    if (isHost()) HostTick(now, live);
+    else ClientTick(now, live);
     net_.Flush();
 }
 
 // ============================== host ==============================
 
-void Session::HostTick(double now) {
-    if (!world_.Ready()) { Fail("world unloaded"); return; }
+void Session::HostTick(double now, bool live) {
+    if (live) lastLive_ = now;
+    else if (now - lastLive_ > cfg_.worldLostTimeout) { Fail("world unloaded"); return; }
 
     for (auto it = pendingPeers_.begin(); it != pendingPeers_.end();) {
         if (now - it->second > cfg_.handshakeTimeout) { net_.Kick(it->first); it = pendingPeers_.erase(it); }
         else ++it;
     }
+
+    HostJoinFlow(now, live);
+    if (state_ != SessionState::Hosting || !live) return;
 
     if (now >= nextInterest_) {
         nextInterest_ = now + kInterestInterval;
@@ -156,6 +169,8 @@ void Session::HostTick(double now) {
     }
     if (controllableDirty_) PushControllable();
 
+    for (auto& [from, c] : pendingCommands_) ApplyCommand(from, c);
+    pendingCommands_.clear();
     // The host's own orders execute natively in its world; nothing to intercept.
     scratchOrders_.clear();
     world_.TakeLocalOrders(scratchOrders_);
@@ -166,10 +181,12 @@ void Session::HostTick(double now) {
         nextTimeState_ = now + cfg_.timeStateInterval;
         Writer w;
         Encode(w, t);
-        BroadcastReliable(w);
+        BroadcastReliable(w, true);
     }
 
-    if (!players_.empty()) {
+    bool anyInGame = false;
+    for (auto& [pid, p] : players_) anyInGame |= p.inGame;
+    if (anyInGame) {
         if (now >= nextSnapshot_) {
             nextSnapshot_ = std::max(nextSnapshot_ + 1.0 / cfg_.snapshotRate, now - 0.5 / cfg_.snapshotRate);
             SendSnapshots(now);
@@ -184,6 +201,126 @@ void Session::HostTick(double now) {
         nextPing_ = now + kPingInterval;
         for (auto& [pid, p] : players_) p.rttMs = net_.stats(p.peer).rttMs;
     }
+}
+
+void Session::HostJoinFlow(double now, bool live) {
+    std::vector<uint8_t> joining;
+    for (auto& [pid, p] : players_) if (!p.inGame && !sync_[pid].kicked) joining.push_back(pid);
+
+    if (joining.empty()) {
+        if (holding_ && live) { world_.HoldForJoin(false); holding_ = false; }
+        if (exportReady_ || exporting_) {  // the next joiner gets a fresh save
+            exportFiles_.clear();
+            exportFiles_.shrink_to_fit();
+            exportReady_ = exporting_ = false;
+        }
+        return;
+    }
+    // Hold the world still: what is saved must be exactly what the joiner will see.
+    if (live && !holding_) { world_.HoldForJoin(true); holding_ = true; }
+
+    for (uint8_t id : joining) {
+        if (now - sync_[id].joinedAt > cfg_.loadTimeout) Kick(players_[id], RejectReason::NotReady);
+    }
+
+    bool needWorld = false;
+    for (uint8_t id : joining) needWorld |= !sync_[id].worldSent;
+    if (needWorld && !exportReady_) {
+        if (!exporting_ && live && holding_) {
+            std::string err;
+            if (world_.BeginWorldExport(&err)) {
+                exporting_ = true;
+                exportStarted_ = now;
+                log_("saving the world for joining players");
+            } else {
+                log_("cannot save the world for joining players: " + err);
+                for (auto& [pid, p] : players_) if (!p.inGame) Kick(p, RejectReason::NotReady);
+                return;
+            }
+        }
+        if (exporting_) {
+            std::string err;
+            const ExportStatus st = world_.PollWorldExport(exportFiles_, &err);
+            if (st == ExportStatus::Done && live) {
+                exporting_ = false;
+                exportReady_ = true;
+                exportHash_ = world_.Fingerprint();
+                uint64_t bytes = 0;
+                for (auto& f : exportFiles_) bytes += f.data.size();
+                log_("world saved: " + std::to_string(exportFiles_.size()) + " files, " + std::to_string(bytes / 1024) + " KB");
+            } else if (st == ExportStatus::Failed || now - exportStarted_ > cfg_.exportTimeout) {
+                exporting_ = false;
+                log_("saving the world failed: " + (err.empty() ? std::string("timeout") : err));
+                for (auto& [pid, p] : players_) if (!p.inGame) Kick(p, RejectReason::NotReady);
+                return;
+            }
+        }
+    }
+    if (exportReady_) {
+        for (auto& [pid, p] : players_) {
+            if (p.inGame || sync_[pid].worldSent) continue;
+            StreamWorld(p);
+            sync_[pid].worldSent = true;
+        }
+    }
+    if (!live) return;
+    for (auto& [pid, p] : players_) {
+        PlayerSync& s = sync_[pid];
+        if (p.inGame || !s.readyPending) continue;
+        s.readyPending = false;
+        if (s.readyHash != world_.Fingerprint()) { Kick(p, RejectReason::WorldMismatch); continue; }
+        FinishJoin(p);
+    }
+}
+
+void Session::StreamWorld(const RemotePlayer& p) {
+    WorldBegin b;
+    b.fileCount = uint32_t(exportFiles_.size());
+    for (auto& f : exportFiles_) b.totalBytes += f.data.size();
+    Writer w;
+    Encode(w, b);
+    SendReliable(p.peer, w);
+    for (uint32_t i = 0; i < exportFiles_.size(); ++i) {
+        const WorldFile& f = exportFiles_[i];
+        uint64_t off = 0;
+        do {
+            WorldChunk c;
+            c.file = i;
+            c.offset = off;
+            if (off == 0) { c.path = f.path; c.fileSize = f.data.size(); }
+            const size_t n = size_t(std::min<uint64_t>(kWorldChunkSize, f.data.size() - off));
+            c.data.assign(f.data.begin() + ptrdiff_t(off), f.data.begin() + ptrdiff_t(off + n));
+            Writer cw(n + 64);
+            Encode(cw, c);
+            SendReliable(p.peer, cw);
+            off += n;
+        } while (off < f.data.size());
+    }
+    Writer e;
+    Encode(e, WorldEnd{exportHash_});
+    SendReliable(p.peer, e);
+    log_("world sent to " + p.name);
+}
+
+void Session::FinishJoin(RemotePlayer& p) {
+    p.inGame = true;
+    sync_[p.id].sent.clear();
+    for (auto& [nid, e] : entities_) SendBind(e, p.peer);
+    Writer t;
+    Encode(t, world_.GetTime());
+    SendReliable(p.peer, t);
+    AddChat("* " + p.name + " is in the world");
+}
+
+void Session::Kick(RemotePlayer& p, RejectReason why) {
+    PlayerSync& s = sync_[p.id];
+    if (s.kicked) return;   // already on its way out
+    s.kicked = true;
+    Writer w;
+    Encode(w, Reject{why});
+    SendReliable(p.peer, w);
+    net_.Kick(p.peer);
+    log_("removed " + p.name + ": " + ToString(why));
 }
 
 void Session::UpdateInterest() {
@@ -206,7 +343,7 @@ void Session::UpdateInterest() {
         e.keep = true;
         byHandle_[h] = e.netId;
         Entity& ref = entities_[e.netId] = std::move(e);
-        for (auto& [pid, p] : players_) SendBind(ref, p.peer);
+        for (auto& [pid, p] : players_) if (p.inGame) SendBind(ref, p.peer);
         if (squad) controllableDirty_ = true;
         return ref;
     };
@@ -240,7 +377,7 @@ void Session::UpdateInterest() {
         if (it->second.keep) { ++it; continue; }
         Writer w;
         Encode(w, Unbind{it->first});
-        BroadcastReliable(w);
+        BroadcastReliable(w, true);
         if (it->second.squad) controllableDirty_ = true;
         for (auto& [pid, s] : sync_) s.sent.erase(it->first);
         byHandle_.erase(it->second.handle);
@@ -255,6 +392,7 @@ void Session::SendSnapshots(double now) {
         if (world_.Read(e.handle, st)) { st.netId = id; stateCache_[id] = st; }
     }
     for (auto& [pid, p] : players_) {
+        if (!p.inGame) continue;
         auto& sent = sync_[pid].sent;
         Snapshot s;
         s.tick = ++tick_;
@@ -279,6 +417,7 @@ void Session::SendVitals(double now) {
         if (world_.ReadVitals(e.handle, v)) { v.netId = id; vitalsCache_[id] = std::move(v); }
     }
     for (auto& [pid, p] : players_) {
+        if (!p.inGame) continue;
         auto& sent = sync_[pid].sent;
         VitalsMsg m;
         m.tick = tick_;
@@ -312,7 +451,7 @@ void Session::Assign(const Handle& h, uint8_t playerId) {
     if (it != owners_.end()) it->second = playerId; else owners_.emplace_back(h, playerId);
     if (Entity* e = entityByHandle(h); e && e->squad) {
         e->owner = playerId;
-        for (auto& [pid, p] : players_) SendBind(*e, p.peer);  // Bind doubles as an ownership update
+        for (auto& [pid, p] : players_) if (p.inGame) SendBind(*e, p.peer);  // Bind doubles as an ownership update
     }
     controllableDirty_ = true;
 }
@@ -340,7 +479,6 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         if (!Decode(r, h) || h.protocol != kProtocolVersion) return reject(RejectReason::BadProtocol);
         if (h.gameBuild != world_.GameBuild()) return reject(RejectReason::GameMismatch);
         if (h.modsHash != world_.ModsHash()) return reject(RejectReason::ModsMismatch);
-        if (h.worldHash != world_.Fingerprint()) return reject(RejectReason::WorldMismatch);
         if (!ValidName(h.name)) return reject(RejectReason::BadName);
         uint8_t id = 0;
         for (uint8_t i = 2; i <= kMaxPlayers; ++i) if (!players_.count(i)) { id = i; break; }
@@ -349,7 +487,6 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
 
         Welcome wm;
         wm.yourId = id;
-        wm.worldHash = world_.Fingerprint();
         wm.hostTime = clock_();
         wm.players.push_back({hostId_, cfg_.name});
         for (auto& [pid, p] : players_) wm.players.push_back({pid, p.name});
@@ -359,27 +496,34 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
 
         Writer j;
         Encode(j, PlayerInfo{id, h.name});
-        BroadcastReliable(j);
+        BroadcastReliable(j, false);
 
         RemotePlayer np;
         np.id = id;
         np.name = h.name;
         np.peer = peer;
+        np.inGame = false;
         players_[id] = np;
-        sync_[id] = PlayerSync{};
-        for (auto& [nid, e] : entities_) SendBind(e, peer);
-        Writer t;
-        Encode(t, world_.GetTime());
-        SendReliable(peer, t);
-        AddChat("* " + h.name + " joined");
+        PlayerSync s;
+        s.joinedAt = clock_();
+        sync_[id] = std::move(s);
+        AddChat("* " + h.name + " is joining...");
         return;
     }
     if (!pl) return;  // everything else requires a completed handshake
 
     switch (type) {
+    case Msg::Ready: {
+        ReadyMsg m;
+        PlayerSync& s = sync_[pl->id];
+        if (!Decode(r, m) || pl->inGame || !s.worldSent) break;
+        s.readyHash = m.worldHash;
+        s.readyPending = true;   // verified on the next live tick
+        break;
+    }
     case Msg::Command: {
         Command c;
-        if (Decode(r, c)) ApplyCommand(pl->id, c);
+        if (pl->inGame && Decode(r, c) && pendingCommands_.size() < 1024) pendingCommands_.emplace_back(pl->id, c);
         break;
     }
     case Msg::Chat: {
@@ -390,7 +534,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         if (c.text.empty()) break;
         Writer w;
         Encode(w, c);
-        BroadcastReliable(w);
+        BroadcastReliable(w, false);
         AddChat(pl->name + ": " + c.text);
         break;
     }
@@ -418,19 +562,75 @@ void Session::ApplyCommand(uint8_t from, const Command& c) {
 
 // ============================== client ==============================
 
-void Session::ClientTick(double now) {
-    if (state_ == SessionState::Connecting || state_ == SessionState::Handshake) {
+void Session::ClientTick(double now, bool live) {
+    switch (state_) {
+    case SessionState::Connecting:
+    case SessionState::Handshake:
         if (now - connectStarted_ > kConnectTimeout) Fail("no answer from host (wrong address, port closed or firewall?)");
         return;
+    case SessionState::Downloading:
+        if (now - connectStarted_ > cfg_.loadTimeout) { Fail("downloading the host's world timed out"); return; }
+        if (dlComplete_ && !importStarted_) {
+            std::string err;
+            importGeneration_ = world_.WorldGeneration();
+            if (!world_.BeginWorldImport(dlFiles_, &err)) { Fail("cannot load the host's world: " + err); return; }
+            dlFiles_.clear();
+            dlFiles_.shrink_to_fit();
+            importStarted_ = true;
+            loadStarted_ = now;
+            loadStableSince_ = 0;
+            sawOtherWorld_ = false;
+            state_ = SessionState::Loading;
+            log_("host world downloaded, loading it");
+        }
+        return;
+    case SessionState::Loading:
+        if (now - loadStarted_ > cfg_.loadTimeout) {
+            Fail(sawOtherWorld_ ? "the loaded world differs from the host's" : "loading the host's world timed out");
+            return;
+        }
+        // The game may run frames while a world is still half-built: only accept a world that
+        // matches the host's for a full second.
+        if (!live || world_.WorldGeneration() == importGeneration_) { loadStableSince_ = 0; return; }
+        if (world_.Fingerprint() != dlHash_) { sawOtherWorld_ = true; loadStableSince_ = 0; return; }
+        if (loadStableSince_ == 0) loadStableSince_ = now;
+        if (now - loadStableSince_ >= 1.0) {
+            const uint64_t fp = world_.Fingerprint();
+            Writer w;
+            Encode(w, ReadyMsg{fp});
+            SendReliable(net_.serverPeer(), w);
+            state_ = SessionState::Connected;
+            lastLive_ = now;
+            world_.SetRole(true, true);
+            controllableDirty_ = true;
+            AddChat("* in the host's world as player " + std::to_string(localId_));
+        }
+        return;
+    default: break;
     }
-    if (!world_.Ready()) { Fail("world unloaded"); return; }
+
+    // Connected
+    if (live) lastLive_ = now;
+    else if (now - lastLive_ > cfg_.worldLostTimeout) { Fail("world unloaded"); return; }
+    if (!live) return;
+
+    if (haveTime_) world_.SetTime(hostTime_);
     if (controllableDirty_) PushControllable();
 
-    // NPCs stream in and out of the local world as zones load: re-resolve the missing ones.
-    if (now >= nextPresenceCheck_) {
-        nextPresenceCheck_ = now + kPresenceInterval;
-        for (auto& [id, e] : entities_) e.present = world_.Exists(e.handle);
+    // NPCs stream in and out of the local world as zones load: re-resolve them regularly.
+    const bool fullCheck = now >= nextPresenceCheck_;
+    if (fullCheck) nextPresenceCheck_ = now + kPresenceInterval;
+    uint32_t missing = 0;
+    for (auto& [id, e] : entities_) {
+        if (fullCheck || !e.checked) {
+            e.present = world_.Exists(e.handle);
+            e.checked = true;
+        }
+        if (e.squad && !e.present) ++missing;
     }
+    if (missing != missingSquad_ && missing > missingSquad_)
+        log_(std::to_string(missing) + " host squad members are missing in the local world");
+    missingSquad_ = missing;
 
     // Local orders never execute locally: they become commands, the host runs them, and the
     // result comes back through snapshots.
@@ -447,17 +647,20 @@ void Session::ClientTick(double now) {
         SendReliable(net_.serverPeer(), w);
     }
 
-    if (!offsetValid_) return;
-    const double renderTime = now + offset_ - cfg_.interpDelay;
-    for (auto& [id, e] : entities_) {
-        if (!e.present || e.buf.empty()) continue;
-        world_.Apply(e.handle, Interpolate(e, renderTime), e.buf.back().s);
+    if (offsetValid_) {
+        const double renderTime = now + offset_ - cfg_.interpDelay;
+        for (auto& [id, e] : entities_) {
+            if (!e.present || e.buf.empty()) continue;
+            world_.Apply(e.handle, Interpolate(e, renderTime), e.buf.back().s);
+        }
     }
     // Local simulation (bleeding, healing...) keeps nudging health: re-impose the host's values.
-    if (now >= nextVitalsApply_) {
-        nextVitalsApply_ = now + kVitalsReapply;
-        for (auto& [id, e] : entities_)
-            if (e.present && e.haveVitals) world_.ApplyVitals(e.handle, e.vitals);
+    const bool reapply = now >= nextVitalsApply_;
+    if (reapply) nextVitalsApply_ = now + kVitalsReapply;
+    for (auto& [id, e] : entities_) {
+        if (!e.present || !e.haveVitals || !(reapply || e.vitalsDirty)) continue;
+        world_.ApplyVitals(e.handle, e.vitals);
+        e.vitalsDirty = false;
     }
 
     if (now >= nextPing_) {
@@ -495,10 +698,12 @@ void Session::ClientPacket(Msg type, Reader& r) {
         for (auto& p : m.players) if (p.id != localId_) players_[p.id] = RemotePlayer{p.id, p.name};
         offset_ = m.hostTime - clock_();
         offsetValid_ = true;
-        state_ = SessionState::Connected;
-        world_.SetRole(true, true);
-        controllableDirty_ = true;
-        AddChat("* connected as player " + std::to_string(localId_));
+        state_ = SessionState::Downloading;
+        dlInfo_ = {};
+        dlFiles_.clear();
+        dlBytes_ = 0;
+        dlComplete_ = importStarted_ = false;
+        AddChat("* joined as player " + std::to_string(localId_) + ", receiving the host's world...");
         break;
     }
     case Msg::Reject: {
@@ -506,11 +711,44 @@ void Session::ClientPacket(Msg type, Reader& r) {
         Fail(Decode(r, m) ? std::string("rejected by host: ") + ToString(m.reason) : "rejected by host");
         break;
     }
+    case Msg::WorldBegin: {
+        WorldBegin m;
+        if (state_ != SessionState::Downloading || !Decode(r, m)) { Fail("bad world transfer from host"); break; }
+        dlInfo_ = m;
+        dlFiles_.assign(m.fileCount, WorldFile{});
+        dlBytes_ = 0;
+        break;
+    }
+    case Msg::WorldChunk: {
+        WorldChunk c;
+        if (state_ != SessionState::Downloading || !Decode(r, c) || c.file >= dlFiles_.size()) { Fail("bad world transfer from host"); break; }
+        WorldFile& f = dlFiles_[c.file];
+        if (c.offset == 0) {
+            if (!f.path.empty() || !f.data.empty()) { Fail("bad world transfer from host"); break; }
+            f.path = c.path;
+            f.data.reserve(size_t(c.fileSize));
+        }
+        if (f.path.empty() || c.offset != f.data.size() || dlBytes_ + c.data.size() > dlInfo_.totalBytes) {
+            Fail("bad world transfer from host");
+            break;
+        }
+        f.data.insert(f.data.end(), c.data.begin(), c.data.end());
+        dlBytes_ += c.data.size();
+        break;
+    }
+    case Msg::WorldEnd: {
+        WorldEnd m;
+        if (state_ != SessionState::Downloading || !Decode(r, m) || dlBytes_ != dlInfo_.totalBytes) { Fail("bad world transfer from host"); break; }
+        for (auto& f : dlFiles_) if (f.path.empty()) { Fail("bad world transfer from host"); return; }
+        dlHash_ = m.worldHash;
+        dlComplete_ = true;
+        break;
+    }
     case Msg::PlayerJoined: {
         PlayerInfo m;
         if (!Decode(r, m) || m.id == localId_) break;
         players_[m.id] = RemotePlayer{m.id, m.name};
-        AddChat("* " + m.name + " joined");
+        AddChat("* " + m.name + " is joining...");
         break;
     }
     case Msg::PlayerLeft: {
@@ -530,22 +768,14 @@ void Session::ClientPacket(Msg type, Reader& r) {
     }
     case Msg::Bind: {
         Bind m;
-        if (!Decode(r, m)) break;
+        if (state_ != SessionState::Connected || !Decode(r, m)) break;
         Entity& e = entities_[m.netId];
-        const bool isNew = e.netId == 0;
-        if (!isNew && e.handle != m.handle) byHandle_.erase(e.handle);
+        if (e.netId != 0 && e.handle != m.handle) { byHandle_.erase(e.handle); e.checked = false; }
         e.netId = m.netId;
         e.handle = m.handle;
         e.owner = m.owner;
         e.squad = m.squad;
         byHandle_[m.handle] = m.netId;
-        if (isNew) {
-            e.present = world_.Exists(m.handle);
-            if (!e.present && e.squad) {
-                ++missingSquad_;
-                log_("host squad member not found in local world (save mismatch?) netId=" + std::to_string(m.netId));
-            }
-        }
         if (e.squad) controllableDirty_ = true;
         break;
     }
@@ -554,17 +784,14 @@ void Session::ClientPacket(Msg type, Reader& r) {
         if (!Decode(r, m)) break;
         auto it = entities_.find(m.netId);
         if (it == entities_.end()) break;
-        if (it->second.squad) {
-            controllableDirty_ = true;
-            if (!it->second.present && missingSquad_) --missingSquad_;
-        }
+        if (it->second.squad) controllableDirty_ = true;
         byHandle_.erase(it->second.handle);
         entities_.erase(it);
         break;
     }
     case Msg::Snapshot: {
         Snapshot s;
-        if (!Decode(r, s)) break;
+        if (state_ != SessionState::Connected || !Decode(r, s)) break;
         const double now = clock_();
         // Clock sync: the least-delayed packet gives the best estimate of host-local offset.
         const double sample = s.hostTime - now;
@@ -586,19 +813,19 @@ void Session::ClientPacket(Msg type, Reader& r) {
     }
     case Msg::Vitals: {
         VitalsMsg m;
-        if (!Decode(r, m)) break;
+        if (state_ != SessionState::Connected || !Decode(r, m)) break;
         for (auto& v : m.entities) {
             auto it = entities_.find(v.netId);
             if (it == entities_.end()) continue;
             it->second.vitals = std::move(v);
             it->second.haveVitals = true;
-            if (it->second.present) world_.ApplyVitals(it->second.handle, it->second.vitals);
+            it->second.vitalsDirty = true;
         }
         break;
     }
     case Msg::TimeState: {
         TimeState t;
-        if (Decode(r, t)) world_.SetTime(t);
+        if (Decode(r, t)) { hostTime_ = t; haveTime_ = true; }
         break;
     }
     case Msg::Pong: break;
@@ -636,12 +863,12 @@ void Session::OnDisconnect(PeerId peer) {
     for (auto& [nid, e] : entities_) {
         if (e.owner != id) continue;
         e.owner = hostId_;
-        for (auto& [pid, p] : players_) SendBind(e, p.peer);
+        for (auto& [pid, p] : players_) if (p.inGame) SendBind(e, p.peer);
     }
     controllableDirty_ = true;
     Writer w;
     Encode(w, PlayerLeft{id});
-    BroadcastReliable(w);
+    BroadcastReliable(w, false);
     AddChat("* " + name + " left");
 }
 
@@ -654,7 +881,7 @@ void Session::SendChat(const std::string& text) {
     if (isHost()) {
         c.from = hostId_;
         Encode(w, c);
-        BroadcastReliable(w);
+        BroadcastReliable(w, false);
         AddChat(cfg_.name + ": " + clean);
     } else if (state_ == SessionState::Connected) {
         Encode(w, c);
@@ -664,10 +891,10 @@ void Session::SendChat(const std::string& text) {
 
 void Session::SendReliable(PeerId to, const Writer& w) { net_.Send(to, kChanReliable, w.data(), w.size(), true); }
 
-void Session::BroadcastReliable(const Writer& w, PeerId except) {
+void Session::BroadcastReliable(const Writer& w, bool inGameOnly, PeerId except) {
     // Only peers that completed the handshake receive game traffic.
     for (auto& [pid, p] : players_)
-        if (p.peer != except) net_.Send(p.peer, kChanReliable, w.data(), w.size(), true);
+        if (p.peer != except && (!inGameOnly || p.inGame)) net_.Send(p.peer, kChanReliable, w.data(), w.size(), true);
 }
 
 void Session::AddChat(const std::string& line) {
@@ -703,13 +930,24 @@ size_t Session::npcCount() const {
 
 uint32_t Session::missingNpcs() const {
     uint32_t n = 0;
-    for (auto& [id, e] : entities_) if (!e.squad && !e.present) ++n;
+    for (auto& [id, e] : entities_) if (!e.squad && e.checked && !e.present) ++n;
     return n;
 }
 
 uint32_t Session::pingMs() const {
     if (isHost()) return 0;
     return rttMs_;
+}
+
+double Session::downloadProgress() const {
+    if (state_ != SessionState::Downloading || dlInfo_.totalBytes == 0) return 0;
+    return double(dlBytes_) / double(dlInfo_.totalBytes);
+}
+
+size_t Session::joiningPlayers() const {
+    size_t n = 0;
+    for (auto& [id, p] : players_) if (!p.inGame) ++n;
+    return n;
 }
 
 } // namespace kc

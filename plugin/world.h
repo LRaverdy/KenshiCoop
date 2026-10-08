@@ -29,11 +29,12 @@ class KenshiWorld final : public kc::IWorld {
 public:
     explicit KenshiWorld(const Config& cfg);
 
-    void BeginFrame();   // refresh caches (game thread, once per tick)
-    void EndFrame();     // enforce host time on clients, publish the hook view
+    void BeginFrame(bool live);   // refresh caches (game thread, once per tick)
+    void EndFrame();              // enforce host time on clients, publish the hook view (live ticks)
 
     // IWorld
     bool Ready() override;
+    uint32_t WorldGeneration() override { return generation_; }
     uint64_t Fingerprint() override;
     uint64_t GameBuild() override { return build_; }
     uint64_t ModsHash() override;
@@ -48,6 +49,10 @@ public:
     void TakeLocalOrders(std::vector<std::pair<kc::Handle, kc::Command>>& out) override;
     kc::TimeState GetTime() override;
     void SetTime(const kc::TimeState& t) override;
+    void HoldForJoin(bool hold) override;
+    bool BeginWorldExport(std::string* err) override;
+    kc::ExportStatus PollWorldExport(std::vector<kc::WorldFile>& files, std::string* err) override;
+    bool BeginWorldImport(const std::vector<kc::WorldFile>& files, std::string* err) override;
     void SetRole(bool client, bool active) override;
     void SetControllable(const std::vector<kc::Handle>& handles) override;
 
@@ -76,6 +81,13 @@ private:
     std::vector<std::pair<kc::Handle, kc::Command>> orders_;
     std::vector<kenshi::Character*> scratch_;
     bool active_ = false, client_ = false;
+    bool live_ = false;
+    bool wasReady_ = false;
+    void* lastPlayer_ = nullptr;
+    uint32_t generation_ = 0;
+    bool holding_ = false, pausedByHold_ = false;
+    bool exporting_ = false;
+    std::string exportFolder_;
     bool haveHostTime_ = false;
     kc::TimeState hostTime_;
     std::mutex toastMutex_;
