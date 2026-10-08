@@ -1,0 +1,264 @@
+#include "kc/protocol.h"
+
+#include <algorithm>
+#include <cmath>
+
+namespace kc {
+
+const char* ToString(RejectReason r) {
+    switch (r) {
+    case RejectReason::BadProtocol: return "incompatible KenshiCoop version";
+    case RejectReason::GameMismatch: return "different Kenshi build (kenshi_x64.exe)";
+    case RejectReason::ModsMismatch: return "different active mod list";
+    case RejectReason::WorldMismatch: return "different save loaded";
+    case RejectReason::Full: return "server full";
+    case RejectReason::BadName: return "invalid player name";
+    case RejectReason::NotReady: return "host has not loaded a world yet";
+    }
+    return "unknown";
+}
+
+namespace {
+
+void PutVec(Writer& w, const Vec3& v) { w.f32(v.x); w.f32(v.y); w.f32(v.z); }
+Vec3 GetVec(Reader& r) { Vec3 v; v.x = r.f32(); v.y = r.f32(); v.z = r.f32(); return v; }
+
+void PutHandle(Writer& w, const Handle& h) {
+    w.varint(h.type); w.varint(h.container); w.varint(h.containerSerial); w.varint(h.index); w.varint(h.serial);
+}
+Handle GetHandle(Reader& r) {
+    Handle h;
+    auto v32 = [&r]() { const uint64_t v = r.varint(); if (v > 0xFFFFFFFFull) r.fail(); return static_cast<uint32_t>(v); };
+    h.type = v32(); h.container = v32(); h.containerSerial = v32(); h.index = v32(); h.serial = v32();
+    return h;
+}
+
+uint32_t GetU32Var(Reader& r) {
+    const uint64_t v = r.varint();
+    if (v > 0xFFFFFFFFull) r.fail();
+    return static_cast<uint32_t>(v);
+}
+
+bool Done(Reader& r) { return r.ok() && r.atEnd(); }
+
+void PutEntity(Writer& w, const EntityState& e) {
+    w.varint(e.netId);
+    PutVec(w, e.pos);
+    w.u32(PackQuat(e.rot));
+    PutVec(w, e.dest);
+    w.u8(e.flags);
+}
+constexpr size_t kMinEntityBytes = 1 + 12 + 4 + 12 + 1;
+
+} // namespace
+
+void Encode(Writer& w, const Hello& m) {
+    w.u8(uint8_t(Msg::Hello));
+    w.u32(kMagic);
+    w.u16(m.protocol);
+    w.u64(m.gameBuild);
+    w.u64(m.modsHash);
+    w.u64(m.worldHash);
+    w.str(m.name);
+}
+bool Decode(Reader& r, Hello& m) {
+    if (r.u32() != kMagic) return false;
+    m.protocol = r.u16();
+    m.gameBuild = r.u64();
+    m.modsHash = r.u64();
+    m.worldHash = r.u64();
+    m.name = r.str(kMaxNameLen);
+    return Done(r);
+}
+
+void Encode(Writer& w, const Welcome& m) {
+    w.u8(uint8_t(Msg::Welcome));
+    w.u8(m.yourId);
+    w.u64(m.worldHash);
+    w.f64(m.hostTime);
+    w.varint(m.players.size());
+    for (const auto& p : m.players) { w.u8(p.id); w.str(p.name); }
+}
+bool Decode(Reader& r, Welcome& m) {
+    m.yourId = r.u8();
+    m.worldHash = r.u64();
+    m.hostTime = r.f64();
+    const uint32_t n = r.count(kMaxPlayers, 2);
+    m.players.resize(n);
+    for (auto& p : m.players) { p.id = r.u8(); p.name = r.str(kMaxNameLen); }
+    return Done(r);
+}
+
+void Encode(Writer& w, const Reject& m) { w.u8(uint8_t(Msg::Reject)); w.u8(uint8_t(m.reason)); }
+bool Decode(Reader& r, Reject& m) {
+    const uint8_t v = r.u8();
+    if (v < 1 || v > 7) return false;
+    m.reason = RejectReason(v);
+    return Done(r);
+}
+
+void Encode(Writer& w, const PlayerInfo& m) { w.u8(uint8_t(Msg::PlayerJoined)); w.u8(m.id); w.str(m.name); }
+bool Decode(Reader& r, PlayerInfo& m) { m.id = r.u8(); m.name = r.str(kMaxNameLen); return Done(r); }
+
+void Encode(Writer& w, const PlayerLeft& m) { w.u8(uint8_t(Msg::PlayerLeft)); w.u8(m.id); }
+bool Decode(Reader& r, PlayerLeft& m) { m.id = r.u8(); return Done(r); }
+
+void Encode(Writer& w, const Chat& m) { w.u8(uint8_t(Msg::Chat)); w.u8(m.from); w.str(m.text); }
+bool Decode(Reader& r, Chat& m) { m.from = r.u8(); m.text = r.str(kMaxChatLen * 4); return Done(r); }
+
+void Encode(Writer& w, const Bind& m) {
+    w.u8(uint8_t(Msg::Bind));
+    w.varint(m.netId);
+    w.u8(uint8_t(m.kind));
+    PutHandle(w, m.handle);
+    w.u8(m.owner);
+}
+bool Decode(Reader& r, Bind& m) {
+    m.netId = GetU32Var(r);
+    const uint8_t k = r.u8();
+    if (k != uint8_t(EntityKind::Character)) return false;
+    m.kind = EntityKind(k);
+    m.handle = GetHandle(r);
+    m.owner = r.u8();
+    return Done(r) && m.netId != 0;
+}
+
+void Encode(Writer& w, const Unbind& m) { w.u8(uint8_t(Msg::Unbind)); w.varint(m.netId); }
+bool Decode(Reader& r, Unbind& m) { m.netId = GetU32Var(r); return Done(r) && m.netId != 0; }
+
+std::vector<std::vector<uint8_t>> EncodeSnapshot(const Snapshot& s, size_t budget) {
+    std::vector<std::vector<uint8_t>> out;
+    size_t i = 0;
+    do {
+        Writer w(budget + 64);
+        w.u8(uint8_t(Msg::Snapshot));
+        w.u32(s.tick);
+        w.f64(s.hostTime);
+        // Count is a fixed u16 here so it can be patched after filling the packet.
+        const size_t countAt = w.size();
+        w.u16(0);
+        uint16_t n = 0;
+        Writer tmp(64);
+        while (i < s.entities.size() && n < kMaxEntitiesPerMsg) {
+            tmp.clear();
+            PutEntity(tmp, s.entities[i]);
+            if (n > 0 && w.size() + tmp.size() > budget) break;
+            w.bytes(tmp.data(), tmp.size());
+            ++n; ++i;
+        }
+        std::memcpy(w.vec().data() + countAt, &n, 2);
+        out.push_back(std::move(w.vec()));
+    } while (i < s.entities.size());
+    return out;
+}
+bool Decode(Reader& r, Snapshot& m) {
+    m.tick = r.u32();
+    m.hostTime = r.f64();
+    const uint16_t n = r.u16();
+    if (n > kMaxEntitiesPerMsg || size_t(n) * kMinEntityBytes > r.remaining()) return false;
+    m.entities.resize(n);
+    for (auto& e : m.entities) {
+        e.netId = GetU32Var(r);
+        e.pos = GetVec(r);
+        e.rot = UnpackQuat(r.u32());
+        e.dest = GetVec(r);
+        e.flags = r.u8();
+        if (!r.ok() || e.netId == 0) return false;
+    }
+    return Done(r);
+}
+
+void Encode(Writer& w, const Command& m) {
+    w.u8(uint8_t(Msg::Command));
+    w.varint(m.seq);
+    w.varint(m.netId);
+    w.u8(uint8_t(m.kind));
+    PutVec(w, m.pos);
+    w.boolean(m.run);
+}
+bool Decode(Reader& r, Command& m) {
+    m.seq = GetU32Var(r);
+    m.netId = GetU32Var(r);
+    const uint8_t k = r.u8();
+    if (k < 1 || k > 2) return false;
+    m.kind = CommandKind(k);
+    m.pos = GetVec(r);
+    m.run = r.boolean();
+    return Done(r) && m.netId != 0;
+}
+
+void Encode(Writer& w, const TimeState& m) { w.u8(uint8_t(Msg::TimeState)); w.f32(m.speed); w.boolean(m.paused); }
+bool Decode(Reader& r, TimeState& m) {
+    m.speed = r.f32();
+    m.paused = r.boolean();
+    return Done(r) && m.speed >= 0.0f && m.speed <= 16.0f;
+}
+
+void EncodePing(Writer& w, const Ping& m, bool pong) { w.u8(uint8_t(pong ? Msg::Pong : Msg::Ping)); w.f64(m.t); }
+bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
+
+std::optional<Msg> PeekType(Reader& r) {
+    const uint8_t t = r.u8();
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Pong)) return std::nullopt;
+    return Msg(t);
+}
+
+bool ValidName(const std::string& s) {
+    if (s.empty() || s.size() > kMaxNameLen || s.front() == ' ' || s.back() == ' ') return false;
+    return std::all_of(s.begin(), s.end(), [](char c) { return c >= 0x20 && c < 0x7F; });
+}
+
+std::string SanitizeChat(const std::string& s) {
+    std::string out;
+    out.reserve(std::min(s.size(), kMaxChatLen));
+    for (unsigned char c : s) {
+        if (out.size() >= kMaxChatLen) break;
+        if (c >= 0x20 && c != 0x7F) out.push_back(char(c));
+    }
+    return out;
+}
+
+uint32_t PackQuat(const Quat& qin) {
+    float q[4] = {qin.w, qin.x, qin.y, qin.z};
+    const float len = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    if (!(len > 1e-6f) || !std::isfinite(len)) { q[0] = 1; q[1] = q[2] = q[3] = 0; }
+    else for (float& c : q) c /= len;
+    int largest = 0;
+    for (int i = 1; i < 4; ++i) if (std::fabs(q[i]) > std::fabs(q[largest])) largest = i;
+    const float sign = q[largest] < 0 ? -1.0f : 1.0f;
+    constexpr float kRange = 0.70710678f;  // 1/sqrt(2): bound of the three smaller components
+    uint32_t packed = uint32_t(largest) << 30;
+    int shift = 20;
+    for (int i = 0; i < 4; ++i) {
+        if (i == largest) continue;
+        const float v = std::clamp(q[i] * sign, -kRange, kRange);
+        const uint32_t qv = uint32_t(std::lround((v + kRange) / (2 * kRange) * 1023.0f));
+        packed |= (qv & 0x3FF) << shift;
+        shift -= 10;
+    }
+    return packed;
+}
+
+Quat UnpackQuat(uint32_t v) {
+    constexpr float kRange = 0.70710678f;
+    const int largest = int(v >> 30);
+    float q[4];
+    float sum = 0;
+    int shift = 20;
+    for (int i = 0; i < 4; ++i) {
+        if (i == largest) continue;
+        q[i] = float((v >> shift) & 0x3FF) / 1023.0f * (2 * kRange) - kRange;
+        sum += q[i] * q[i];
+        shift -= 10;
+    }
+    q[largest] = std::sqrt(std::max(0.0f, 1.0f - sum));
+    return Quat{q[0], q[1], q[2], q[3]};
+}
+
+uint64_t Fnv1a64(const void* data, size_t n, uint64_t h) {
+    const auto* p = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < n; ++i) { h ^= p[i]; h *= 0x100000001b3ull; }
+    return h;
+}
+
+} // namespace kc
