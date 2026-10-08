@@ -4,6 +4,8 @@
 
 #include <MinHook.h>
 
+#include <atomic>
+#include <mutex>
 #include <vector>
 
 #include "util.h"
@@ -14,8 +16,11 @@ namespace kcp {
 namespace {
 
 TickFn g_tick = nullptr;
-double g_lastLiveTick = -1e9;
-bool g_inTick = false;
+std::atomic<double> g_lastLiveTick{-1e9};
+// Ogre may fire frame events on another thread than the game's main loop: ticks are serialized,
+// and a tick that would overlap another one (or re-enter it) is simply skipped.
+std::mutex g_tickMutex;
+std::atomic<DWORD> g_liveThread{0}, g_menuThread{0};
 thread_local int g_hostCall = 0;   // >0 while KenshiCoop itself is calling into the game
 
 // ---- originals
@@ -66,7 +71,7 @@ void TickSEH(bool live) {
 
 void hk_mainLoop(void* gw, float t) {
     o_mainLoop(gw, t);
-    g_lastLiveTick = NowSeconds();
+    g_lastLiveTick.store(NowSeconds());
     RunTick(true);
 }
 
@@ -205,13 +210,16 @@ std::vector<void*> g_installed;
 } // namespace
 
 void RunTick(bool live) {
-    if (!g_tick || g_inTick) return;   // the game can render (and call us) from inside a tick
-    g_inTick = true;
+    if (!g_tick) return;
+    const DWORD tid = GetCurrentThreadId();
+    std::atomic<DWORD>& seen = live ? g_liveThread : g_menuThread;
+    if (seen.exchange(tid) != tid) Log("%s tick runs on thread %lu", live ? "main-loop" : "frame-listener", tid);
+    std::unique_lock<std::mutex> lk(g_tickMutex, std::try_to_lock);
+    if (!lk.owns_lock()) return;   // another tick is running (other thread, or re-entered by the game)
     TickSEH(live);
-    g_inTick = false;
 }
 
-double LastLiveTick() { return g_lastLiveTick; }
+double LastLiveTick() { return g_lastLiveTick.load(); }
 
 HostCallScope::HostCallScope() { ++g_hostCall; }
 HostCallScope::~HostCallScope() { --g_hostCall; }

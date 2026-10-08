@@ -2,6 +2,7 @@
 // dllStartPlugin while the engine starts, before any save is loaded.
 #include <windows.h>
 
+#include <atomic>
 #include <cstdio>
 #include <deque>
 #include <memory>
@@ -247,10 +248,51 @@ bool InstallFrameListener() {
     return get && add && AddFrameListenerSEH(get, add);
 }
 
+// Last-chance crash report: where the game died, written to KenshiCoop.log before Windows takes over.
+std::string ModuleOf(uintptr_t addr) {
+    HMODULE mod = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(addr), &mod) || !mod)
+        return "?";
+    wchar_t path[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(mod, path, MAX_PATH);
+    std::wstring w(path, n);
+    const size_t slash = w.find_last_of(L"\\/");
+    char buf[160];
+    snprintf(buf, sizeof(buf), "%ls+0x%llx", slash == std::wstring::npos ? w.c_str() : w.c_str() + slash + 1,
+             (unsigned long long)(addr - reinterpret_cast<uintptr_t>(mod)));
+    return buf;
+}
+
+LPTOP_LEVEL_EXCEPTION_FILTER g_prevFilter = nullptr;
+LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep) {
+    static std::atomic<int> once{0};
+    if (once.fetch_add(1) == 0 && ep && ep->ExceptionRecord && ep->ContextRecord) {
+        const auto* er = ep->ExceptionRecord;
+        const auto* cx = ep->ContextRecord;
+        Log("CRASH code=%08lx at %p (%s) thread=%lu access=%llu addr=%p", er->ExceptionCode, er->ExceptionAddress,
+            ModuleOf(reinterpret_cast<uintptr_t>(er->ExceptionAddress)).c_str(), GetCurrentThreadId(),
+            er->NumberParameters > 0 ? (unsigned long long)er->ExceptionInformation[0] : 0ull,
+            er->NumberParameters > 1 ? reinterpret_cast<void*>(er->ExceptionInformation[1]) : nullptr);
+        // Return addresses on the stack that land in a loaded module: enough to see who jumped where.
+        const auto* sp = reinterpret_cast<const uintptr_t*>(cx->Rsp);
+        int shown = 0;
+        for (int i = 0; i < 256 && shown < 24; ++i) {
+            uintptr_t v = 0;
+            if (IsBadReadPtr(sp + i, sizeof(v))) break;
+            v = sp[i];
+            const std::string m = ModuleOf(v);
+            if (m != "?") { Log("  stack[%d] %s", i, m.c_str()); ++shown; }
+        }
+    }
+    return g_prevFilter ? g_prevFilter(ep) : EXCEPTION_CONTINUE_SEARCH;
+}
+
 bool Start() {
     const std::wstring dir = GameDir();
     LogOpen(dir + L"KenshiCoop.log");
     Log("KenshiCoop %s starting", kVersion);
+    g_prevFilter = SetUnhandledExceptionFilter(&CrashFilter);
 
     // Never patch a game build we have not analysed.
     std::string sha;
