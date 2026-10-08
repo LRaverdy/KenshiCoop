@@ -31,6 +31,8 @@ const FunctionSig kFunctions[FnCount] = {
     {"SaveManager::load", 0x47B480, {0x4C, 0x8B, 0xDC, 0x57, 0x48, 0x81, 0xEC, 0x70, 0x01, 0x00, 0x00, 0x48}},
     {"RootObjectFactory::createRandomCharacter", 0x5836E0, {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41}},
     {"GameWorld::destroy(RootObject*)", 0x799AF0, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
+    {"Character::endCombatMode", 0x5C91C0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8D, 0x05, 0x03, 0xC1, 0x0B}},
+    {"Character::ragdollMode", 0x5CBD60, {0x45, 0x85, 0xC0, 0x0F, 0x84, 0x13, 0x02, 0x00, 0x00, 0x44, 0x89, 0x44}},
 };
 
 namespace {
@@ -637,6 +639,90 @@ Character* CreateCharacter(const kc::SpawnInfo& info, const kc::Vec3& pos, std::
     if (!info.name.empty() && MakeGameString(info.name, gs))
         if (void* fn = VSlot(obj, slot::RO_setName)) CallStr(fn, obj, gs.raw);
     return static_cast<Character*>(obj);
+}
+
+namespace {
+void* CombatOf(const Character* c) {
+    void* body = nullptr;
+    void* combat = nullptr;
+    if (!IsCharacter(c) || !Rd(c, off::CH_body, body) || !body || !Rd(body, off::BODY_combat, combat) || !combat) return nullptr;
+    const uintptr_t vt = Vtable(combat);
+    return (vt == Addr(rva::VtCombatClass) || vt == Addr(rva::VtCombatClassAI)) ? combat : nullptr;
+}
+using FnInitCombat = bool (*)(void* self, const void* hand, int end, bool focused);
+bool CallInitCombat(void* fn, void* self, const void* hand, int end) {
+    __try {
+        reinterpret_cast<FnInitCombat>(fn)(self, hand, end, true);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool ReadCombat(Character* c, kc::Handle& target) {
+    void* combat = CombatOf(c);
+    bool active = false;
+    if (!combat || !Rd(combat, off::CC_active, active) || !active) return false;
+    return ReadHandle(reinterpret_cast<uint8_t*>(combat) + off::CC_target, target) && target.valid();
+}
+
+bool StartCombat(Character* c, const kc::Handle& target) {
+    void* combat = CombatOf(c);
+    if (!combat || !target.valid()) return false;
+    alignas(8) uint8_t raw[off::HandSize] = {};
+    const uintptr_t vt = Addr(rva::VtHand);
+    std::memcpy(raw, &vt, 8);
+    std::memcpy(raw + off::H_type, &target.type, 4);
+    std::memcpy(raw + off::H_container, &target.container, 4);
+    std::memcpy(raw + off::H_containerSerial, &target.containerSerial, 4);
+    std::memcpy(raw + off::H_index, &target.index, 4);
+    std::memcpy(raw + off::H_serial, &target.serial, 4);
+    void* fn = VSlot(combat, slot::CC_initCombatMode);
+    return fn && CallInitCombat(fn, combat, raw, 0);
+}
+
+bool EndCombat(Character* c) {
+    return CombatOf(c) && CallVoid(FnAddr(FnEndCombatMode), c);
+}
+
+namespace {
+using FnBoolInt = void (*)(void* self, bool b, int i);
+bool CallBoolInt(void* fn, void* self, bool b, int i) {
+    __try {
+        reinterpret_cast<FnBoolInt>(fn)(self, b, i);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+using FnInt = void (*)(void* self, int i);
+bool CallInt(void* fn, void* self, int i) {
+    __try {
+        reinterpret_cast<FnInt>(fn)(self, i);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+constexpr int kRagdollWhole = 1;
+constexpr int kProneNormal = 0;
+} // namespace
+
+bool SetRagdoll(Character* c, bool on) {
+    return IsCharacter(c) && CallBoolInt(FnAddr(FnRagdollMode), c, on, kRagdollWhole);
+}
+
+bool StandUp(Character* c) {
+    void* m = Medical(c);
+    if (!m) return false;
+    const bool no = false;
+    const float zero = 0.0f;
+    Wr(m, off::MS_unconscious, no);
+    Wr(m, off::MS_koTimer, zero);
+    bool ok = SetRagdoll(c, false);
+    if (void* fn = VSlot(c, slot::CH_setProneState)) ok = CallInt(fn, c, kProneNormal) && ok;
+    return ok;
 }
 
 bool DestroyObject(void* obj) {

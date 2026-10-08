@@ -29,6 +29,9 @@ inline constexpr uintptr_t VtGameWorld = 0x1722608;
 inline constexpr uintptr_t VtPlayerInterface = 0x171a2b8;
 inline constexpr uintptr_t VtCharMovement = 0x16fcc88;
 inline constexpr uintptr_t VtAI = 0x16fa3e8;
+inline constexpr uintptr_t VtCombatClass = 0x16f6698;
+inline constexpr uintptr_t VtCombatClassAI = 0x16f67b8;
+inline constexpr uintptr_t VtHand = 0x16852d0;
 } // namespace rva
 
 struct FunctionSig {
@@ -60,6 +63,8 @@ enum Fn : int {
     FnSaveManagerLoad,          // void SaveManager::load(const std::string& name)                  (deferred)
     FnCreateRandomCharacter,    // RootObject* RootObjectFactory::createRandomCharacter(Faction*, Vector3, RootObjectContainer*, GameData*, Building*, float age)
     FnWorldDestroy,             // bool GameWorld::destroy(RootObject*, bool justUnloaded, const char* debugInfo)
+    FnEndCombatMode,            // void Character::endCombatMode()
+    FnRagdollMode,              // void Character::ragdollMode(bool on, RagdollPart::Enum part)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -112,6 +117,11 @@ inline constexpr uintptr_t RO_rot = 0xB0;         // Ogre::Quaternion (w,x,y,z)
 inline constexpr uintptr_t CH_movement = 0x640;   // CharMovement*
 inline constexpr uintptr_t CH_ai = 0x650;         // AI*
 inline constexpr uintptr_t CH_medical = 0x458;    // MedicalSystem (inline)
+inline constexpr uintptr_t CH_body = 0x648;       // CharBody*: +0x8 CombatClass*
+inline constexpr uintptr_t BODY_combat = 0x8;
+// CombatClass
+inline constexpr uintptr_t CC_active = 0x130;       // bool combatModeActive
+inline constexpr uintptr_t CC_target = 0x298;       // hand: attack target
 
 // MedicalSystem
 inline constexpr uintptr_t MS_blood = 0x70;          // float
@@ -148,6 +158,8 @@ inline constexpr uintptr_t CH_getAge = 0x390;                     // float getAg
 inline constexpr uintptr_t CM_setDestination = 0x90;              // void setDestination(const Vector3&, UpdatePriority, bool)
 inline constexpr uintptr_t CM_halt = 0x98;                        // void halt()
 inline constexpr uintptr_t CM_setPositionDirectionAndTeleport = 0xC0;  // (const Vector3&, const Quaternion&) - halts first
+inline constexpr uintptr_t CH_setProneState = 0x370;   // void setProneState(ProneState): 0 = normal (standing)
+inline constexpr uintptr_t CC_initCombatMode = 0x10;   // bool initCombatMode(const hand& subject, int end, bool focused): end 0 = engage
 inline constexpr uintptr_t CM_setPositionSimple = 0xC8;  // (const Vector3&): moves body + physics capsule, keeps walking
 } // namespace slot
 
@@ -200,6 +212,15 @@ bool ReadSpawnSource(Character* c, kc::SpawnInfo& out);    // template + faction
 void ResetLookupCaches();                                  // call when a new world loads
 Character* CreateCharacter(const kc::SpawnInfo& info, const kc::Vec3& pos, std::string* err);
 bool DestroyObject(void* obj);
+
+// Melee combat.
+bool ReadCombat(Character* c, kc::Handle& target);          // true when in combat mode with a target
+bool StartCombat(Character* c, const kc::Handle& target);   // engage (local handle of the target)
+bool EndCombat(Character* c);
+
+// Getting knocked down / getting up (the AI normally drives the getting up).
+bool SetRagdoll(Character* c, bool on);
+bool StandUp(Character* c);   // clears the unconscious flag, leaves ragdoll, normal posture
 bool SetGameHours(double hours);
 
 float GetFrameSpeed();

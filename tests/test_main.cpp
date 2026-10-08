@@ -42,6 +42,7 @@ struct FakeChar {
     Quat rot;
     bool squad = true;
     EntityVitals vit;   // netId unused
+    uint32_t fights = 0;   // serial of the character it fights
 };
 
 struct FakeWorld : IWorld {
@@ -134,6 +135,16 @@ struct FakeWorld : IWorld {
         auto it = chars.find(h.serial);
         if (it == chars.end()) return;
         it->second.pos = target.pos; it->second.rot = target.rot; it->second.dest = latest.dest;
+    }
+    bool ReadCombat(const Handle& h, Handle& target) override {
+        auto it = chars.find(h.serial);
+        if (it == chars.end() || !it->second.fights) return false;
+        target = H(it->second.fights);
+        return true;
+    }
+    void ApplyCombat(const Handle& h, bool fight, const Handle& target) override {
+        auto it = chars.find(h.serial);
+        if (it != chars.end()) it->second.fights = fight ? target.serial : 0;
     }
     bool ReadSpawnInfo(const Handle& h, SpawnInfo& out) override {
         auto it = chars.find(h.serial);
@@ -575,6 +586,14 @@ static void TestWorldAuthority() {
     CHECK(cw.chars[2].vit.blood == 100 && cw.chars[2].vit.flags == 0);   // local death undone
     CHECK(cw.chars[1].vit.blood == 40 && (cw.chars[1].vit.flags & kVitUnconscious));
     CHECK(cw.time.paused && cw.time.gameHours == 1234.5);
+
+    // melee: the NPC engages squad member 1 on the host; the client's copy engages the same target
+    hw.chars[10].fights = 1;
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cw.chars[10].fights == 1; });
+    CHECK(cw.chars[10].fights == 1);
+    hw.chars[10].fights = 0;
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cw.chars[10].fights == 0; });
+    CHECK(cw.chars[10].fights == 0);
 
     hw.chars[10].pos = {50000, 0, 0}; hw.chars[10].dest = hw.chars[10].pos;
     Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cli.npcCount() == 0; });

@@ -50,8 +50,9 @@ void PutEntity(Writer& w, const EntityState& e) {
     w.u32(PackQuat(e.rot));
     PutVec(w, e.dest);
     w.u8(e.flags);
+    w.varint(e.combatTarget);
 }
-constexpr size_t kMinEntityBytes = 1 + 12 + 4 + 12 + 1;
+constexpr size_t kMinEntityBytes = 1 + 12 + 4 + 12 + 1 + 1;
 
 } // namespace
 
@@ -182,6 +183,7 @@ bool Decode(Reader& r, Snapshot& m) {
         e.rot = UnpackQuat(r.u32());
         e.dest = GetVec(r);
         e.flags = r.u8();
+        e.combatTarget = GetU32Var(r);
         if (!r.ok() || e.netId == 0) return false;
     }
     return Done(r);

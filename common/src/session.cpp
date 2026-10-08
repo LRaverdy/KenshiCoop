@@ -35,7 +35,8 @@ Quat Nlerp(Quat a, const Quat& b, float t) {
 }
 
 bool StateChanged(const EntityState& a, const EntityState& b) {
-    return Dist(a.pos, b.pos) > 0.02f || Dist(a.dest, b.dest) > 0.25f || a.flags != b.flags || QuatDot(a.rot, b.rot) < 0.99995f;
+    return Dist(a.pos, b.pos) > 0.02f || Dist(a.dest, b.dest) > 0.25f || a.flags != b.flags || QuatDot(a.rot, b.rot) < 0.99995f ||
+           a.combatTarget != b.combatTarget;
 }
 bool VitalsChanged(const EntityVitals& a, const EntityVitals& b) {
     return std::fabs(a.blood - b.blood) > 0.05f || std::fabs(a.koTimer - b.koTimer) > 0.5f || a.flags != b.flags || a.parts != b.parts;
@@ -391,7 +392,14 @@ void Session::SendSnapshots(double now) {
     stateCache_.clear();
     for (auto& [id, e] : entities_) {
         EntityState st;
-        if (world_.Read(e.handle, st)) { st.netId = id; stateCache_[id] = st; }
+        if (!world_.Read(e.handle, st)) continue;
+        st.netId = id;
+        Handle target;
+        if (world_.ReadCombat(e.handle, target)) {
+            auto t = byHandle_.find(target);
+            st.combatTarget = t != byHandle_.end() ? t->second : 0;
+        }
+        stateCache_[id] = st;
     }
     for (auto& [pid, p] : players_) {
         if (!p.inGame) continue;
@@ -668,6 +676,16 @@ void Session::ClientTick(double now, bool live) {
         for (auto& [id, e] : entities_) {
             if (!e.present || e.buf.empty()) continue;
             world_.Apply(e.handle, Interpolate(e, renderTime), e.buf.back().s);
+            // Melee: fight the same target as on the host (the swings are animated locally, the
+            // outcome comes from the host's vitals). Re-imposed now and then in case it lapsed.
+            const uint32_t want = e.buf.back().s.combatTarget;
+            if (want != e.combatApplied || (want && now >= e.combatReapply)) {
+                auto t = want ? entities_.find(want) : entities_.end();
+                if (!want) world_.ApplyCombat(e.handle, false, Handle{});
+                else if (t != entities_.end() && t->second.present) world_.ApplyCombat(e.handle, true, t->second.handle);
+                e.combatApplied = want;
+                e.combatReapply = now + 2.0;
+            }
         }
     }
     // Local simulation (bleeding, healing...) keeps nudging health: re-impose the host's values.

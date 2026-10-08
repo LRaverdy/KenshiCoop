@@ -217,6 +217,10 @@ def compare(h, c, label, pos_tol=3.0):
     report["pos_err_over_tol"] = sum(1 for e, _ in pos_err if e > pos_tol)
     dead_mismatch = [k for k in common if h["char"][k].get("vflags") != c["char"][k].get("vflags")]
     report["vital_flag_mismatch"] = len(dead_mismatch)
+    hcomb = {k: v.get("combat") for k, v in list(h["char"].items()) + list(h["squad"].items()) if v.get("combat")}
+    ccomb = {k: v.get("combat") for k, v in list(c["char"].items()) + list(c["squad"].items()) if v.get("combat")}
+    report["combat_host"] = len(hcomb)
+    report["combat_mismatch"] = sum(1 for k, t in hcomb.items() if ccomb.get(k) != t) + sum(1 for k in ccomb if k not in hcomb)
     ht, ct = h["time"], c["time"]
     try:
         report["hours_diff"] = round(abs(float(ht["hours"]) - float(ct["hours"])), 4)
@@ -293,20 +297,27 @@ def scenario(host, cli, quick=False):
     log("host move", cmd(host, "moverel 1 300 -200"))
     time.sleep(25)
     reports.append(frozen_check(host, cli, "host walked squad1"))
-    # an NPC that only the host has: the client must recreate it, then see it fall and die
+    # an NPC that only the host has: the client must recreate it, then mirror every posture change
     ok, text = cmd(host, "spawnnpc 12 8")
     log("host spawns an NPC", ok, text)
-    spawned_key = text.split()[1] if ok else None
     time.sleep(6)
-    r = frozen_check(host, cli, "host-only NPC appears")
-    r["spawned_key_on_client"] = bool(spawned_key) and spawned_key in dump(cli, "c_spawn_lookup")["char"] or "check by netId"
-    reports.append(r)
-    log("ko", cmd(host, "ko"))
-    time.sleep(5)
-    reports.append(frozen_check(host, cli, "NPC knocked out"))
-    log("kill", cmd(host, "kill"))
-    time.sleep(5)
-    reports.append(frozen_check(host, cli, "NPC killed"))
+    reports.append(frozen_check(host, cli, "host-only NPC appears"))
+
+    def npc_flags(state_h, state_c, key):
+        hv, cv = state_h["char"].get(key, {}), state_c["char"].get(key, {})
+        return (hv.get("flags"), hv.get("vflags")), (cv.get("flags"), cv.get("vflags"))
+
+    key = text.split()[1] if ok else ""
+    for step, wait in (("ko", 5), ("wake", 6), ("kill", 5)):
+        log(step, cmd(host, step))
+        time.sleep(wait)
+        hs, cs = dump(host, "h_" + step), dump(cli, "c_" + step)
+        hf, cf = npc_flags(hs, cs, key)
+        r = compare(hs, cs, f"NPC after {step} (live)")
+        r["npc_host_flags/vflags"] = hf
+        r["npc_client_flags/vflags"] = cf
+        r["npc_match"] = hf == cf
+        reports.append(r)
     if not quick:
         h = dump(host, "h_pre_tp")
         x, y, z = squad_pos(h, 2)

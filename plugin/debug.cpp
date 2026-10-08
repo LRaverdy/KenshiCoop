@@ -62,6 +62,8 @@ void DumpCharacter(std::ostream& o, const char* tag, KenshiWorld& w, const kc::H
         o << " pos=" << st.pos.x << ',' << st.pos.y << ',' << st.pos.z << " dest=" << st.dest.x << ',' << st.dest.y << ',' << st.dest.z
           << " flags=" << unsigned(st.flags);
     }
+    kc::Handle ct;
+    if (kenshi::Character* ch = w.Find(h); ch && kenshi::ReadCombat(ch, ct)) o << " combat=" << Key(w.HostHandleOf(ct));
     kc::EntityState latest, rendered;
     if (g_dumpSession && !g_dumpSession->isHost() && g_dumpSession->TargetOf(hostHandle, latest, rendered))
         o << " latest=" << latest.pos.x << ',' << latest.pos.y << ',' << latest.pos.z << " lflags=" << unsigned(latest.flags)
@@ -192,6 +194,28 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         if (!c || !kenshi::GetHandle(c, h)) return "err " + e;
         lastSpawned_ = h;
         return "ok " + Key(h) + " " + info.templateSid;
+    }
+    if (cmd == "fight") {   // fight <index>: squad member engages the NPC created by the last spawnnpc
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        kenshi::Character* t = w.Find(lastSpawned_);
+        if (idx >= squad.size() || !t) return "err need a squad member and a spawned NPC";
+        HostCallScope scope;
+        return kenshi::StartCombat(w.FindSquad(squad[idx]), lastSpawned_) ? "ok" : "err initCombatMode failed";
+    }
+    if (cmd == "wake") {   // wake: the NPC created by the last spawnnpc gets up immediately
+        kenshi::Character* c = w.Find(lastSpawned_);
+        if (!c) return "err no spawned NPC";
+        HostCallScope scope;
+        return kenshi::StandUp(c) ? "ok" : "err";
+    }
+    if (cmd == "npcstate") {   // npcstate: posture/vitals of the last spawned NPC, as this machine sees it
+        kenshi::Character* c = w.Find(lastSpawned_);
+        if (!c) return "err no spawned NPC";
+        std::ostringstream o;
+        o << "ok down=" << kenshi::IsDown(c) << " unconscious=" << kenshi::IsUnconscious(c) << " dead=" << kenshi::IsDead(c);
+        return o.str();
     }
     if (cmd == "ko" || cmd == "kill") {   // ko|kill: knock out / kill the NPC created by the last spawnnpc
         kenshi::Character* c = w.Find(lastSpawned_);

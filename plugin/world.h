@@ -44,6 +44,8 @@ public:
     bool Read(const kc::Handle& h, kc::EntityState& out) override;
     bool ReadVitals(const kc::Handle& h, kc::EntityVitals& out) override;
     bool ReadSpawnInfo(const kc::Handle& h, kc::SpawnInfo& out) override;
+    bool ReadCombat(const kc::Handle& h, kc::Handle& target) override;
+    void ApplyCombat(const kc::Handle& h, bool fight, const kc::Handle& target) override;
     bool Spawn(const kc::Handle& h, const kc::SpawnInfo& info, const kc::EntityState& at) override;
     void Despawn(const kc::Handle& h) override;
     void Apply(const kc::Handle& h, const kc::EntityState& target, const kc::EntityState& latest) override;
@@ -87,6 +89,8 @@ private:
     // client: host handle -> handle of the local stand-in we created for it
     std::unordered_map<kc::Handle, kc::Handle, HandleHash> alias_;
     std::unordered_map<kc::Handle, kc::Vec3, HandleHash> lastDest_;   // client: destination last issued
+    std::unordered_map<kc::Handle, double, HandleHash> postureSince_; // client: when host/local posture started to differ
+    std::unordered_map<kc::Handle, double, HandleHash> postureFixed_; // client: last forced posture change
     std::mutex ordersMutex_;
     std::vector<std::pair<kc::Handle, kc::Command>> orders_;
     std::vector<kenshi::Character*> scratch_;

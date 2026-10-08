@@ -55,6 +55,10 @@ public:
     virtual bool Exists(const Handle& h) = 0;
     virtual bool Read(const Handle& h, EntityState& out) = 0;      // pos/rot/dest/flags (netId ignored)
     virtual bool ReadVitals(const Handle& h, EntityVitals& out) = 0;
+    // Host: is the character in melee combat, and against whom.
+    virtual bool ReadCombat(const Handle& h, Handle& target) = 0;
+    // Client: make the local copy fight `target` (host handle), or stop fighting.
+    virtual void ApplyCombat(const Handle& h, bool fight, const Handle& target) = 0;
     // Host: what a client needs to recreate this character if its world lacks it.
     virtual bool ReadSpawnInfo(const Handle& h, SpawnInfo& out) = 0;
     // Client: create a local stand-in for host character `h` (later found through Exists/Read/...
@@ -175,6 +179,8 @@ private:
         bool hasSpawn = false;               // host sent how to recreate it
         SpawnInfo spawn;
         bool spawned = false;                // client created a stand-in for it
+        uint32_t combatApplied = 0;          // client: combat target last imposed (netId)
+        double combatReapply = 0;
         int spawnAttempts = 0;
         double nextSpawnTry = 0;
         // host

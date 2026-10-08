@@ -145,6 +145,23 @@ kenshi::Character* KenshiWorld::Find(const kc::Handle& h) {
     return c;
 }
 
+bool KenshiWorld::ReadCombat(const kc::Handle& h, kc::Handle& target) {
+    kenshi::Character* c = Find(h);
+    if (!c || !kenshi::ReadCombat(c, target)) return false;
+    target = HostHandleOf(target);   // host side: identity; harmless
+    return true;
+}
+
+void KenshiWorld::ApplyCombat(const kc::Handle& h, bool fight, const kc::Handle& target) {
+    kenshi::Character* c = Find(h);
+    if (!c) return;
+    HostCallScope scope;
+    if (!fight) { kenshi::EndCombat(c); return; }
+    kenshi::Character* t = Find(target);   // host handle -> our copy (stand-ins included)
+    kc::Handle local;
+    if (t && kenshi::GetHandle(t, local)) kenshi::StartCombat(c, local);
+}
+
 bool KenshiWorld::ReadSpawnInfo(const kc::Handle& h, kc::SpawnInfo& out) {
     kenshi::Character* c = Find(h);
     return c && kenshi::ReadSpawnSource(c, out);
@@ -199,10 +216,39 @@ bool KenshiWorld::ReadVitals(const kc::Handle& h, kc::EntityVitals& out) {
 void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, const kc::EntityState& latest) {
     kenshi::Character* c = Find(h);
     if (!c) return;
-    // Bodies on the ground are moved by ragdoll physics, not by their legs.
-    if ((target.flags | latest.flags) & (kc::kFlagDown | kc::kFlagDead)) { lastDest_.erase(h); return; }
+    // Posture: lying on the ground (knocked out, knocked down) or standing must match the host.
+    // Deaths come through vitals; getting up is normally decided by the AI, which clients do not run.
+    const bool hostDead = (latest.flags & kc::kFlagDead) != 0;
+    const bool hostDown = (latest.flags & kc::kFlagDown) != 0;
+    const bool localDown = kenshi::IsDown(c);
+    const double now = NowSeconds();
+    if (hostDown != localDown && !hostDead) {
+        double& since = postureSince_[h];
+        if (since == 0) since = now;
+        double& fixed = postureFixed_[h];
+        if (now - since > 0.3 && now - fixed > 1.0) {   // not a one-frame flicker, and not every frame
+            HostCallScope scope;
+            if (hostDown) kenshi::SetRagdoll(c, true);
+            else kenshi::StandUp(c);
+            fixed = now;
+        }
+    } else {
+        postureSince_.erase(h);
+    }
     kc::Vec3 local;
     if (!kenshi::GetPosition(c, local)) return;
+    // Bodies on the ground are moved by ragdoll physics, not by their legs: once both lie down,
+    // put the body where the host's lies (at most once a second, it is a teleport).
+    if (hostDown || hostDead || localDown) {
+        lastDest_.erase(h);
+        double& fixed = postureFixed_[h];
+        if (hostDown == localDown && Dist(local, target.pos) > 2.0f && now - fixed > 1.0) {
+            HostCallScope scope;
+            kenshi::Teleport(c, target.pos, target.rot);
+            fixed = now;
+        }
+        return;
+    }
 
     const float err = Dist(local, target.pos);
     HostCallScope scope;
@@ -375,6 +421,8 @@ void KenshiWorld::SetRole(bool client, bool active) {
     active_ = active;
     haveHostTime_ = false;
     lastDest_.clear();
+    postureSince_.clear();
+    postureFixed_.clear();
     if (!active) controllable_.clear();
 }
 
