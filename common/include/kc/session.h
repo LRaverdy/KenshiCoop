@@ -115,6 +115,8 @@ public:
     // Items on the ground. Host: dropped/picked up since the last call. Client: replay one.
     virtual void TakeGroundEvents(std::vector<GroundEvent>& out) { out.clear(); }
     virtual void ApplyGround(const GroundEvent& e) { (void)e; }
+    // Client: items the local player dropped from a character (asked of the host, not done locally).
+    virtual void TakeLocalDrops(std::vector<std::pair<Handle, ItemState>>& out) { out.clear(); }
 
     // Inventories. Host: read; execute a client's item movement (false = refused/impossible).
     virtual bool ReadInventory(const Handle& h, std::vector<ItemState>& out) = 0;
@@ -282,6 +284,7 @@ private:
     void SendBind(const Entity& e, PeerId to, const Handle& previous = Handle{});
     void SendInventories(double now, bool force, PeerId onlyTo);
     void ClientInventoryDiff(double now);
+    void SendLocalDrops();
     void HostInvOp(uint8_t from, const InvOp& op);
     void SendReliable(PeerId to, const Writer& w);
     void BroadcastReliable(const Writer& w, bool inGameOnly, PeerId except = kNoPeer);

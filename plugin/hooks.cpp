@@ -341,7 +341,11 @@ bool hk_giveItem(void* chr, void* item, bool dropOnFail, bool destroyOnFail) {
     return ok;
 }
 void hk_dropItem(void* chr, void* item) {
-    if (KenshiWorld::ClientActive() && !g_hostCall && KenshiWorld::View()->replicated.count(chr)) return;
+    if (KenshiWorld::ClientActive() && !g_hostCall && KenshiWorld::View()->replicated.count(chr)) {
+        // the player dropped it from one of their characters: the host does it (and everyone sees it)
+        if (KenshiWorld* w = TheWorld(); w && item && kenshi::IsCharacter(chr)) w->QueueLocalDrop(static_cast<kenshi::Character*>(chr), item);
+        return;
+    }
     o_dropItem(chr, item);
     if (KenshiWorld::ClientActive() || !KenshiWorld::View()->active || !item || !kenshi::ItemOnGround(item)) return;
     kc::GroundEvent e;

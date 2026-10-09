@@ -1946,6 +1946,8 @@ bool SehGetObjects(void* grid, const float* pt, float r, GameLektor* lk) {
 }
 } // namespace
 
+bool DescribeInventoryItem(void* item, kc::ItemState& s) { return item && ReadItemState(item, s); }
+
 void GroundItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out) {
     out.clear();
     void* zm = nullptr;

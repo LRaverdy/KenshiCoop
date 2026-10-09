@@ -380,6 +380,7 @@ inline constexpr uintptr_t kAddWoundBegin = 0x6508D0, kAddWoundEnd = 0x651FF1;
 Character* CharacterOfHand(const void* hand);
 // Items on the ground
 bool ItemOnGround(void* item);                             // in the world, not in an inventory
+bool DescribeInventoryItem(void* item, kc::ItemState& s);   // what it is and where it sits in its inventory
 bool DescribeGroundItem(void* item, kc::Handle& h, kc::ItemState& s, kc::Vec3& pos);
 void* ResolveItem(const kc::Handle& h);                    // the item with that handle here, if any
 void* CreateGroundItem(const kc::ItemState& s, const kc::Vec3& pos, kc::Handle& localHandle, std::string* why);

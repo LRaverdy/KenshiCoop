@@ -533,6 +533,26 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
     return false;
 }
 
+void KenshiWorld::QueueLocalDrop(kenshi::Character* c, void* item) {
+    kc::ItemState s;
+    if (!kenshi::DescribeInventoryItem(item, s)) return;
+    std::lock_guard<std::mutex> lk(groundMutex_);
+    if (localDrops_.size() < 256) localDrops_.emplace_back(c, s);
+}
+
+void KenshiWorld::TakeLocalDrops(std::vector<std::pair<kc::Handle, kc::ItemState>>& out) {
+    out.clear();
+    std::vector<std::pair<kenshi::Character*, kc::ItemState>> raw;
+    {
+        std::lock_guard<std::mutex> lk(groundMutex_);
+        raw.swap(localDrops_);
+    }
+    for (auto& [c, s] : raw) {
+        kc::Handle h;
+        if (kenshi::IsCharacter(c) && kenshi::GetHandle(c, h) && h.valid()) out.emplace_back(h, std::move(s));
+    }
+}
+
 void KenshiWorld::UpdatePendingPickups() {
     constexpr float kReach = 15.0f;
     const double now = NowSeconds();

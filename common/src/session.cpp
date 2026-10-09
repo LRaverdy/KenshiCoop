@@ -825,6 +825,24 @@ void Session::ClientInventoryDiff(double now) {
     }
 }
 
+void Session::SendLocalDrops() {
+    std::vector<std::pair<Handle, ItemState>> drops;
+    world_.TakeLocalDrops(drops);
+    for (const auto& [h, item] : drops) {
+        for (auto& [id, e] : entities_) {
+            if (e.handle != h) continue;
+            InvOp op;
+            op.kind = InvOpKind::Drop;
+            op.fromNetId = id;
+            op.item = item;
+            Writer w;
+            Encode(w, op);
+            SendReliable(net_.serverPeer(), w);
+            break;
+        }
+    }
+}
+
 void Session::ApplyCommand(uint8_t from, const Command& c) {
     auto it = entities_.find(c.netId);
     if (it == entities_.end()) return;
@@ -980,6 +998,7 @@ void Session::ClientTick(double now, bool live) {
         }
     }
     ClientInventoryDiff(now);
+    SendLocalDrops();
     for (auto& [id, e] : entities_) {
         if (!e.present || !e.invDirty || now < e.invRetry) continue;
         if (world_.ApplyInventory(e.handle, e.inv)) { e.invDirty = false; e.invFailures = 0; continue; }
