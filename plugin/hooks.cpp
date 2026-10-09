@@ -7,6 +7,7 @@
 #include <intrin.h>
 
 #include <atomic>
+#include <cmath>
 #include <mutex>
 #include <vector>
 
@@ -84,6 +85,12 @@ AnimCarryFn o_animSetCarryMode = nullptr;
 AnimSetBoolFn o_animGuardLegs = nullptr, o_animGuardUpper = nullptr;
 using DrawWeaponFn = bool (*)(void* chr, void* item, void* section);
 DrawWeaponFn o_drawWeapon = nullptr;
+using SingleAnimUpdateFn = void (*)(void* single, float masterTime, float frameTime, bool sounds);
+SingleAnimUpdateFn o_singleAnimUpdate = nullptr;
+using TrackAnimMoveFn = void (*)(void* mov, bool on);
+TrackAnimMoveFn o_trackAnimMove = nullptr;
+using AnimSelectFn = void (*)(void* ac, float t);
+AnimSelectFn o_animSelect = nullptr;
 using CombatMoveFn = void (*)(void* mov, float ft, const float* pos, const float* dir, bool moving, float* repulsion, float* facingOut,
                               bool defensive, int state, float raceSpeedMult);
 CombatMoveFn o_combatMove = nullptr;
@@ -434,6 +441,53 @@ void hk_sheatheWeapon(void* chr) {
     e.kind = kc::AnimKind::Sheathe;
     if (!WeaponHookBlocked(chr, &e)) o_sheatheWeapon(chr);
 }
+// A host-driven character whose animations we mirror does not pick its own: what the host's plays
+// (created by KenshiWorld::ApplyAnimFrame, timed by the update hook) is all it plays.
+void hk_animSelect(void* ac, float t) {
+    if (KenshiWorld::ClientActive() && KenshiWorld::View()->anims.count(ac)) return;
+    o_animSelect(ac, t);
+}
+// A host-driven character goes where the host's is, never where its own animations would carry it
+// (lunges, steps back): both together made it jump.
+void hk_trackAnimMove(void* mov, bool on) {
+    if (on && KenshiWorld::ClientActive() && KenshiWorld::View()->facing.count(mov)) on = false;
+    o_trackAnimMove(mov, on);
+}
+// What is on screen: each animation of a host-driven character plays at the host's time and
+// weight; one the host does not play is silenced. Runs right before the game advances it.
+std::atomic<uint64_t> g_animHookCalls{0}, g_animHookTargets{0}, g_animHookMatched{0}, g_animHookSilenced{0};
+void hk_singleAnimUpdate(void* single, float masterTime, float frameTime, bool sounds) {
+    g_animHookCalls.fetch_add(1, std::memory_order_relaxed);
+    if (KenshiWorld::ClientActive()) {
+        auto v = KenshiWorld::View();
+        if (!v->anims.empty()) {
+            auto it = v->anims.find(kenshi::SingleAnimOwner(single));
+            std::string name;
+            if (it != v->anims.end() && kenshi::SingleAnimName(single, name)) {
+                g_animHookTargets.fetch_add(1, std::memory_order_relaxed);
+                const auto& target = *it->second;
+                const kc::AnimEntry* match = nullptr;
+                for (const auto& e : target.anims)
+                    if (e.anim == name) { match = &e; break; }
+                if (match) {
+                    g_animHookMatched.fetch_add(1, std::memory_order_relaxed);
+                    const float late = float(NowSeconds() - target.sampledAt) * v->gameSpeed;
+                    const float want = match->time + match->speed * late;
+                    float mine = want;
+                    kenshi::ReadSingleAnimTime(single, mine);
+                    // keep our own smooth progress unless it drifted: jumping the time every frame jitters
+                    const float t = kenshi::SyncedAnimTime(single, mine, want, match->looped);
+                    kenshi::WriteSingleAnim(single, t, match->speed, match->weight, match->desired);
+                } else {
+                    g_animHookSilenced.fetch_add(1, std::memory_order_relaxed);
+                    float t = 0;
+                    kenshi::WriteSingleAnim(single, t, 0.0f, 0.0f, 0.0f);
+                }
+            }
+        }
+    }
+    o_singleAnimUpdate(single, masterTime, frameTime, sounds);
+}
 // In a fight, a client's game turns each fighter toward its own idea of the target: the host's
 // facing replaces it.
 void hk_combatMove(void* mov, float ft, const float* pos, const float* dir, bool moving, float* repulsion, float* facingOut, bool defensive,
@@ -489,6 +543,13 @@ void RunTick(bool live) {
 
 double LastLiveTick() { return g_lastLiveTick.load(); }
 
+std::string AnimHookStats() {
+    char b[160];
+    snprintf(b, sizeof(b), "calls=%llu targets=%llu matched=%llu silenced=%llu", (unsigned long long)g_animHookCalls.load(),
+             (unsigned long long)g_animHookTargets.load(), (unsigned long long)g_animHookMatched.load(), (unsigned long long)g_animHookSilenced.load());
+    return b;
+}
+
 HostCallScope::HostCallScope() { ++g_hostCall; }
 HostCallScope::~HostCallScope() { --g_hostCall; }
 AnimReplayScope::AnimReplayScope() { ++g_animReplay; ++g_hostCall; }
@@ -540,6 +601,9 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnSheatheWeapon, reinterpret_cast<void*>(&hk_sheatheWeapon), reinterpret_cast<void**>(&o_sheatheWeapon)},
         {kenshi::FnAnimGuardLegs, reinterpret_cast<void*>(&hk_animGuardLegs), reinterpret_cast<void**>(&o_animGuardLegs)},
         {kenshi::FnAnimGuardUpper, reinterpret_cast<void*>(&hk_animGuardUpper), reinterpret_cast<void**>(&o_animGuardUpper)},
+        {kenshi::FnAnimationSelection, reinterpret_cast<void*>(&hk_animSelect), reinterpret_cast<void**>(&o_animSelect)},
+        {kenshi::FnTrackAnimationMovement, reinterpret_cast<void*>(&hk_trackAnimMove), reinterpret_cast<void**>(&o_trackAnimMove)},
+        {kenshi::FnSingleAnimUpdate, reinterpret_cast<void*>(&hk_singleAnimUpdate), reinterpret_cast<void**>(&o_singleAnimUpdate)},
         {kenshi::FnCombatMovementUpdate, reinterpret_cast<void*>(&hk_combatMove), reinterpret_cast<void**>(&o_combatMove)},
     };
     const MH_STATUS init = MH_Initialize();

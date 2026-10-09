@@ -248,6 +248,23 @@ void Session::HostTick(double now, bool live) {
             BroadcastReliable(out, true);
         }
     }
+    // What every nearby character is playing, 15 times a second (unreliable, like snapshots).
+    if (anyInGame && now >= nextAnimFrame_) {
+        nextAnimFrame_ = std::max(nextAnimFrame_ + 1.0 / 15.0, now - 0.5 / 15.0);
+        AnimFrameMsg m;
+        m.hostTime = now;
+        for (auto& [id, e] : entities_) {
+            AnimFrame f;
+            f.netId = id;
+            if (world_.ReadAnimFrame(e.handle, f.anims)) m.chars.push_back(std::move(f));
+        }
+        if (!m.chars.empty()) {
+            const auto pkts = EncodeAnimFrames(m);
+            for (auto& [pid, p] : players_)
+                if (p.inGame)
+                    for (const auto& pkt : pkts) net_.Send(p.peer, kChanSnapshot, pkt.data(), pkt.size(), false);
+        }
+    }
     // Weather effects: every one the host's game places goes out as soon as it appears; the
     // complete live set every 5 s heals anything missed (and serves newcomers).
     {
@@ -1138,6 +1155,16 @@ void Session::ClientPacket(Msg type, Reader& r) {
         if (state_ == SessionState::Connected && Decode(r, m)) world_.ApplyEffects(m);
         break;
     }
+    case Msg::AnimFrame: {
+        AnimFrameMsg m;
+        if (state_ != SessionState::Connected || !Decode(r, m) || !offsetValid_) break;
+        const double age = std::max(0.0, clock_() + offset_ - m.hostTime);
+        for (const auto& f : m.chars) {
+            auto it = entities_.find(f.netId);
+            if (it != entities_.end()) world_.ApplyAnimFrame(it->second.handle, f.anims, age);
+        }
+        break;
+    }
     case Msg::Anim: {
         AnimMsg m;
         if (state_ != SessionState::Connected || !Decode(r, m)) break;
@@ -1172,7 +1199,7 @@ void Session::OnPacket(PeerId peer, uint8_t chan, const uint8_t* data, size_t si
     const auto type = PeekType(r);
     if (!type) return;
     // Each message type travels on exactly one channel.
-    const uint8_t expected = *type == Msg::Snapshot ? kChanSnapshot : *type == Msg::Vitals ? kChanVitals : kChanReliable;
+    const uint8_t expected = (*type == Msg::Snapshot || *type == Msg::AnimFrame) ? kChanSnapshot : *type == Msg::Vitals ? kChanVitals : kChanReliable;
     if (chan != expected) return;
     if (net_.isServer()) HostPacket(peer, *type, r);
     else ClientPacket(*type, r);

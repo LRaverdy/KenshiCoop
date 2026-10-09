@@ -62,6 +62,10 @@ const FunctionSig kFunctions[FnCount] = {
     {"CharacterHuman::sheatheWeapon", 0x5CC820, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x60, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE}},
     {"AnimationClass::setCombatModeLegsIdle", 0x51C920, {0x38, 0x91, 0x4C, 0x02, 0x00, 0x00, 0x88, 0x91, 0x4C, 0x02, 0x00, 0x00}},
     {"AnimationClass::setCombatModeUpperIdle", 0x51C940, {0x38, 0x91, 0x4D, 0x02, 0x00, 0x00, 0x88, 0x91, 0x4D, 0x02, 0x00, 0x00}},
+    {"SingleAnimation::update", 0x5B1700, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x50, 0x0F, 0x29}},
+    {"AnimationClass::runAnimation(AnimationData*, layer)", 0x5B7AC0, {0x48, 0x89, 0x6C, 0x24, 0x20, 0x56, 0x48, 0x83, 0xEC, 0x70, 0x48, 0x83}},
+    {"AnimationClass::animationSelection", 0x520500, {0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x7C, 0x24, 0x20, 0x41, 0x54}},
+    {"CharMovement::trackAnimationMovement", 0x65E240, {0x48, 0x83, 0xEC, 0x28, 0x38, 0x91, 0x7C, 0x03, 0x00, 0x00, 0x74, 0x17}},
     {"CharMovement::combatMovementUpdate", 0x2AF1E0, {0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x70, 0x10, 0x48}},
 };
 
@@ -1637,6 +1641,96 @@ std::string CurrentTechniqueName(const Character* c) {
 }
 
 std::string ItemTemplate(const void* item);
+
+namespace {
+constexpr uintptr_t AC_layers = 0xD0;                       // lektor<AnimationLayer*>
+constexpr uintptr_t AL_addList = 0x0, AL_removeList = 0x18;  // lektor<SingleAnimation*>
+constexpr uintptr_t SA_name = 0x0, SA_data = 0x30, SA_speed = 0x40, SA_weight = 0x44, SA_desired = 0x48, SA_time = 0x50, SA_time01 = 0x54,
+                    SA_looped = 0x5D;
+} // namespace
+
+bool ReadPlayingAnims(const Character* c, std::vector<PlayingAnim>& out) {
+    out.clear();
+    void* ac = AnimationOf(c);
+    if (!ac) return false;
+    uint32_t nl = 0;
+    void** layers = nullptr;
+    if (!Rd(ac, AC_layers + off::LK_count, nl) || !Rd(ac, AC_layers + off::LK_data, layers) || !layers || nl > 8) return false;
+    for (uint32_t li = 0; li < nl; ++li) {
+        void* layer = nullptr;
+        if (!Rd(layers, li * sizeof(void*), layer) || !layer) continue;
+        for (int list = 0; list < 2; ++list) {
+            const uintptr_t lo = list == 0 ? AL_addList : AL_removeList;
+            uint32_t n = 0;
+            void** items = nullptr;
+            if (!Rd(layer, lo + off::LK_count, n) || !Rd(layer, lo + off::LK_data, items) || !items || n > 64) continue;
+            for (uint32_t i = 0; i < n; ++i) {
+                void* sa = nullptr;
+                PlayingAnim a;
+                uint8_t looped = 0;
+                void* data = nullptr;
+                if (!Rd(items, i * sizeof(void*), sa) || !sa || !ReadGameString(sa, a.anim) || !Rd(sa, SA_speed, a.speed) || !Rd(sa, SA_weight, a.weight) ||
+                    !Rd(sa, SA_desired, a.desired) || !Rd(sa, SA_time, a.time) || !Rd(sa, SA_time01, a.time01) || !Rd(sa, SA_looped, looped))
+                    continue;
+                if (Rd(sa, SA_data, data) && data) a.data = AnimDataName(data);
+                a.layer = uint8_t(li);
+                a.looped = looped != 0;
+                a.fadingOut = list == 1;
+                a.single = sa;
+                out.push_back(std::move(a));
+            }
+        }
+    }
+    return true;
+}
+
+void* SingleAnimOwner(const void* single) {
+    constexpr uintptr_t SA_class = 0x38;
+    void* ac = nullptr;
+    return single && Rd(single, SA_class, ac) ? ac : nullptr;
+}
+
+bool SingleAnimName(const void* single, std::string& out) { return single && ReadGameString(single, out); }
+
+bool ReadSingleAnimTime(const void* sa, float& time) { return sa && Rd(sa, SA_time, time) && std::isfinite(time); }
+
+float SyncedAnimTime(const void* sa, float mine, float want, bool looped) {
+    constexpr float kTolerance = 0.12f;   // closer than that, our own smooth progress stays
+    float d = want - mine;
+    float t01 = 0;
+    if (looped && Rd(sa, SA_time01, t01) && t01 > 0.02f && mine > 0.01f) {
+        const float length = mine / t01;
+        if (std::isfinite(length) && length > 0.05f) {
+            d = std::fmod(d, length);
+            if (d > length * 0.5f) d -= length;
+            if (d < -length * 0.5f) d += length;
+        }
+    }
+    return std::fabs(d) > kTolerance ? mine + d : mine;
+}
+
+void WriteSingleAnim(void* sa, float time, float speed, float weight, float desired) {
+    constexpr uintptr_t SA_stillWanted = 0x67;
+    if (!sa || !std::isfinite(time) || !std::isfinite(speed)) return;
+    const uint8_t wanted = desired > 0.0f ? 1 : 0;   // the per-frame selection we skip would set it
+    Wr(sa, SA_stillWanted, wanted);
+    Wr(sa, SA_time, time);
+    Wr(sa, SA_speed, speed);
+    Wr(sa, SA_weight, weight);
+    Wr(sa, SA_desired, desired);
+}
+
+namespace {
+using FnRunAnimLayer = void (*)(void* ac, void* anim, float speed, int layer, float blend);
+bool SehRunAnimLayer(void* fn, void* ac, void* a, float s, int l, float b) {
+    __try { reinterpret_cast<FnRunAnimLayer>(fn)(ac, a, s, l, b); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+bool CallRunAnimation(Character* c, void* animData, float speed, int layer, float blend) {
+    void* ac = AnimationOf(c);
+    return ac && animData && SehRunAnimLayer(FnAddr(FnRunAnimationLayer), ac, animData, speed, layer, blend);
+}
 
 std::string CurrentStumbleName(const Character* c) {
     constexpr uintptr_t AC_reqStumble = 0x228;

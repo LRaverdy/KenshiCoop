@@ -27,6 +27,8 @@ struct HostCallScope {
 };
 // Inside it, the animation hooks let a client play one of the host's animations (every other
 // animation call on the host's characters is refused on clients, ours included).
+std::string AnimHookStats();   // tests
+
 struct AnimReplayScope {
     AnimReplayScope();
     ~AnimReplayScope();

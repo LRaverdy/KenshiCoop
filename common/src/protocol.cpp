@@ -287,7 +287,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Anim)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::AnimFrame)) return std::nullopt;
     return Msg(t);
 }
 
@@ -550,6 +550,85 @@ bool Decode(Reader& r, AnimMsg& m) {
         e.kind = AnimKind(k);
         e.name = r.str(kMaxAnimNameLen); e.a = r.f32(); e.b = r.f32(); e.flags = r.u8();
         if (!r.ok() || e.netId == 0) return false;
+    }
+    return Done(r);
+}
+
+// Each packet is self-contained: a string table (animation and data names) then the characters.
+std::vector<std::vector<uint8_t>> EncodeAnimFrames(const AnimFrameMsg& m, size_t budget) {
+    std::vector<std::vector<uint8_t>> out;
+    size_t i = 0;
+    while (i < m.chars.size()) {
+        std::vector<std::string> table;
+        auto index = [&](const std::string& s) {
+            for (size_t k = 0; k < table.size(); ++k)
+                if (table[k] == s) return uint32_t(k);
+            table.push_back(s);
+            return uint32_t(table.size() - 1);
+        };
+        Writer body(budget + 256);
+        uint32_t n = 0;
+        size_t tableBytes = 0;
+        while (i < m.chars.size()) {
+            const AnimFrame& f = m.chars[i];
+            const size_t tableBefore = table.size();
+            Writer one(256);
+            one.varint(f.netId);
+            const size_t na = std::min<size_t>(f.anims.size(), kMaxAnimsPerChar);
+            one.u8(uint8_t(na));
+            for (size_t a = 0; a < na; ++a) {
+                const AnimEntry& e = f.anims[a];
+                one.u8(uint8_t((e.layer & 0x3F) | (e.looped ? 0x40 : 0) | (e.fadingOut ? 0x80 : 0)));
+                one.varint(index(e.anim));
+                one.varint(index(e.data));
+                one.f32(e.time); one.f32(e.speed);
+                one.u8(uint8_t(std::lround(std::clamp(e.weight, 0.0f, 1.0f) * 255)));
+                one.u8(uint8_t(std::lround(std::clamp(e.desired, 0.0f, 1.0f) * 255)));
+            }
+            size_t added = 0;
+            for (size_t k = tableBefore; k < table.size(); ++k) added += table[k].size() + 2;
+            if (n > 0 && 1 + 8 + 4 + tableBytes + added + body.size() + one.size() > budget) {
+                table.resize(tableBefore);
+                break;
+            }
+            tableBytes += added;
+            body.bytes(one.data(), one.size());
+            ++n;
+            ++i;
+        }
+        Writer w(budget + 512);
+        w.u8(uint8_t(Msg::AnimFrame));
+        w.f64(m.hostTime);
+        w.varint(table.size());
+        for (const auto& s : table) w.str(s);
+        w.varint(n);
+        w.bytes(body.data(), body.size());
+        out.push_back(std::move(w.vec()));
+    }
+    return out;
+}
+bool Decode(Reader& r, AnimFrameMsg& m) {
+    m.hostTime = r.f64();
+    const uint32_t nt = r.count(4096, 1);
+    std::vector<std::string> table(nt);
+    for (auto& s : table) s = r.str(kMaxAnimNameLen);
+    const uint32_t n = r.count(kMaxEntitiesPerMsg, 2);
+    m.chars.resize(n);
+    for (auto& f : m.chars) {
+        f.netId = GetU32Var(r);
+        const uint8_t na = r.u8();
+        if (na > kMaxAnimsPerChar) return false;
+        f.anims.resize(na);
+        for (auto& e : f.anims) {
+            const uint8_t fl = r.u8();
+            e.layer = fl & 0x3F; e.looped = (fl & 0x40) != 0; e.fadingOut = (fl & 0x80) != 0;
+            const uint32_t ia = GetU32Var(r), id = GetU32Var(r);
+            if (ia >= table.size() || id >= table.size()) return false;
+            e.anim = table[ia]; e.data = table[id];
+            e.time = r.f32(); e.speed = r.f32();
+            e.weight = r.u8() / 255.0f; e.desired = r.u8() / 255.0f;
+        }
+        if (!r.ok() || f.netId == 0) return false;
     }
     return Done(r);
 }

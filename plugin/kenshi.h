@@ -98,6 +98,10 @@ enum Fn : int {
     FnSheatheWeapon,            // void CharacterHuman::sheatheWeapon()
     FnAnimGuardLegs,            // void AnimationClass::setCombatModeLegsIdle(bool)
     FnAnimGuardUpper,           // void AnimationClass::setCombatModeUpperIdle(bool)
+    FnSingleAnimUpdate,         // void AnimationClassBase::SingleAnimation::update(float masterTime, float frameTime, bool sounds)
+    FnRunAnimationLayer,        // void AnimationClass::runAnimation(AnimationData*, float speed, AnimationLayerEnum, float blend)
+    FnAnimationSelection,       // void AnimationClass::animationSelection(float time)   (picks what to play each frame)
+    FnTrackAnimationMovement,   // void CharMovement::trackAnimationMovement(bool)   (animations move the character)
     FnCombatMovementUpdate,     // void CharMovement::combatMovementUpdate(float, const Vector3& pos, const Vector3& dir, bool moving, Vector3& repulsion, Vector3& facingOut, bool defensive, swordStateEnum, float raceSpeedMult)
     FnCount
 };
@@ -336,6 +340,23 @@ struct AnimModes {
 };
 bool ReadAnimModes(const Character* c, AnimModes& out);
 std::string CurrentTechniqueName(const Character* c);   // the attack/block it is playing ("-" none)
+// Every animation the character is playing right now, layer by layer (what is actually on screen).
+struct PlayingAnim {
+    uint8_t layer = 0;
+    std::string anim;       // Ogre animation name
+    std::string data;       // its AnimationData name ("" for combat techniques)
+    float time = 0, time01 = 0, weight = 0, desired = 0, speed = 0;
+    bool looped = false, fadingOut = false;
+    void* single = nullptr;
+};
+bool ReadPlayingAnims(const Character* c, std::vector<PlayingAnim>& out);
+void* SingleAnimOwner(const void* single);           // its AnimationClass
+bool SingleAnimName(const void* single, std::string& out);
+void WriteSingleAnim(void* single, float time, float speed, float weight, float desired);
+bool ReadSingleAnimTime(const void* single, float& time);
+// The time to give an animation playing at `mine` so it matches `want` (looped ones by phase).
+float SyncedAnimTime(const void* single, float mine, float want, bool looped);
+bool CallRunAnimation(Character* c, void* animData, float speed, int layer, float blend);
 std::string CurrentStumbleName(const Character* c);     // the stumble it is playing ("-" none)
 bool WeaponInHands(const Character* c, std::string& itemSid, std::string& fromSection);   // false: hands empty
 bool CallStartCombatAnim(void* fn, Character* c, void* technique, float speed);

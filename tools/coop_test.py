@@ -595,6 +595,51 @@ def exp_anim(host, cli, rounds=10):
     log("squad vflags flips:", flips)
 
 
+def read_anims(path):
+    chars, cur = {}, None
+    for line in open(path, encoding="utf-8", errors="replace"):
+        if line.startswith("char "):
+            cur = line.split()[1]; chars[cur] = {}
+        elif cur and line.strip().startswith("L"):
+            head, rest = line.strip().split(" | ", 1)
+            parts = head.split(None, 2)
+            name = parts[2] if len(parts) > 2 else ""
+            kv = dict(x.split("=", 1) for x in rest.split() if "=" in x)
+            if parts[1] == "in" and float(kv.get("w", 0)) > 0.05:
+                chars[cur][name] = (float(kv["t"]), float(kv["w"]))
+    return chars
+
+
+def exp_animframe(host, cli, rounds=10):
+    """What is on screen: the same animations, at the same time and weight, on both sides."""
+    time.sleep(8)
+    log("spawn", cmd(host, "spawnnpc 15 10"))
+    time.sleep(3)
+    for i in (0, 1, 2):
+        cmd(host, f"fight {i}")
+    worst_set, worst_t = 0, 0.0
+    for r in range(rounds):
+        time.sleep(1.1 + 0.37 * (r % 4))
+        cmd(host, "pause 1")
+        time.sleep(1.5)
+        hp = os.path.abspath(os.path.join(OUT_DIR, "h_af.txt")); cp = os.path.abspath(os.path.join(OUT_DIR, "c_af.txt"))
+        cmd(host, f"anims {hp}"); cmd(cli, f"anims {cp}")
+        cmd(host, "pause 0")
+        h, c = read_anims(hp), read_anims(cp)
+        diff_sets, tdiff = [], []
+        for k in h:
+            hs, cs = set(h[k]), set(c.get(k, {}))
+            if hs != cs:
+                diff_sets.append((k[-6:], sorted(hs - cs)[:2], sorted(cs - hs)[:2]))
+            for n in hs & cs:
+                tdiff.append((abs(h[k][n][0] - c[k][n][0]), abs(h[k][n][1] - c[k][n][1]), n))
+        tdiff.sort(reverse=True)
+        worst_set = max(worst_set, len(diff_sets))
+        worst_t = max(worst_t, tdiff[0][0] if tdiff else 0)
+        log(f"frame {r + 1}: chars {len(h)} differing sets {len(diff_sets)} {diff_sets[:3]} worst time/weight diff {tdiff[:2]}")
+    log("animframe worst differing sets:", worst_set, "worst time diff:", round(worst_t, 3))
+
+
 def exp_bodies(host, cli):
     """Where does a knocked-out body lie on each side, over time, for each body mode?"""
     time.sleep(6)
@@ -828,6 +873,9 @@ def main():
     t.add_argument("--save", default="kctest_base")
     e = sub.add_parser("bodies")
     e.add_argument("--save", default="kctest_base")
+    af = sub.add_parser("animframe")
+    af.add_argument("--save", default="kctest_base")
+    af.add_argument("--keep", action="store_true")
     an = sub.add_parser("anim")
     an.add_argument("--save", default="kctest_base")
     an.add_argument("--keep", action="store_true")
@@ -856,7 +904,9 @@ def main():
         log("ready: host", host, "client", cli)
         return
     try:
-        if a.what == "anim":
+        if a.what == "animframe":
+            exp_animframe(host, cli)
+        elif a.what == "anim":
             exp_anim(host, cli)
         elif a.what == "gait":
             exp_gait(host, cli)

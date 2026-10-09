@@ -243,6 +243,22 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         return ok ? "ok " + Key(lastSpawned_) : "err call failed";
     }
     if (cmd == "rollweather") return "ok " + std::to_string(w.ExpireAllWeather());
+    if (cmd == "anims") {   // anims <file>: every squad member's playing animations
+        std::string file;
+        in >> file;
+        std::ofstream o(file, std::ios::trunc);
+        if (!o) return "err cannot write " + file;
+        o << "hook " << AnimHookStats() << " targets=" << w.AnimTargetCount() << '\n';
+        for (const auto& h : SortedSquad(w)) {
+            std::vector<kenshi::PlayingAnim> v;
+            kenshi::ReadPlayingAnims(w.FindSquad(h), v);
+            o << "char " << Key(h) << " n=" << v.size() << '\n';
+            for (const auto& a : v)
+                o << "  L" << int(a.layer) << (a.fadingOut ? " out " : " in  ") << a.anim << " | " << a.data << " t=" << a.time << " t01=" << a.time01
+                  << " w=" << a.weight << " dw=" << a.desired << " sp=" << a.speed << " loop=" << a.looped << '\n';
+        }
+        return "ok";
+    }
     if (cmd == "fxhurry") return "ok " + std::to_string(w.HurryEffects());   // fxhurry: every effect group places one now
     if (cmd == "setweather") {   // setweather <regionSid> <seasonSid> <weatherSid>
         std::string region, season, weather;

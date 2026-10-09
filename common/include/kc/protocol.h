@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 12;
+constexpr uint16_t kProtocolVersion = 13;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -56,6 +56,7 @@ enum class Msg : uint8_t {
     InvOp = 21,       // C->S  the client moved items (loot, equip, rearrange, drop)
     Effects = 22,     // S->C  weather effects the host's game placed (lightning, storms, gas clouds)
     Anim = 23,        // S->C  animations the host's characters start and stop (attacks, actions, stumbles)
+    AnimFrame = 24,   // S->C  (unreliable) every animation each nearby character is playing: name, time, weight
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -347,6 +348,25 @@ struct AnimMsg {
     std::vector<AnimEvent> events;
 };
 constexpr uint32_t kMaxAnimEvents = 4096;
+
+// What is on screen: each animation a character plays (whatever logic started it), with its time
+// and blend weight. Clients impose it, so every step, guard, swing and turn looks the same.
+struct AnimEntry {
+    uint8_t layer = 0;
+    bool looped = false, fadingOut = false;
+    std::string anim;     // Ogre animation name
+    std::string data;     // its animation data ("" for combat techniques)
+    float time = 0, weight = 0, desired = 0, speed = 0;
+};
+struct AnimFrame {
+    uint32_t netId = 0;
+    std::vector<AnimEntry> anims;
+};
+struct AnimFrameMsg {
+    double hostTime = 0;
+    std::vector<AnimFrame> chars;
+};
+constexpr uint32_t kMaxAnimsPerChar = 32;
 constexpr size_t kMaxAnimNameLen = 200;
 
 // ---- world transfer ----
@@ -403,6 +423,7 @@ void Encode(Writer& w, const AnimMsg& m);
 // Snapshots are split into packets that each fit `budget` bytes; every packet is self-contained.
 std::vector<std::vector<uint8_t>> EncodeSnapshot(const Snapshot& s, size_t budget = kSnapshotBudget);
 std::vector<std::vector<uint8_t>> EncodeVitals(const VitalsMsg& v, size_t budget = kSnapshotBudget);
+std::vector<std::vector<uint8_t>> EncodeAnimFrames(const AnimFrameMsg& m, size_t budget = kSnapshotBudget);
 
 std::optional<Msg> PeekType(Reader& r);
 bool Decode(Reader& r, Hello& m);
@@ -426,6 +447,7 @@ bool Decode(Reader& r, InventoryMsg& m);
 bool Decode(Reader& r, InvOp& m);
 bool Decode(Reader& r, EffectsMsg& m);
 bool Decode(Reader& r, AnimMsg& m);
+bool Decode(Reader& r, AnimFrameMsg& m);
 bool Decode(Reader& r, Ping& m);
 
 // Name rules: 1..kMaxNameLen printable ASCII, no leading/trailing spaces.

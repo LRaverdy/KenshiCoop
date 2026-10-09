@@ -98,6 +98,16 @@ void KenshiWorld::EndFrame() {
         v->replicated.insert(it->first);
         ++it;
     }
+    v->gameSpeed = kenshi::GetFrameSpeed();
+    if (active_ && client_) {
+        for (auto it = animTargets_.begin(); it != animTargets_.end();) {
+            if (nowView - it->second->sampledAt > 1.0 || !v->replicated.count(it->first)) { it = animTargets_.erase(it); continue; }
+            if (void* ac = kenshi::AnimationOf(it->first)) v->anims[ac] = it->second;
+            ++it;
+        }
+    } else {
+        animTargets_.clear();
+    }
     if (active_ && client_)
         for (const auto& [h, st] : lastTarget_)
             if (kenshi::Character* c = Find(h); c && v->replicated.count(c))
@@ -867,6 +877,92 @@ void KenshiWorld::TakeAnimEvents(std::vector<std::pair<kc::Handle, kc::AnimEvent
     }
 }
 
+bool KenshiWorld::ReadAnimFrame(const kc::Handle& h, std::vector<kc::AnimEntry>& out) {
+    out.clear();
+    if (client_) return false;
+    const double now = NowSeconds();
+    if (now - animCentersAt_ > 0.25) {
+        animCentersAt_ = now;
+        animCenters_.clear();
+        for (auto& [sh, sc] : squad_) {
+            kc::Vec3 p;
+            if (kenshi::GetPosition(sc, p)) animCenters_.push_back(p);
+        }
+    }
+    kenshi::Character* c = Find(h);
+    kc::Vec3 p;
+    if (!c || !kenshi::GetPosition(c, p)) return false;
+    constexpr float kAnimRadius = 1500.0f;   // 150 m: beyond, nobody makes out a step
+    bool closeBy = false;
+    for (const auto& q : animCenters_) closeBy = closeBy || ((p.x - q.x) * (p.x - q.x) + (p.z - q.z) * (p.z - q.z) < kAnimRadius * kAnimRadius);
+    if (!closeBy) return false;
+    std::vector<kenshi::PlayingAnim> playing;
+    if (!kenshi::ReadPlayingAnims(c, playing)) return false;
+    for (const auto& a : playing) {
+        if (a.weight < 0.002f && a.desired < 0.002f) continue;   // idle entries the blender keeps around
+        kc::AnimEntry e;
+        e.layer = a.layer; e.looped = a.looped; e.fadingOut = a.fadingOut;
+        e.anim = a.anim; e.data = a.data;
+        e.time = a.time; e.weight = a.weight; e.desired = a.desired; e.speed = a.speed;
+        out.push_back(std::move(e));
+    }
+    return true;
+}
+
+void KenshiWorld::ApplyAnimFrame(const kc::Handle& h, const std::vector<kc::AnimEntry>& anims, double ageSeconds) {
+    kenshi::Character* c = Find(h);
+    if (!c || !client_ || kenshi::IsDead(c)) return;
+    const double now = NowSeconds();
+    auto t = std::make_shared<HookView::AnimTarget>();
+    t->anims = anims;
+    t->sampledAt = now - ageSeconds;
+    animTargets_[c] = t;
+    // what the host plays and we do not: start it (the update hook then sets its time and weight)
+    std::vector<kenshi::PlayingAnim> mine;
+    kenshi::ReadPlayingAnims(c, mine);
+    for (const auto& e : anims) {
+        if (e.fadingOut || e.desired < 0.05f) continue;
+        bool have = false;   // playing here too, and not on its way out
+        for (const auto& m : mine) have = have || (m.anim == e.anim && !m.fadingOut);
+        if (have) continue;
+        double& tried = animCreateTried_[std::to_string(reinterpret_cast<uintptr_t>(c)) + "|" + e.anim];
+        if (now - tried < 0.2) continue;
+        tried = now;
+        AnimReplayScope scope;
+        void* found = nullptr;
+        bool called = false;
+        if (!e.data.empty()) {
+            if ((found = kenshi::FindAnimData(c, e.data))) called = kenshi::CallRunAnimation(c, found, e.speed, e.layer, 0.0f);
+        } else if ((found = kenshi::FindTechnique(e.anim))) {
+            called = kenshi::CallStartCombatAnim(kenshi::FnAddr(kenshi::FnAnimRunCombat), c, found, e.speed);
+        }
+        static int createLogged = 0;
+        if (createLogged < 0) {
+            ++createLogged;
+            std::vector<kenshi::PlayingAnim> after;
+            kenshi::ReadPlayingAnims(c, after);
+            bool present = false;
+            for (const auto& a : after) present = present || a.anim == e.anim;
+            Log("anim create: '%s' data='%s' L%d found=%d called=%d present=%d (now %zu playing)", e.anim.c_str(), e.data.c_str(), int(e.layer),
+                found ? 1 : 0, called ? 1 : 0, present ? 1 : 0, after.size());
+        }
+    }
+    if (animCreateTried_.size() > 4096) animCreateTried_.clear();
+    // and set every one now (paused, the update hook does not run)
+    kenshi::ReadPlayingAnims(c, mine);
+    for (const auto& m : mine) {
+        const kc::AnimEntry* match = nullptr;
+        for (const auto& e : anims)
+            if (e.anim == m.anim) { match = &e; break; }
+        if (!match || match->fadingOut != m.fadingOut) {   // not the host's (or the host's is the other copy)
+            if (!match) kenshi::WriteSingleAnim(m.single, m.time, 0.0f, 0.0f, 0.0f);
+            continue;
+        }
+        const float want = match->time + match->speed * float(ageSeconds) * kenshi::GetFrameSpeed();
+        kenshi::WriteSingleAnim(m.single, kenshi::SyncedAnimTime(m.single, m.time, want, match->looped), match->speed, match->weight, match->desired);
+    }
+}
+
 void KenshiWorld::ApplyAnim(const kc::Handle& h, const kc::AnimEvent& e) {
     kenshi::Character* c = Find(h);
     static int logged = 0;
@@ -876,6 +972,11 @@ void KenshiWorld::ApplyAnim(const kc::Handle& h, const kc::AnimEvent& e) {
             e.kind <= kc::AnimKind::CombatRun && kenshi::FindTechnique(e.name) ? 1 : 0, c && kenshi::FindAnimData(c, e.name) ? 1 : 0);
     }
     if (!c || !client_ || kenshi::IsDead(c)) return;
+    // a character whose animations are mirrored keeps what the host's shows: ends come with it
+    const bool mirrored = animTargets_.count(c) > 0;
+    if (mirrored && (e.kind == kc::AnimKind::EndCombat || e.kind == kc::AnimKind::StopAction || e.kind == kc::AnimKind::EndStumble ||
+                     e.kind == kc::AnimKind::State))
+        return;
     AnimReplayScope scope;
     switch (e.kind) {
     case kc::AnimKind::Combat:

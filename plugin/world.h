@@ -25,6 +25,12 @@ struct HookView {
     std::unordered_set<kc::Handle, HandleHash> controllable;  // handles this machine may command
     std::unordered_set<const void*> replicated;    // client: characters driven by the host's state
     std::unordered_map<const void*, kc::Vec3> facing;   // client: CharMovement -> where the host's character faces
+    struct AnimTarget {
+        std::vector<kc::AnimEntry> anims;
+        double sampledAt = 0;   // NowSeconds() when the host sampled them
+    };
+    std::unordered_map<const void*, std::shared_ptr<const AnimTarget>> anims;   // client: AnimationClass -> host's animations
+    float gameSpeed = 1.0f;
 };
 
 class KenshiWorld final : public kc::IWorld {
@@ -65,6 +71,8 @@ public:
     void ApplyWeather(const std::vector<kc::RegionWeather>& regions) override;
     void ReadEffects(kc::EffectsMsg& out, bool full) override;
     void TakeAnimEvents(std::vector<std::pair<kc::Handle, kc::AnimEvent>>& out, bool state) override;
+    bool ReadAnimFrame(const kc::Handle& h, std::vector<kc::AnimEntry>& out) override;
+    void ApplyAnimFrame(const kc::Handle& h, const std::vector<kc::AnimEntry>& anims, double ageSeconds) override;
     void ApplyAnim(const kc::Handle& h, const kc::AnimEvent& e) override;
     // Host: an animation hook saw one of our characters start/stop something (any game thread).
     void NoteAnim(kenshi::Character* c, kc::AnimEvent e);
@@ -74,6 +82,7 @@ public:
     void WeatherRegionTick(void* region, bool afterUpdate);
     size_t ExpireAllWeather();   // tests: every known region rolls a new weather
     std::string EffectsReport();  // tests: live weather effects per region
+    size_t AnimTargetCount() const { return animTargets_.size(); }
     std::string WeatherGroups();  // tests: each region's weather, effect groups and possible weathers
     size_t HurryEffects();        // tests: host groups place their next effect now
     void ForceWeather(const std::string& regionSid, const std::string& seasonSid, const std::string& weatherSid);   // tests (host)
@@ -203,6 +212,10 @@ private:   // first few lifecycle events (tests)
     std::mutex animMutex_;
     std::vector<std::pair<kenshi::Character*, kc::AnimEvent>> animOut_;   // host: not taken by the session yet
     std::unordered_map<kenshi::Character*, uint32_t> animLast_;            // host: last event reported per character
+    std::vector<kc::Vec3> animCenters_;                                     // host: players' characters, for relevance
+    double animCentersAt_ = -1e9;
+    std::unordered_map<kenshi::Character*, std::shared_ptr<const HookView::AnimTarget>> animTargets_;   // client
+    std::unordered_map<std::string, double> animCreateTried_;               // client: "<char>|<anim>" -> last attempt
     std::mutex toastMutex_;
     std::vector<std::string> toasts_;
 
