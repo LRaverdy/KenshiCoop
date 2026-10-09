@@ -3485,6 +3485,11 @@ void SetGodMode(Character* c, bool on) {
     else g_god.erase(c);
 }
 
+void ForgetGodModes() {
+    std::lock_guard<std::mutex> lk(g_godMutex);
+    g_god.clear();
+}
+
 bool GodMode(const void* c) {
     std::lock_guard<std::mutex> lk(g_godMutex);
     return g_god.count(c) != 0;
@@ -3537,6 +3542,32 @@ void* SetHandTool(Character* c, void* current, const std::string& sid) {
     if (void* fn = VSlot(owner, 0x198); fn && HandSeh(fn, owner, name, item)) return item;   // into the hands
     DestroyItem(item);
     return nullptr;
+}
+
+// ---- fix G6: floors
+// CharMovement::floorGroup (+0x334): getCurrentFloor() derives the floor from it, and
+// _setPositionAndTeleport(p, floor) sets it to floor + 9. Taking the stairs changes it; a character
+// only placed (as on a client) keeps its old one.
+namespace {
+constexpr uintptr_t CM_floorGroup = 0x334;
+}
+
+bool ReadFloorGroup(const Character* c, int32_t& group) {
+    void* m = Movement(c);
+    return m && Rd(m, CM_floorGroup, group);
+}
+
+bool WriteFloorGroup(Character* c, int32_t group) {
+    void* m = Movement(c);
+    int32_t cur = 0;
+    if (!m || !Rd(m, CM_floorGroup, cur)) return false;
+    if (cur == group) return true;
+    __try {
+        *reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(m) + CM_floorGroup) = group;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    return true;
 }
 
 } // namespace kenshi

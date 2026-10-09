@@ -385,6 +385,8 @@ void ConsoleCommand(const std::string& line) {
                     if (kenshi::Character* c = g_world->FindSquad(h); c && kenshi::GetPosition(c, dest)) have = true;
         }
         if (!have) { out("destination introuvable : sélectionne un de tes persos"); return; }
+        // its game loads the destination zone at once and freezes meanwhile: the link must wait
+        if (id != g_session->localId()) g_session->ExpectStall(uint8_t(id), 120.0);
         const int n = g_world->TeleportCharacters(who, dest);
         out(std::to_string(n) + " personnage(s) du joueur " + std::to_string(id) + " téléporté(s)");
         Toast(std::to_string(n) + " personnage(s) téléporté(s).");

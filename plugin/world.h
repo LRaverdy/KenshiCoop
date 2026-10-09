@@ -72,6 +72,8 @@ public:
     bool ReadMoney(int32_t& money) override { return kenshi::ReadPlayerMoney(money); }
     bool ReadTool(const kc::Handle& h, std::string& sid) override;
     void ApplyTool(const kc::Handle& h, const std::string& sid) override;
+    bool ReadFloor(const kc::Handle& h, uint8_t& group) override;   // fix G6
+    void ApplyFloor(const kc::Handle& h, uint8_t group) override;
     void ReadSquads(std::vector<WorldSquad>& out) override;
     bool FindContainer(const std::string& sid, const kc::Vec3& pos, kc::Handle& out) override;
     bool ContainerKind(const kc::Handle& container, std::string& sid) override;
@@ -291,6 +293,8 @@ private:
     bool live_ = false;
     bool wasReady_ = false;
     void* lastPlayer_ = nullptr;
+    std::vector<const void*> lastSquadPtrs_;   // the squad of the world last seen (sorted): same ones, same world
+    void ResetWorldBound();
     uint32_t generation_ = 0;
     bool holding_ = false, pausedByHold_ = false;
     bool exporting_ = false;

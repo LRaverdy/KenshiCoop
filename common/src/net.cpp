@@ -1,11 +1,21 @@
 #include "kc/net.h"
 
 #include <atomic>
+#include <chrono>
 #include <enet/enet.h>
 
 #include "kc/protocol.h"
 
 namespace kc {
+
+namespace {
+constexpr uint32_t kTimeoutMinMs = 5000, kTimeoutMaxMs = 15000;           // a crashed game is noticed in 15 s
+constexpr uint32_t kQuietTimeoutMinMs = 30000, kQuietTimeoutMaxMs = 120000;   // a game loading a zone
+double SteadySeconds() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+} // namespace
+
 
 namespace {
 std::atomic<int> g_initCount{0};
@@ -62,7 +72,7 @@ bool Net::Connect(const std::string& hostName, uint16_t port, std::string* err, 
         return false;
     }
     peer->data = reinterpret_cast<void*>(uintptr_t(nextId_++));
-    enet_peer_timeout(peer, 0, 5000, 15000);
+    enet_peer_timeout(peer, 0, kTimeoutMinMs, kTimeoutMaxMs);
     server_ = false;
     return true;
 }
@@ -82,6 +92,14 @@ void Net::Close() {
 
 void Net::Poll(const Callbacks& cb) {
     if (!host_) return;
+    if (!quietUntil_.empty()) {
+        const double now = SteadySeconds();
+        for (auto it = quietUntil_.begin(); it != quietUntil_.end();) {
+            if (now < it->second) { ++it; continue; }
+            if (ENetPeer* p = find(it->first)) enet_peer_timeout(p, 0, kTimeoutMinMs, kTimeoutMaxMs);
+            it = quietUntil_.erase(it);
+        }
+    }
     ENetEvent ev;
     // enet_host_service with timeout 0 never blocks; loop until the queue is drained.
     while (host_ && enet_host_service(host_, &ev, 0) > 0) {
@@ -89,7 +107,7 @@ void Net::Poll(const Callbacks& cb) {
         case ENET_EVENT_TYPE_CONNECT:
             if (server_) {
                 ev.peer->data = reinterpret_cast<void*>(uintptr_t(nextId_++));
-                enet_peer_timeout(ev.peer, 0, 5000, 15000);
+                enet_peer_timeout(ev.peer, 0, kTimeoutMinMs, kTimeoutMaxMs);
             } else {
                 serverPeer_ = IdOf(ev.peer);
             }
@@ -147,6 +165,14 @@ void Net::Broadcast(uint8_t channel, const void* data, size_t size, bool reliabl
 
 void Net::Flush() {
     if (host_) enet_host_flush(host_);
+}
+
+void Net::ExpectSilence(PeerId peer, double seconds) {
+    if (peer == kNoPeer) peer = serverPeer_;
+    ENetPeer* p = find(peer);
+    if (!p) return;
+    enet_peer_timeout(p, 0, kQuietTimeoutMinMs, kQuietTimeoutMaxMs);
+    quietUntil_[peer] = SteadySeconds() + seconds;
 }
 
 void Net::Kick(PeerId peer) {

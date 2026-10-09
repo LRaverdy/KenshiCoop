@@ -53,20 +53,68 @@ void KenshiWorld::BeginFrame(bool live) {
         if (kenshi::GetHandle(c, h) && h.valid()) squad_[h] = c;
     }
     // A (re)loaded world: a new generation, which tells a joining client its load completed.
+    // A frame without the game's main loop (a zone loading after a long walk or a far teleport, a
+    // hitch) also passes through "not live": the same characters at the same addresses afterwards
+    // mean the same world, whose stand-ins and caches must survive. Any reload frees them all.
     void* player = kenshi::Player();
     const bool ready = player && !squad_.empty();
     if (ready && (!wasReady_ || player != lastPlayer_)) {
-        ++generation_;
-        alias_.clear();                  // stand-ins belonged to the previous world
-        pendingLoot_.clear();
-        strangerSince_.clear();
-        lastTarget_.clear();
-        fallPrep_.clear();
-        fellAt_.clear();
-        kenshi::ResetLookupCaches();
+        std::vector<const void*> now;
+        for (auto& [h, c] : squad_) now.push_back(c);
+        std::sort(now.begin(), now.end());
+        if (player != lastPlayer_ || now != lastSquadPtrs_) {
+            ++generation_;
+            ResetWorldBound();
+            Log("new world (generation %u): every per-world state reset", generation_);
+        }
+        lastSquadPtrs_ = std::move(now);
     }
     wasReady_ = ready;
     lastPlayer_ = player;
+}
+
+// Everything that names objects of the loaded world (pointers, local handles, requests about
+// them). After a reload (a resync, a load) they are gone: keeping any of it makes the next
+// frame call the game on freed memory.
+void KenshiWorld::ResetWorldBound() {
+    alias_.clear();   // stand-ins belonged to the previous world
+    pendingLoot_.clear();
+    strangerSince_.clear();
+    lastTarget_.clear();
+    fallPrep_.clear();
+    fellAt_.clear();
+    lastDest_.clear();
+    postureSince_.clear();
+    postureFixed_.clear();
+    carriedHere_.clear();
+    handTools_.clear();
+    applied_.clear();
+    replicatedAt_.clear();
+    animTargets_.clear();
+    animLast_.clear();
+    animCreateTried_.clear();
+    lastFloater_.clear();
+    edited_.clear();
+    containerReqs_.clear();
+    taskDropAt_.clear();
+    stuck_.clear();
+    farSnapAt_.clear();
+    reRagdoll_.clear();
+    syncErr_.clear();
+    syncMaxErr_ = 0;
+    remoteDialogs_.clear();
+    turretCache_.clear();
+    pickups_.clear();
+    captiveHold_.clear();
+    captiveMissing_.clear();
+    resolved_.clear();
+    { std::lock_guard<std::mutex> lk(groundMutex_); localDrops_.clear(); groundAlias_.clear(); }
+    { std::lock_guard<std::mutex> lk(doorMutex_); doorReqs_.clear(); doorCache_.clear(); }
+    { std::lock_guard<std::mutex> lk(tradeMutex_); tradeReqs_.clear(); hostTradeLooter_ = {}; hostTradeTrader_ = {}; }
+    { std::lock_guard<std::mutex> lk(buildMutex_); trackedBuildings_.clear(); localPlacements_.clear(); localBuildActions_.clear(); removedBuildings_.clear(); }
+    { std::lock_guard<std::mutex> lk(dialogMutex_); dialogEvents_.clear(); }
+    kenshi::ResetLookupCaches();
+    kenshi::ForgetGodModes();
 }
 
 void KenshiWorld::EndFrame() {
@@ -347,6 +395,14 @@ bool KenshiWorld::Exists(const kc::Handle& h) {
             resolved_[h] = real;
             return true;
         }
+        // The stand-in is gone (killed and cleaned up, or dropped with its zone by the local game):
+        // the alias must go too, or Spawn and Reconcile would skip this character forever.
+        if (!kenshi::Resolve(a->second)) {
+            Log("stand-in %s for the host's %s is gone here: it can be recreated", KeyOf(a->second).c_str(), KeyOf(h).c_str());
+            alias_.erase(a);
+            resolved_.erase(h);
+            return false;
+        }
     }
     return Find(h) != nullptr;
 }
@@ -540,9 +596,17 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     }
 
     const float err = Dist(local, target.pos);
-    syncMaxErr_ = std::max(syncMaxErr_, err);
-    if (!(latest.flags & kc::kFlagMoving)) syncErr_[h] = err;
-    else syncErr_.erase(h);
+    // Far from our squad (beyond what the player sees) the local game hardly runs a character and
+    // ignores most positions written to it: its offset there is not a desync anyone sees, and it
+    // put hundreds of units in the reports ("max offset" 300-466). Measured near our squad only.
+    constexpr float kSeenRange = 300.0f;
+    if (err > 5.0f && NearestSquadDistance(local) > kSeenRange) {
+        syncErr_.erase(h);
+    } else {
+        syncMaxErr_ = std::max(syncMaxErr_, err);
+        if (!(latest.flags & kc::kFlagMoving)) syncErr_[h] = err;
+        else syncErr_.erase(h);
+    }
     HostCallScope scope;
     // Far off (late join, lag spike, teleport on the host): snap straight to the host state.
     if (err > cfg_.snapDistance) {
@@ -949,6 +1013,22 @@ void KenshiWorld::ApplyTool(const kc::Handle& h, const std::string& sid) {
     if (sid.empty() || !now) handTools_.erase(h);
     else handTools_[h] = {sid, now, c};
     Log("tool: %s %s", KeyOf(h).c_str(), sid.empty() ? "puts its tool away" : ("holds " + TemplateName(sid) + (now ? "" : " (failed)")).c_str());
+}
+
+// ---- fix G6: floors
+bool KenshiWorld::ReadFloor(const kc::Handle& h, uint8_t& group) {
+    int32_t g = 0;
+    kenshi::Character* c = Find(h);
+    if (!c || !kenshi::ReadFloorGroup(c, g) || g < 0 || g > 255) return false;
+    group = uint8_t(g);
+    return true;
+}
+
+void KenshiWorld::ApplyFloor(const kc::Handle& h, uint8_t group) {
+    kenshi::Character* c = Find(h);
+    int32_t g = 0;
+    if (!c || !kenshi::ReadFloorGroup(c, g) || g == group) return;
+    if (kenshi::WriteFloorGroup(c, group)) Log("floor: %s now on floor group %d (was %d), as on the host", KeyOf(h).c_str(), int(group), int(g));
 }
 
 int KenshiWorld::TeleportCharacters(const std::vector<kc::Handle>& who, const kc::Vec3& to) {

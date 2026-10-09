@@ -705,7 +705,29 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         for (const auto& h : squad) if (s.ownerOf(h) == id) who.push_back(h);
         kc::Vec3 p;
         if (who.empty() || squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), p)) return "err";
+        s.ExpectStall(uint8_t(id), 120.0);   // fix G6: as the admin "tp"
         return "ok " + std::to_string(w.TeleportCharacters(who, p));
+    }
+    // ---- fix G6
+    if (cmd == "squadbar") {   // squadbar: how many portraits the squad bar shows, and the squad count here
+        std::vector<kenshi::Character*> shown;
+        kenshi::SquadMembers(kenshi::ShownSquad(), shown);
+        return "ok " + std::to_string(shown.size()) + " " + std::to_string(w.CharacterCount()) + " gen=" + std::to_string(w.WorldGeneration());
+    }
+    if (cmd == "floor") {   // floor <squadIndex> [group]: its floor group (9: ground floor); with a group: put it there (host)
+        int i = -1, g = -1;
+        in >> i >> g;
+        auto squad = SortedSquad(w);
+        if (i < 0 || i >= int(squad.size())) return "err";
+        kenshi::Character* c = w.FindSquad(squad[i]);
+        int32_t cur = 0;
+        if (!c || !kenshi::ReadFloorGroup(c, cur)) return "err";
+        if (g >= 0) {
+            HostCallScope scope;
+            kenshi::WriteFloorGroup(c, g);
+            kenshi::ReadFloorGroup(c, cur);
+        }
+        return "ok " + std::to_string(cur);
     }
     if (cmd == "consolewin") {   // consolewin: is the host console window there, and how much log does it show
         HWND wnd = FindWindowA("KenshiCoopHostConsole", nullptr);

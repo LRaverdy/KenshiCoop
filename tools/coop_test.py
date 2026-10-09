@@ -1566,6 +1566,89 @@ def vec(t):
     return vec_of(t)
 
 
+# ---- fix G6
+def exp_resyncbar(host, cli):
+    """Resync: the client reloads the host's world; afterwards its squad bar still shows its
+    characters, its game is still alive a minute later, and orders still go through."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(2)
+    before = cmd(cli, "squadbar")
+    log("before", before)
+    log("resync", cmd(host, "resync 2"))
+    time.sleep(3)
+    wait_for(cli, lambda f: f.get("state") == "connected" and f.get("ready") == "1", 240, "client back in the host's world")
+    time.sleep(5)
+    after = cmd(cli, "squadbar")
+    log("after", after)
+    n = int(after[1].split()[1]) if after[0] else 0
+    check("resync : la barre d'escouade montre des portraits", n > 0, after[1])
+    gen0 = before[1].split("gen=")[-1] if before[0] else "?"
+    gen1 = after[1].split("gen=")[-1] if after[0] else "?"
+    check("resync : un nouveau monde (generation changee)", gen0 != gen1, f"{gen0} -> {gen1}")
+    own = own_index(host)
+    cmd(cli, f"move {own} 0 0")
+    time.sleep(60)
+    st = status(cli)
+    check("resync : le client tourne encore 1 min apres", st.get("state") == "connected", st)
+    summary()
+
+
+def exp_fartp(host, cli):
+    """The client walks its character far away, then the host's admin TP brings it back: the
+    client must not be dropped while it loads the zone."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(2)
+    own = own_index(host)
+    cmd(host, f"teleport {own} 30000 0 30000")   # far: another zone entirely
+    time.sleep(20)
+    log("tp", cmd(host, "tpplayer 2"))
+    t0 = time.time()
+    dropped = False
+    while time.time() - t0 < 90:
+        st = status(cli)
+        if st.get("state") not in ("connected", None):
+            dropped = True
+            break
+        time.sleep(2)
+    check("TP lointain : le client reste connecte", not dropped and status(cli).get("state") == "connected")
+    check("TP lointain : l'hote ne l'a pas perdu", "left" not in host_log()[-4000:])
+    summary()
+
+
+def exp_missing(host, cli, minutes=5):
+    """Missing NPCs on the client over time: the count must go down to (near) zero near the
+    players, never stay stuck."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    seen = []
+    for _ in range(minutes * 6):
+        st = status(cli)
+        seen.append(int(st.get("missingNpcs", "0")))
+        log("missingNpcs", seen[-1], "entities", st.get("entities"))
+        time.sleep(10)
+    check("PNJ manquants : le compte redescend", seen[-1] <= max(2, min(seen)), seen[-6:])
+    summary()
+
+
+def exp_floor(host, cli):
+    """A host character changes floor: the client's copy takes the same floor group."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(2)
+    log("host floor 0", cmd(host, "floor 0"))
+    cmd(host, "floor 0 10")
+    time.sleep(2)
+    c = cmd(cli, "floor 0")
+    check("etage : le client suit l'etage de l'hote", c[0] and c[1].split()[1] == "10", c[1])
+    cmd(host, "floor 0 9")
+    time.sleep(2)
+    c = cmd(cli, "floor 0")
+    check("etage : retour au rez-de-chaussee", c[0] and c[1].split()[1] == "9", c[1])
+    summary()
+
+
 def exp_suite(host, cli):
     """Every feature in one session: PASS / FAIL per point."""
     time.sleep(6)
@@ -2171,7 +2254,7 @@ def main():
     td.add_argument("--save", default="kctest_town")
     td.add_argument("--keep", action="store_true")
     td.add_argument("--merchant", default="Marchand", help="part of the merchant's name ('_' for spaces)")
-    for name in ("stuck", "farnpc", "beds", "tpdown", "lootswap", "groundpick"):
+    for name in ("stuck", "farnpc", "beds", "tpdown", "lootswap", "groundpick", "resyncbar", "fartp", "missing", "floor"):
         e2 = sub.add_parser(name)
         e2.add_argument("--save", default="kctest_town" if name in ("beds", "groundpick") else "kctest_base")
         e2.add_argument("--keep", action="store_true")
@@ -2293,6 +2376,14 @@ def main():
             exp_lootswap(host, cli)
         elif a.what == "groundpick":
             exp_groundpick(host, cli)
+        elif a.what == "resyncbar":   # fix G6
+            exp_resyncbar(host, cli)
+        elif a.what == "fartp":
+            exp_fartp(host, cli)
+        elif a.what == "missing":
+            exp_missing(host, cli)
+        elif a.what == "floor":
+            exp_floor(host, cli)
         elif a.what == "factions":
             exp_factions(host, cli)
         elif a.what == "doors":

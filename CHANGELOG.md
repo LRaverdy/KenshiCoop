@@ -23,6 +23,17 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
   bottes) marche sans refus ni duplication ; une pile lâchée sur une pile identique s'y ajoute chez
   l'hôte ; on peut poser des objets sur un corps K.-O. ; un client peut ramasser ou voler les objets
   posés en ville (marchandises, décor), avec l'ordre « ramasser » du jeu chez l'hôte.
+- **Resync, TP lointaine, PNJ manquants, étages (fix G6)** :
+  - un nouveau monde remet à zéro tout l'état du mod lié au monde, ce qui corrige le plantage après
+    un resync ;
+  - une zone qui charge n'efface plus les remplaçants des PNJ ;
+  - un PNJ dont le remplaçant a disparu est recréé au lieu de manquer pour toujours ;
+  - le « max offset » ne compte plus les persos hors de vue ;
+  - la TP admin prévient le joueur visé et laisse 2 min à la connexion pendant que la zone charge
+    (message 70) ;
+  - l'étage des persos suit celui de l'hôte (message 71), donc l'étage affiché aussi ;
+  - nouvelles expériences `resyncbar`, `fartp`, `missing`, `floor`.
+
 - **Robustesse (lot F)** : un PNJ bloqué chez un client (mur, porte, étage) est replacé où l'hôte
   l'a après 1 s sans progrès ; les PNJ lointains sont replacés sur la position de l'hôte ; la TP
   admin déplace aussi un personnage à terre ou porté ; un perso dans un lit ou une cage n'est plus

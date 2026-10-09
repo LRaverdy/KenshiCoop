@@ -88,6 +88,9 @@ enum class Msg : uint8_t {
     BuildState = 53,      // S->C  construction progress of player buildings (complete, paused, dismantling)
     BuildRemove = 54,     // S->C  a player building is gone (dismantled, destroyed)
     BuildAction = 55,     // both  buy / dismantle a building (client: asks the host; host: replay of a purchase)
+    // ---- fix G6
+    Stall = 70,           // S->C  your game is about to freeze a while (a far teleport loads a zone): keep the link up
+    Floors = 71,          // S->C  the floor characters are on inside buildings (it drives the floor shown)
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -153,6 +156,16 @@ struct Reject {
 };
 struct PlayerLeft {
     uint8_t id = 0;
+};
+struct StallMsg {   // fix G6
+    uint16_t seconds = 0;   // how long the connection may stay silent
+};
+struct FloorEntry {
+    uint32_t netId = 0;
+    uint8_t group = 0;   // the game's floor group of its movement (9: ground floor / outdoors)
+};
+struct FloorsMsg {   // fix G6
+    std::vector<FloorEntry> entries;
 };
 struct Chat {
     uint8_t from = 0;  // set by the host, ignored when sent by a client
@@ -575,6 +588,8 @@ void Encode(Writer& w, const Welcome& m);
 void Encode(Writer& w, const Reject& m);
 void Encode(Writer& w, const PlayerInfo& m);  // PlayerJoined
 void Encode(Writer& w, const PlayerLeft& m);
+void Encode(Writer& w, const StallMsg& m);
+void Encode(Writer& w, const FloorsMsg& m);
 void Encode(Writer& w, const Chat& m);
 void Encode(Writer& w, const Bind& m);
 void Encode(Writer& w, const Unbind& m);
@@ -796,6 +811,8 @@ bool Decode(Reader& r, Welcome& m);
 bool Decode(Reader& r, Reject& m);
 bool Decode(Reader& r, PlayerInfo& m);
 bool Decode(Reader& r, PlayerLeft& m);
+bool Decode(Reader& r, StallMsg& m);
+bool Decode(Reader& r, FloorsMsg& m);
 bool Decode(Reader& r, Chat& m);
 bool Decode(Reader& r, Bind& m);
 bool Decode(Reader& r, Unbind& m);

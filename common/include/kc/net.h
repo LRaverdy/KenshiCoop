@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <unordered_map>
 
 struct _ENetHost;
 struct _ENetPeer;
@@ -44,6 +45,9 @@ public:
     void Broadcast(uint8_t channel, const void* data, size_t size, bool reliable, PeerId except = kNoPeer);
     void Flush();                            // push queued packets to the socket now
     void Kick(PeerId peer);                  // disconnect after pending reliable data is sent
+    // That peer may not answer for up to `seconds` (its game freezes while loading a zone): its
+    // timeout grows meanwhile, then goes back to normal. kNoPeer on a client: the host.
+    void ExpectSilence(PeerId peer, double seconds);
 
     bool active() const { return host_ != nullptr; }
     bool isServer() const { return server_; }
@@ -56,6 +60,7 @@ private:
     bool server_ = false;
     PeerId serverPeer_ = kNoPeer;
     PeerId nextId_ = 1;
+    std::unordered_map<PeerId, double> quietUntil_;   // peers with a longer timeout, until then (steady seconds)
 };
 
 } // namespace kc

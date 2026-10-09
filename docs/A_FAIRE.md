@@ -4,6 +4,11 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
 
 ## 10 octobre 2026
 
+- **Un join qui garde l'hôte en pause** (fix G6) : vérifié. Un joueur qui rejoint est retiré après
+  `loadTimeout` (300 s). Si son jeu plante pendant le chargement, ENet le coupe en 15 s et l'hôte
+  repart. Le journal dit maintenant « X left while joining (connection lost: their game quit or
+  crashed while loading) ».
+
 - ~~**PRIORITÉ — Les 3 clients plantent juste après une nouvelle prime**~~ (10/10) — **corrigé** (à
   vérifier en jeu). L'operator[] (0x5E7EE0) était bien appelé comme le jeu le fait ; mais le client
   plantait aussi au chargement de la sauvegarde contenant la prime, sans le mod : c'est la prime
@@ -18,9 +23,21 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   celle des bâtiments des joueurs.
 - **Fenêtre du marchand chez l'hôte** : en 0.2.x, la fenêtre de commerce s'ouvre encore chez l'hôte et pas
   chez le client (au moins dans un des cas de dialogue ou de clic).
-- **Plantage après un resync** : après un resync, un client n'avait plus les cartes de ses personnages dans
-  la barre d'escouade, puis son jeu a planté.
-- **Étage qui ne change pas tout seul** : chez un client, l'étage affiché ne suit pas automatiquement quand un
+- ~~**Plantage après un resync**~~ (corrigé, fix G6, à vérifier en jeu) : après un resync, un client n'avait
+  plus les cartes de ses personnages dans la barre d'escouade, puis son jeu a planté.
+  Trouvé : au rechargement du monde, le mod ne vidait qu'une partie de son état. Des pointeurs vers les
+  objets de l'ancien monde restaient : outils mis en main (`handTools_`), animations et chiffres de
+  dégâts par perso, dialogues, bâtiments suivis, ramassages en cours, mode dieu… Le premier appel au
+  jeu sur l'un d'eux tombait dans de la mémoire libérée. Tout l'état lié au monde est maintenant
+  remis à zéro à chaque nouveau monde (`KenshiWorld::ResetWorldBound`). À l'inverse, une simple
+  coupure du tick (une zone qui charge, un à-coup) comptait comme un nouveau monde et effaçait les
+  remplaçants des PNJ en pleine partie. Un nouveau monde se reconnaît maintenant à un joueur ou à
+  une escouade dont les objets ont changé. Test en jeu : expérience `resyncbar`.
+- ~~**Étage qui ne change pas tout seul**~~ (corrigé, fix G6, à vérifier en jeu) : trouvé le champ du jeu,
+  `CharMovement::floorGroup` (+0x334, 9 = rez-de-chaussée), d'où `getCurrentFloor()` tire l'étage.
+  L'hôte l'envoie pour chaque perso (message 71 `Floors`) et le client l'écrit sur sa copie. Test :
+  expérience `floor`.
+  Signalement d'origine : chez un client, l'étage affiché ne suit pas automatiquement quand un
   perso monte ou descend dans un bâtiment (comme le fait le jeu en solo). Piste : chez le client, les persos
   sont placés à la position de l'hôte au lieu de prendre l'escalier eux-mêmes, et l'étage courant du
   personnage (qui pilote l'affichage) n'est pas mis à jour.
@@ -29,7 +46,12 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   (panneau Tâches, clic sur la croix) ne passe que par le jeu du client : l'hôte la garde, et elle revient.
   À faire : intercepter la suppression d'une tâche (et « tout effacer ») côté client et l'exécuter chez
   l'hôte, comme les ordres.
-- **« TP vers moi » sur un joueur loin : il est éjecté** de la partie. Pistes : son jeu charge d'un coup la
+- ~~**« TP vers moi » sur un joueur loin : il est éjecté**~~ (corrigé, fix G6, à vérifier en jeu). Trouvé : le
+  jeu du client se fige pendant qu'il charge la zone d'arrivée. Or la connexion ENet coupe un pair
+  muet au bout de 15 s (des deux côtés). Maintenant, avant la TP, l'hôte allonge ce délai à 2 min
+  pour ce joueur et prévient son jeu (message 70 `Stall`), qui fait de même. Le délai normal revient
+  ensuite. Un vrai plantage reste repéré en 15 s le reste du temps. Test : expérience `fartp`.
+  Signalement d'origine : son jeu charge d'un coup la
   zone d'arrivée et ne répond plus assez longtemps pour que la connexion expire, ou il plante pendant ce
   chargement. À vérifier dans son KenshiCoop.log (déconnexion ou CRASH) ; si c'est l'attente, allonger le
   délai d'expiration pendant un TP ou faire charger la zone avant de déplacer le perso.
@@ -68,6 +90,14 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   Ces PNJ n'existent pas dans le jeu du client, et sa recréation (modèle + faction) échoue. Voir pourquoi
   (PNJ unique, modèle introuvable, zone pas chargée). Les mêmes rapports montrent aussi des persos décalés
   de 300 à 466 unités (« max offset »), à éclaircir.
+  **Trouvé (fix G6, à vérifier en jeu)** : deux causes.
+  1. Quand le jeu du client supprimait un remplaçant (mort puis nettoyé, ou zone déchargée), son alias
+     restait. `Spawn` et `Reconcile` sautaient alors ce PNJ pour toujours : les « 31 en permanence ».
+     L'alias mort est maintenant retiré et le PNJ est recréé.
+  2. Une coupure du tick effaçait tous les alias (voir « Plantage après un resync »).
+  Le « max offset » venait des persos loin de l'escouade du client : là, son jeu les fait à peine
+  tourner et ignore les positions qu'on leur écrit, et personne ne les voit. L'écart n'est plus
+  compté au-delà de 300 unités de l'escouade. Test : expérience `missing`.
 - **Le perso de l'hôte en passif attaque quand un ami attaque** (10/10). L'hôte se met en passif ; quand un
   client ordonne à son perso d'attaquer un PNJ, le perso de l'hôte part aussi à l'attaque. Pistes : l'ordre
   du client est exécuté chez l'hôte en sélectionnant le perso du client ; si la sélection de l'hôte (son
