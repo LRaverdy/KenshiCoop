@@ -940,6 +940,7 @@ std::string AnimHookStats() {
     return b;
 }
 
+bool InHostCall() { return g_hostCall > 0; }
 HostCallScope::HostCallScope() { ++g_hostCall; }
 HostCallScope::~HostCallScope() { --g_hostCall; }
 AnimReplayScope::AnimReplayScope() { ++g_animReplay; ++g_hostCall; }
@@ -1034,6 +1035,23 @@ bool CallPlayerMoveOrder(kenshi::Character* c, const kc::Vec3& pos) {
     return CallMoveOrderSEH(c, p);
 }
 
+// ---- lot A: doors (plugin/doors.cpp)
+namespace doorhooks {
+bool hk_open(void*);
+bool hk_close(void*);
+void hk_lock(void*);
+void hk_unlock(void*);
+void hk_openButton(void*, void*);
+void hk_lockButton(void*, void*);
+extern bool (*o_open)(void*);
+extern bool (*o_close)(void*);
+extern void (*o_lock)(void*);
+extern void (*o_unlock)(void*);
+extern void (*o_openButton)(void*, void*);
+extern void (*o_lockButton)(void*, void*);
+} // namespace doorhooks
+// ---- end lot A
+
 bool InstallHooks(TickFn tick, std::string* err) {
     g_tick = tick;
     const HookDef defs[] = {
@@ -1110,6 +1128,14 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnTrackAnimationMovement, reinterpret_cast<void*>(&hk_trackAnimMove), reinterpret_cast<void**>(&o_trackAnimMove)},
         {kenshi::FnSingleAnimUpdate, reinterpret_cast<void*>(&hk_singleAnimUpdate), reinterpret_cast<void**>(&o_singleAnimUpdate)},
         {kenshi::FnCombatMovementUpdate, reinterpret_cast<void*>(&hk_combatMove), reinterpret_cast<void**>(&o_combatMove)},
+        // ---- lot A: doors
+        {kenshi::FnDoorOpen, reinterpret_cast<void*>(&doorhooks::hk_open), reinterpret_cast<void**>(&doorhooks::o_open)},
+        {kenshi::FnDoorClose, reinterpret_cast<void*>(&doorhooks::hk_close), reinterpret_cast<void**>(&doorhooks::o_close)},
+        {kenshi::FnDoorLock, reinterpret_cast<void*>(&doorhooks::hk_lock), reinterpret_cast<void**>(&doorhooks::o_lock)},
+        {kenshi::FnDoorUnlock, reinterpret_cast<void*>(&doorhooks::hk_unlock), reinterpret_cast<void**>(&doorhooks::o_unlock)},
+        {kenshi::FnDoorOpenButton, reinterpret_cast<void*>(&doorhooks::hk_openButton), reinterpret_cast<void**>(&doorhooks::o_openButton)},
+        {kenshi::FnDoorLockButton, reinterpret_cast<void*>(&doorhooks::hk_lockButton), reinterpret_cast<void**>(&doorhooks::o_lockButton)},
+        // ---- end lot A
     };
     const MH_STATUS init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {

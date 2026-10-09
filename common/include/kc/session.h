@@ -192,6 +192,16 @@ public:
     virtual bool TradeWindowBusy() { return false; }   // client: an item is on the mouse (do not reopen the window now)
     virtual void SetMoneyOf(const Handle& who, int32_t money) { (void)who; (void)money; }
     virtual std::string CharacterNameOf(const Handle& h) { (void)h; return {}; }
+    // ---- lot A: doors and locks. Host: the doors and locked furniture within `radius` of the points,
+    // as they are; is this container locked (it cannot be looked into); run a door button a client
+    // clicked. Client: impose one door's state (found by kind and place; false: not here); the door
+    // buttons the local player clicked (never run locally).
+    virtual void ReadDoors(const std::vector<Vec3>& centers, float radius, std::vector<DoorState>& out) { (void)centers; (void)radius; out.clear(); }
+    virtual bool ContainerLocked(const Handle& container) { (void)container; return false; }
+    virtual bool ExecuteDoorRequest(const DoorRequest& r) { (void)r; return false; }
+    virtual bool ApplyDoor(const DoorState& d) { (void)d; return false; }
+    virtual void TakeDoorRequests(std::vector<DoorRequest>& out) { out.clear(); }
+    // ---- end lot A
 
     // Inventories. Host: read; execute a client's item movement (false = refused/impossible).
     virtual bool ReadInventory(const Handle& h, std::vector<ItemState>& out) = 0;
@@ -331,6 +341,9 @@ public:
         return {trade_.pending, trade_.open, trade_.trader, trade_.counters.size(), unsentSpend_};
     }
     size_t hostTrades() const { return trades_.size(); }   // host: trade windows open by players
+    // ---- lot A: doors (tests): doors sent (host) / known and applied here (client)
+    size_t doorsKnown() const { return isHost() ? doorsSent_.size() : clientDoors_.size(); }
+    size_t doorsApplied() const { return doorsApplied_; }
 
 private:
     struct Sample { double t; EntityState s; };
@@ -506,6 +519,24 @@ private:
     int32_t unsentSpend_ = 0;              // client: cats our trade window took (gave: negative), not sent yet
     void CaptureLocalSpend();
     void ApplyHostMoney(int32_t money);
+    // ---- lot A: doors and locks. Host: what each door near the players looked like when last sent
+    // (key: kind and place); door buttons clients clicked. Client: the host's doors, applied (and
+    // re-applied now and then: a door of a zone that was not loaded yet, a local change).
+    std::unordered_map<std::string, DoorState> doorsSent_;
+    double nextDoors_ = 0, nextDoorsFull_ = 0;
+    std::vector<DoorState> scratchDoors_;
+    std::vector<std::pair<uint8_t, DoorRequest>> pendingDoorReqs_;
+    std::vector<DoorRequest> scratchDoorReqs_;
+    struct ClientDoor { DoorState state; bool dirty = true; bool found = false; };
+    std::unordered_map<std::string, ClientDoor> clientDoors_;
+    double nextDoorsApply_ = 0;
+    size_t doorsApplied_ = 0;
+    void HostDoors(double now);
+    void ClientDoors(double now);
+    void HostDoorPacket(uint8_t from, Reader& r);
+    void ClientDoorsPacket(Reader& r);
+    void ResetDoors();
+    // ---- end lot A
     std::vector<std::pair<uint8_t, AppearanceMsg>> pendingLooks_;   // host: from players, applied on the next live tick
     uint32_t editRequest_ = 0;             // client: the host asked us to make our new character
     bool editingSent_ = false;             // client: what we last told the host about our editor

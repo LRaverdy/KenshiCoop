@@ -72,6 +72,9 @@ enum class Msg : uint8_t {
     ContainerOpened = 37, // S->C  it is there: here is the container's netId (its items follow as an Inventory)
     ContainerClose = 38,  // both  the window is closed (client) / must close (host: caught stealing, too far)
     TradeOpen = 39,       // S->C  trade with a merchant: its shop counters (their items follow), its cats
+    // ---- lot A: doors
+    Doors = 40,           // S->C  doors and locks near the players: open/closed, locked, lock level, broken
+    DoorRequest = 41,     // C->S  the player clicked a door's open / lock button
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -620,6 +623,46 @@ struct TradeOpen {
     std::string note;              // no counters: why the trade cannot open (shown to the player)
 };
 constexpr uint32_t kMaxTradeCounters = 32;
+
+// ---- lot A: doors and locks
+// A door (DoorStuff) or a piece of furniture with a lock (chest, cage...). Objects of the world have
+// another handle on every machine: they are known by kind and place (as containers are).
+enum class DoorKind : uint8_t { Door = 1, Lock = 2 };
+enum DoorFlags : uint8_t {
+    kDoorWantsLock = 1,   // locks itself once closed
+    kDoorBroken = 2,      // bashed open
+    kDoorHasLock = 4,
+    kDoorLocked = 8,
+    kDoorLockBroken = 16,
+};
+struct DoorState {
+    std::string sid;
+    Vec3 pos;
+    DoorKind kind = DoorKind::Door;
+    uint8_t state = 0;      // DoorState: 0 closed, 1 open, 2 opening, 3 closing (doors)
+    uint8_t flags = 0;      // DoorFlags
+    int32_t lockLevel = 0;
+    float openAmount = 0;   // 0 closed .. 1 open (doors)
+    bool sameState(const DoorState& o) const {   // what matters (the opening amount moves on its own)
+        return kind == o.kind && state == o.state && flags == o.flags && lockLevel == o.lockLevel;
+    }
+};
+struct DoorsMsg {
+    bool full = false;      // every door near the players (others the client knows are unchanged)
+    std::vector<DoorState> doors;
+};
+constexpr uint32_t kMaxDoorsPerMsg = 256;
+enum class DoorAction : uint8_t { OpenButton = 1, LockButton = 2 };
+struct DoorRequest {
+    std::string sid;
+    Vec3 pos;
+    DoorAction action = DoorAction::OpenButton;
+};
+void Encode(Writer& w, const DoorsMsg& m);
+bool Decode(Reader& r, DoorsMsg& m);
+void Encode(Writer& w, const DoorRequest& m);
+bool Decode(Reader& r, DoorRequest& m);
+// ---- end lot A
 void Encode(Writer& w, const TradeOpen& m);
 bool Decode(Reader& r, TradeOpen& m);
 void Encode(Writer& w, const ContainerOpen& m);

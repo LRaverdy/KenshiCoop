@@ -158,6 +158,12 @@ Les signatures sont celles du commentaire du code.
 | 113 | `FnGetNpcTrader` | `InventoryGUI::getNPCTrader` | `0x70E2D0` | — | static Character* getNPCTrader() : le marchand de la fenêtre de commerce ouverte (null si moins de 2 fenêtres) |
 | 114 | `FnCharTakeMoney` | `Character::takeMoney` | `0x7965F0` | — | bool Character::takeMoney(int) : `getOwnerships()->takeMoney` ; négatif = donner ; false si pas assez |
 | 115 | `FnRClickAutoTrade` | `InventoryGUI::RClickAutoTrade` | `0x713D20` | — | TradeResult* RClickAutoTrade(TradeResult* out, const std::string& section, int x, int y, InventoryGUI* vers, bool vol, bool premier) : clic droit, une unité passe de l'autre côté (achat / vente du jeu) ; tests seulement |
+| 116 | `FnDoorOpen` | `DoorStuff::openDoor` | `0x297040` | oui (lot A) | bool openDoor() : fermée → en ouverture ; refusé chez un client hors `HostCallScope` |
+| 117 | `FnDoorClose` | `DoorStuff::closeDoor` | `0x298C50` | oui (lot A) | bool closeDoor() : ouverte → en fermeture (pas si cassée) |
+| 118 | `FnDoorLock` | `DoorStuff::lockDoor` | `0x2969F0` | oui (lot A) | void lockDoor() |
+| 119 | `FnDoorUnlock` | `DoorStuff::unlockDoor` | `0x56A3D0` | oui (lot A) | void unlockDoor() |
+| 120 | `FnDoorOpenButton` | `DoorStuff::openButton` | `0x546FB0` | oui (lot A) | void openButton(DataPanelLine*) : chez un client, le clic part à l'hôte |
+| 121 | `FnDoorLockButton` | `DoorStuff::lockButton` | `0x547060` | oui (lot A) | void lockButton(DataPanelLine*) : idem |
 
 L'ordre de la table doit suivre celui de l'énumération `Fn` : la vérification des prologues ne voit
 pas deux lignes inversées (chaque adresse correspond bien à ses octets). Deux lignes l'étaient
@@ -847,6 +853,43 @@ Recherche faite le 9 octobre 2026 pour le commerce. Fiabilité de chaque fait :
   `ZoneMapHandleContainerList::getObject` `0x9F8F20`.
 - Requêtes spatiales : `GameWorld::getObjectsWithinSphere` `0x7861A0` (type 1 → grille +0x10,
   type 0 → grille +0x48, sinon +0x80).
+
+## Portes et serrures (lot A) [D]
+
+Vérifié par désassemblage du 1.0.68 (les décalages de KenshiLib 1.0.65 sont identiques pour
+`DoorStuff`) :
+
+| Champ | Décalage | Sens |
+|---|---|---|
+| `DoorStuff::doorLock` | +0x370 | `DoorLock*` (null : pas de serrure) |
+| `DoorStuff::doorOpenAmount` | +0x37C | float, 0 fermée → 1 ouverte |
+| `DoorStuff::state` | +0x380 | `DoorState` : 0 fermée, 1 ouverte, 2 en ouverture, 3 en fermeture |
+| `DoorStuff::wantsToLock` | +0x384 | bool : se verrouille une fois fermée |
+| `DoorStuff::_isBroken` | +0x3EC | bool : défoncée |
+| `UseableStuff` serrure | +0x438 | `DoorLock*` des meubles (coffres, cages…) |
+| `UseableStuff` cassé | +0x3B6 | bool |
+| `DoorLock` niveau | +0x0 | int (0 : pas de vraie serrure) |
+| `DoorLock` propriétaire | +0x8 | l'objet qui porte la serrure |
+| `DoorLock` verrouillée | +0x20 | bool |
+| `DoorLock` serrure cassée | +0x21 | bool |
+
+Slots virtuels de `Building` (valables pour tout bâtiment ou meuble) : 0x308 `isBroken`, 0x310
+`setBroken(bool)`, 0x3C8 `doorStuff()` (lui-même pour une porte, null sinon), 0x3E0 `getDoor()`,
+0x400 `getDoorLock()`, 0x408 `hasDoorLock()`, 0x418 `getDefaultTask()` (porte : 72 « ouvrir » si
+fermée, 73 « fermer » si ouverte).
+
+| Fonction | RVA | Comportement |
+|---|---|---|
+| `DoorStuff::openDoor` | `0x297040` | si fermée : passe en ouverture (2), son « porte » |
+| `DoorStuff::closeDoor` | `0x298C50` | si ouverte et pas cassée : passe en fermeture (3), son |
+| `DoorStuff::lockDoor` | `0x2969F0` | verrouille tout de suite si fermée, sinon `wantsToLock` |
+| `DoorStuff::unlockDoor` | `0x56A3D0` | `locked = 0`, puis prévient |
+| `DoorStuff::openButton` | `0x546FB0` | bouton du panneau : ferme si ouverte, sinon déverrouille si besoin et ouvre |
+| `DoorStuff::lockButton` | `0x547060` | bouton du panneau : bascule `wantsToLock` et le verrou |
+| `DoorStuff::isLocked` | `0x2EA220` | verrouillée, niveau > 0 et serrure non cassée |
+| `DoorStuff::setDoorState` | `0x299000` | écrit l'état et pose aussitôt l'ouverture (chargement) |
+| `DoorLock::isBroken` | `0x297D60` | propriétaire cassé, ou +0x21 |
+| `CharStats::xpLockpicking` | `0x8C62E0` | expérience de crochetage (traduit de KenshiLib, non lu) |
 
 ## 8. Recherche : vol et crimes [D]
 

@@ -160,6 +160,7 @@ void Session::Leave() {
     windowOpenedAt_ = -1;
     trades_.clear();
     trade_ = ClientTrade{};
+    ResetDoors();   // lot A
     haveMoneyBase_ = false;
     unsentSpend_ = 0;
     dialogReplies_.clear();
@@ -226,6 +227,7 @@ void Session::HostTick(double now, bool live) {
     pendingAnswers_.clear();
     HostContainers(now);
     HostTrades(now);
+    HostDoors(now);   // lot A
     // A player's new looks: applied here, then shown to everyone else.
     for (auto& [from, m] : pendingLooks_) {
         auto it = entities_.find(m.netId);
@@ -836,6 +838,16 @@ void Session::HostContainers(double now) {
             log_("[" + pl->second.name + "] container " + world_.TemplateName(ask.sid) + " not found here");
             continue;
         }
+        if (world_.ContainerLocked(h)) {   // lot A: a locked chest is opened by picking its lock first
+            log_("[" + pl->second.name + "] container " + world_.TemplateName(ask.sid) + " is locked: not opened");
+            Chat c;
+            c.from = 0;
+            c.text = "C'est verrouillé : il faut d'abord crocheter la serrure.";
+            Writer w;
+            Encode(w, c);
+            SendReliable(pl->second.peer, w);
+            continue;
+        }
         uint32_t id = 0;
         if (auto b = byHandle_.find(h); b != byHandle_.end()) id = b->second;
         else {
@@ -1389,6 +1401,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         SendReliable(peer, w);
         break;
     }
+    case Msg::DoorRequest: HostDoorPacket(pl->id, r); break;   // lot A
     default: break;  // host ignores host-bound-only messages from clients
     }
 }
@@ -1981,6 +1994,7 @@ void Session::ClientTick(double now, bool live) {
     }
     SendEditedAppearances();
     ClientContainers(now);
+    ClientDoors(now);   // lot A
     // Squads: split our characters as the host does (again now and then: stand-ins, late arrivals).
     if (haveSquads_ && now - squadsAt_ > 2.0) {
         squadsAt_ = now;
@@ -2373,6 +2387,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
         it->second.invFailures = 0;
         break;
     }
+    case Msg::Doors: ClientDoorsPacket(r); break;   // lot A
     case Msg::Pong: break;
     default: break;
     }

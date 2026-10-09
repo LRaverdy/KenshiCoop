@@ -291,6 +291,8 @@ format, et une version différente est refusée à la connexion.
 | 36 | ContainerOpen | C→H | mon personnage veut regarder dans ce contenant (type, endroit) |
 | 37 | ContainerOpened | H→C | il y est : netId du contenant (son contenu suit en `Inventory`) |
 | 38 | ContainerClose | ⇄ | fenêtre fermée (client) ou à fermer (hôte : vol repéré, trop loin) |
+| 40 | Doors | H→C | portes et serrures près des joueurs : ouverte/fermée, verrouillée, niveau de serrure, cassée (lot A) |
+| 41 | DoorRequest | C→H | le joueur a cliqué un bouton du panneau d'une porte (ouvrir, verrouiller) (lot A) |
 
 ## Les flux, système par système
 
@@ -379,6 +381,25 @@ format, et une version différente est refusée à la connexion.
 5. L'hôte vérifie les droits, fait passer le test de vol si l'objet sort d'un contenant vers un
    personnage, déplace l'objet (`MoveInventoryItem`), puis renvoie les deux inventaires.
 6. Un objet jeté par le client devient `InvOp Drop`.
+
+### Portes et serrures (`HostDoors`, `ClientDoors`, `common/src/session_doors.cpp`, `plugin/doors.cpp`)
+1. Toutes les 0,5 s, l'hôte lit (`KenshiWorld::ReadDoors`) les portes (`DoorStuff`) et les meubles
+   à serrure (`DoorLock`) à moins de 400 unités de chaque membre de l'escouade. Une entrée : type,
+   endroit, état de la porte, ouverture, drapeaux (verrouillée, cassée, serrure cassée, se verrouille
+   en se fermant), niveau de serrure.
+2. Il envoie à tous les joueurs en jeu celles qui ont changé (`Doors`), et toutes les 5 s la liste
+   complète (par morceaux de 256).
+3. Le client garde l'état de l'hôte par « type + endroit ». Il retrouve sa copie de l'objet
+   (`FindDoor`, mise en cache par handle) et applique l'état (`ApplyDoor`, sous `HostCallScope`) :
+   ouvrir et fermer par les fonctions du jeu, verrou et niveau écrits directement. Il réapplique
+   tout toutes les 3 s (64 objets par image au plus).
+4. Chez le client, les hooks `openDoor`, `closeDoor`, `lockDoor`, `unlockDoor` refusent tout appel
+   hors `HostCallScope`. Les hooks des boutons du panneau (`openButton`, `lockButton`) mettent le
+   clic en file : il part à l'hôte en `DoorRequest`, et l'hôte appuie sur le même bouton
+   (`ExecuteDoorRequest`).
+5. Les ordres sur une porte (tâches 72, 73, 76, 77, 78, 81) passent par le chemin normal des
+   ordres : la porte est retrouvée chez l'hôte par type et endroit.
+6. `HostContainers` refuse d'ouvrir un contenant dont la serrure tient (`ContainerLocked`).
 
 ### Contenants (`HostContainers`, `ClientContainers`)
 1. Clic droit chez le client : `ContainerOpen` avec le personnage, le type et l'endroit.

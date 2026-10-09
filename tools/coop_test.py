@@ -809,6 +809,101 @@ def exp_talk(host, cli):
             return
 
 
+# ---- lot A: doors and locks
+def exp_doors(host, cli):
+    """Doors and locks: the host's doors reach the client; the client's own game cannot open a door by
+    itself; a door panel button and door orders given on the client run on the host; lockpicking ends
+    the same everywhere; a locked chest stays shut for a client."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    log("doors around (host):", cmd(host, "doors 0 door")[1][:500])
+    log("locks around (host):", cmd(host, "doors 0 lock")[1][:500])
+    def st(pid, what):
+        t = cmd(pid, f"doorstate 0 {what}")[1]
+        m = re.search(r"kind=(\d+) state=(\d+) flags=(\d+) level=(\d+)", t)
+        return (int(m.group(1)), int(m.group(2)) in (1, 2), int(m.group(3)) & 0x1E, int(m.group(4))) if m else None, t
+    def same(what, wait=6.0):
+        deadline = time.time() + wait
+        while True:
+            (h, ht), (c, ct) = st(host, what), st(cli, what)
+            if (h and h == c) or time.time() > deadline:
+                return h is not None and h == c, f"hote {ht} / client {ct}"
+            time.sleep(0.5)
+    log("client knows", cmd(cli, "doorsknown")[1])
+    # 1. the host's door opens and closes on the client too
+    cmd(host, "doorset 0 door close")
+    ok, d = same("door")
+    check("portes : fermee chez l'hote, fermee chez le client", ok, d)
+    cmd(host, "doorset 0 door open")
+    ok, d = same("door")
+    check("portes : ouverte chez l'hote, ouverte chez le client", ok, d)
+    # 2. locks follow
+    cmd(host, "doorset 0 door close")
+    time.sleep(3)
+    locked = cmd(host, "doorset 0 door lock")
+    ok, d = same("door")
+    hl_ = st(host, "door")[0]
+    check("portes : verrouillee chez l'hote, verrouillee chez le client", locked[0] and ok and hl_ is not None and hl_[2] & 8, f"{locked[1]} | {d}")
+    cmd(host, "doorset 0 door unlock")
+    ok, d = same("door")
+    check("portes : deverrouillee partout", ok, d)
+    # 3. the client's own game cannot open a door
+    before = st(cli, "door")[0]
+    cmd(cli, "doorlocal 0 door open")
+    time.sleep(0.5)
+    after = st(cli, "door")[0]
+    check("portes : le jeu du client ne l'ouvre pas tout seul", before is not None and before == after, f"{before} -> {after}")
+    # 4. the client clicks the door's open button: the host's game runs it
+    hb = st(host, "door")[0]
+    cmd(cli, "doorbutton 0 door open")
+    time.sleep(3)
+    ha = st(host, "door")[0]
+    ok, d = same("door")
+    check("portes : bouton du client execute chez l'hote", hb and ha and hb[1] != ha[1] and ok, f"{hb} -> {ha} | {d}")
+    # 5. an order on the door from the client (open / close): its character walks there, on the host
+    hb = st(host, "door")[0]
+    task = 73 if hb and hb[1] else 72
+    log("client orders", task, cmd(cli, f"doororder {own} {task} door"))
+    ha = hb
+    for _ in range(40):
+        time.sleep(0.5)
+        ha = st(host, "door")[0]
+        if ha and hb and ha[1] != hb[1]:
+            break
+    ok, d = same("door")
+    check("portes : ordre ouvrir/fermer du client execute chez l'hote", ha and hb and ha[1] != hb[1] and ok, f"{hb} -> {ha} | {d}")
+    # 6. lockpicking: the host locks, the client's character picks; whatever the outcome, the same everywhere
+    cmd(host, "doorset 0 door close")
+    time.sleep(3)
+    cmd(host, "doorset 0 door lock")
+    time.sleep(1)
+    log("client picks the lock", cmd(cli, f"doororder {own} 76 door"))
+    for _ in range(60):
+        time.sleep(0.5)
+        h = st(host, "door")[0]
+        if h and not (h[2] & 8):
+            break
+    ok, d = same("door")
+    check("portes : crochetage, meme etat partout", ok, d)
+    log("lockpicking result (host):", st(host, "door")[1])
+    # 7. a locked chest stays shut for the client
+    cmd(host, "doorset 0 lock lock")
+    t = st(host, "lock")[1]
+    name = re.sub(r"^ok (.*) kind=.*$", r"\1", t).strip().replace(" ", "_")
+    time.sleep(2)
+    log("client looks into", name, cmd(cli, f"containerreq {own} {name}"))
+    time.sleep(6)
+    hl = host_log()
+    check("portes : un coffre verrouille reste ferme pour le client", "is locked: not opened" in hl and "windows=0" in cmd(cli, "tradestate")[1],
+          cmd(cli, "tradestate")[1])
+    cmd(host, "doorset 0 lock unlock")
+    check("portes : le client connait les portes de l'hote", int(re.search(r"known=(\d+)", cmd(cli, "doorsknown")[1]).group(1)) > 0,
+          cmd(cli, "doorsknown")[1])
+    summary()
+
+
 def exp_trade(host, cli, merchant="Marchand"):
     """Trading with a merchant: the host's game asks for a trade window for the client's character; it
     opens on the client with the shop's stock. A purchase and a sale, the game's own way (right click),
@@ -1513,6 +1608,9 @@ def main():
     cp = sub.add_parser("clientpickup")
     cp.add_argument("--save", default="kctest_base")
     cp.add_argument("--keep", action="store_true")
+    dr = sub.add_parser("doors", help="lot A: doors, locks, lockpicking, locked chests")
+    dr.add_argument("--save", default="kctest_town")
+    dr.add_argument("--keep", action="store_true")
     td = sub.add_parser("trade", help="a client trades with a merchant: purchase, sale, stock everywhere")
     td.add_argument("--save", default="kctest_town")
     td.add_argument("--keep", action="store_true")
@@ -1614,6 +1712,8 @@ def main():
             exp_facing(host, cli)
         elif a.what == "talk":
             exp_talk(host, cli)
+        elif a.what == "doors":
+            exp_doors(host, cli)
         elif a.what == "trade":
             exp_trade(host, cli, a.merchant)
         elif a.what == "progress":

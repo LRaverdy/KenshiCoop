@@ -10,6 +10,11 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
   crochetage, factions et primes, combat à distance et tourelles, prisons et capture, bâtiments et
   construction, désynchro de combat et PNJ lointains. Ils seront fusionnés puis testés en jeu
   ensemble.
+- **Portes et serrures (lot A, à vérifier en jeu)** : les portes (ouvertes, fermées, verrouillées,
+  défoncées) et les serrures des meubles (coffres, cages) près des joueurs suivent l'hôte ; le jeu
+  d'un client ne change plus une porte de lui-même ; les boutons du panneau d'une porte cliqués par
+  un client sont exécutés par l'hôte ; un coffre verrouillé ne s'ouvre pas pour un client (il faut
+  crocheter). Messages `Doors` (40) et `DoorRequest` (41) ; expérience `doors`.
 
 ## 9 octobre 2026 (soir)
 

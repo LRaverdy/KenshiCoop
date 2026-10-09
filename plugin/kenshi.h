@@ -166,6 +166,14 @@ enum Fn : int {
     FnGetNpcTrader,             // static Character* InventoryGUI::getNPCTrader()   (the merchant of the open trade window)
     FnCharTakeMoney,            // bool Character::takeMoney(int)   (negative: gives)
     FnRClickAutoTrade,          // TradeResult* InventoryGUI::RClickAutoTrade(TradeResult*, const std::string& section, int x, int y, InventoryGUI* to, bool thievery, bool first)
+    // ---- lot A: doors
+    FnDoorOpen,                 // bool DoorStuff::openDoor()   (closed -> opening, plays the sound)
+    FnDoorClose,                // bool DoorStuff::closeDoor()   (open -> closing; refused when broken)
+    FnDoorLock,                 // void DoorStuff::lockDoor()   (locks it now if closed, else once closed)
+    FnDoorUnlock,               // void DoorStuff::unlockDoor()
+    FnDoorOpenButton,           // void DoorStuff::openButton(DataPanelLine*)   (the door panel's open/close button)
+    FnDoorLockButton,           // void DoorStuff::lockButton(DataPanelLine*)   (the door panel's lock toggle)
+    // ---- end lot A
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -318,6 +326,14 @@ bool OpenTradeWindow(Character* looter, Character* trader);   // the game's trad
 Character* NpcTrader();                              // the merchant of the trade window open here, or null
 bool MouseHoldsItem();                               // an item is being dragged in an inventory window
 int BuildingFunctionOf(void* building);              // BuildingFunction (9 BF_SHOP...), -1 unknown
+// ---- lot A: doors and locks (plugin/doors.cpp). A door (DoorStuff) or any building with a lock
+// (DoorLock: chests, cages...). Read: false when it is neither. Apply: the host's state, the game's
+// way for opening and closing (callers hold a HostCallScope on clients).
+bool ReadDoor(void* obj, kc::DoorState& out);        // sid and pos not filled
+bool ApplyDoorState(void* obj, const kc::DoorState& d);
+bool DoorLocked(void* obj);                          // a lock that holds (locked, level > 0, not broken)
+bool PressDoorButton(void* door, kc::DoorAction action);   // the door panel's button, through our hooks
+// ---- end lot A
 // tests: the items of the open trade window's merchant side (or the player side), and a right click
 // on one of them (one unit goes to the other side, bought or sold the game's own way)
 struct WindowItem { std::string section; int x = 0, y = 0; kc::ItemState state; };
