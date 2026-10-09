@@ -64,6 +64,9 @@ const FunctionSig kFunctions[FnCount] = {
     {"AnimationClass::setCombatModeUpperIdle", 0x51C940, {0x38, 0x91, 0x4D, 0x02, 0x00, 0x00, 0x88, 0x91, 0x4D, 0x02, 0x00, 0x00}},
     {"SingleAnimation::update", 0x5B1700, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x50, 0x0F, 0x29}},
     {"AnimationClass::runAnimation(AnimationData*, layer)", 0x5B7AC0, {0x48, 0x89, 0x6C, 0x24, 0x20, 0x56, 0x48, 0x83, 0xEC, 0x70, 0x48, 0x83}},
+    {"InventorySection::canItemGoHere", 0x74BE40, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
+    {"InventorySection::existsItemInFootprint", 0x7466F0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
+    {"InventorySection::getValidInventoryPosition", 0x74BEC0, {0x48, 0x89, 0x5C, 0x24, 0x18, 0x55, 0x56, 0x57, 0x48, 0x83, 0xEC, 0x20}},
     {"PlayerInterface::pickupItem", 0x7FB3A0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B}},
     {"Character::giveItem", 0x5CB400, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
     {"CharacterHuman::dropItem", 0x5CA740, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48}},
@@ -1104,19 +1107,51 @@ void* FindSection(void* inv, const std::string& name) {
 }
 
 // Put an item where a save load would: the named section at (x, y) when it fits, else anywhere.
+using FnCanGo = bool (*)(void* sec, void* item, int x, int y);
+using FnValidPos = bool (*)(void* sec, void* item, int* x, int* y);
+bool CallSectionTakes(void* sec, void* item, int x, int y) {
+    __try { return reinterpret_cast<FnCanGo>(FnAddr(FnSectionCanItemGoHere))(sec, item, x, y); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+// The section takes this item there (type, size) and no item it holds overlaps those cells.
+bool CallSectionCanGo(void* sec, void* item, int x, int y) {
+    if (x < 0 || y < 0 || !CallSectionTakes(sec, item, x, y)) return false;
+    int iw = 1, ih = 1;
+    Rd(item, IT_width, iw);
+    Rd(item, IT_height, ih);
+    uintptr_t first = 0, last = 0;
+    if (!Rd(sec, SEC_items, first) || !Rd(sec, SEC_items + 8, last) || last < first || (last - first) % kSectionItemSize) return false;
+    for (uintptr_t p = first; p < last; p += kSectionItemSize) {
+        uint16_t box[4] = {0, 0, 1, 1};   // x, y, w, h
+        void* other = nullptr;
+        if (!Rd(reinterpret_cast<const void*>(p), 0, other) || other == item || !Rd(reinterpret_cast<const void*>(p), 8, box)) continue;
+        if (x < box[0] + box[2] && box[0] < x + iw && y < box[1] + box[3] && box[1] < y + ih) return false;
+    }
+    return true;
+}
+bool CallSectionValidPos(void* sec, void* item, int& x, int& y) {
+    __try { return reinterpret_cast<FnValidPos>(FnAddr(FnSectionValidPosition))(sec, item, &x, &y); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
 bool PlaceItem(void* inv, void* item, const std::string& section, int x, int y, int qty) {
     if (void* sec = FindSection(inv, section)) {
         int w = 0, h = 0, iw = 1, ih = 1;
         uint8_t enabled = 1;
         Rd(sec, SEC_width, w); Rd(sec, SEC_height, h); Rd(item, IT_width, iw); Rd(item, IT_height, ih); Rd(sec, SEC_enabled, enabled);
-        if (x >= 0 && y >= 0 && x + iw <= w && y + ih <= h) {
+        auto tryAt = [&](int px, int py) {
+            if (px < 0 || py < 0 || px + iw > w || py + ih > h) return false;
             const uint8_t one = 1;
             if (!enabled) Wr(sec, SEC_enabled, one);
-            CallSecAddAt(VSlot(sec, SECV_addAt), sec, item, x, y);
+            CallSecAddAt(VSlot(sec, SECV_addAt), sec, item, px, py);
             if (!enabled) Wr(sec, SEC_enabled, enabled);
             uint8_t inside = 0;
-            if (Rd(item, IT_inInventory, inside) && inside) return true;
-        }
+            return Rd(item, IT_inInventory, inside) && inside != 0;
+        };
+        if (CallSectionCanGo(sec, item, x, y) && tryAt(x, y)) return true;
+        // somewhere free in that section (the game's own "add" would equip a weapon or armour back
+        // into a free slot: dragging a worn item into the bag would then snap it back on)
+        for (int py = 0; py + ih <= h && py < 64; ++py)
+            for (int px = 0; px + iw <= w && px < 64; ++px)
+                if (CallSectionCanGo(sec, item, px, py) && tryAt(px, py)) return true;
     }
     return CallAddItem(VSlot(inv, INVV_addItem), inv, item, qty);
 }

@@ -1299,7 +1299,10 @@ bool KenshiWorld::ExecuteInvOp(const kc::Handle& from, const kc::Handle& to, con
     if (!a || !b) return false;
     std::string err;
     HostCallScope scope;
-    if (kenshi::MoveInventoryItem(a, b, op, &err)) return true;
+    if (kenshi::MoveInventoryItem(a, b, op, &err)) {
+        Log("client item move done: %s %s -> %s %d,%d", op.item.templateSid.c_str(), op.item.section.c_str(), op.toSection.c_str(), op.toX, op.toY);
+        return true;
+    }
     Log("client item move refused: %s (%s x%d)", err.c_str(), op.item.templateSid.c_str(), op.item.quantity);
     return false;
 }

@@ -810,6 +810,8 @@ void Session::ClientInventoryDiff(double now) {
             op.toSection = added[i].item.section;
             op.toX = added[i].item.x;
             op.toY = added[i].item.y;
+            log_("inventory move asked of the host: " + g.item.templateSid + " " + g.item.section + " -> " + op.toSection + " " +
+                 std::to_string(op.toX) + "," + std::to_string(op.toY));
             Writer w;
             Encode(w, op);
             SendReliable(net_.serverPeer(), w);

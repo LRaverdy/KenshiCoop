@@ -397,7 +397,9 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         std::string fromS, toS, which;
         size_t idx = 0;
         int qty = 0;
-        in >> fromS >> toS >> which >> qty;
+        int toX = -1, toY = -1;
+        std::string toSec = "main";
+        in >> fromS >> toS >> which >> qty >> toX >> toY >> toSec;
         auto squad = SortedSquad(w);
         auto pick = [&](const std::string& s) -> kc::Handle {
             if (s == "spawned") return lastSpawned_;
@@ -421,9 +423,9 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         kc::InvOp op;
         op.item = items[idx];
         if (qty > 0) op.item.quantity = std::min(qty, op.item.quantity);
-        op.toSection = "main";
-        op.toX = -1;   // anywhere it fits
-        op.toY = -1;
+        op.toSection = toSec;
+        op.toX = int16_t(toX);   // -1: anywhere it fits
+        op.toY = int16_t(toY);
         std::string e;
         HostCallScope scope;
         return kenshi::MoveInventoryItem(a, b, op, &e) ? "ok " + op.item.templateSid : "err " + e;
