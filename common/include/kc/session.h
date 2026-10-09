@@ -150,7 +150,9 @@ public:
     virtual void HoldForJoin(bool hold) = 0;
     // Host, while holding for a join: the joining player's own character (found by name, else
     // created and recruited into the squad). It is then in the save the player receives.
-    virtual bool EnsurePlayerCharacter(const std::string& playerName, Handle& out) = 0;
+    // The joining player's own character: the one recorded for that Steam account (or, without
+    // one, the squad member with the player's name), created if there is none. created: it is new.
+    virtual bool EnsurePlayerCharacter(const std::string& playerName, uint64_t steamId, Handle& out, bool& created) = 0;
     // Host: save the current world for transfer; poll until Done (files filled) or Failed.
     virtual bool BeginWorldExport(std::string* err) = 0;
     virtual ExportStatus PollWorldExport(std::vector<WorldFile>& files, std::string* err) = 0;
@@ -178,6 +180,7 @@ struct SessionConfig {
     float snapDistance = 50.0f;        // samples further apart than this are not interpolated
     float interestRadius = 0.0f;       // NPCs within this distance of the squad are replicated (0 = all active)
     bool characterPerPlayer = true;    // host: every joining player gets a character of their own
+    uint64_t steamId = 0;              // this player's Steam account (0: none)
 };
 
 enum class SessionState { Idle, Hosting, Connecting, Handshake, Downloading, Loading, Connected, Failed };
@@ -185,6 +188,7 @@ enum class SessionState { Idle, Hosting, Connecting, Handshake, Downloading, Loa
 struct RemotePlayer {
     uint8_t id = 0;
     std::string name;
+    uint64_t steamId = 0;    // host side: the Steam account the player joined with (0: unknown)
     PeerId peer = kNoPeer;   // host side only
     uint32_t rttMs = 0;
     bool inGame = true;      // host side: finished loading the world
@@ -300,6 +304,7 @@ private:
         bool kicked = false;
         Handle own;                          // the player's own character (characterPerPlayer)
         bool ownChecked = false;
+        bool ownCreated = false;             // made for this join (the player has never had one)
     };
 
     void HostTick(double now, bool live);

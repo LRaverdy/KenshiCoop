@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 17;
+constexpr uint16_t kProtocolVersion = 18;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -109,6 +109,7 @@ struct Hello {
     uint64_t modsHash = 0;   // hash of the ordered active mod list
     uint64_t worldHash = 0;  // fingerprint of the loaded save
     std::string name;
+    uint64_t steamId = 0;    // who the player is, whatever name they use (0: unknown)
 };
 struct PlayerInfo {
     uint8_t id = 0;

@@ -1599,14 +1599,76 @@ bool KenshiWorld::BeginWorldImport(const std::vector<kc::WorldFile>& files, std:
     return true;
 }
 
-bool KenshiWorld::EnsurePlayerCharacter(const std::string& playerName, kc::Handle& out) {
-    const std::string name = playerName.substr(0, 15);   // what fits a character name here
+namespace {
+// Which character each Steam account plays, kept next to the game (one line per account:
+// "<steamId> <character handle> <name>"). Handles are the save's own object ids: the same
+// character keeps its handle from one save to the next.
+std::filesystem::path PlayersLedger() { return std::filesystem::path(GameDir()) / L"KenshiCoop-players.txt"; }
+struct LedgerEntry { uint64_t steamId = 0; kc::Handle handle; std::string name; };
+std::vector<LedgerEntry> ReadLedger() {
+    std::vector<LedgerEntry> out;
+    std::ifstream f(PlayersLedger());
+    std::string line;
+    while (std::getline(f, line)) {
+        LedgerEntry e;
+        char key[96] = {}, name[64] = {};
+        unsigned long long id = 0;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (sscanf(line.c_str(), "%llu %95s %63[^\n]", &id, key, name) < 2) continue;
+        if (sscanf(key, "%u:%u:%u:%u:%u", &e.handle.type, &e.handle.container, &e.handle.containerSerial, &e.handle.index, &e.handle.serial) != 5) continue;
+        e.steamId = id;
+        e.name = name;
+        out.push_back(e);
+    }
+    return out;
+}
+void WriteLedger(const std::vector<LedgerEntry>& entries) {
+    std::ofstream f(PlayersLedger(), std::ios::trunc);
+    for (const auto& e : entries)
+        f << e.steamId << ' ' << e.handle.type << ':' << e.handle.container << ':' << e.handle.containerSerial << ':' << e.handle.index << ':'
+          << e.handle.serial << ' ' << e.name << '\n';
+}
+} // namespace
+
+bool KenshiWorld::EnsurePlayerCharacter(const std::string& playerName, uint64_t steamId, kc::Handle& out, bool& created) {
+    created = false;
+    std::string name = playerName.substr(0, 15);   // what fits a character name here
     std::vector<kenshi::Character*> squad;
     kenshi::PlayerCharacters(squad);
     if (squad.empty()) return false;
-    for (kenshi::Character* c : squad) {   // back again: same character as last time
+    auto ledger = ReadLedger();
+    auto inSquad = [&](const kc::Handle& h) {
+        for (kenshi::Character* c : squad) { kc::Handle sh; if (kenshi::GetHandle(c, sh) && sh == h) return c; }
+        return static_cast<kenshi::Character*>(nullptr);
+    };
+    // 1. the character this Steam account played last time (whatever name the player uses now)
+    if (steamId)
+        for (const auto& e : ledger)
+            if (e.steamId == steamId && inSquad(e.handle)) {
+                out = e.handle;
+                Log("%s is back with their character", name.c_str());
+                return true;
+            }
+    // 2. a squad member with the player's name that no other account owns
+    auto ownedByOther = [&](const kc::Handle& h) {
+        for (const auto& e : ledger) if (e.handle == h && e.steamId != steamId) return true;
+        return false;
+    };
+    for (kenshi::Character* c : squad) {
         std::string n;
-        if (kenshi::CharacterName(c, n) && n == name && kenshi::GetHandle(c, out)) return true;
+        kc::Handle h;
+        if (kenshi::CharacterName(c, n) && n == name && kenshi::GetHandle(c, h) && !(steamId && ownedByOther(h))) {
+            out = h;
+            if (steamId) { ledger.push_back({steamId, h, name}); WriteLedger(ledger); }
+            return true;
+        }
+    }
+    // 3. a new one (its name made unique in the squad)
+    for (int n = 2; n < 100; ++n) {
+        bool clash = false;
+        for (kenshi::Character* c : squad) { std::string cn; clash |= kenshi::CharacterName(c, cn) && cn == name; }
+        if (!clash) break;
+        name = playerName.substr(0, 12) + " " + std::to_string(n);
     }
     kc::Vec3 p;
     if (!kenshi::GetPosition(squad.front(), p)) return false;
@@ -1618,6 +1680,12 @@ bool KenshiWorld::EnsurePlayerCharacter(const std::string& playerName, kc::Handl
     if (!c || !kenshi::GetHandle(c, out)) {
         Log("cannot create %s's character: %s", name.c_str(), err.c_str());
         return false;
+    }
+    created = true;
+    if (steamId) {
+        ledger.erase(std::remove_if(ledger.begin(), ledger.end(), [&](const LedgerEntry& e) { return e.steamId == steamId; }), ledger.end());
+        ledger.push_back({steamId, out, name});
+        WriteLedger(ledger);
     }
     Log("created %s's own character", name.c_str());
     Toast(name + " joins with a character of their own.");

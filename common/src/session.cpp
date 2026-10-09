@@ -77,6 +77,7 @@ Session::Session(IWorld& world, SessionConfig cfg, ClockFn clock, LogFn log)
             h.gameBuild = world_.GameBuild();
             h.modsHash = world_.ModsHash();
             h.name = cfg_.name;
+            h.steamId = cfg_.steamId;
             Writer w;
             Encode(w, h);
             SendReliable(net_.serverPeer(), w);
@@ -357,7 +358,11 @@ void Session::HostJoinFlow(double now, bool live) {
                     PlayerSync& s = sync_[id];
                     if (s.ownChecked || s.worldSent) continue;
                     s.ownChecked = true;
-                    if (world_.EnsurePlayerCharacter(players_[id].name, s.own)) Assign(s.own, id);
+                    bool created = false;
+                    if (world_.EnsurePlayerCharacter(players_[id].name, players_[id].steamId, s.own, created)) {
+                        Assign(s.own, id);
+                        s.ownCreated = created;
+                    }
                     else log_("no character of their own for " + players_[id].name);
                 }
             }
@@ -764,6 +769,11 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         bool taken = h.name == cfg_.name;
         for (auto& [pid, p] : players_) taken |= p.name == h.name;
         if (taken) h.name = h.name.substr(0, kMaxNameLen - 4) + " " + std::to_string(id);
+        // One Steam account, one player: a second connection from the same account (two games on
+        // one PC) is told apart by its name only.
+        bool steamTaken = h.steamId != 0 && h.steamId == cfg_.steamId;
+        for (auto& [pid, p] : players_) steamTaken |= h.steamId != 0 && p.steamId == h.steamId;
+        if (steamTaken) h.steamId = 0;
         pendingPeers_.erase(peer);
 
         Welcome wm;
@@ -782,6 +792,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         RemotePlayer np;
         np.id = id;
         np.name = h.name;
+        np.steamId = h.steamId;
         np.peer = peer;
         np.inGame = false;
         players_[id] = np;

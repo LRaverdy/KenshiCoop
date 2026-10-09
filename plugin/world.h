@@ -101,7 +101,7 @@ public:
     void ForceWeather(const std::string& regionSid, const std::string& seasonSid, const std::string& weatherSid);   // tests (host)
     void SetTime(const kc::TimeState& t) override;
     void HoldForJoin(bool hold) override;
-    bool EnsurePlayerCharacter(const std::string& playerName, kc::Handle& out) override;
+    bool EnsurePlayerCharacter(const std::string& playerName, uint64_t steamId, kc::Handle& out, bool& created) override;
     bool BeginWorldExport(std::string* err) override;
     kc::ExportStatus PollWorldExport(std::vector<kc::WorldFile>& files, std::string* err) override;
     bool BeginWorldImport(const std::vector<kc::WorldFile>& files, std::string* err) override;

@@ -180,8 +180,10 @@ struct FakeWorld : IWorld {
         if (chars.erase(h.serial)) ++despawns;
     }
     std::map<std::string, uint32_t> named;   // player characters by name
-    bool EnsurePlayerCharacter(const std::string& name, Handle& out) override {
+    bool EnsurePlayerCharacter(const std::string& name, uint64_t steamId, Handle& out, bool& created) override {
+        (void)steamId;
         auto it = named.find(name);
+        created = it == named.end();
         if (it == named.end()) {
             const uint32_t s = 5000 + uint32_t(named.size());
             FakeChar c;

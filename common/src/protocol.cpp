@@ -67,6 +67,7 @@ void Encode(Writer& w, const Hello& m) {
     w.u64(m.modsHash);
     w.u64(m.worldHash);
     w.str(m.name);
+    w.u64(m.steamId);
 }
 bool Decode(Reader& r, Hello& m) {
     if (r.u32() != kMagic) return false;
@@ -75,6 +76,7 @@ bool Decode(Reader& r, Hello& m) {
     m.modsHash = r.u64();
     m.worldHash = r.u64();
     m.name = r.str(kMaxNameLen);
+    m.steamId = r.u64();
     return Done(r);
 }
 

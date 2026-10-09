@@ -587,6 +587,9 @@ bool Start() {
     sc.snapDistance = g_cfg.snapDistance;
     sc.interestRadius = g_cfg.interestRadius;
     sc.characterPerPlayer = g_cfg.characterPerPlayer;
+    sc.steamId = steam::MyId();
+    // tests: two games on one PC share one Steam account; the harness gives each a fake one
+    if (char buf[32]; g_cfg.debugCommands && GetEnvironmentVariableA("KC_FAKE_STEAM_ID", buf, sizeof(buf)) > 0) sc.steamId = std::stoull(buf);
     g_session = std::make_unique<kc::Session>(*g_world, sc, NowSeconds, [](const std::string& s) { Log("%s", s.c_str()); });
 
     if (!InstallHooks(&TickEntry, &err)) { Log("disabled: %s", err.c_str()); g_session.reset(); g_world.reset(); return false; }

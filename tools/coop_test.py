@@ -79,9 +79,13 @@ def dismiss_launcher(pid, timeout=25):
     return False
 
 
-def launch():
+def launch(fake_steam_id=None):
     before = set(running_pids())
-    subprocess.Popen([EXE], cwd=KENSHI)
+    env = dict(os.environ)
+    env.pop("KC_FAKE_STEAM_ID", None)
+    if fake_steam_id:
+        env["KC_FAKE_STEAM_ID"] = str(fake_steam_id)
+    subprocess.Popen([EXE], cwd=KENSHI, env=env)
     deadline = time.time() + 30
     while time.time() < deadline:
         new = set(running_pids()) - before
@@ -300,7 +304,7 @@ def setup(save, name="Tester"):
     wait_for(host, lambda s: s.get("ready") == "1", 180, "host world")
     ok, t = cmd(host, "host")
     log("host", ok, t)
-    cli = launch()
+    cli = launch(fake_steam_id=76561190000000002)
     log("client pid", cli)
     wait_for(cli, lambda s: s.get("state") == "idle", 120, "client menu")
     time.sleep(3)
@@ -323,7 +327,7 @@ def setup_many(save, clients):
     log("host", cmd(host, "host"))
     clis = []
     for n in range(clients):
-        c = launch()
+        c = launch(fake_steam_id=76561190000000002 + n)
         log("client", n + 1, "pid", c)
         wait_for(c, lambda s: s.get("state") == "idle", 240, f"client {n + 1} menu")
         time.sleep(3)
