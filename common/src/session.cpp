@@ -210,9 +210,10 @@ void Session::HostTick(double now, bool live) {
         nextInventory_ = now + 0.5;
         SendInventories(now, false, kNoPeer);
     }
-    // Weather: sent when any region's weather changes, and in full every 10 s.
+    // Weather: sent the tick any region's weather changes (before the effects that weather places),
+    // and in full every 10 s.
     if (anyInGame && now >= nextWeather_) {
-        nextWeather_ = now + 2.0;
+        nextWeather_ = now;
         std::vector<RegionWeather> w;
         world_.ReadWeather(w);
         bool changed = w.size() != lastWeather_.size() || now >= weatherForceAt_;
@@ -223,6 +224,19 @@ void Session::HostTick(double now, bool live) {
             WeatherMsg m;
             m.regions = std::move(w);
             Writer out(4096);
+            Encode(out, m);
+            BroadcastReliable(out, true);
+        }
+    }
+    // Weather effects: every one the host's game places goes out as soon as it appears; the
+    // complete live set every 5 s heals anything missed (and serves newcomers).
+    {
+        EffectsMsg m;
+        const bool full = anyInGame && now >= effectsFullAt_;
+        world_.ReadEffects(m, full);   // drained even with nobody to send them to
+        if (full) effectsFullAt_ = now + 5.0;
+        if (anyInGame && !m.empty()) {
+            Writer out(1024);
             Encode(out, m);
             BroadcastReliable(out, true);
         }
@@ -363,6 +377,7 @@ void Session::FinishJoin(RemotePlayer& p) {
     SendInventories(clock_(), true, p.peer);
     weatherForceAt_ = 0;   // the newcomer gets the full weather on the next weather tick
     nextWeather_ = 0;
+    effectsFullAt_ = clock_() + 1.0;   // and every weather effect once that weather is in place
     AddChat("* " + p.name + " is in the world");
 }
 
@@ -1096,6 +1111,11 @@ void Session::ClientPacket(Msg type, Reader& r) {
     case Msg::Weather: {
         WeatherMsg m;
         if (state_ == SessionState::Connected && Decode(r, m)) world_.ApplyWeather(m.regions);
+        break;
+    }
+    case Msg::Effects: {
+        EffectsMsg m;
+        if (state_ == SessionState::Connected && Decode(r, m)) world_.ApplyEffects(m);
         break;
     }
     case Msg::Inventory: {

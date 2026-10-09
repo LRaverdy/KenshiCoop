@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 9;
+constexpr uint16_t kProtocolVersion = 10;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -54,6 +54,7 @@ enum class Msg : uint8_t {
     Weather = 19,     // S->C  weather of every region
     Inventory = 20,   // S->C  full inventory of one character
     InvOp = 21,       // C->S  the client moved items (loot, equip, rearrange, drop)
+    Effects = 22,     // S->C  weather effects the host's game placed (lightning, storms, gas clouds)
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -277,6 +278,40 @@ struct WeatherMsg {
 };
 constexpr uint32_t kMaxWeatherRegions = 256;
 
+// ---- weather effects ----
+// A weather effect the host's game placed in the world at random: a lightning bolt, a wandering
+// dust storm or gas cloud, a point effect. It belongs to one effect group of one weather region
+// (the region's effect, counted among the region's groups showing that same effect); clients
+// recreate it there with the host's random values instead of rolling their own.
+enum class EffectKind : uint8_t { Point = 1, Wandering = 2 };
+struct WeatherEffect {
+    uint32_t id = 0;              // host-assigned, increasing
+    EffectKind kind = EffectKind::Point;
+    std::string regionSid;
+    std::string effectSid;
+    uint8_t ordinal = 0;
+    Vec3 pos;
+    float age = 0;                // seconds since it appeared
+    float life = 0;               // seconds left (unless endless)
+    bool endless = false;
+    float strength = 0;
+    bool struck = false;          // point: lightning already hit
+    float strikeIn = 0;           //        seconds before it hits
+    Vec3 dir, turnTo;             // wandering: heading, and the heading it is turning to
+};
+struct EffectState {              // where a wandering effect is now
+    uint32_t id = 0;
+    Vec3 pos, dir, turnTo;
+};
+struct EffectsMsg {
+    bool full = false;            // `spawned` is the host's complete live set: anything else goes
+    std::vector<WeatherEffect> spawned;
+    std::vector<EffectState> moved;
+    std::vector<uint32_t> ended;
+    bool empty() const { return !full && spawned.empty() && moved.empty() && ended.empty(); }
+};
+constexpr uint32_t kMaxEffectsPerMsg = 4096;
+
 // ---- world transfer ----
 struct WorldFile {
     std::string path;            // relative, '/'-separated, validated by ValidWorldPath
@@ -325,6 +360,7 @@ void Encode(Writer& w, const ReadyMsg& m);
 void Encode(Writer& w, const WeatherMsg& m);
 void Encode(Writer& w, const InventoryMsg& m);
 void Encode(Writer& w, const InvOp& m);
+void Encode(Writer& w, const EffectsMsg& m);
 
 // Snapshots are split into packets that each fit `budget` bytes; every packet is self-contained.
 std::vector<std::vector<uint8_t>> EncodeSnapshot(const Snapshot& s, size_t budget = kSnapshotBudget);
@@ -350,6 +386,7 @@ bool Decode(Reader& r, ReadyMsg& m);
 bool Decode(Reader& r, WeatherMsg& m);
 bool Decode(Reader& r, InventoryMsg& m);
 bool Decode(Reader& r, InvOp& m);
+bool Decode(Reader& r, EffectsMsg& m);
 bool Decode(Reader& r, Ping& m);
 
 // Name rules: 1..kMaxNameLen printable ASCII, no leading/trailing spaces.

@@ -534,17 +534,379 @@ void KenshiWorld::WeatherRegionTick(void* region, bool afterUpdate) {
     if (!active_) return;
     if (afterUpdate) {   // remember every region's state after the game advanced it (host: what we send)
         kc::RegionWeather w;
-        if (kenshi::ReadRegionWeather(region, w)) seenRegions_[region] = std::move(w);
+        if (kenshi::ReadRegionWeather(region, w)) {
+            if (!client_) HostEffectsTick(region, w.regionSid);
+            seenRegions_[region] = std::move(w);
+        }
         return;
     }
-    if (!client_) return;   // client: impose the host's weather before the game's update runs
+    if (!client_) {
+        if (forcedWeather_.empty()) return;
+        kc::RegionWeather w;
+        if (!kenshi::ReadRegionWeather(region, w)) return;
+        auto f = forcedWeather_.find(w.regionSid);
+        if (f == forcedWeather_.end()) return;
+        w.seasonSid = f->second.first;
+        w.weatherSid = f->second.second;
+        forcedWeather_.erase(f);
+        HostCallScope scope;
+        Log("test: region %s weather -> %s: %s", w.regionSid.c_str(), w.weatherSid.c_str(), kenshi::WriteRegionWeather(region, w) ? "ok" : "failed");
+        return;
+    }
+    // client: impose the host's weather before the game's update runs
     kc::RegionWeather mine;
     if (!kenshi::ReadRegionWeather(region, mine)) return;
     auto it = hostWeather_.find(mine.regionSid);
     if (it != hostWeather_.end()) {
         HostCallScope scope;
-        kenshi::WriteRegionWeather(region, it->second);
+        if (kenshi::WriteRegionWeather(region, it->second) && mine.weatherSid != it->second.weatherSid) fxRebuild_.insert(region);
     }
+    ClientEffectsTick(region, mine.regionSid);
+}
+
+// Host: after the game advanced a region, note every effect its groups placed, moved or removed.
+// Only effects near a player's character matter (an effect shows only in the zones loaded around a
+// camera): one that comes near is announced like a new one, one that goes away like a removed one.
+namespace {
+constexpr float kFxRadius = 9000.0f;            // two loading zones
+constexpr float kFxForget = kFxRadius + 1000.0f;
+constexpr double kFxRefresh = 2.0;              // wandering effects: state sent at least this often
+bool NearAny(const kc::Vec3& p, const std::vector<kc::Vec3>& centers, float r) {
+    for (const auto& c : centers) {
+        const float dx = p.x - c.x, dz = p.z - c.z;
+        if (dx * dx + dz * dz < r * r) return true;
+    }
+    return false;
+}
+} // namespace
+
+void KenshiWorld::HostEffectsTick(void* region, const std::string& regionSid) {
+    std::vector<kenshi::EffectGroupInfo> groups;
+    if (!kenshi::ReadEffectGroups(region, groups)) return;
+    auto& known = hostFx_[region];
+    const double now = NowSeconds();
+    auto drop = [&](HostFx& f) {
+        if (!f.sent) return;
+        fxOut_.ended.push_back(f.id);
+        fxLive_.erase(f.id);
+        f.sent = false;
+    };
+    std::unordered_set<void*> seen;
+    for (const auto& g : groups) {
+        for (void* h : g.handlers) {
+            seen.insert(h);
+            auto it = known.find(h);
+            if (it != known.end() && it->second.group != g.group) {   // that address now holds another group's effect
+                drop(it->second);
+                known.erase(it);
+                it = known.end();
+            }
+            if (it == known.end()) it = known.emplace(h, HostFx{nextFxId_++, g.group, g.kind, false, 0.0, {}}).first;   // movedAt 0: never sent
+            HostFx& f = it->second;
+            kc::WeatherEffect e;
+            if (!kenshi::ReadEffect(h, g.kind, e)) continue;
+            if (!f.sent) {
+                if (!NearAny(e.pos, fxCenters_, kFxRadius)) continue;
+                if (f.movedAt != 0.0) f.id = nextFxId_++;   // it was sent before, then went away: new to the clients
+                e.id = f.id;
+                e.kind = g.kind;
+                e.regionSid = regionSid;
+                e.effectSid = g.effectSid;
+                e.ordinal = g.ordinal;
+                f.sent = true;
+                f.movedAt = now;
+                f.turnTo = e.turnTo;
+                fxLive_[e.id] = e;
+                fxOut_.spawned.push_back(std::move(e));
+                continue;
+            }
+            if (!NearAny(e.pos, fxCenters_, kFxForget)) {
+                drop(f);
+                continue;
+            }
+            kc::WeatherEffect& live = fxLive_[f.id];
+            kenshi::ReadEffect(h, g.kind, live);
+            if (g.kind != kc::EffectKind::Wandering) continue;
+            const bool turned = live.turnTo.x != f.turnTo.x || live.turnTo.y != f.turnTo.y || live.turnTo.z != f.turnTo.z;
+            if (turned || now - f.movedAt >= kFxRefresh) {
+                fxOut_.moved.push_back({f.id, live.pos, live.dir, live.turnTo});
+                f.movedAt = now;
+                f.turnTo = live.turnTo;
+            }
+        }
+    }
+    for (auto it = known.begin(); it != known.end();) {
+        if (seen.count(it->first)) { ++it; continue; }
+        drop(it->second);
+        it = known.erase(it);
+    }
+}
+
+// Client: before the game advances a region, its groups place nothing of their own; what the host
+// placed is placed here (same spot, same random rolls), moved like the host's, and removed with it.
+void KenshiWorld::ClientEffectsTick(void* region, const std::string& regionSid) {
+    std::vector<kenshi::EffectGroupInfo> groups;
+    if (!kenshi::ReadEffectGroups(region, groups)) return;
+    std::unordered_map<void*, void*> groupOf;   // live handler -> its group
+    for (const auto& g : groups) {
+        kenshi::BlockEffectSpawns(g.group);
+        for (void* h : g.handlers) groupOf[h] = g.group;
+    }
+    auto& stopped = fxStopped_[region];
+    for (auto it = stopped.begin(); it != stopped.end();) it = groupOf.count(*it) ? std::next(it) : stopped.erase(it);
+    auto stop = [&](void* h) {
+        HostCallScope scope;
+        if (stopped.insert(h).second && kenshi::StopEffect(h)) ++fxStats_.stopped;
+    };
+    // forget our copies the game has removed (they ran their course)
+    for (auto it = clientFx_.begin(); it != clientFx_.end();) {
+        if (it->second.regionSid != regionSid) { ++it; continue; }
+        auto g = groupOf.find(it->second.handler);
+        if (g == groupOf.end() || g->second != it->second.group) {
+            FxLog(it->first, g == groupOf.end() ? "gone by itself" : "gone (address reused)", &it->second);
+            // a moving effect the host still has (our group was replaced under it): place it again now
+            const ClientFx& c = it->second;
+            const float lived = float(NowSeconds() - c.placedAt);
+            if (c.kind == kc::EffectKind::Wandering && !fxEnd_.count(it->first) && (c.last.endless || c.life - lived > 1.0f) &&
+                fxPending_.insert(it->first).second) {
+                kc::WeatherEffect e = c.last;
+                e.age += lived;
+                e.life = c.life - lived;
+                fxSpawn_[regionSid].push_back({e, NowSeconds()});
+            }
+            it = clientFx_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    // removed on the host
+    for (auto it = fxEnd_.begin(); it != fxEnd_.end();) {
+        auto c = clientFx_.find(*it);
+        if (c == clientFx_.end()) { it = fxEnd_.erase(it); continue; }
+        if (c->second.regionSid != regionSid) { ++it; continue; }
+        FxLog(c->first, "ended by the host", &c->second);
+        stop(c->second.handler);
+        clientFx_.erase(c);
+        it = fxEnd_.erase(it);
+    }
+    // gone from the host's complete set
+    if (fxFullDone_[regionSid] != fxFullGen_) {
+        fxFullDone_[regionSid] = fxFullGen_;
+        for (auto it = clientFx_.begin(); it != clientFx_.end();) {
+            if (it->second.regionSid == regionSid && !fxLiveIds_.count(it->first)) {
+                FxLog(it->first, "not in the host's set", &it->second);
+                stop(it->second.handler);
+                it = clientFx_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    // placed on the host (not into groups the game is about to replace with the new weather's)
+    const double now = NowSeconds();
+    auto pend = fxRebuild_.count(region) ? fxSpawn_.end() : fxSpawn_.find(regionSid);
+    if (pend != fxSpawn_.end()) {
+        std::vector<PendingFx> keep;
+        for (auto& p : pend->second) {
+            if (clientFx_.count(p.e.id) || (p.e.kind == kc::EffectKind::Point && fxHandled_.count(p.e.id))) {
+                fxPending_.erase(p.e.id);
+                continue;
+            }
+            const kenshi::EffectGroupInfo* group = nullptr;
+            for (const auto& g : groups)
+                if (g.kind == p.e.kind && g.effectSid == p.e.effectSid && g.ordinal == p.e.ordinal) group = &g;
+            if (!group) {   // our region may still be switching to the host's weather
+                if (now - p.since < 3.0) keep.push_back(std::move(p));
+                else { fxPending_.erase(p.e.id); ++fxStats_.noGroup; }
+                continue;
+            }
+            kc::WeatherEffect e = p.e;
+            if (fxHandled_.count(e.id) && !e.endless && e.life < 1.0f) { fxPending_.erase(e.id); continue; }   // ours just ended too
+            const float late = float(now - p.since);
+            e.age += late;
+            e.strikeIn -= late;
+            if (!e.endless) e.life -= late;
+            fxPending_.erase(e.id);
+            if (!e.endless && e.life <= 0) { ++fxStats_.over; continue; }   // over by now
+            void* h = nullptr;
+            {
+                HostCallScope scope;
+                h = kenshi::SpawnEffect(group->group, e);
+            }
+            if (!h) { ++fxStats_.failed; continue; }
+            ++fxStats_.placed;
+            fxHandled_.insert(e.id);
+            clientFx_[e.id] = {group->group, h, regionSid, e.kind, now, e.life, e};
+            groupOf[h] = group->group;
+        }
+        pend->second.swap(keep);
+    }
+    // moved on the host
+    for (auto it = fxMove_.begin(); it != fxMove_.end();) {
+        auto c = clientFx_.find(it->first);
+        if (c == clientFx_.end()) { it = fxPending_.count(it->first) ? std::next(it) : fxMove_.erase(it); continue; }
+        if (c->second.regionSid != regionSid) { ++it; continue; }
+        kc::WeatherEffect mine;
+        if (kenshi::ReadEffect(c->second.handler, kc::EffectKind::Wandering, mine)) {
+            const double d = Dist(mine.pos, it->second.pos);
+            ++fxStats_.corrections;
+            fxStats_.correctionSum += d;
+            fxStats_.correctionMax = std::max(fxStats_.correctionMax, d);
+        }
+        kenshi::WriteEffectState(c->second.handler, it->second);
+        c->second.last.pos = it->second.pos;
+        c->second.last.dir = it->second.dir;
+        c->second.last.turnTo = it->second.turnTo;
+        it = fxMove_.erase(it);
+    }
+    // anything else (left from before we joined) fades out
+    std::unordered_set<void*> ours;
+    for (const auto& [id, c] : clientFx_)
+        if (c.regionSid == regionSid) ours.insert(c.handler);
+    for (const auto& [h, g] : groupOf)
+        if (!ours.count(h)) stop(h);
+}
+
+void KenshiWorld::FxLog(uint32_t id, const char* what, const ClientFx* c) {
+    if (fxLogged_ >= 400) return;
+    ++fxLogged_;
+    if (c)
+        Log("effect %u %s after %.1f s (placed with %.1f s to live)", id, what, NowSeconds() - c->placedAt, c->life);
+    else
+        Log("effect %u %s", id, what);
+}
+
+bool KenshiWorld::TakeEffectsRebuild(void* region) {
+    std::lock_guard<std::mutex> lk(weatherMutex_);
+    return fxRebuild_.erase(region) > 0;
+}
+
+void KenshiWorld::NoteEffectStop(void* handler, uintptr_t callerRva) {
+    std::unique_lock<std::mutex> lk(weatherMutex_, std::try_to_lock);
+    uint32_t id = 0;
+    if (lk.owns_lock())
+        for (const auto& [cid, c] : clientFx_)
+            if (c.handler == handler) id = cid;
+    static std::atomic<int> logged{0};
+    if (id && logged.fetch_add(1) < 300) Log("effect %u stopped by the game (caller rva %llx)", id, (unsigned long long)callerRva);
+}
+
+void KenshiWorld::ReadEffects(kc::EffectsMsg& out, bool full) {
+    std::vector<kc::Vec3> centers;
+    const double now = NowSeconds();
+    const bool refresh = now - fxCentersAt_ >= 0.5;
+    if (refresh) {
+        fxCentersAt_ = now;
+        for (auto& [h, c] : squad_) {
+            kc::Vec3 p;
+            if (kenshi::GetPosition(c, p)) centers.push_back(p);
+        }
+    }
+    std::lock_guard<std::mutex> lk(weatherMutex_);
+    if (refresh) fxCenters_.swap(centers);
+    out = std::move(fxOut_);
+    fxOut_ = kc::EffectsMsg{};
+    if (!full) return;
+    out.full = true;
+    out.spawned.clear();
+    out.spawned.reserve(fxLive_.size());
+    for (const auto& [id, e] : fxLive_) out.spawned.push_back(e);
+    std::sort(out.spawned.begin(), out.spawned.end(), [](const kc::WeatherEffect& a, const kc::WeatherEffect& b) { return a.id < b.id; });
+}
+
+void KenshiWorld::ApplyEffects(const kc::EffectsMsg& m) {
+    std::lock_guard<std::mutex> lk(weatherMutex_);
+    if (!client_) return;
+    const double now = NowSeconds();
+    for (const auto& e : m.spawned) {
+        if (clientFx_.count(e.id) || (e.kind == kc::EffectKind::Point && fxHandled_.count(e.id)) || !fxPending_.insert(e.id).second) continue;
+        fxSpawn_[e.regionSid].push_back({e, now});
+    }
+    for (const auto& s : m.moved) fxMove_[s.id] = s;
+    for (uint32_t id : m.ended) {
+        if (clientFx_.count(id)) fxEnd_.insert(id);
+        fxMove_.erase(id);
+        if (fxPending_.erase(id))
+            for (auto& [sid, list] : fxSpawn_)
+                list.erase(std::remove_if(list.begin(), list.end(), [id](const PendingFx& p) { return p.e.id == id; }), list.end());
+    }
+    if (!m.full) return;
+    fxLiveIds_.clear();
+    for (const auto& e : m.spawned) fxLiveIds_.insert(e.id);
+    ++fxFullGen_;
+    for (auto it = fxHandled_.begin(); it != fxHandled_.end();) it = fxLiveIds_.count(*it) ? std::next(it) : fxHandled_.erase(it);
+}
+
+std::string KenshiWorld::WeatherGroups() {
+    std::lock_guard<std::mutex> lk(weatherMutex_);
+    std::string out;
+    for (const auto& [region, w] : seenRegions_) {
+        std::vector<kenshi::EffectGroupInfo> groups;
+        kenshi::ReadEffectGroups(region, groups);
+        out += "region " + w.regionSid + (region == kenshi::CameraWeatherRegion() ? " camera" : "") + " season=" + w.seasonSid +
+               " weather=" + w.weatherSid + " groups:";
+        for (const auto& g : groups)
+            out += std::string(" ") + (g.kind == kc::EffectKind::Point ? "point:" : "wander:") + g.effectSid + "x" + std::to_string(g.handlers.size());
+        out += "\n" + kenshi::DescribeRegionWeathers(region);
+    }
+    return out;
+}
+
+size_t KenshiWorld::HurryEffects() {
+    std::lock_guard<std::mutex> lk(weatherMutex_);
+    size_t n = 0;
+    for (const auto& [region, w] : seenRegions_) {
+        std::vector<kenshi::EffectGroupInfo> groups;
+        if (!kenshi::ReadEffectGroups(region, groups)) continue;
+        for (const auto& g : groups) {
+            kenshi::HurryEffectSpawn(g.group);
+            ++n;
+        }
+    }
+    return n;
+}
+
+void KenshiWorld::ForceWeather(const std::string& regionSid, const std::string& seasonSid, const std::string& weatherSid) {
+    std::lock_guard<std::mutex> lk(weatherMutex_);
+    forcedWeather_[regionSid] = {seasonSid, weatherSid};
+}
+
+std::string KenshiWorld::EffectsReport() {
+    std::lock_guard<std::mutex> lk(weatherMutex_);
+    char head[320];
+    snprintf(head, sizeof(head), "fxstats placed=%llu failed=%llu nogroup=%llu over=%llu stopped=%llu live=%zu corr=%llu corr_avg=%.2f corr_max=%.2f\n",
+             (unsigned long long)fxStats_.placed, (unsigned long long)fxStats_.failed, (unsigned long long)fxStats_.noGroup,
+             (unsigned long long)fxStats_.over, (unsigned long long)fxStats_.stopped, client_ ? clientFx_.size() : fxLive_.size(),
+             (unsigned long long)fxStats_.corrections, fxStats_.corrections ? fxStats_.correctionSum / double(fxStats_.corrections) : 0.0,
+             fxStats_.correctionMax);
+    std::string out = head;
+    for (const auto& [region, w] : seenRegions_) {
+        std::vector<kenshi::EffectGroupInfo> groups;
+        if (!kenshi::ReadEffectGroups(region, groups)) continue;
+        for (const auto& g : groups) {
+            for (void* h : g.handlers) {
+                kc::WeatherEffect e;
+                if (!kenshi::ReadEffect(h, g.kind, e)) continue;
+                uint32_t id = 0;
+                if (client_) {
+                    for (const auto& [cid, c] : clientFx_)
+                        if (c.handler == h) id = cid;
+                } else {
+                    auto k = hostFx_.find(region);
+                    if (k != hostFx_.end()) {
+                        auto f = k->second.find(h);
+                        if (f != k->second.end() && f->second.sent) id = f->second.id;
+                    }
+                }
+                char line[400];
+                snprintf(line, sizeof(line), "fx %u %s %s %s %u %.1f,%.1f,%.1f age=%.2f life=%.2f endless=%d struck=%d shown=%d\n", id,
+                         g.kind == kc::EffectKind::Point ? "point" : "wander", w.regionSid.c_str(), g.effectSid.c_str(), unsigned(g.ordinal),
+                         e.pos.x, e.pos.y, e.pos.z, e.age, e.life, e.endless ? 1 : 0, e.struck ? 1 : 0, kenshi::EffectShown(h) ? 1 : 0);
+                out += line;
+            }
+        }
+    }
+    return out;
 }
 
 bool KenshiWorld::ReadInventory(const kc::Handle& h, std::vector<kc::ItemState>& out) {
@@ -732,6 +1094,23 @@ void KenshiWorld::SetRole(bool client, bool active) {
         std::lock_guard<std::mutex> lk(weatherMutex_);
         seenRegions_.clear();
         hostWeather_.clear();
+        hostFx_.clear();
+        fxLive_.clear();
+        fxCenters_.clear();
+        fxCentersAt_ = -1e9;
+        fxStats_ = FxStats{};
+        fxLogged_ = 0;
+        fxOut_ = kc::EffectsMsg{};
+        clientFx_.clear();
+        fxSpawn_.clear();
+        fxPending_.clear();
+        fxHandled_.clear();
+        fxMove_.clear();
+        fxEnd_.clear();
+        fxLiveIds_.clear();
+        fxFullDone_.clear();
+        fxStopped_.clear();
+        fxRebuild_.clear();
     }
     if (!active) controllable_.clear();
 }

@@ -44,6 +44,10 @@ const FunctionSig kFunctions[FnCount] = {
     {"PlayerInterface::recruit", 0x692820, {0x4C, 0x8B, 0xDC, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
     {"PlayerInterface::addTaskNearestSelectedCharacter", 0x7FAE70, {0x40, 0x53, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xEC, 0xC8}},
     {"PlayerInterface::addJobSelectedCharacters", 0x7F5A90, {0x40, 0x53, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x48, 0x8B}},
+    {"EffectHandler::EffectHandler", 0x1034F0, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x83, 0xEC, 0x70}},
+    {"EffectHandler::affectObjects", 0x1020E0, {0x48, 0x8B, 0xC4, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x81, 0xEC, 0x90}},
+    {"EffectHandler::stop", 0x100B00, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xC7, 0x41, 0x58}},
+    {"WeatherRegion::updateWeatherEffects", 0x9DCAF0, {0x48, 0x89, 0x4C, 0x24, 0x08, 0x53, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41}},
 };
 
 namespace {
@@ -1217,6 +1221,190 @@ bool ExpireRegionWeather(void* region) {
     void* inst = nullptr;
     const int32_t zero = 0;
     return region && Rd(region, WR_instance, inst) && inst && Wr(inst, WI_end, zero);
+}
+
+namespace {
+// WeatherRegion: vector<EffectGroup*>
+constexpr uintptr_t WR_effectsBegin = 0x70, WR_effectsEnd = 0x78;
+// EffectGroup: effect GameData, vector<EffectHandler*>, countdown to the next spawn
+constexpr uintptr_t EG_data = 0x8, EG_handlersBegin = 0x20, EG_handlersEnd = 0x28, EG_spawnTimer = 0x40;
+constexpr uintptr_t EG_vSpawn = 0x20;   // bool spawn()
+// EffectHandler
+constexpr uintptr_t EH_pos = 0x24, EH_strength = 0x48, EH_age = 0x54, EH_life = 0x58, EH_endless = 0x5C;
+constexpr uintptr_t EH_vStop = 0x20;    // void stop()
+constexpr uintptr_t EHP_struck = 0x69, EHP_strikeIn = 0x6C;                  // EffectHandlerPoint (lightning)
+constexpr uintptr_t EHW_dir = 0x68, EHW_turnTo = 0x74, EHW_turnIn = 0x80;    // EffectHandlerWandering
+constexpr float kNeverTurn = 1e9f;      // clients' wandering effects turn only when the host's do
+
+thread_local const float* t_effectPos = nullptr;
+
+bool ReadPointerVector(const void* obj, uintptr_t beginOff, uintptr_t endOff, size_t max, std::vector<void*>& out) {
+    out.clear();
+    void** b = nullptr;
+    void** e = nullptr;
+    if (!Rd(obj, beginOff, b) || !Rd(obj, endOff, e) || e < b || size_t(e - b) > max) return false;
+    out.resize(size_t(e - b));
+    return out.empty() || SafeCopy(out.data(), b, out.size() * sizeof(void*));
+}
+
+bool HandlerOfKind(const void* h, kc::EffectKind kind) {
+    return Vtable(h) == Addr(kind == kc::EffectKind::Point ? rva::VtEffectHandlerPoint : rva::VtEffectHandlerWandering);
+}
+
+bool RdVec(const void* p, uintptr_t offset, kc::Vec3& v) {
+    float f[3];
+    if (!Rd(p, offset, f)) return false;
+    v = {f[0], f[1], f[2]};
+    return Finite(v);
+}
+bool WrVec(void* p, uintptr_t offset, const kc::Vec3& v) {
+    const float f[3] = {v.x, v.y, v.z};
+    return Finite(v) && Wr(p, offset, f);
+}
+} // namespace
+
+bool ReadEffectGroups(void* region, std::vector<EffectGroupInfo>& out) {
+    out.clear();
+    std::vector<void*> groups;
+    if (!region || !ReadPointerVector(region, WR_effectsBegin, WR_effectsEnd, 64, groups)) return false;
+    std::vector<std::pair<kc::EffectKind, std::string>> counted;
+    for (void* g : groups) {
+        const uintptr_t vt = Vtable(g);
+        EffectGroupInfo gi;
+        if (vt == Addr(rva::VtEffectGroupPoint)) gi.kind = kc::EffectKind::Point;
+        else if (vt == Addr(rva::VtEffectGroupWandering)) gi.kind = kc::EffectKind::Wandering;
+        else continue;
+        if (!SidAt(g, EG_data, gi.effectSid) || !ReadPointerVector(g, EG_handlersBegin, EG_handlersEnd, 1024, gi.handlers)) continue;
+        gi.group = g;
+        size_t same = 0;
+        for (const auto& c : counted) same += c.first == gi.kind && c.second == gi.effectSid ? 1 : 0;
+        if (same > 255) continue;
+        gi.ordinal = uint8_t(same);
+        counted.emplace_back(gi.kind, gi.effectSid);
+        out.push_back(std::move(gi));
+    }
+    return true;
+}
+
+bool ReadEffect(void* h, kc::EffectKind kind, kc::WeatherEffect& e) {
+    if (!HandlerOfKind(h, kind)) return false;
+    uint8_t endless = 0;
+    bool ok = RdVec(h, EH_pos, e.pos) && Rd(h, EH_strength, e.strength) && Rd(h, EH_age, e.age) && Rd(h, EH_life, e.life) &&
+              Rd(h, EH_endless, endless);
+    e.endless = endless != 0;
+    if (kind == kc::EffectKind::Point) {
+        uint8_t struck = 0;
+        ok = ok && Rd(h, EHP_struck, struck) && Rd(h, EHP_strikeIn, e.strikeIn);
+        e.struck = struck != 0;
+    } else {
+        ok = ok && RdVec(h, EHW_dir, e.dir) && RdVec(h, EHW_turnTo, e.turnTo);
+    }
+    return ok && std::isfinite(e.strength) && std::isfinite(e.age) && std::isfinite(e.life) && std::isfinite(e.strikeIn);
+}
+
+void BlockEffectSpawns(void* group) {
+    const float later = 1e6f;
+    Wr(group, EG_spawnTimer, later);
+}
+
+void* SpawnEffect(void* group, const kc::WeatherEffect& e) {
+    void* fn = VSlot(group, EG_vSpawn);
+    if (!fn || !Finite(e.pos)) return nullptr;
+    std::vector<void*> before, after;
+    if (!ReadPointerVector(group, EG_handlersBegin, EG_handlersEnd, 1024, before)) return nullptr;
+    const float pos[3] = {e.pos.x, e.pos.y, e.pos.z};
+    bool spawned = false;
+    t_effectPos = pos;
+    const bool called = CallBool(fn, group, spawned);
+    t_effectPos = nullptr;
+    if (!called || !spawned || !ReadPointerVector(group, EG_handlersBegin, EG_handlersEnd, 1024, after) || after.size() != before.size() + 1)
+        return nullptr;
+    void* h = after.back();
+    if (!HandlerOfKind(h, e.kind)) return nullptr;
+    // the host's random rolls instead of ours
+    const uint8_t endless = e.endless ? 1 : 0;
+    Wr(h, EH_strength, e.strength); Wr(h, EH_age, e.age); Wr(h, EH_life, e.life); Wr(h, EH_endless, endless);
+    if (e.kind == kc::EffectKind::Point) {
+        const uint8_t struck = e.struck ? 1 : 0;
+        Wr(h, EHP_struck, struck);
+        Wr(h, EHP_strikeIn, e.strikeIn);
+    } else {
+        WrVec(h, EHW_dir, e.dir);
+        WrVec(h, EHW_turnTo, e.turnTo);
+        Wr(h, EHW_turnIn, kNeverTurn);
+    }
+    return h;
+}
+
+bool WriteEffectState(void* h, const kc::EffectState& s) {
+    if (!HandlerOfKind(h, kc::EffectKind::Wandering)) return false;
+    return WrVec(h, EH_pos, s.pos) && WrVec(h, EHW_dir, s.dir) && WrVec(h, EHW_turnTo, s.turnTo) && Wr(h, EHW_turnIn, kNeverTurn);
+}
+
+bool StopEffect(void* h) {
+    if (!HandlerOfKind(h, kc::EffectKind::Point) && !HandlerOfKind(h, kc::EffectKind::Wandering)) return false;
+    void* fn = VSlot(h, EH_vStop);
+    return fn && CallVoid(fn, h);
+}
+
+const float* EffectSpawnPosition() { return t_effectPos; }
+
+bool RegionRebuildingEffects(void* region) {
+    uint8_t dirty = 0;
+    return Rd(region, WR_effectsDirty, dirty) && dirty != 0;
+}
+
+bool EffectShown(void* h) {
+    uint8_t shown = 0;
+    return Rd(h, 0x38, shown) && shown != 0;
+}
+
+void HurryEffectSpawn(void* group) {
+    const float now = 0.0f;
+    Wr(group, EG_spawnTimer, now);
+}
+
+std::string DescribeRegionWeathers(void* region) {
+    constexpr uintptr_t WEATHER_effectsBegin = 0x10, WEATHER_effectsEnd = 0x18, kEffectEntry = 0x18;   // pair<GameData*, TripleInt>
+    auto label = [](void* gd) {
+        std::string sid, name;
+        GameDataSid(gd, sid);
+        ReadGameString(reinterpret_cast<const uint8_t*>(gd) + off::GD_name, name);
+        return sid + " '" + name + "'";
+    };
+    std::vector<void*> seasons;
+    if (!region || !ReadPointerVector(region, WR_seasonsBegin, WR_seasonsEnd, 64, seasons)) return "";
+    std::string out;
+    for (void* season : seasons) {
+        uint32_t count = 0;
+        void** list = nullptr;
+        void* sgd = nullptr;
+        if (!Rd(season, SEASON_data, sgd) || !Rd(season, SEASON_weatherCount, count) || !Rd(season, SEASON_weathers, list) || !list || count > 256)
+            continue;
+        std::string ssid;
+        GameDataSid(sgd, ssid);
+        for (uint32_t i = 0; i < count; ++i) {
+            void* wt = nullptr;
+            void* gd = nullptr;
+            uint8_t* b = nullptr;
+            uint8_t* e = nullptr;
+            if (!Rd(list, i * sizeof(void*), wt) || !Rd(wt, WEATHER_data, gd)) continue;
+            out += "  weather " + label(gd) + " season " + ssid + " effects:";
+            if (Rd(wt, WEATHER_effectsBegin, b) && Rd(wt, WEATHER_effectsEnd, e) && e >= b && size_t(e - b) <= 64 * kEffectEntry)
+                for (uint8_t* q = b; q < e; q += kEffectEntry) {
+                    void* fx = nullptr;
+                    if (Rd(q, 0, fx)) out += " " + label(fx);
+                }
+            out += "\n";
+        }
+    }
+    return out;
+}
+
+void* CameraWeatherRegion() {
+    void* system = nullptr;
+    void* region = nullptr;
+    return Rd(reinterpret_cast<void*>(Addr(rva::WeatherSystem)), 0, system) && system && Rd(system, 0, region) ? region : nullptr;
 }
 
 bool SetRagdoll(Character* c, bool on) {

@@ -99,6 +99,11 @@ public:
     // weather update, which may run on another thread, so ApplyWeather only stores it).
     virtual void ReadWeather(std::vector<RegionWeather>& out) = 0;
     virtual void ApplyWeather(const std::vector<RegionWeather>& regions) = 0;
+    // Weather effects (lightning, storms, gas clouds). Host: what its game placed, moved and
+    // removed since the last call (plus the complete live set when `full`). Client: hand the
+    // host's to the game (applied by the weather update too, so this only stores them).
+    virtual void ReadEffects(EffectsMsg& out, bool full) { out = EffectsMsg{}; (void)full; }
+    virtual void ApplyEffects(const EffectsMsg& m) { (void)m; }
 
     // Inventories. Host: read; execute a client's item movement (false = refused/impossible).
     virtual bool ReadInventory(const Handle& h, std::vector<ItemState>& out) = 0;
@@ -310,6 +315,7 @@ private:
     double nextInvDiff_ = 0;
     std::vector<std::pair<uint8_t, InvOp>> pendingInvOps_;   // host: run on the next live tick
     double weatherForceAt_ = 0;
+    double effectsFullAt_ = 0;
     std::vector<RegionWeather> lastWeather_;
     bool controllableDirty_ = true;
     uint32_t missingSquad_ = 0;

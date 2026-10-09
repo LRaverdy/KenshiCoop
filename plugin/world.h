@@ -62,10 +62,16 @@ public:
     bool ApplyInventory(const kc::Handle& h, const std::vector<kc::ItemState>& items) override;
     void ReadWeather(std::vector<kc::RegionWeather>& out) override;
     void ApplyWeather(const std::vector<kc::RegionWeather>& regions) override;
+    void ReadEffects(kc::EffectsMsg& out, bool full) override;
+    void ApplyEffects(const kc::EffectsMsg& m) override;
     kc::TimeState GetTime() override;
     // Called by the WeatherRegion::updateBT hook (background thread).
     void WeatherRegionTick(void* region, bool afterUpdate);
     size_t ExpireAllWeather();   // tests: every known region rolls a new weather
+    std::string EffectsReport();  // tests: live weather effects per region
+    std::string WeatherGroups();  // tests: each region's weather, effect groups and possible weathers
+    size_t HurryEffects();        // tests: host groups place their next effect now
+    void ForceWeather(const std::string& regionSid, const std::string& seasonSid, const std::string& weatherSid);   // tests (host)
     void SetTime(const kc::TimeState& t) override;
     void HoldForJoin(bool hold) override;
     bool EnsurePlayerCharacter(const std::string& playerName, kc::Handle& out) override;
@@ -138,6 +144,55 @@ private:
     std::mutex weatherMutex_;   // weather is advanced by a game background thread
     std::unordered_map<void*, kc::RegionWeather> seenRegions_;          // host: last state of each region
     std::unordered_map<std::string, kc::RegionWeather> hostWeather_;    // client: what the host has
+    // Weather effects (weather thread and session thread, under weatherMutex_).
+    void HostEffectsTick(void* region, const std::string& regionSid);
+    void ClientEffectsTick(void* region, const std::string& regionSid);
+    struct HostFx {
+        uint32_t id;
+        void* group;
+        kc::EffectKind kind;
+        bool sent;           // near a player: the clients have it
+        double movedAt;      // wandering: state last sent
+        kc::Vec3 turnTo;     //            heading sent with it
+    };
+    std::unordered_map<void*, std::unordered_map<void*, HostFx>> hostFx_;   // host: region -> handler -> effect
+    std::unordered_map<uint32_t, kc::WeatherEffect> fxLive_;                // host: every effect the clients have
+    std::vector<kc::Vec3> fxCenters_;                                       // host: where the players' characters are
+    double fxCentersAt_ = -1e9;
+    struct FxStats {
+        uint64_t placed = 0, failed = 0, noGroup = 0, over = 0, stopped = 0;
+        uint64_t corrections = 0;            // wandering states applied
+        double correctionSum = 0, correctionMax = 0;   // how far our copy was from the host's state then
+    } fxStats_;
+    kc::EffectsMsg fxOut_;                                                  // host: not handed to the session yet
+    uint32_t nextFxId_ = 1;
+    struct ClientFx {
+        void* group;
+        void* handler;
+        std::string regionSid;
+        kc::EffectKind kind;
+        double placedAt;
+        float life;          // when placed
+        kc::WeatherEffect last;   // the host's latest state of it
+    };
+    void FxLog(uint32_t id, const char* what, const ClientFx* c);
+public:
+    void NoteEffectStop(void* handler, uintptr_t callerRva);   // diagnostics (any thread)
+    bool TakeEffectsRebuild(void* region);   // client: the host switched this region's weather (weather thread)
+private:   // first few lifecycle events (tests)
+    uint32_t fxLogged_ = 0;
+    struct PendingFx { kc::WeatherEffect e; double since; };
+    std::unordered_map<uint32_t, ClientFx> clientFx_;                       // client: host id -> our copy
+    std::unordered_map<std::string, std::vector<PendingFx>> fxSpawn_;       // client: region -> to place
+    std::unordered_set<uint32_t> fxPending_, fxHandled_;                    // client: waiting / placed once
+    std::unordered_map<uint32_t, kc::EffectState> fxMove_;                  // client: newest state per effect
+    std::unordered_set<uint32_t> fxEnd_;                                    // client: to stop
+    std::unordered_set<uint32_t> fxLiveIds_;                                // client: host's last complete set
+    uint64_t fxFullGen_ = 0;
+    std::unordered_map<std::string, uint64_t> fxFullDone_;                  // client: region -> set applied
+    std::unordered_map<void*, std::unordered_set<void*>> fxStopped_;        // client: region -> handlers we stopped
+    std::unordered_set<void*> fxRebuild_;                                   // client: regions whose weather we switched
+    std::unordered_map<std::string, std::pair<std::string, std::string>> forcedWeather_;   // tests: region -> season, weather
     std::mutex toastMutex_;
     std::vector<std::string> toasts_;
 

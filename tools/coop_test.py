@@ -170,6 +170,13 @@ def parse_state(path):
                 st[tag][key] = d
             elif tag == "weather":
                 st["weather"][parts[1]] = dict(p.split("=", 1) for p in parts[2:] if "=" in p)
+            elif tag == "fx":
+                d = dict(p.split("=", 1) for p in parts[7:] if "=" in p)
+                d.update(id=int(parts[1]), kind=parts[2], region=parts[3], effect=parts[4], ordinal=parts[5],
+                         pos=tuple(float(x) for x in parts[6].split(",")))
+                st.setdefault("fx", []).append(d)
+            elif tag == "fxstats":
+                st["fxstats"] = dict(p.split("=", 1) for p in parts[1:] if "=" in p)
             elif tag == "entity":
                 d = dict(p.split("=", 1) for p in parts[3:] if "=" in p)
                 d["key"] = parts[2]
@@ -299,6 +306,14 @@ def setup(save, name="Tester"):
     return host, cli
 
 
+def arrange(host, cli):
+    """Cascade the two game windows so both stay reachable on one screen."""
+    for i, pid in enumerate((host, cli)):
+        for hwnd, w, h in windows_of(pid):
+            if w >= 800:
+                user32.SetWindowPos(hwnd, 0, i * 620, i * 300, 0, 0, 0x0001 | 0x0004)   # SWP_NOSIZE | SWP_NOZORDER
+
+
 def frozen_check(host, cli, label, radius=3000):
     """Pause the host (real pause: game speed 0), let the client settle, compare: must be exact."""
     cmd(host, "pause 1")
@@ -406,6 +421,92 @@ def scenario(host, cli, quick=False):
     for r in reports:
         print_report(r)
     return reports
+
+
+def compare_fx(h, c, label):
+    """Weather effects: every effect the host shows near the players must be on the client, same place."""
+    hf = {e["id"]: e for e in h.get("fx", []) if e["id"]}
+    cf = {e["id"]: e for e in c.get("fx", []) if e["id"]}
+    common = sorted(set(hf) & set(cf))
+    errs = sorted(dist(hf[i]["pos"], cf[i]["pos"]) for i in common)
+    by_kind = {}
+    for i in common:
+        k = hf[i]["kind"]
+        by_kind[k] = max(by_kind.get(k, 0), round(dist(hf[i]["pos"], cf[i]["pos"]), 2))
+    r = {
+        "label": label,
+        "host_near": len(hf),
+        "client_mapped": len(cf),
+        "client_unmapped_live": sum(1 for e in c.get("fx", []) if not e["id"] and float(e.get("life", 0)) > 0 and e.get("endless") == "0"),
+        "missing_on_client": sorted(set(hf) - set(cf))[:8],
+        "missing_count": len(set(hf) - set(cf)),
+        "extra_on_client": sorted(set(cf) - set(hf))[:8],
+        "pos_err_max_by_kind": by_kind,
+        "pos_err_p50": round(errs[len(errs) // 2], 2) if errs else 0,
+        "host_stats": h.get("fxstats"),
+        "client_stats": c.get("fxstats"),
+        "effects_host": sorted({(e["kind"], e["effect"]) for e in hf.values()}),
+    }
+    print_report(r)
+    return r
+
+
+def lightning_weathers(pid, camera_only=False):
+    """Regions that can have a weather with a Lightning effect: {region: (seasonSid, weatherSid)}."""
+    path = os.path.abspath(os.path.join(OUT_DIR, f"weathers_{pid}.txt"))
+    cmd(pid, f"weathers {path}")
+    out, region, camera = {}, None, None
+    for line in open(path, encoding="utf-8", errors="replace"):
+        if line.startswith("region "):
+            region = line.split()[1]
+            if " camera " in line:
+                camera = region
+        elif line.strip().startswith("weather ") and "ightning" in line and region and region not in out:
+            words = line.split()
+            out[region] = (words[words.index("season") + 1], words[1])
+    log("camera region:", camera, "can have lightning:", camera in out)
+    return {camera: out[camera]} if camera_only and camera in out else out
+
+
+def exp_fx(host, cli, rounds=6):
+    """Lightning storm everywhere it can happen; bolts forced; host and client compared while paused."""
+    time.sleep(6)
+    storms = lightning_weathers(host)
+    log("regions that can have lightning:", len(storms))
+    for region, (season, weather) in storms.items():
+        cmd(host, f"setweather {region} {season} {weather}")
+    time.sleep(8)   # the new weather reaches the client (every 2 s), effect groups rebuilt on both sides
+    reports = []
+    for i in range(rounds):
+        for _ in range(3):
+            cmd(host, "fxhurry")
+            time.sleep(0.4)
+        time.sleep(0.3 + 0.5 * (i % 3))
+        cmd(host, "pause 1")
+        time.sleep(2.5)
+        h, c = dump(host, f"h_fx{i}", 300), dump(cli, f"c_fx{i}", 300)
+        cmd(host, "pause 0")
+        reports.append(compare_fx(h, c, f"fx round {i + 1}"))
+        log("weather mismatch:", compare(h, c, "w")["weather_mismatch"])
+    worst = max(r["missing_count"] for r in reports)
+    log("fx worst missing:", worst, "max pos err:", max((max(r["pos_err_max_by_kind"].values() or [0]) for r in reports)))
+
+
+def exp_fxlive(host, cli, minutes=3):
+    """Weather effects while the game runs: every effect near the players exists on both sides."""
+    time.sleep(8)
+    worst = 0
+    for i in range(minutes * 6):
+        time.sleep(10)
+        h, c = dump(host, "h_fxlive", 300), dump(cli, "c_fxlive", 300)
+        hf = {e["id"]: e for e in h.get("fx", []) if e["id"]}
+        cf = {e["id"]: e for e in c.get("fx", []) if e["id"]}
+        # an effect may end (or start) between the two dumps: only count those well inside their life
+        missing = [i for i in hf if i not in cf and float(hf[i]["age"]) > 1 and (hf[i]["endless"] == "1" or float(hf[i]["life"]) > 1)]
+        extra = [i for i in cf if i not in hf and float(cf[i]["age"]) > 1 and (cf[i]["endless"] == "1" or float(cf[i]["life"]) > 1)]
+        worst = max(worst, len(missing) + len(extra))
+        log(f"fx live {i + 1}: host {len(hf)} client {len(cf)} missing {missing[:6]} extra {extra[:6]} stats {c.get('fxstats')}")
+    log("fx live worst:", worst)
 
 
 def exp_bodies(host, cli):
@@ -641,6 +742,15 @@ def main():
     t.add_argument("--save", default="kctest_base")
     e = sub.add_parser("bodies")
     e.add_argument("--save", default="kctest_base")
+    fl = sub.add_parser("fxlive")
+    fl.add_argument("--save", default="kctest_base")
+    fl.add_argument("--keep", action="store_true")
+    fl.add_argument("--minutes", type=int, default=3)
+    fx = sub.add_parser("fx")
+    fx.add_argument("--save", default="kctest_base")
+    fx.add_argument("--keep", action="store_true")
+    up = sub.add_parser("up", help="host + joined client, left running for a manual test")
+    up.add_argument("--save", default="kctest_base")
     c = sub.add_parser("cmd")
     c.add_argument("pid", type=int)
     c.add_argument("command", nargs="+")
@@ -649,8 +759,16 @@ def main():
         print(cmd(a.pid, " ".join(a.command)))
         return
     host, cli = setup(a.save)
+    if a.what == "up":
+        arrange(host, cli)
+        log("ready: host", host, "client", cli)
+        return
     try:
-        if a.what == "bodies":
+        if a.what == "fxlive":
+            exp_fxlive(host, cli, a.minutes)
+        elif a.what == "fx":
+            exp_fx(host, cli)
+        elif a.what == "bodies":
             exp_bodies(host, cli)
         elif a.what == "trace":
             exp_trace(host, cli)

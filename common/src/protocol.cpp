@@ -283,7 +283,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::InvOp)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Effects)) return std::nullopt;
     return Msg(t);
 }
 
@@ -482,6 +482,51 @@ uint64_t Fnv1a64(const void* data, size_t n, uint64_t h) {
     const auto* p = static_cast<const uint8_t*>(data);
     for (size_t i = 0; i < n; ++i) { h ^= p[i]; h *= 0x100000001b3ull; }
     return h;
+}
+
+void Encode(Writer& w, const EffectsMsg& m) {
+    w.u8(uint8_t(Msg::Effects));
+    w.boolean(m.full);
+    w.varint(m.spawned.size());
+    for (const auto& e : m.spawned) {
+        w.u32(e.id); w.u8(uint8_t(e.kind)); w.str(e.regionSid); w.str(e.effectSid); w.u8(e.ordinal);
+        PutVec(w, e.pos); w.f32(e.age); w.f32(e.life); w.boolean(e.endless); w.f32(e.strength);
+        if (e.kind == EffectKind::Point) {
+            w.boolean(e.struck); w.f32(e.strikeIn);
+        } else {
+            PutVec(w, e.dir); PutVec(w, e.turnTo);
+        }
+    }
+    w.varint(m.moved.size());
+    for (const auto& s : m.moved) { w.u32(s.id); PutVec(w, s.pos); PutVec(w, s.dir); PutVec(w, s.turnTo); }
+    w.varint(m.ended.size());
+    for (uint32_t id : m.ended) w.u32(id);
+}
+bool Decode(Reader& r, EffectsMsg& m) {
+    m.full = r.boolean();
+    const uint32_t n = r.count(kMaxEffectsPerMsg, 30);
+    m.spawned.resize(n);
+    for (auto& e : m.spawned) {
+        e.id = r.u32();
+        const uint8_t kind = r.u8();
+        if (kind != uint8_t(EffectKind::Point) && kind != uint8_t(EffectKind::Wandering)) return false;
+        e.kind = EffectKind(kind);
+        e.regionSid = r.str(kMaxSidLen); e.effectSid = r.str(kMaxSidLen); e.ordinal = r.u8();
+        e.pos = GetVec(r); e.age = r.f32(); e.life = r.f32(); e.endless = r.boolean(); e.strength = r.f32();
+        if (e.kind == EffectKind::Point) {
+            e.struck = r.boolean(); e.strikeIn = r.f32();
+        } else {
+            e.dir = GetVec(r); e.turnTo = GetVec(r);
+        }
+        if (!r.ok()) return false;
+    }
+    const uint32_t nm = r.count(kMaxEffectsPerMsg, 40);
+    m.moved.resize(nm);
+    for (auto& s : m.moved) { s.id = r.u32(); s.pos = GetVec(r); s.dir = GetVec(r); s.turnTo = GetVec(r); }
+    const uint32_t ne = r.count(kMaxEffectsPerMsg, 4);
+    m.ended.resize(ne);
+    for (auto& id : m.ended) id = r.u32();
+    return Done(r);
 }
 
 } // namespace kc

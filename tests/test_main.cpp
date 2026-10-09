@@ -270,6 +270,15 @@ struct FakeWorld : IWorld {
     std::vector<RegionWeather> weather;
     void ReadWeather(std::vector<RegionWeather>& out) override { out = weather; }
     void ApplyWeather(const std::vector<RegionWeather>& r) override { weather = r; }
+    EffectsMsg fxPending;                  // host: what the game placed/moved/removed since the last read
+    std::vector<WeatherEffect> fxLive;     // host: every live effect
+    std::vector<EffectsMsg> fxApplied;     // client: what arrived from the host
+    void ReadEffects(EffectsMsg& out, bool full) override {
+        out = std::move(fxPending);
+        fxPending = EffectsMsg{};
+        if (full) { out.full = true; out.spawned = fxLive; }
+    }
+    void ApplyEffects(const EffectsMsg& m) override { fxApplied.push_back(m); }
     TimeState GetTime() override { return time; }
     void SetTime(const TimeState& t) override { time = t; }
     void HoldForJoin(bool h) override { holding = h; }
@@ -390,6 +399,29 @@ static void TestWire() {
     }
     CHECK(total == 300);
 
+    EffectsMsg fx; fx.full = true;
+    WeatherEffect bolt; bolt.id = 41; bolt.kind = EffectKind::Point; bolt.regionSid = "r-1"; bolt.effectSid = "lightning"; bolt.ordinal = 1;
+    bolt.pos = {1.5f, -2, 3}; bolt.age = 0.05f; bolt.life = 0.9f; bolt.strength = 2; bolt.strikeIn = 0.05f;
+    WeatherEffect storm; storm.id = 42; storm.kind = EffectKind::Wandering; storm.regionSid = "r-1"; storm.effectSid = "dust"; storm.endless = true;
+    storm.pos = {100, 5, -100}; storm.dir = {1, 0, 0}; storm.turnTo = {0, 0, 1};
+    fx.spawned = {bolt, storm};
+    fx.moved.push_back({42, {101, 5, -100}, {0.7f, 0, 0.7f}, {0, 0, 1}});
+    fx.ended = {40};
+    Writer fw; Encode(fw, fx);
+    Reader fr(fw.data(), fw.size()); CHECK(PeekType(fr) == Msg::Effects);
+    EffectsMsg fx2; CHECK(Decode(fr, fx2));
+    CHECK(fx2.full && fx2.spawned.size() == 2 && fx2.moved.size() == 1 && fx2.ended == std::vector<uint32_t>{40});
+    CHECK(fx2.spawned[0].kind == EffectKind::Point && fx2.spawned[0].ordinal == 1 && fx2.spawned[0].strikeIn == 0.05f &&
+          fx2.spawned[0].pos.y == -2 && fx2.spawned[0].life == 0.9f && fx2.spawned[0].effectSid == "lightning");
+    CHECK(fx2.spawned[1].kind == EffectKind::Wandering && fx2.spawned[1].endless && fx2.spawned[1].turnTo.z == 1 && fx2.spawned[1].pos.x == 100);
+    CHECK(fx2.moved[0].id == 42 && fx2.moved[0].dir.x == 0.7f);
+    {   // an unknown kind is refused
+        std::vector<uint8_t> bad(fw.data(), fw.data() + fw.size());
+        bad[3 + 4] = 9;   // id byte, full, count, u32 id -> kind
+        Reader br(bad.data(), bad.size()); PeekType(br);
+        EffectsMsg fx3; CHECK(!Decode(br, fx3));
+    }
+
     WorldChunk c; c.file = 2; c.path = "zone/zone.1.2.zone"; c.fileSize = 5; c.data = {1, 2, 3};
     Writer cw; Encode(cw, c);
     Reader cr(cw.data(), cw.size()); CHECK(PeekType(cr) == Msg::WorldChunk);
@@ -440,6 +472,10 @@ static void TestFuzz() {
     add([](Writer& w) { WeatherMsg m; m.regions.resize(2); m.regions[0].regionSid = "a"; m.regions[1].weatherSid = "b"; Encode(w, m); });
     add([](Writer& w) { InventoryMsg m; m.netId = 3; m.items.resize(2); for (auto& i : m.items) i.templateSid = "x"; Encode(w, m); });
     add([](Writer& w) { InvOp m; m.fromNetId = 1; m.toNetId = 2; m.item.templateSid = "x"; m.toSection = "main"; Encode(w, m); });
+    add([](Writer& w) {
+        EffectsMsg m; m.spawned.resize(2); m.spawned[1].kind = EffectKind::Wandering; m.spawned[0].regionSid = "r";
+        m.moved.resize(1); m.ended = {3}; Encode(w, m);
+    });
     { VitalsMsg v; v.entities.resize(2); for (auto& e : v.entities) { e.netId = 4; e.parts.resize(3); } seeds.push_back(EncodeVitals(v)[0]); }
     { Snapshot s; s.entities.resize(3); for (auto& e : s.entities) e.netId = 7; seeds.push_back(EncodeSnapshot(s)[0]); }
 
@@ -468,6 +504,7 @@ static void TestFuzz() {
         case Msg::Weather: { WeatherMsg m; Decode(r, m); break; }
         case Msg::Inventory: { InventoryMsg m; Decode(r, m); break; }
         case Msg::InvOp: { InvOp m; Decode(r, m); break; }
+        case Msg::Effects: { EffectsMsg m; Decode(r, m); break; }
         }
     };
     for (int i = 0; i < 300000; ++i) {
@@ -764,6 +801,27 @@ static void TestWorldAuthority() {
     hw.weather[0].weatherSid = "clear"; hw.weather[0].endMinutes = 1200;
     Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return !cw.weather.empty() && cw.weather[0].weatherSid == "clear"; });
     CHECK(!cw.weather.empty() && cw.weather[0].weatherSid == "clear");
+    // weather effects: a bolt the host's game drops reaches the client at once, with the host's spot
+    // and random rolls; a storm's moves follow; removals too; and the complete set comes regularly
+    WeatherEffect bolt; bolt.id = 7; bolt.kind = EffectKind::Point; bolt.regionSid = "biome-1"; bolt.effectSid = "lightning";
+    bolt.pos = {12, 3, 45}; bolt.life = 0.8f; bolt.strikeIn = 0.1f;
+    hw.fxLive = {bolt};
+    hw.fxPending.spawned = {bolt};
+    cw.fxApplied.clear();
+    auto arrived = [&](auto pred) { for (const auto& m : cw.fxApplied) if (pred(m)) return true; return false; };
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return arrived([](const EffectsMsg& m) { return !m.spawned.empty(); }); });
+    CHECK(arrived([](const EffectsMsg& m) {
+        return !m.spawned.empty() && m.spawned[0].id == 7 && m.spawned[0].pos.z == 45 && m.spawned[0].strikeIn == 0.1f && m.spawned[0].effectSid == "lightning";
+    }));
+    hw.fxPending.moved.push_back({9, {5, 0, 5}, {1, 0, 0}, {0, 0, 1}});
+    hw.fxPending.ended = {7};
+    hw.fxLive.clear();
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return arrived([](const EffectsMsg& m) { return !m.ended.empty(); }); });
+    CHECK(arrived([](const EffectsMsg& m) { return m.ended == std::vector<uint32_t>{7} && m.moved.size() == 1 && m.moved[0].id == 9; }));
+    cw.fxApplied.clear();
+    Run({{&host, &hw}, {&cli, &cw}}, 6.0, [&] { return arrived([](const EffectsMsg& m) { return m.full; }); });
+    CHECK(arrived([](const EffectsMsg& m) { return m.full && m.spawned.empty(); }));
+    CHECK(!arrived([](const EffectsMsg& m) { return !m.full && m.empty(); }));   // nothing empty goes out
 
     // melee: the NPC engages squad member 1 on the host; the client's copy engages the same target
     hw.chars[10].fights = 1;

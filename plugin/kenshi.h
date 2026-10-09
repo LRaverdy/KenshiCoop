@@ -22,6 +22,7 @@ inline constexpr uintptr_t HandleTable = 0x2133f90;         // first arg of the 
 inline constexpr uintptr_t GameClockOwner = 0x21303d0;      // pointer; +0xA0 = in-game hours (double)
 inline constexpr uintptr_t SaveUsesUserPath = 0x2133573;    // bool: SaveManager uses userSavePath, else localSavePath
 inline constexpr uintptr_t TradeGui = 0x21337B0;            // the GUI object showTradeWindow() is called on
+inline constexpr uintptr_t WeatherSystem = 0x2128190;       // pointer; +0 = WeatherRegion* where the camera is
 
 inline constexpr uintptr_t VtCharacter = 0x16f9eb8;
 inline constexpr uintptr_t VtCharacterHuman = 0x16f2848;
@@ -33,6 +34,10 @@ inline constexpr uintptr_t VtAI = 0x16fa3e8;
 inline constexpr uintptr_t VtCombatClass = 0x16f6698;
 inline constexpr uintptr_t VtCombatClassAI = 0x16f67b8;
 inline constexpr uintptr_t VtHand = 0x16852d0;
+inline constexpr uintptr_t VtEffectGroupPoint = 0x168be10;        // point effects: lightning, static points
+inline constexpr uintptr_t VtEffectGroupWandering = 0x168be58;    // wandering storms and gas clouds
+inline constexpr uintptr_t VtEffectHandlerPoint = 0x168c0a8;
+inline constexpr uintptr_t VtEffectHandlerWandering = 0x168c128;
 } // namespace rva
 
 struct FunctionSig {
@@ -75,6 +80,10 @@ enum Fn : int {
     FnRecruit,                  // bool PlayerInterface::recruit(Character*, bool editor)
     FnAddTaskNearest,           // void PlayerInterface::addTaskNearestSelectedCharacter(Building*, TaskType, RootObject*, bool shift, const Vector3&, bool noAnimals)
     FnAddJobSelected,           // void PlayerInterface::addJobSelectedCharacters(TaskType, RootObject*, bool shift, bool add, const Vector3&)
+    FnEffectHandlerCtor,        // EffectHandler::EffectHandler(GameData* effect, AreaBiomeGroup*, const Vector3& pos)
+    FnEffectAffectObjects,      // void EffectHandler::affectObjects()   (a weather effect hurts the characters it reaches)
+    FnEffectStop,               // void EffectHandler::stop()            (fades out; removed once faded)
+    FnRegionUpdateEffects,      // void WeatherRegion::updateWeatherEffects()   (replaces the effect groups after a weather change)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -257,6 +266,32 @@ bool SetRagdoll(Character* c, bool on);
 bool ReadRegionWeather(void* region, kc::RegionWeather& out);
 bool WriteRegionWeather(void* region, const kc::RegionWeather& w);   // returns false if ids are unknown here
 bool ExpireRegionWeather(void* region);   // the game rolls a new weather on its next update (tests)
+
+// Weather effects. A weather region owns effect groups (one per effect of its current weather);
+// a point or wandering group spawns effect handlers at random places and times, each one a
+// lightning bolt, a dust storm, a gas cloud... All of this runs on the weather thread.
+struct EffectGroupInfo {
+    void* group = nullptr;
+    kc::EffectKind kind = kc::EffectKind::Point;
+    std::string effectSid;
+    uint8_t ordinal = 0;              // among the region's groups of that kind showing that effect
+    std::vector<void*> handlers;      // live effects, oldest first
+};
+bool ReadEffectGroups(void* region, std::vector<EffectGroupInfo>& out);   // point and wandering groups only
+bool ReadEffect(void* handler, kc::EffectKind kind, kc::WeatherEffect& e);  // fills pos and the state fields
+void BlockEffectSpawns(void* group);   // the group places nothing on its next update
+// Has the group spawn one effect now, at e.pos, with e's random values. Returns the new handler.
+void* SpawnEffect(void* group, const kc::WeatherEffect& e);
+bool WriteEffectState(void* handler, const kc::EffectState& s);   // wandering effects
+bool StopEffect(void* handler);        // fades out, then the game removes it
+// Set only while SpawnEffect runs: the EffectHandler constructor hook builds the effect there.
+const float* EffectSpawnPosition();
+bool EffectShown(void* handler);
+bool RegionRebuildingEffects(void* region);   // its weather just changed: its effect groups are replaced on this update         // the game currently renders it (near enough to the camera)
+void HurryEffectSpawn(void* group);      // tests: the group places its next effect on its next update
+// tests: "<weatherSid> '<name>' [<effectSid> '<name>' kind]..." for every weather of the region's season
+std::string DescribeRegionWeathers(void* region);
+void* CameraWeatherRegion();             // the weather region the camera is in
 bool StandUp(Character* c);   // clears the unconscious flag, leaves ragdoll, normal posture
 
 float GetFrameSpeed();

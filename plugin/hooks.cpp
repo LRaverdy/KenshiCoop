@@ -4,6 +4,8 @@
 
 #include <MinHook.h>
 
+#include <intrin.h>
+
 #include <atomic>
 #include <mutex>
 #include <vector>
@@ -58,6 +60,11 @@ RagdollModeFn o_ragdollMode = nullptr;
 using CreateCharFn = void* (*)(void* factory, void* faction, const float* pos, void* owner, void* data, void* home, float age);
 CreateCharFn o_createChar = nullptr;
 VoidFn o_regionUpdateBT = nullptr;
+using EffectCtorFn = void* (*)(void* self, void* effect, void* biome, const float* pos);
+EffectCtorFn o_effectCtor = nullptr;
+VoidFn o_effectAffect = nullptr;
+VoidFn o_effectStop = nullptr;
+VoidFn o_regionUpdateEffects = nullptr;
 VoidFn o_seasonGetNewWeather = nullptr;
 
 void SafeTick(bool live) {
@@ -264,6 +271,31 @@ void hk_regionUpdateBT(void* region) {
     o_regionUpdateBT(region);
     if (w) w->WeatherRegionTick(region, true);
 }
+// Weather effects: a client places the host's effects (KenshiWorld::WeatherRegionTick) where the
+// host's game put them; the game's spawn code still runs, only the place it chose is replaced.
+void* hk_effectCtor(void* self, void* effect, void* biome, const float* pos) {
+    const float* forced = kenshi::EffectSpawnPosition();
+    return o_effectCtor(self, effect, biome, forced ? forced : pos);
+}
+// What a lightning bolt or a gas cloud does to the characters it reaches is the host's call.
+void hk_effectAffect(void* handler) {
+    if (KenshiWorld::ClientActive() && !g_hostCall) return;
+    o_effectAffect(handler);
+}
+// A client's weather never ends by itself (the host's does, and is then imposed): when the game
+// thinks the current weather is over it still asks to rebuild the effect groups, which would wipe
+// every effect placed for the host. Only a weather switch the host made rebuilds them.
+void hk_regionUpdateEffects(void* region) {
+    if (KenshiWorld::ClientActive())
+        if (KenshiWorld* w = TheWorld(); w && !w->TakeEffectsRebuild(region)) return;
+    o_regionUpdateEffects(region);
+}
+// Diagnostics: who stops the effects a client placed for the host.
+void hk_effectStop(void* handler) {
+    if (KenshiWorld::ClientActive() && !g_hostCall)
+        if (KenshiWorld* w = TheWorld()) w->NoteEffectStop(handler, reinterpret_cast<uintptr_t>(_ReturnAddress()) - kenshi::Base());
+    o_effectStop(handler);
+}
 void hk_seasonGetNewWeather(void* season) {
     if (KenshiWorld::ClientActive() && !g_hostCall) return;
     o_seasonGetNewWeather(season);
@@ -331,6 +363,10 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnCreateRandomCharacter, reinterpret_cast<void*>(&hk_createRandomCharacter), reinterpret_cast<void**>(&o_createChar)},
         {kenshi::FnRegionUpdateBT, reinterpret_cast<void*>(&hk_regionUpdateBT), reinterpret_cast<void**>(&o_regionUpdateBT)},
         {kenshi::FnSeasonGetNewWeather, reinterpret_cast<void*>(&hk_seasonGetNewWeather), reinterpret_cast<void**>(&o_seasonGetNewWeather)},
+        {kenshi::FnEffectHandlerCtor, reinterpret_cast<void*>(&hk_effectCtor), reinterpret_cast<void**>(&o_effectCtor)},
+        {kenshi::FnEffectAffectObjects, reinterpret_cast<void*>(&hk_effectAffect), reinterpret_cast<void**>(&o_effectAffect)},
+        {kenshi::FnEffectStop, reinterpret_cast<void*>(&hk_effectStop), reinterpret_cast<void**>(&o_effectStop)},
+        {kenshi::FnRegionUpdateEffects, reinterpret_cast<void*>(&hk_regionUpdateEffects), reinterpret_cast<void**>(&o_regionUpdateEffects)},
     };
     const MH_STATUS init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {

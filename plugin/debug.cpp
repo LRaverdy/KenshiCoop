@@ -232,6 +232,22 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         return ok ? "ok " + Key(lastSpawned_) : "err call failed";
     }
     if (cmd == "rollweather") return "ok " + std::to_string(w.ExpireAllWeather());
+    if (cmd == "fxhurry") return "ok " + std::to_string(w.HurryEffects());   // fxhurry: every effect group places one now
+    if (cmd == "setweather") {   // setweather <regionSid> <seasonSid> <weatherSid>
+        std::string region, season, weather;
+        in >> region >> season >> weather;
+        if (weather.empty()) return "err usage: setweather <regionSid> <seasonSid> <weatherSid>";
+        w.ForceWeather(region, season, weather);
+        return "ok";
+    }
+    if (cmd == "weathers") {   // weathers <file>: regions, their effect groups and the weathers they can have
+        std::string file;
+        in >> file;
+        std::ofstream o(file, std::ios::trunc);
+        if (!o) return "err cannot write " + file;
+        o << w.WeatherGroups();
+        return "ok";
+    }
     if (cmd == "loot") {   // loot <target> [squadIndex]: what a loot order on a body does on a client
         std::string k;
         size_t idx = 0;
@@ -326,6 +342,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         for (const auto& r : wr)
             o << "weather " << r.regionSid << " season=" << r.seasonSid << " type=" << r.weatherSid << " str=" << r.strength
               << " end=" << r.endMinutes << '\n';
+        o << w.EffectsReport();
         std::vector<kc::Vec3> centers;
         for (const auto& h : SortedSquad(w)) {
             DumpCharacter(o, "squad", w, h);
