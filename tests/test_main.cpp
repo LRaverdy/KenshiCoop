@@ -272,15 +272,52 @@ struct FakeWorld : IWorld {
         for (size_t i = 0; i < a->size(); ++i) {
             ItemState& it = (*a)[i];
             if (!it.sameKind(op.item) || it.quantity < op.item.quantity) continue;
+            // like the game: a slot holds one thing; a pile of the same kind takes more of it
+            ItemState* onto = nullptr;
+            if (op.kind == InvOpKind::Move)
+                for (auto& o : *b)
+                    if (&o != &it && o.section == op.toSection && o.x == op.toX && o.y == op.toY) onto = &o;
+            if (onto && !onto->sameKind(op.item)) { ++invRefusals; return false; }
             ItemState moved = it;
             moved.quantity = op.item.quantity;
             moved.section = op.toSection; moved.x = op.toX; moved.y = op.toY;
-            it.quantity -= op.item.quantity;
-            if (it.quantity == 0) a->erase(a->begin() + ptrdiff_t(i));
-            if (op.kind == InvOpKind::Move) b->push_back(moved);
+            const int qty = op.item.quantity;
+            it.quantity -= qty;
+            if (it.quantity == 0) {
+                if (onto && a == b && onto > &it) --onto;   // the erase shifts it
+                a->erase(a->begin() + ptrdiff_t(i));
+            }
+            if (op.kind == InvOpKind::Move) {
+                if (onto) onto->quantity += qty;
+                else b->push_back(moved);
+            }
             return true;
         }
         return false;
+    }
+    int invRefusals = 0, invSwaps = 0;
+    bool ExecuteInvSwap(const Handle& from, const Handle& to, const InvOp& x, const InvOp& y) override {
+        auto* a = ItemsOf(from);
+        auto* b = ItemsOf(to);
+        if (!a || !b) return false;
+        auto at = [](std::vector<ItemState>& v, const ItemState& want) -> ItemState* {
+            for (auto& i : v)
+                if (i == want) return &i;
+            return nullptr;
+        };
+        ItemState* ia = at(*a, x.item);
+        ItemState* ib = at(*b, y.item);
+        if (!ia || !ib || ia == ib) return false;
+        ia->section = x.toSection; ia->x = x.toX; ia->y = x.toY;
+        ib->section = y.toSection; ib->x = y.toX; ib->y = y.toY;
+        ItemState ma = *ia, mb = *ib;
+        a->erase(a->begin() + (ia - a->data()));
+        ib = at(*b, mb);
+        b->erase(b->begin() + (ib - b->data()));
+        b->push_back(ma);
+        a->push_back(mb);
+        ++invSwaps;
+        return true;
     }
     float DistanceTo(const Handle& who, const Vec3& pos) override {
         auto it = chars.find(who.serial);
@@ -1505,6 +1542,94 @@ static void TestInventories() {
     CHECK(hw.chars[2].items.size() == 2 && cw.chars[2].items == hw.chars[2].items);
 }
 
+// ---- fix G2: swaps, merges and refusals in looting
+static void TestInventorySwaps() {
+    std::printf("session: loot swaps, stack merges, moves into a freed slot, refusals\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    auto item = [](const char* sid, int q, const char* sec, int x, int y) {
+        ItemState i; i.templateSid = sid; i.quantity = q; i.section = sec; i.x = int16_t(x); i.y = int16_t(y); return i;
+    };
+    FakeChar body; body.squad = false; body.pos = {130, 0, 0}; body.dest = body.pos; body.vit.flags = kVitUnconscious;
+    body.items = {item("leather_boots", 1, "boots", 0, 0), item("bread", 2, "main", 1, 0), item("sword", 1, "main", 3, 0)};
+    hw.chars[20] = body;
+    FakeChar guard; guard.squad = false; guard.pos = {140, 0, 0}; guard.dest = guard.pos;   // awake
+    hw.chars[21] = guard;
+    hw.chars[2].items = {item("sandals", 1, "boots", 0, 0), item("bread", 3, "main", 0, 0), item("knife", 1, "weapon", 0, 0)};
+    AtMenu(cw);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 5));
+    host.Assign(FakeWorld::H(2), 2);
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return cw.chars[20].items == hw.chars[20].items && cw.chars[2].items == hw.chars[2].items; });
+    CHECK(cw.chars[20].items == hw.chars[20].items);
+    auto count = [](const std::vector<ItemState>& v, const char* sid) {
+        int n = 0;
+        for (const auto& i : v) n += i.templateSid == sid ? i.quantity : 0;
+        return n;
+    };
+    auto find = [](std::vector<ItemState>& v, const char* sid) -> ItemState& {
+        for (auto& i : v)
+            if (i.templateSid == sid) return i;
+        static ItemState none;
+        return none;
+    };
+    // 1. boots dropped on a character already wearing boots: the game swaps them
+    find(cw.chars[20].items, "leather_boots").templateSid = "sandals";
+    find(cw.chars[2].items, "sandals").templateSid = "leather_boots";
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return count(hw.chars[2].items, "leather_boots") == 1 && cw.chars[2].items == hw.chars[2].items; });
+    CHECK(hw.invSwaps == 1 && hw.invRefusals == 0);
+    CHECK(count(hw.chars[2].items, "leather_boots") == 1 && count(hw.chars[2].items, "sandals") == 0);
+    CHECK(count(hw.chars[20].items, "sandals") == 1 && count(hw.chars[20].items, "leather_boots") == 0);
+    CHECK(find(hw.chars[2].items, "leather_boots").section == "boots" && find(hw.chars[20].items, "sandals").section == "boots");
+    CHECK(cw.chars[2].items == hw.chars[2].items && cw.chars[20].items == hw.chars[20].items);
+    // 2. the body's bread dropped on our bread: one pile of 5 where ours was
+    cw.chars[20].items.erase(std::remove_if(cw.chars[20].items.begin(), cw.chars[20].items.end(), [](const ItemState& i) { return i.templateSid == "bread"; }),
+                             cw.chars[20].items.end());
+    find(cw.chars[2].items, "bread").quantity = 5;
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return count(hw.chars[2].items, "bread") == 5 && cw.chars[2].items == hw.chars[2].items; });
+    CHECK(count(hw.chars[2].items, "bread") == 5 && count(hw.chars[20].items, "bread") == 0);
+    int piles = 0;
+    for (const auto& i : hw.chars[2].items) piles += i.templateSid == "bread";
+    CHECK(piles == 1 && find(hw.chars[2].items, "bread").x == 0);
+    CHECK(cw.chars[2].items == hw.chars[2].items && cw.chars[20].items == hw.chars[20].items);
+    // 3. the knife goes to the bag and the body's sword into the hand it freed, in one go: the
+    //    move that frees the slot runs first, whatever order the diff found them in
+    ItemState& knife = find(cw.chars[2].items, "knife");
+    knife.section = "main"; knife.x = 5; knife.y = 0;
+    ItemState sword = find(cw.chars[20].items, "sword");
+    cw.chars[20].items.erase(std::remove_if(cw.chars[20].items.begin(), cw.chars[20].items.end(), [](const ItemState& i) { return i.templateSid == "sword"; }),
+                             cw.chars[20].items.end());
+    sword.section = "weapon"; sword.x = 0; sword.y = 0;
+    cw.chars[2].items.push_back(sword);
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return count(hw.chars[2].items, "sword") == 1 && cw.chars[2].items == hw.chars[2].items; });
+    CHECK(hw.invRefusals == 0);
+    CHECK(find(hw.chars[2].items, "sword").section == "weapon" && find(hw.chars[2].items, "knife").section == "main");
+    CHECK(count(hw.chars[20].items, "sword") == 0);
+    CHECK(cw.chars[2].items == hw.chars[2].items && cw.chars[20].items == hw.chars[20].items);
+    // 4. putting something on a knocked-out body is allowed (the game allows it)
+    ItemState k2 = find(cw.chars[2].items, "knife");
+    cw.chars[2].items.erase(std::remove_if(cw.chars[2].items.begin(), cw.chars[2].items.end(), [](const ItemState& i) { return i.templateSid == "knife"; }),
+                            cw.chars[2].items.end());
+    k2.x = 7;
+    cw.chars[20].items.push_back(k2);
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return count(hw.chars[20].items, "knife") == 1 && cw.chars[20].items == hw.chars[20].items; });
+    CHECK(count(hw.chars[20].items, "knife") == 1 && count(hw.chars[2].items, "knife") == 0);
+    // 5. ...but not on an awake NPC: refused, the client goes back to the host's state, nothing lost
+    Run({{&host, &hw}, {&cli, &cw}}, 1.0, [&] { return cw.chars[21].items == hw.chars[21].items; });
+    ItemState s2 = find(cw.chars[2].items, "sword");
+    cw.chars[2].items.erase(std::remove_if(cw.chars[2].items.begin(), cw.chars[2].items.end(), [](const ItemState& i) { return i.templateSid == "sword"; }),
+                            cw.chars[2].items.end());
+    s2.section = "main";
+    cw.chars[21].items.push_back(s2);
+    Run({{&host, &hw}, {&cli, &cw}}, 6.0, [&] { return cw.chars[2].items == hw.chars[2].items && cw.chars[21].items == hw.chars[21].items; });
+    CHECK(count(hw.chars[2].items, "sword") == 1 && hw.chars[21].items.empty());
+    CHECK(cw.chars[2].items == hw.chars[2].items && cw.chars[21].items == hw.chars[21].items);
+}
+
 // ---- lot A: doors and locks
 static void TestDoors() {
     std::printf("session: doors and locks near the players follow the host; door buttons go to the host; a locked chest stays shut\n");
@@ -1910,6 +2035,7 @@ int main() {
     TestOwnCharacter();
     TestSpawnReplication();
     TestInventories();
+    TestInventorySwaps();
     TestTrade();
     TestBuildings();
     TestRanged();   // lot C

@@ -653,7 +653,7 @@ void hk_pickup(void* pi, void* item) {
 // Items on the ground belong to the host's world: its pickups and drops are replayed on clients,
 // whose own (for host-driven characters) are refused.
 bool hk_giveItem(void* chr, void* item, bool dropOnFail, bool destroyOnFail) {
-    if (!item || !kenshi::ItemOnGround(item)) return o_giveItem(chr, item, dropOnFail, destroyOnFail);   // inventory to inventory
+    if (!item || !kenshi::ItemLoose(item)) return o_giveItem(chr, item, dropOnFail, destroyOnFail);   // inventory to inventory
     if (KenshiWorld::ClientActive()) {
         if (!g_hostCall && KenshiWorld::View()->replicated.count(chr)) return false;
         return o_giveItem(chr, item, dropOnFail, destroyOnFail);

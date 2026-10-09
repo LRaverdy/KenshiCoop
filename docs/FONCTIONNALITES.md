@@ -264,9 +264,12 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   personnage va chercher l'objet chez l'hôte.
 - Vérifié par les expériences `ground` (objets posés puis ramassés par l'hôte) et `clientpickup`
   (ramassage demandé par un client).
-- 🟡 Un objet qui traînait déjà dans la sauvegarde a un autre handle chez chaque joueur : le client
-  le retrouve par type et endroit (à 15 unités près). C'est implémenté, mais aucun test ne l'a
-  confirmé.
+- 🟡 Un objet qui traînait déjà dans la sauvegarde a un autre handle chez chaque joueur : l'hôte le
+  retrouve par type et endroit, le plus proche à moins de 40 unités, parmi **tous** les objets hors
+  inventaire (marchandises de magasin, objets de décor de la ville, que le jeu range dans un groupe
+  d'objets ou garde non physiques). Puis il donne au perso du client l'ordre « ramasser » du jeu
+  lui-même : le perso y va et le prend, en le volant (avec la réaction des gardes) s'il appartient à
+  quelqu'un. Expérience `groundpick` (à lancer en ville).
 
 ### Inventaires, équipement, fouille des corps ✅
 - **Le joueur** voit le même inventaire et le même équipement partout. Il peut fouiller un
@@ -274,7 +277,15 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   fouille du jeu s'ouvre chez lui.
 - **Fonctionnement** : chaque objet déplacé dans une fenêtre d'inventaire du client devient une
   demande de déplacement (`InvOp`) que l'hôte rejoue. L'hôte refuse de vider un PNJ conscient ou
-  le personnage d'un autre joueur, et renvoie alors l'état réel.
+  le personnage d'un autre joueur, et renvoie alors l'état réel. On peut aussi poser des objets sur
+  un corps K.-O. ou mort, comme dans le jeu.
+  - Un objet lâché sur une case occupée (des bottes sur un perso qui en porte déjà) : le jeu échange
+    les deux objets ; l'hôte reconnaît la paire de déplacements et fait le même échange d'un coup.
+  - Un déplacement qui libère une case passe avant celui qui la remplit (ranger son arme dans le sac
+    puis prendre celle du corps).
+  - Une pile lâchée sur une pile du même objet s'y ajoute chez l'hôte aussi (au lieu d'être posée
+    ailleurs, ce qui faisait « sauter » l'inventaire du client).
+  - Expérience `lootswap`, tests `TestInventorySwaps`.
 - **Limite** : un objet tenu à la souris pendant un glisser-déposer laisse 10 s avant le retour à
   l'état de l'hôte.
 

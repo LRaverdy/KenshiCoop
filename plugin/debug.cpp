@@ -309,12 +309,14 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
     }
     if (cmd == "groundnear") {   // groundnear <radius>: items lying around squad[0]: key template x,y,z;...
         float radius = 500;
-        in >> radius;
+        std::string mode;
+        in >> radius >> mode;
         auto squad = SortedSquad(w);
         kc::Vec3 base;
         if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), base)) return "err no squad";
         std::vector<void*> items;
-        kenshi::GroundItemsNear(base, radius, items);
+        if (mode == "loose") kenshi::LooseItemsNear(base, radius, items);
+        else kenshi::GroundItemsNear(base, radius, items);
         std::string out = "ok " + std::to_string(items.size());
         for (void* it : items) {
             kc::Handle ih;
@@ -1447,6 +1449,32 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         std::string e;
         HostCallScope scope;
         return kenshi::MoveInventoryItem(a, b, op, &e) ? "ok " + op.item.templateSid : "err " + e;
+    }
+    if (cmd == "invswap") {   // invswap <from> <to> <section>: what dropping <from>'s item there on <to>'s (occupied) slot does
+        std::string fromS, toS, sec;
+        in >> fromS >> toS >> sec;
+        auto squad = SortedSquad(w);
+        auto pick = [&](const std::string& s) -> kc::Handle {
+            if (s == "spawned") return lastSpawned_;
+            if (s.rfind("squad", 0) == 0) { size_t i = std::stoul(s.substr(5)); return i < squad.size() ? squad[i] : kc::Handle{}; }
+            kc::Handle h;
+            sscanf(s.c_str(), "%u:%u:%u:%u:%u", &h.type, &h.container, &h.containerSerial, &h.index, &h.serial);
+            return h;
+        };
+        kenshi::Character* a = w.Find(pick(fromS));
+        kenshi::Character* b = w.Find(pick(toS));
+        std::vector<kc::ItemState> ia, ib;
+        if (!a || !b || !kenshi::ReadInventory(a, ia) || !kenshi::ReadInventory(b, ib)) return "err bad characters";
+        auto inSec = [&](const std::vector<kc::ItemState>& v) { return std::find_if(v.begin(), v.end(), [&](const kc::ItemState& i) { return i.section == sec; }); };
+        auto xa = inSec(ia);
+        auto xb = inSec(ib);
+        if (xa == ia.end() || xb == ib.end()) return "err nothing in " + sec + " on both";
+        kc::InvOp opA, opB;
+        opA.item = *xa; opA.toSection = xb->section; opA.toX = xb->x; opA.toY = xb->y;
+        opB.item = *xb; opB.toSection = xa->section; opB.toX = xa->x; opB.toY = xa->y;
+        std::string e;
+        HostCallScope scope;
+        return kenshi::SwapInventoryItems(a, b, opA, opB, &e) ? "ok " + xa->templateSid + " <-> " + xb->templateSid : "err " + e;
     }
     if (cmd == "pause") { int on = 1; in >> on; return kenshi::CallUserPause(on != 0) ? "ok" : "err"; }
     if (cmd == "speed") { float v = 1; in >> v; return kenshi::CallSetFrameSpeed(v) ? "ok" : "err"; }

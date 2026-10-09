@@ -743,6 +743,21 @@ bool CallStartPlayerConversation(Character* npc, Character* pc) {
     return d && IsCharacter(pc) && StartConvSeh(FnAddr(FnDialogueSendEvent), d, pc, result) && result;
 }
 
+namespace {
+bool PickupItemSeh(void* pi, void* item) {
+    __try { reinterpret_cast<void (*)(void*, void*)>(FnAddr(FnPickupItem))(pi, item); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+bool OrderPickupItem(Character* c, void* item) {
+    PlayerInterface* pi = Player();
+    if (!pi || !IsCharacter(c) || !ItemLoose(item)) return false;
+    bool ok = false;
+    WithSelection(c, [&] { ok = PickupItemSeh(pi, item); });
+    return ok;
+}
+
 bool FocusCamera(Character* c) {
     PlayerInterface* pi = Player();
     if (!pi || !IsCharacter(c)) return false;
@@ -2012,39 +2027,78 @@ bool RebuildInventory(void* c, const std::vector<kc::ItemState>& items, std::str
     return ok;
 }
 
+namespace {
+struct Stack { void* item = nullptr; int qty = 0; };
+void ItemPlace(void* it, std::string& sec, int& x, int& y) {
+    int32_t pos[2] = {0, 0};
+    Rd(it, IT_pos, pos);
+    ReadGameString(reinterpret_cast<uint8_t*>(it) + IT_section, sec);
+    x = pos[0];
+    y = pos[1];
+}
+bool ItemKind(void* it, kc::ItemState& s) {
+    void* gd = nullptr;
+    if (!Rd(it, off::RO_data, gd) || !GameDataSid(gd, s.templateSid)) return false;
+    void* mat = nullptr;
+    void* man = nullptr;
+    if (Rd(it, IT_material, mat) && mat) GameDataSid(mat, s.materialSid);
+    if (Rd(it, IT_manufacturer, man) && man) GameDataSid(man, s.manufacturerSid);
+    if (void* fn = VSlot(it, ITEM_getLevel)) CallItemInt(fn, it, s.level);
+    return true;
+}
+// the stack the client moved: same kind, at least that many, preferably at the same place
+Stack FindStack(void* inv, const kc::ItemState& want) {
+    Stack best;
+    for (void* it : InventoryItems(inv)) {
+        kc::ItemState s;
+        if (!ItemKind(it, s) || !s.sameKind(want)) continue;
+        int q = 0, x = 0, y = 0;
+        std::string sec;
+        Rd(it, IT_quantity, q);
+        ItemPlace(it, sec, x, y);
+        const bool samePlace = sec == want.section && x == want.x && y == want.y;
+        if (q >= want.quantity && (!best.item || samePlace)) { best = {it, q}; if (samePlace) break; }
+    }
+    return best;
+}
+// the item lying at that place (its top-left cell) of an inventory, other than `except`
+void* ItemAt(void* inv, const std::string& section, int x, int y, void* except) {
+    for (void* it : InventoryItems(inv)) {
+        std::string sec;
+        int ix = 0, iy = 0;
+        ItemPlace(it, sec, ix, iy);
+        if (it != except && sec == section && ix == x && iy == y) return it;
+    }
+    return nullptr;
+}
+} // namespace
+
 bool MoveInventoryItem(void* from, void* to, const kc::InvOp& op, std::string* err) {
     void* src = InventoryOf(from);
     void* dst = InventoryOf(to);
     if (!src || !dst) { if (err) *err = "no inventory"; return false; }
-    // the stack the client moved: same kind, preferably at the same place
-    void* best = nullptr;
-    int bestQty = 0;
-    std::vector<kc::ItemState> states;
-    for (void* it : InventoryItems(src)) {
-        kc::ItemState s;
-        void* gd = nullptr;
-        if (!Rd(it, off::RO_data, gd) || !GameDataSid(gd, s.templateSid)) continue;
-        void* mat = nullptr;
-        void* man = nullptr;
-        if (Rd(it, IT_material, mat) && mat) GameDataSid(mat, s.materialSid);
-        if (Rd(it, IT_manufacturer, man) && man) GameDataSid(man, s.manufacturerSid);
-        if (void* fn = VSlot(it, ITEM_getLevel)) CallItemInt(fn, it, s.level);
-        if (!s.sameKind(op.item)) continue;
-        int q = 0;
-        int32_t pos[2] = {0, 0};
-        std::string sec;
-        Rd(it, IT_quantity, q);
-        Rd(it, IT_pos, pos);
-        ReadGameString(reinterpret_cast<uint8_t*>(it) + IT_section, sec);
-        const bool samePlace = sec == op.item.section && pos[0] == op.item.x && pos[1] == op.item.y;
-        if (q >= op.item.quantity && (!best || samePlace)) { best = it; bestQty = q; if (samePlace) break; }
-    }
+    const Stack found = FindStack(src, op.item);
+    void* best = found.item;
+    const int bestQty = found.qty;
     if (!best) { if (err) *err = "item not found"; return false; }
     if (op.kind == kc::InvOpKind::Drop) {
         void* fn = VSlot(src, INVV_drop);
         return fn && CallPtrArg2(fn, src, best);
     }
     const int qty = std::min(op.item.quantity, bestQty);
+    // dropped on a stack of the same kind: it joins that stack, as the client's game showed it (only
+    // for what surely stacks, a pile of two or more: two single swords trade places instead)
+    if (void* onto = ItemAt(dst, op.toSection, op.toX, op.toY, best)) {
+        kc::ItemState k;
+        int have = 0;
+        if (ItemKind(onto, k) && k.sameKind(op.item) && Rd(onto, IT_quantity, have) && have > 0 && (have > 1 || qty > 1)) {
+            CallRemoveDestroy(VSlot(src, INVV_removeAutoDestroy), src, best, qty);
+            const int sum = have + qty;
+            Wr(onto, IT_quantity, sum);
+            if (err) err->clear();
+            return true;
+        }
+    }
     void* moving = CallRemoveReturns(VSlot(src, INVV_removeDontDestroy), src, best, qty);
     if (!moving) { if (err) *err = "cannot take the item"; return false; }
     // Only cells we checked are free: the game's addItem could destroy the item when it finds no
@@ -2054,6 +2108,39 @@ bool MoveInventoryItem(void* from, void* to, const kc::InvOp& op, std::string* e
     if (!PlaceItem(src, moving, op.item.section, op.item.x, op.item.y, qty, false)) PlaceItem(src, moving, op.item.section, op.item.x, op.item.y, qty);
     if (err) *err = "no room";
     return false;
+}
+
+bool SwapInventoryItems(void* from, void* to, const kc::InvOp& a, const kc::InvOp& b, std::string* err) {
+    void* ia = InventoryOf(from);
+    void* ib = InventoryOf(to);
+    if (!ia || !ib) { if (err) *err = "no inventory"; return false; }
+    const Stack sa = FindStack(ia, a.item);
+    const Stack sb = FindStack(ib, b.item);
+    // whole stacks only, and really where the client saw them (else it is not this swap)
+    if (!sa.item || !sb.item || sa.item == sb.item || sa.qty != a.item.quantity || sb.qty != b.item.quantity) { if (err) *err = "not the same items here"; return false; }
+    std::string sec;
+    int x = 0, y = 0;
+    ItemPlace(sb.item, sec, x, y);
+    if (sec != a.toSection || x != a.toX || y != a.toY) { if (err) *err = "the slot holds something else here"; return false; }
+    void* ma = CallRemoveReturns(VSlot(ia, INVV_removeDontDestroy), ia, sa.item, sa.qty);
+    if (!ma) { if (err) *err = "cannot take the first item"; return false; }
+    void* mb = CallRemoveReturns(VSlot(ib, INVV_removeDontDestroy), ib, sb.item, sb.qty);
+    if (!mb) {
+        if (!PlaceItem(ia, ma, a.item.section, a.item.x, a.item.y, sa.qty, false)) PlaceItem(ia, ma, a.item.section, a.item.x, a.item.y, sa.qty);
+        if (err) *err = "cannot take the second item";
+        return false;
+    }
+    const bool okA = PlaceItem(ib, ma, a.toSection, a.toX, a.toY, sa.qty, false);
+    if (!okA) {   // both back home, as they were
+        if (!PlaceItem(ib, mb, b.item.section, b.item.x, b.item.y, sb.qty, false)) PlaceItem(ib, mb, b.item.section, b.item.x, b.item.y, sb.qty);
+        if (!PlaceItem(ia, ma, a.item.section, a.item.x, a.item.y, sa.qty, false)) PlaceItem(ia, ma, a.item.section, a.item.x, a.item.y, sa.qty);
+        if (err) *err = "no room for the first item";
+        return false;
+    }
+    // the second where the client put it, else anywhere it fits in that inventory, never lost
+    if (!PlaceItem(ia, mb, b.toSection, b.toX, b.toY, sb.qty, false) && !PlaceItem(ia, mb, a.item.section, a.item.x, a.item.y, sb.qty, false))
+        PlaceItem(ia, mb, b.toSection, b.toX, b.toY, sb.qty);
+    return true;
 }
 
 namespace {
@@ -2995,6 +3082,11 @@ bool ItemOnGround(void* item) {
            CallBool(fn, item, physical) && physical;
 }
 
+bool ItemLoose(void* item) {
+    uint8_t inInv = 1;
+    return item && !IsCharacter(item) && Rd(item, IT_inInventoryFlag, inInv) && inInv == 0;
+}
+
 bool DescribeGroundItem(void* item, kc::Handle& h, kc::ItemState& s, kc::Vec3& pos) {
     float p[3];
     void* fn = VSlot(item, IV_getPosition);
@@ -3098,7 +3190,20 @@ void AllObjectsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out) 
     }
 }
 
+namespace {
+void ItemsNearIf(const kc::Vec3& pos, float radius, std::vector<void*>& out, bool (*keep)(void*));
+} // namespace
+
 void GroundItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out) {
+    ItemsNearIf(pos, radius, out, [](void* o) { return !IsCharacter(o) && ItemOnGround(o); });
+}
+
+void LooseItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out) {
+    ItemsNearIf(pos, radius, out, [](void* o) { return ItemLoose(o); });
+}
+
+namespace {
+void ItemsNearIf(const kc::Vec3& pos, float radius, std::vector<void*>& out, bool (*keep)(void*)) {
     out.clear();
     void* zm = nullptr;
     if (!Rd(reinterpret_cast<void*>(Addr(kZoneManagerPtr)), 0, zm) || !zm) return;
@@ -3110,10 +3215,11 @@ void GroundItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out)
     if (SehGetObjects(reinterpret_cast<uint8_t*>(zm) + ZM_objectGrid, pt, radius, &lk))
         for (uint32_t i = 0; i < lk.count && i < 100000; ++i) {
             void* o = nullptr;
-            if (Rd(lk.data, i * sizeof(void*), o) && o && !IsCharacter(o) && ItemOnGround(o)) out.push_back(o);
+            if (Rd(lk.data, i * sizeof(void*), o) && o && keep(o)) out.push_back(o);
         }
     if (lk.data) reinterpret_cast<FnDelete>(Addr(kGameDelete))(lk.data);
 }
+} // namespace
 
 bool DestroyItem(void* item) {
     constexpr uintptr_t IV_deactivate = 0x238;   // out of the world first, as a pickup does

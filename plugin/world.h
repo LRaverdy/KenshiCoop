@@ -165,6 +165,7 @@ public:
     void TakeLocalOrders(std::vector<std::pair<kc::Handle, kc::Command>>& out) override;
     bool ReadInventory(const kc::Handle& h, std::vector<kc::ItemState>& out) override;
     bool ExecuteInvOp(const kc::Handle& from, const kc::Handle& to, const kc::InvOp& op) override;
+    bool ExecuteInvSwap(const kc::Handle& from, const kc::Handle& to, const kc::InvOp& a, const kc::InvOp& b) override;
     bool ApplyInventory(const kc::Handle& h, const std::vector<kc::ItemState>& items) override;
     void ReadWeather(std::vector<kc::RegionWeather>& out) override;
     void ApplyWeather(const std::vector<kc::RegionWeather>& regions) override;

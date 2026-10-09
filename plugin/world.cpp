@@ -1079,11 +1079,14 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
         return ok;
     }
     case kc::CommandKind::PickUp: {
-        // the item the client meant: same thing lying there
+        // the item the client meant: same thing lying there. Not only "ground" items in the strict
+        // sense: shop goods and town clutter sit in item groups or are non-physical props, and the
+        // client's copy may be some way off the host's (positions drift), so: any loose item of
+        // that kind, the nearest within 40 units.
         std::vector<void*> around;
-        kenshi::GroundItemsNear(cmd.pos, 30.0f, around);
+        kenshi::LooseItemsNear(cmd.pos, 60.0f, around);
         void* item = nullptr;
-        float best = 15.0f;
+        float best = 40.0f;
         kc::Handle itemHandle;
         for (void* it : around) {
             kc::Handle ih;
@@ -1093,7 +1096,16 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
             const float d = Dist(p, cmd.pos);
             if (d < best) { best = d; item = it; itemHandle = ih; }
         }
-        if (!item) return false;
+        if (!item) {
+            Log("client pick up: no %s within 40 units of the spot (%zu loose items around)", TemplateName(cmd.itemSid).c_str(), around.size());
+            return false;
+        }
+        // the game's own order, as when the host clicks: it walks there and takes it, stealing it
+        // (with the guards' reaction) when it is someone's. Our own walk-and-take stays as fallback.
+        if (kenshi::OrderPickupItem(c, item)) {
+            Log("client pick up: the game's pick up order given (%.0f units from the client's spot)", best);
+            return true;
+        }
         pickups_[h] = {itemHandle, NowSeconds() + 30.0};
         return CallPlayerMoveOrder(c, cmd.pos);
     }
@@ -1278,7 +1290,7 @@ void KenshiWorld::UpdatePendingPickups() {
         kc::Vec3 cp, ip;
         kc::Handle ih;
         kc::ItemState st;
-        if (!c || !item || !kenshi::ItemOnGround(item) || now > it->second.until || !kenshi::DescribeGroundItem(item, ih, st, ip)) {
+        if (!c || !item || !kenshi::ItemLoose(item) || now > it->second.until || !kenshi::DescribeGroundItem(item, ih, st, ip)) {
             it = pickups_.erase(it);
             continue;
         }
@@ -1685,9 +1697,9 @@ void KenshiWorld::ApplyGround(const kc::GroundEvent& e) {
         // the same item here (from the shared save), or the copy we made when the host dropped it
         auto a = groundAlias_.find(e.item);
         void* item = kenshi::ResolveItem(a != groundAlias_.end() ? a->second : e.item);
-        if (!item || !kenshi::ItemOnGround(item)) {   // an item from the save: same thing at the same spot
+        if (!item || !kenshi::ItemLoose(item)) {   // an item from the save: same thing at the same spot
             std::vector<void*> around;
-            kenshi::GroundItemsNear(e.pos, 30.0f, around);
+            kenshi::LooseItemsNear(e.pos, 30.0f, around);
             float best = 15.0f;
             for (void* it : around) {
                 kc::Handle ih;
@@ -1698,7 +1710,7 @@ void KenshiWorld::ApplyGround(const kc::GroundEvent& e) {
                 if (d < best) { best = d; item = it; }
             }
         }
-        const bool onGround = item && kenshi::ItemOnGround(item);
+        const bool onGround = item && kenshi::ItemLoose(item);
         const bool gone = onGround && kenshi::DestroyItem(item);
         Log("host picked up item %u:%u: %s", e.item.index, e.item.serial,
             gone ? "removed here" : !item ? "we do not have it" : !onGround ? "not on the ground here" : "could not remove it");
@@ -2034,6 +2046,18 @@ bool KenshiWorld::ExecuteInvOp(const kc::Handle& from, const kc::Handle& to, con
     }
     Log("client item move refused: %s (%s x%d)", err.c_str(), op.item.templateSid.c_str(), op.item.quantity);
     return false;
+}
+
+bool KenshiWorld::ExecuteInvSwap(const kc::Handle& from, const kc::Handle& to, const kc::InvOp& a, const kc::InvOp& b) {
+    void* x = InventoryHolder(from);
+    void* y = InventoryHolder(to);
+    if (!x || !y) return false;
+    std::string err;
+    HostCallScope scope;
+    const bool ok = kenshi::SwapInventoryItems(x, y, a, b, &err);
+    Log("client item swap %s: %s <-> %s (%s %d,%d)%s%s", ok ? "done" : "not possible", a.item.templateSid.c_str(), b.item.templateSid.c_str(),
+        a.toSection.c_str(), a.toX, a.toY, ok ? "" : ": ", err.c_str());
+    return ok;
 }
 
 bool KenshiWorld::ApplyInventory(const kc::Handle& h, const std::vector<kc::ItemState>& items) {

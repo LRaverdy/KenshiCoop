@@ -224,7 +224,7 @@ void Session::HostTick(double now, bool live) {
 
     for (auto& [from, c] : pendingCommands_) ApplyCommand(from, c);
     pendingCommands_.clear();
-    for (auto& [from, op] : pendingInvOps_) HostInvOp(from, op);
+    HostInvOps();
     if (!pendingInvOps_.empty()) nextInventory_ = 0;   // show the result right away
     pendingInvOps_.clear();
     for (const auto& a : pendingAnswers_) world_.DialogAnswer(a.dialogId, a.index);
@@ -1469,23 +1469,81 @@ void Session::SendInventories(double now, bool force, PeerId onlyTo) {
 // A client player may move items out of its own characters and, like the game allows, out of
 // NPCs that are knocked out or dead, into its own characters. Never out of a conscious NPC (it
 // still uses its gear) nor out of another player's characters.
-void Session::HostInvOp(uint8_t from, const InvOp& op) {
+namespace {
+// `first` empties the place `later` fills
+bool FreesPlaceFor(const InvOp& first, const InvOp& later) {
+    return first.kind == InvOpKind::Move && later.kind == InvOpKind::Move && first.fromNetId == later.toNetId &&
+           first.item.section == later.toSection && first.item.x == later.toX && first.item.y == later.toY;
+}
+// Reorder so a move into a place another move empties comes after it (cycles keep their order).
+template <class Get>
+void FreeingFirst(std::vector<size_t>& idx, Get get) {
+    for (size_t guard = 0; guard < idx.size() * idx.size() + 1; ++guard) {
+        bool moved = false;
+        for (size_t i = 0; i < idx.size() && !moved; ++i)
+            for (size_t j = i + 1; j < idx.size() && !moved; ++j)
+                if (FreesPlaceFor(get(idx[j]), get(idx[i])) && !FreesPlaceFor(get(idx[i]), get(idx[j]))) {
+                    std::rotate(idx.begin() + ptrdiff_t(i), idx.begin() + ptrdiff_t(j), idx.begin() + ptrdiff_t(j) + 1);
+                    moved = true;
+                }
+        if (!moved) return;
+    }
+}
+} // namespace
+
+// One round of a client's moves. Moves dropped on an occupied slot come as a pair (the item that
+// arrived, the one it pushed out to where the first came from): those run as one swap, the only way
+// both can land. The rest run so that a move into a place another move frees comes after it.
+void Session::HostInvOps() {
+    std::vector<std::pair<uint8_t, InvOp>>& ops = pendingInvOps_;
+    std::vector<bool> done(ops.size(), false);
+    auto isSwap = [](const InvOp& a, const InvOp& b) {
+        return a.kind == InvOpKind::Move && b.kind == InvOpKind::Move && !a.traderNetId && !b.traderNetId && a.fromNetId == b.toNetId &&
+               a.toNetId == b.fromNetId && a.toSection == b.item.section && a.toX == b.item.x && a.toY == b.item.y;
+    };
+    for (size_t i = 0; i < ops.size(); ++i) {
+        if (done[i]) continue;
+        for (size_t j = i + 1; j < ops.size(); ++j) {
+            if (done[j] || ops[j].first != ops[i].first) continue;
+            const InvOp& a = ops[i].second;
+            const InvOp& b = ops[j].second;
+            if (!isSwap(a, b) && !isSwap(b, a)) continue;
+            if (isSwap(a, b)) HostInvOp(ops[i].first, a, &b);
+            else HostInvOp(ops[i].first, b, &a);
+            done[i] = done[j] = true;
+            break;
+        }
+    }
+    std::vector<size_t> order;
+    for (size_t i = 0; i < ops.size(); ++i)
+        if (!done[i]) order.push_back(i);
+    FreeingFirst(order, [&](size_t i) -> const InvOp& { return ops[i].second; });
+    for (size_t i : order) HostInvOp(ops[i].first, ops[i].second);
+}
+
+void Session::HostInvOp(uint8_t from, const InvOp& op, const InvOp* swapWith) {
     if (op.traderNetId) { HostTradeOp(from, op); return; }
     auto src = entities_.find(op.fromNetId);
     if (src == entities_.end()) return;
-    EntityState st;
-    EntityVitals v;
-    const bool srcDown = (world_.Read(src->second.handle, st) && (st.flags & (kFlagDown | kFlagDead)) != 0) ||
-                         (world_.ReadVitals(src->second.handle, v) && (v.flags & (kVitUnconscious | kVitDead)) != 0);
-    const bool srcOpen = src->second.container && src->second.openBy.count(from);
-    const bool srcOk = (src->second.squad && src->second.owner == from) || (!src->second.squad && !src->second.container && srcDown) || srcOpen;
+    auto isDown = [&](const Entity& e) {
+        EntityState st;
+        EntityVitals v;
+        return (world_.Read(e.handle, st) && (st.flags & (kFlagDown | kFlagDead)) != 0) ||
+               (world_.ReadVitals(e.handle, v) && (v.flags & (kVitUnconscious | kVitDead)) != 0);
+    };
+    // what this player may take from and put into: its own characters, a container it opened, an
+    // NPC knocked out or dead (the game lets one strip a body and also put things on it)
+    auto mayTouch = [&](const Entity& e) {
+        return (e.squad && e.owner == from) || (e.container && e.openBy.count(from)) || (!e.squad && !e.container && isDown(e));
+    };
+    const bool srcOk = mayTouch(src->second);
     if (op.kind == InvOpKind::Drop) {
         if (src->second.owner == from) world_.ExecuteInvOp(src->second.handle, src->second.handle, op);
         src->second.invHash = 0;
         return;
     }
     auto dst = entities_.find(op.toNetId);
-    const bool dstOk = dst != entities_.end() && ((dst->second.squad && dst->second.owner == from) || (dst->second.container && dst->second.openBy.count(from)));
+    const bool dstOk = dst != entities_.end() && mayTouch(dst->second);
     // Taking from a container that is not ours is stealing: the game decides, on the host, like it
     // does for its own player (crime, the owners may notice).
     if (dstOk && srcOk && src->second.container && !dst->second.container) {
@@ -1506,9 +1564,21 @@ void Session::HostInvOp(uint8_t from, const InvOp& op) {
         if (theft == 1) log_("[" + who + "] steals " + world_.TemplateName(op.item.templateSid) + " (unseen)");
     }
     if (!dstOk || !srcOk) {
-        log_("refused an inventory move from player " + std::to_string(from));
+        log_("refused an inventory move from player " + std::to_string(from) + ": " + op.item.templateSid + " " +
+             (srcOk ? "" : dst == entities_.end() ? "(unknown destination) " : "(may not take from there) ") + (dstOk ? "" : "(may not put there)"));
         src->second.invHash = 0;   // resend the true state so the client's prediction is undone
         if (dst != entities_.end()) dst->second.invHash = 0;
+        return;
+    }
+    if (swapWith) {
+        // both ways are between the same two inventories, both already allowed above
+        if (!world_.ExecuteInvSwap(src->second.handle, dst->second.handle, op, *swapWith)) {
+            // not a real swap here (the host's places differ): one after the other, the outgoing first
+            world_.ExecuteInvOp(dst->second.handle, src->second.handle, *swapWith);
+            world_.ExecuteInvOp(src->second.handle, dst->second.handle, op);
+        }
+        src->second.invHash = 0;
+        dst->second.invHash = 0;
         return;
     }
     world_.ExecuteInvOp(src->second.handle, dst->second.handle, op);
@@ -1720,6 +1790,15 @@ void Session::ClientInventoryDiff(double now) {
         if (touchable(id)) continue;
         const bool moved = std::any_of(ops.begin(), ops.end(), [&](const InvOp& op) { return op.fromNetId == id || op.toNetId == id; });
         if (auto it = entities_.find(id); it != entities_.end() && !moved) { it->second.invDirty = true; it->second.invUnmatchedSince = 0; }
+    }
+    // A move into a place another move empties is sent after it (the host runs them in order).
+    {
+        std::vector<size_t> idx(ops.size());
+        for (size_t i = 0; i < idx.size(); ++i) idx[i] = i;
+        FreeingFirst(idx, [&](size_t i) -> const InvOp& { return ops[i]; });
+        std::vector<InvOp> sorted;
+        for (size_t i : idx) sorted.push_back(ops[i]);
+        ops.swap(sorted);
     }
     // The price our trade window counted goes with the first purchase or sale of this round.
     bool priced = false;
