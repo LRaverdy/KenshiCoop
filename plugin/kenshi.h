@@ -321,6 +321,7 @@ int BuildingFunctionOf(void* building);              // BuildingFunction (9 BF_S
 // An open inventory window (trade, loot) is about `obj` (its character or object): it must close
 // before `obj` goes away (the window keeps a raw pointer to it).
 bool InventoryWindowShows(const void* obj);
+bool ReadOperatorCount(void* useable, uint64_t& n);  // characters using a bed, a chair, a machine (UseableStuff operator set size)
 // tests: the items of the open trade window's merchant side (or the player side), and a right click
 // on one of them (one unit goes to the other side, bought or sold the game's own way)
 struct WindowItem { std::string section; int x = 0, y = 0; kc::ItemState state; };

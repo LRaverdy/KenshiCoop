@@ -79,6 +79,10 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `kosquad` | des membres de l'escouade K.-O. chez l'hôte tombent et restent au sol chez le client, puis se relèvent ensemble |
 | `far` | le personnage du client à environ 5 km de l'escouade de l'hôte : l'hôte simule-t-il bien sa zone, et le client voit-il la même chose ? |
 | `squads` | nouvelles escouades et déplacements entre escouades, depuis l'hôte et depuis le client |
+| `stuck` | la copie d'un PNJ poussée dans un mur ou sous le sol chez le client revient où l'hôte l'a |
+| `farnpc` | écart des PNJ qui marchent loin de l'escouade du client |
+| `beds` (`kctest_town`) | le perso du client dort dans le lit libre le plus proche, puis mine |
+| `tpdown` | TP admin du perso du client mis K.-O. |
 | `talk` | un PNJ parle au personnage du client : la conversation tourne chez l'hôte, la fenêtre s'ouvre chez le client |
 | `progress` | compétences, argent, bulles et ordres : l'hôte décide, le client suit |
 | `ground` / `clientpickup` | objets posés et ramassés ; ramassage demandé par un client |
@@ -255,6 +259,10 @@ l'escouade triée par handle.
 | `containerreq <sélection> <nom>` | clic droit sur le contenant le plus proche de ce nom |
 | `contake <sélection> <nom>` | dans la fenêtre ouverte, prend le premier objet |
 | `contcount <nom\|any>` | piles dans le contenant le plus proche de ce nom |
+| `robuststats` | (client) personnages débloqués d'un mur et PNJ lointains replacés depuis le dernier appel |
+| `strand <dx> <dy> <dz>` | (client) déplace la copie locale du PNJ le plus proche (dans un mur, sous le sol) |
+| `bedreq <i>` | ce membre seul reçoit l'ordre de dormir dans le lit libre le plus proche (tâche 258) |
+| `minereq <i>` | ce membre seul reçoit l'ordre d'exploiter la mine la plus proche (tâche 87) |
 | `tradegui` | type de fenêtre de commerce en attente dans l'interface (0 = aucune) |
 
 **Météo**

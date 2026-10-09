@@ -294,8 +294,16 @@ private:   // first few lifecycle events (tests)
     std::unordered_map<kc::Handle, double, kc::HandleHash> taskDropAt_;   // client: when its local tasks were last dropped
     float syncMaxErr_ = 0;      // client: largest correction since the last report
 public:
-    uint64_t masterCorrections = 0, masterChecks = 0;   // tests: animation clock corrections on clients
+    uint64_t masterCorrections = 0, masterChecks = 0;   // tests: animation clock corrections on clients (fighting and fallen characters not counted)
+    uint64_t stuckFixes = 0, farSnaps = 0;               // tests (client): characters freed from a wall / far walkers put back on the host's path
 private:
+    struct Stuck { double since = 0; float bestErr = 0; };
+    std::unordered_map<kc::Handle, Stuck, kc::HandleHash> stuck_;          // client: no progress toward the host's position since
+    std::unordered_map<kc::Handle, double, kc::HandleHash> farSnapAt_;     // client: last time a far walker was put back
+    float NearestSquadDistance(const kc::Vec3& p);                         // client: how far from our squad (far: the game moves it rarely)
+    struct ReRagdoll { kc::Handle h; double at; };
+    std::vector<ReRagdoll> reRagdoll_;                                     // host: teleported bodies to lay down again
+    void UpdateReRagdolls();
     std::unordered_map<kc::Handle, float, kc::HandleHash> syncErr_;   // client: last error per standing character
     double nextPauseTry_ = 0;
     bool pauseRefusedLogged_ = false;

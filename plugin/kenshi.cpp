@@ -2198,6 +2198,13 @@ Character* NpcTrader() {
     return IsCharacter(c) ? static_cast<Character*>(c) : nullptr;
 }
 
+bool ReadOperatorCount(void* useable, uint64_t& n) {
+    constexpr uintptr_t US_operatorCount = 0x3E0;   // UseableStuff: std::set<hand> of operators (+0x3D0), size
+    // only UseableStuff has the set: furniture with a function other than none / fluff
+    const int f = BuildingFunctionOf(useable);
+    return f > 0 && f != 18 && Rd(useable, US_operatorCount, n) && n < 64;
+}
+
 int BuildingFunctionOf(void* building) {
     void* fn = building && !IsCharacter(building) ? VSlot(building, 0x2F0) : nullptr;   // Building::getSpecialFunction
     int v = -1;

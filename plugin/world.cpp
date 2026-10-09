@@ -109,6 +109,7 @@ void KenshiWorld::EndFrame() {
     }
     if (active_ && client_ && live_ && !pendingLoot_.empty()) UpdatePendingLoot();
     if (active_ && !client_ && live_ && !pickups_.empty()) UpdatePendingPickups();
+    if (active_ && !client_ && live_ && !reRagdoll_.empty()) UpdateReRagdolls();
     auto v = std::make_shared<HookView>();
     v->active = active_;
     v->client = client_;
@@ -124,6 +125,12 @@ void KenshiWorld::EndFrame() {
     }
     v->gameSpeed = kenshi::GetFrameSpeed();
     if (active_ && client_) {
+        // fighting and fallen characters play the host's combat and fall animations: their master
+        // clock is still corrected, but not counted (the tests measure walking cycles)
+        std::unordered_set<const void*> busy;
+        for (const auto& [h, st] : lastTarget_)
+            if (st.combatTarget || (st.flags & (kc::kFlagDown | kc::kFlagDead)))
+                if (kenshi::Character* c = Find(h)) busy.insert(c);
         for (auto it = animTargets_.begin(); it != animTargets_.end();) {
             if (nowView - it->second->sampledAt > 1.0 || !v->replicated.count(it->first)) { it = animTargets_.erase(it); continue; }
             if (void* ac = kenshi::AnimationOf(it->first)) {
@@ -139,8 +146,10 @@ void KenshiWorld::EndFrame() {
                 d -= std::round(d);
                 // far off: jump; a little off: ease a tenth of the way per frame (invisible); close: ours
                 const float jump = std::min(0.35f, 0.15f * std::max(1.0f, v->gameSpeed));
-                ++masterChecks;
-                masterCorrections += std::fabs(d) > jump;
+                if (!busy.count(it->first)) {
+                    ++masterChecks;
+                    masterCorrections += std::fabs(d) > jump;
+                }
                 float t = mine;
                 if (std::fabs(d) > jump) t = want;
                 else if (std::fabs(d) > 0.01f) t = mine + d * 0.1f;
@@ -313,6 +322,14 @@ bool KenshiWorld::ReadyToFall(const kc::Handle& h, kenshi::Character* c, const k
     lastDest_.erase(h);
     it->second.lastMove = now;
     return false;
+}
+
+float KenshiWorld::NearestSquadDistance(const kc::Vec3& p) {
+    float best = 1e9f;
+    kc::Vec3 q;
+    for (const auto& [h, c] : squad_)
+        if (kenshi::GetPosition(c, q)) best = std::min(best, Dist(p, q));
+    return best;
 }
 
 bool KenshiWorld::Exists(const kc::Handle& h) {
@@ -515,6 +532,7 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     // host's did (see ReadyToFall).
     if (hostDown || hostDead || localDown) {
         lastDest_.erase(h);
+        stuck_.erase(h);
         return;
     }
 
@@ -528,6 +546,41 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         kenshi::Teleport(c, target.pos, target.rot);
         lastDest_.erase(h);
         return;
+    }
+    // Stuck: a wall, a closed door or another floor between our copy and the host's position (an
+    // NPC shut in a house here while it fights outside on the host): neither the locomotion nor the
+    // pull below gets it there. No progress for a second: put it exactly where the host has it.
+    if (!(haveHostTime_ && hostTime_.paused)) {
+        const float stuckErr = 3.0f * std::max(1.0f, haveHostTime_ ? hostTime_.speed : 1.0f);
+        Stuck& sk = stuck_[h];
+        if (err > stuckErr) {
+            if (sk.since == 0 || err < sk.bestErr * 0.8f) {
+                sk.since = now;
+                sk.bestErr = err;
+            } else if (now - sk.since > 1.0) {
+                kenshi::Teleport(c, target.pos, target.rot);
+                lastDest_.erase(h);
+                ++stuckFixes;
+                Log("stuck: %s made no progress toward the host's position for 1 s (%.1f units off%s): put there", KeyOf(h).c_str(), err,
+                    latest.combatTarget ? ", fighting" : "");
+                sk = Stuck{};
+                return;
+            }
+        } else {
+            sk = Stuck{};
+        }
+        // Far from our squad the game moves a character only a few times per second and keeps its
+        // own idea of where it is (writes do not stick): put it back on the host's position a few
+        // times a second instead of pulling.
+        if (err > 1.0f && NearestSquadDistance(local) > 300.0f) {
+            double& at = farSnapAt_[h];
+            if (now - at > 0.25) {
+                at = now;
+                kenshi::Teleport(c, target.pos, target.rot);
+                lastDest_.erase(h);
+                ++farSnaps;
+            }
+        }
     }
     // The game's own locomotion animates the character (walking toward the host's destination)...
     const bool hostMoving = (latest.flags & kc::kFlagMoving) != 0;
@@ -844,14 +897,44 @@ void KenshiWorld::ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& 
 int KenshiWorld::TeleportCharacters(const std::vector<kc::Handle>& who, const kc::Vec3& to) {
     int n = 0;
     HostCallScope scope;
+    std::vector<kenshi::Character*> all;
     for (const auto& h : who) {
         kenshi::Character* c = FindSquad(h);
         kc::Quat rot;
         if (!c || !kenshi::GetRotation(c, rot)) continue;
+        // on someone's shoulder: put down first (the carrier stays where it is)
+        if (all.empty()) kenshi::ActiveCharacters(all);
+        for (kenshi::Character* other : all) {
+            kc::Handle carried;
+            if (other != c && kenshi::ReadCarried(other, carried) && carried == h) {
+                kenshi::DropCarried(other);
+                Log("tp: %s was carried: put down first", KeyOf(h).c_str());
+                break;
+            }
+        }
+        // the engine does not move an active ragdoll: the body gets up, moves, and lies down again
+        // a moment later (a ragdoll started right after a teleport would be thrown away)
+        const bool body = kenshi::IsRagdoll(c);
+        if (body) kenshi::SetRagdoll(c, false);
         const kc::Vec3 p{to.x + 6.0f * float(n + 1), to.y + 2.0f, to.z + 4.0f};
-        if (kenshi::Teleport(c, p, rot)) ++n;
+        if (kenshi::Teleport(c, p, rot)) {
+            ++n;
+            if (body) reRagdoll_.push_back({h, NowSeconds() + 0.5});
+            Log("tp: %s moved%s", KeyOf(h).c_str(), body ? " (it was lying on the ground)" : "");
+        }
     }
     return n;
+}
+
+void KenshiWorld::UpdateReRagdolls() {
+    const double now = NowSeconds();
+    HostCallScope scope;
+    for (auto it = reRagdoll_.begin(); it != reRagdoll_.end();) {
+        if (now < it->at) { ++it; continue; }
+        kenshi::Character* c = FindSquad(it->h);
+        if (c && (kenshi::IsUnconscious(c) || kenshi::IsDead(c)) && !kenshi::IsRagdoll(c)) kenshi::SetRagdoll(c, true);
+        it = reRagdoll_.erase(it);
+    }
 }
 
 bool KenshiWorld::ReadProgress(const kc::Handle& h, std::vector<float>& stats, uint16_t& modes, uint8_t& style) {
@@ -889,7 +972,10 @@ void KenshiWorld::ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) {
     // Already on the ground: only the state is missing. Sleep, hunger and blood loss knock out
     // without a timer, and what keeps them going on the host (its AI tasks) does not run here, so
     // the local medical update would wake them at once: impose the host's state.
-    if (faints && (kenshi::IsRagdoll(c) || kenshi::IsDown(c))) {
+    // In a bed or a cage (sleep knocks out too), or carried (on a shoulder: IsRagdoll): the state
+    // only, never a fall that would throw it out of there.
+    int inside = 0;
+    if (faints && (kenshi::IsRagdoll(c) || kenshi::IsDown(c) || (kenshi::ReadInSomething(c, inside) && inside != 0))) {
         kenshi::SetUnconscious(c, true);
         return;
     }
@@ -962,8 +1048,21 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
             }
             return found;
         };
+        // a handle resolved here may name another object than on the client: it must be of the
+        // kind the client named, where the client saw it
+        auto sameThing = [](void* o, const std::string& sid, const kc::Vec3& at) {
+            if (!o || sid.empty() || kenshi::IsCharacter(o)) return o != nullptr;
+            std::string s;
+            kc::Vec3 p;
+            return kenshi::ObjectTemplate(o, s) && s == sid && kenshi::ObjectPosition(o, p) && Dist(p, at) < 40.0f;
+        };
         void* subject = kenshi::ResolveObject(cmd.subject);
         void* building = kenshi::ResolveObject(cmd.building);
+        if (subject && !sameThing(subject, cmd.itemSid, cmd.subjectPos)) {
+            Log("client task %d: its subject handle names another object here", cmd.task);
+            subject = nullptr;
+        }
+        if (building && !sameThing(building, cmd.buildingSid, cmd.buildingPos)) building = nullptr;
         if (cmd.subject.valid() && !subject && !cmd.itemSid.empty()) {
             subject = byKindAndPlace(cmd.itemSid, cmd.subjectPos);
             Log("client task %d: subject %sfound by kind and place", cmd.task, subject ? "" : "NOT ");

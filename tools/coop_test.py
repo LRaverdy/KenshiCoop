@@ -1035,6 +1035,110 @@ def own_index(pid):
     return len(keys) - 1
 
 
+def exp_stuck(host, cli):
+    """An NPC's copy shut in a wall / under the floor on the client only: the client must notice it
+    makes no progress and put it back where the host has it (within ~2 s)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(2)
+    cmd(cli, "robuststats")
+    for dx, dy, dz, label in ((6, 0, 0, "dans un mur"), (0, -4, 0, "sous le sol"), (8, 0, 8, "en diagonale")):
+        t = cmd(cli, f"strand {dx} {dy} {dz}")
+        log("client strands an NPC copy", label, t)
+        if not t[0]:
+            continue
+        key = t[1].split()[1]
+        time.sleep(3)
+        ph, pc = cmd(host, f"where {key}"), cmd(cli, f"where {key}")
+        e = dist(vec_of(ph[1]), vec_of(pc[1])) if ph[0] and pc[0] else 999
+        check(f"bloque : PNJ ramene chez le client ({label})", e < 1.5, f"{e:.2f}")
+    log("client robuststats:", cmd(cli, "robuststats")[1])
+    summary()
+
+
+def exp_farnpc(host, cli):
+    """Walking NPCs far from the client's squad (the game moves them rarely): how far the client's copy
+    is from the host's, sampled during a few seconds."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(2)
+    cmd(cli, "robuststats")
+    worst, n = 0.0, 0
+    for _ in range(6):
+        time.sleep(1.5)
+        h, c = dump(host, "hfar"), dump(cli, "cfar")
+        sq = [v["pos"] for v in c["squad"].values() if "pos" in v]
+        for k, hv in h["char"].items():
+            cv = c["char"].get(k)
+            if not cv or "pos" not in hv or "pos" not in cv or not (int(hv.get("flags", "0")) & 1) or int(hv.get("flags", "0")) & 12:
+                continue
+            if not sq or min(dist(cv["pos"], q) for q in sq) < 300:
+                continue
+            n += 1
+            worst = max(worst, dist(hv["pos"], cv["pos"]))
+    log("client robuststats:", cmd(cli, "robuststats")[1])
+    check("PNJ lointains : position chez le client (pire ecart < 3 unites)", n > 0 and worst < 3.0, f"{worst:.2f} sur {n} echantillons")
+    summary()
+
+
+def exp_beds(host, cli):
+    """A client player's character is ordered to sleep in the nearest free bed, then to mine: the host runs
+    both, everyone sees the character there."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(2)
+    own = own_index(host)
+    r = cmd(cli, f"bedreq {own}")
+    log("client: sleep in a bed", r)
+    ins = "?"
+    for _ in range(40):
+        time.sleep(1)
+        ins = cmd(host, f"insomething {own}")[1]
+        if ins == "ok 1":
+            break
+    check("lit : le perso du client se couche chez l'hote", ins == "ok 1", f"{r[1]} | {ins}")
+    time.sleep(2)
+    e = dist(vec(cmd(host, f"where {own}")[1]), vec(cmd(cli, f"where {own}")[1]))
+    check("lit : meme position chez le client", e < 1.0, f"{e:.2f}")
+    r = cmd(cli, f"minereq {own}")
+    log("client: mine", r)
+    if r[0]:
+        time.sleep(25)
+        hl = host_log()
+        check("mine : l'ordre est execute chez l'hote", "client task 87" in hl and "run for a character: ok" in hl, r[1])
+        e = dist(vec(cmd(host, f"where {own}")[1]), vec(cmd(cli, f"where {own}")[1]))
+        check("mine : meme position chez le client", e < 1.0, f"{e:.2f}")
+    summary()
+
+
+def exp_tpdown(host, cli):
+    """Admin TP of the client's character while it lies knocked out: it moves next to the host's squad
+    member 0, lies down again there, and the client sees it there."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(2)
+    own = own_index(host)
+    cmd(host, "moverel 0 200 0")
+    time.sleep(10)
+    cmd(host, f"kosquad {own}")
+    time.sleep(4)
+    log("tp", cmd(host, "tpplayer 2"))
+    time.sleep(5)
+    p0, pc = vec(cmd(host, "where 0")[1]), vec(cmd(host, f"where {own}")[1])
+    pcc = vec(cmd(cli, f"where {own}")[1])
+    check("TP admin (perso a terre) : il arrive pres de l'hote", dist(p0, pc) < 30, f"{dist(p0, pc):.1f}")
+    check("TP admin (perso a terre) : le client le voit au meme endroit", dist(pc, pcc) < 3, f"{dist(pc, pcc):.2f}")
+    summary()
+
+
+def vec_of(t):
+    return tuple(map(float, t.split()[1].split(",")))
+
+
+def vec(t):
+    return vec_of(t)
+
+
 def exp_suite(host, cli):
     """Every feature in one session: PASS / FAIL per point."""
     time.sleep(6)
@@ -1109,6 +1213,11 @@ def exp_suite(host, cli):
     def yaw(f):
         x, _, z = map(float, f.split(","))
         return math.degrees(math.atan2(x, z))
+    def body_yaw(v):   # the body's rotation (what players see): forward of the quaternion w,x,y,z
+        if "rot" not in v:
+            return yaw(v["face"])
+        w, x, y, z = map(float, v["rot"].split(","))
+        return math.degrees(math.atan2(2 * (x * z + w * y), 1 - 2 * (x * x + y * y)))
     for speed in (1, 3):
         cmd(host, f"speed {speed}")
         time.sleep(1)
@@ -1122,10 +1231,11 @@ def exp_suite(host, cli):
                 h, c = dump(host, "hs"), dump(cli, "cs")
                 k = sorted(h["squad"])[idx]
                 hv, cv = h["char"][k], c["char"][k]
-                if not (int(hv["flags"]) & 1) or int(hv["flags"]) & 4:
+                # walking only: a fight (raiders passing by) turns and staggers characters on purpose
+                if not (int(hv["flags"]) & 1) or int(hv["flags"]) & 12 or hv.get("combat") or cv.get("combat"):
                     continue
                 samples += 1
-                worst = max(worst, abs((yaw(hv["face"]) - yaw(cv["face"]) + 540) % 360 - 180))
+                worst = max(worst, abs((body_yaw(hv) - body_yaw(cv) + 540) % 360 - 180))
         st = cmd(cli, "animstats")[1].split()
         corr, checks = int(st[1]), max(1, int(st[2]))
         check(f"vitesse {speed} : orientation en marchant (pire ecart <= 30 deg)", samples > 0 and worst <= 30, f"{worst:.0f} deg sur {samples}")
@@ -1517,6 +1627,10 @@ def main():
     td.add_argument("--save", default="kctest_town")
     td.add_argument("--keep", action="store_true")
     td.add_argument("--merchant", default="Marchand", help="part of the merchant's name ('_' for spaces)")
+    for name in ("stuck", "farnpc", "beds", "tpdown"):
+        e2 = sub.add_parser(name)
+        e2.add_argument("--save", default="kctest_town" if name == "beds" else "kctest_base")
+        e2.add_argument("--keep", action="store_true")
     tk = sub.add_parser("talk")
     tk.add_argument("--save", default="kctest_base")
     tk.add_argument("--keep", action="store_true")
@@ -1614,6 +1728,14 @@ def main():
             exp_facing(host, cli)
         elif a.what == "talk":
             exp_talk(host, cli)
+        elif a.what == "stuck":
+            exp_stuck(host, cli)
+        elif a.what == "farnpc":
+            exp_farnpc(host, cli)
+        elif a.what == "beds":
+            exp_beds(host, cli)
+        elif a.what == "tpdown":
+            exp_tpdown(host, cli)
         elif a.what == "trade":
             exp_trade(host, cli, a.merchant)
         elif a.what == "progress":

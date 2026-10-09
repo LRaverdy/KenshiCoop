@@ -109,6 +109,10 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
 - **Mesuré** : personnages immobiles exacts à 0,01 unité près (1 unité ≈ 10 cm).
 
 ### Orientation ✅ (vitesse 1) — 🟡 (vitesse 3)
+- La suite compare maintenant la rotation du corps (ce que voient les joueurs) et ignore les
+  échantillons en combat ou à terre : l'échec à 178° venait d'un personnage pris dans l'attaque des
+  pillards. Le compteur de l'horloge d'animation ne compte plus les personnages en combat ou à
+  terre (leur horloge est toujours corrigée).
 - **Le joueur** voit un personnage qui marche regarder dans le même sens que chez l'hôte. Ce
   bug, signalé par les amis, est corrigé.
 - **Fonctionnement** : le client impose la direction de l'hôte :
@@ -134,6 +138,17 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
 - **Mesures** : horloge corrigée sur 1 image sur 15 000 à vitesse 1 (suite de 19 h 05 : 2 sur
   14 466). À vitesse 3, 168 sur 17 882 à 19 h 05, mais 4 % à 19 h 34, pendant le combat.
 
+### PNJ bloqué chez le client (mur, porte, autre étage) 🟡 implémenté, à vérifier en jeu
+- **Le joueur** ne voit plus un PNJ coincé dans une maison chez lui alors qu'il se bat dehors chez
+  l'hôte.
+- **Fonctionnement** : le client suit la progression de chaque personnage vers la position de
+  l'hôte. Si l'écart reste au-dessus de 3 unités (× la vitesse du jeu) sans diminuer d'au moins
+  20 % pendant 1 s (un mur, une porte fermée ou un autre étage bloque la marche et le rappel), il
+  le téléporte exactement à la position de l'hôte, combat compris. Les personnages à terre ne sont
+  pas concernés (ragdoll). Ligne de journal `stuck: ... put there`.
+- Test : expérience `stuck` (la copie d'un PNJ est poussée dans un mur ou sous le sol chez le
+  client seulement).
+
 ### Combat au corps à corps ✅ — désynchro signalée 🟡
 - **Le joueur** voit chaque combattant attaquer la même cible que chez l'hôte. Les coups sont
   animés localement, l'issue (blessures, KO, mort) vient de l'hôte.
@@ -143,6 +158,8 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   était dehors chez l'hôte. Pas encore reproduit ni corrigé.
 
 ### Santé, K.-O., mort ✅ (un correctif en cours 🔧)
+- Un personnage dans un lit ou une cage (le sommeil est un K.-O.) reçoit seulement l'état
+  inconscient chez le client, jamais la chute qui le sortirait de là ; idem s'il est porté.
 - **Le joueur** voit chaque blessure de membre, saignement, faim, K.-O. et mort comme chez l'hôte.
   Un personnage tombe là où celui de l'hôte est tombé.
 - **Fonctionnement** :
@@ -229,8 +246,10 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   - ✅ déplacement (expérience `four`), porter et ordres permanents (suite), ramasser (expérience
     `clientpickup`) ;
   - 🟡 arrêt (pas de test dédié) ;
-  - 🟡 dormir dans un lit : le chemin de test n'a pas permis de le vérifier, même un personnage
-    de l'hôte ne s'y couche pas dans la ville de test ;
+  - 🟡 dormir dans un lit et miner : l'hôte vérifie maintenant que le handle envoyé par le client
+    désigne bien un objet du même type au même endroit (sinon il le cherche par type et endroit :
+    un handle de meuble peut désigner un autre objet chez l'hôte). Test : expérience `beds`
+    (lit libre le plus proche, puis mine), commandes `bedreq` et `minereq` ;
   - 🟡 miner ou utiliser une machine (bug signalé par les amis, corrigé depuis par la recherche
     « type + endroit ») ;
   - 🟡 les autres ordres.
@@ -304,7 +323,11 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   personnage.
 - Vérifié par la suite.
 
-### Téléportation admin (« TP vers moi ») ✅
+### Téléportation admin (« TP vers moi ») ✅ — perso à terre ou porté 🟡 implémenté, à vérifier en jeu
+- Un personnage à terre (K.-O.) est désormais déplacé aussi : il quitte le ragdoll, est téléporté,
+  puis se recouche 0,5 s plus tard s'il est toujours inconscient (un ragdoll lancé juste après une
+  téléportation serait projeté). Un personnage porté par quelqu'un est d'abord posé.
+- Test : expérience `tpdown`.
 - **L'hôte** dispose d'un bouton « TP vers moi » par joueur, ou de la commande
   `tp <id> [vers <id>]`. Les personnages du joueur arrivent à côté du personnage sélectionné de
   l'hôte (ou de ceux d'un autre joueur) : pratique pour débloquer quelqu'un.
@@ -384,6 +407,13 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   refusent ces changements.
 - Celles de l'hôte ne sont pas encore envoyées : elles restent celles de la sauvegarde jusqu'au
   prochain « Resync ».
+
+### Précision des PNJ lointains 🟡 implémenté, à vérifier en jeu
+- Loin de l'escouade du client (plus de 300 unités), le jeu ne déplace un personnage que quelques
+  fois par seconde et garde sa propre idée de sa position : le rappel progressif n'y tient pas. Le
+  client le replace donc sur la position de l'hôte (téléportation) jusqu'à 4 fois par seconde dès
+  qu'il s'en écarte de plus d'1 unité.
+- Test : expérience `farnpc` (pire écart des marcheurs lointains, objectif < 3 unités).
 
 ### Joueurs éloignés, précision des PNJ lointains 🟡
 - Avec `interest_radius=0` (défaut), l'hôte réplique **chaque** personnage actif de son jeu, où
