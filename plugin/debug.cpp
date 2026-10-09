@@ -289,6 +289,18 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         if (idx >= squad.size() || !item) return "err no such squad member or item";
         return kenshi::CallGiveItem(w.FindSquad(squad[idx]), item) ? "ok" : "err giveItem refused";
     }
+    if (cmd == "pickupreq") {   // pickupreq <squadIndex> <itemSid> <x,y,z>: what a client's "pick up" click sends
+        size_t idx = 0;
+        std::string sid, at;
+        in >> idx >> sid >> at;
+        auto squad = SortedSquad(w);
+        kc::Command c;
+        c.kind = kc::CommandKind::PickUp;
+        c.itemSid = sid;
+        if (idx >= squad.size() || sscanf(at.c_str(), "%f,%f,%f", &c.pos.x, &c.pos.y, &c.pos.z) != 3) return "err usage";
+        w.QueueLocalOrder(squad[idx], c);
+        return "ok";
+    }
     if (cmd == "groundnear") {   // groundnear <radius>: items lying around squad[0]: key template x,y,z;...
         float radius = 500;
         in >> radius;

@@ -668,6 +668,25 @@ def exp_ground(host, cli):
         log("  client after pickup:", cmd(cli, f"ground {key}"), "| host:", cmd(host, f"ground {key}"))
 
 
+def exp_clientpickup(host, cli):
+    """The client asks to pick up an item: its character walks there, the item leaves the ground everywhere."""
+    time.sleep(8)
+    log("give", cmd(host, "give 2 0"))
+    time.sleep(2)
+    ok, text = cmd(host, "drop 1")
+    log("host drop", text)
+    key, tpl, pos = text.split()[1], text.split()[2], text.split()[3]
+    time.sleep(2)
+    log("client sees:", cmd(cli, f"ground {key}"))
+    log("client asks squad0 to pick it up:", cmd(cli, f"pickupreq 0 {tpl} {pos}"))
+    for i in range(12):
+        time.sleep(2)
+        h, c = cmd(host, f"ground {key}")[1], cmd(cli, f"ground {key}")[1]
+        log(f"  t+{2 * (i + 1)}s host: {h} | client: {c}")
+        if "absent" in c or "not-on-ground" in c:
+            break
+
+
 def exp_bodies(host, cli):
     """Where does a knocked-out body lie on each side, over time, for each body mode?"""
     time.sleep(6)
@@ -901,6 +920,9 @@ def main():
     t.add_argument("--save", default="kctest_base")
     e = sub.add_parser("bodies")
     e.add_argument("--save", default="kctest_base")
+    cp = sub.add_parser("clientpickup")
+    cp.add_argument("--save", default="kctest_base")
+    cp.add_argument("--keep", action="store_true")
     gr = sub.add_parser("ground")
     gr.add_argument("--save", default="kctest_base")
     gr.add_argument("--keep", action="store_true")
@@ -935,7 +957,9 @@ def main():
         log("ready: host", host, "client", cli)
         return
     try:
-        if a.what == "ground":
+        if a.what == "clientpickup":
+            exp_clientpickup(host, cli)
+        elif a.what == "ground":
             exp_ground(host, cli)
         elif a.what == "animframe":
             exp_animframe(host, cli)

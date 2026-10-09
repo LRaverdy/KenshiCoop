@@ -100,6 +100,7 @@ enum Fn : int {
     FnAnimGuardUpper,           // void AnimationClass::setCombatModeUpperIdle(bool)
     FnSingleAnimUpdate,         // void AnimationClassBase::SingleAnimation::update(float masterTime, float frameTime, bool sounds)
     FnRunAnimationLayer,        // void AnimationClass::runAnimation(AnimationData*, float speed, AnimationLayerEnum, float blend)
+    FnPickupItem,               // void PlayerInterface::pickupItem(Item*)   (the player's "pick up" order)
     FnGiveItem,                 // bool Character::giveItem(Item*, bool dropOnFail, bool destroyOnFail)   (pickups go through it)
     FnDropItemHuman,            // void CharacterHuman::dropItem(RootObject*)
     FnCreateScreenLabel,        // ScreenLabel* ForgottenGUI::createScreenLabel(const std::string&, const Colour&, LabelSize, RisingSpeed)

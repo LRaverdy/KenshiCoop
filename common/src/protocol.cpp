@@ -203,15 +203,17 @@ void Encode(Writer& w, const Command& m) {
     w.u8(uint8_t(m.kind));
     PutVec(w, m.pos);
     w.boolean(m.run);
+    if (m.kind == CommandKind::PickUp) w.str(m.itemSid);
 }
 bool Decode(Reader& r, Command& m) {
     m.seq = GetU32Var(r);
     m.netId = GetU32Var(r);
     const uint8_t k = r.u8();
-    if (k < 1 || k > 2) return false;
+    if (k < 1 || k > 3) return false;
     m.kind = CommandKind(k);
     m.pos = GetVec(r);
     m.run = r.boolean();
+    if (m.kind == CommandKind::PickUp) m.itemSid = r.str(kMaxSidLen);
     return Done(r) && m.netId != 0;
 }
 

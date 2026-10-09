@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 15;
+constexpr uint16_t kProtocolVersion = 16;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -186,6 +186,7 @@ struct Snapshot {
 enum class CommandKind : uint8_t {
     MoveTo = 1,  // walk/run to `pos`
     Stop = 2,
+    PickUp = 3,  // take the item `itemSid` lying at `pos`
 };
 struct Command {
     uint32_t seq = 0;
@@ -193,6 +194,7 @@ struct Command {
     CommandKind kind = CommandKind::MoveTo;
     Vec3 pos;
     bool run = false;
+    std::string itemSid;   // PickUp
 };
 
 struct TimeState {

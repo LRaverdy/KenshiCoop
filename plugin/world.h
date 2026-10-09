@@ -118,6 +118,7 @@ public:
 
     // Called from hooks (game thread).
     void QueueLocalOrder(const kc::Handle& h, const kc::Command& c);
+    void UpdatePendingPickups();   // host: characters walking to an item a client asked them to take
     // Client: the local player wants `looter` (one of its characters) to loot `target`, a knocked-out
     // or dead character. It walks there through the host; the loot window opens once it is close.
     void RequestLoot(const kc::Handle& looter, kenshi::Character* target);
@@ -228,7 +229,9 @@ private:   // first few lifecycle events (tests)
     std::unordered_map<kenshi::Character*, void*> lastFloater_;
     std::mutex groundMutex_;
     std::vector<kc::GroundEvent> groundOut_;                                // host: not sent yet
-    std::unordered_map<kc::Handle, kc::Handle, kc::HandleHash> groundAlias_;   // client: host item -> our copy             // client: last damage number shown on each               // client: "<char>|<anim>" -> last attempt
+    std::unordered_map<kc::Handle, kc::Handle, kc::HandleHash> groundAlias_;   // client: host item -> our copy
+    struct PendingPickup { kc::Handle item; double until; };
+    std::unordered_map<kc::Handle, PendingPickup, kc::HandleHash> pickups_;   // host: character -> item it goes to take             // client: last damage number shown on each               // client: "<char>|<anim>" -> last attempt
     std::mutex toastMutex_;
     std::vector<std::string> toasts_;
 

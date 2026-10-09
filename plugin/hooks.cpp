@@ -65,6 +65,8 @@ CreateLabelFn o_createLabel = nullptr;
 using GiveItemFn = bool (*)(void* chr, void* item, bool dropOnFail, bool destroyOnFail);
 using DropItemFn = void (*)(void* chr, void* item);
 GiveItemFn o_giveItem = nullptr;
+using PickupFn = void (*)(void* pi, void* item);
+PickupFn o_pickup = nullptr;
 DropItemFn o_dropItem = nullptr;
 LabelTrackFn o_labelTrack = nullptr;
 LabelColorFn o_labelColor = nullptr;
@@ -294,6 +296,33 @@ void hk_medKnockout(void* med, float skill01) {
 void hk_collapse(void* med, bool medic, bool agony) {
     if (KenshiWorld::ClientActive() && !g_hostCall) return;
     o_collapse(med, medic, agony);
+}
+// A client's "pick up" goes to the host: the nearest selected character of ours walks there and the
+// host's game takes it (the pickup then reaches everyone like any other).
+void hk_pickup(void* pi, void* item) {
+    auto v = KenshiWorld::View();
+    if (g_hostCall || !v->active || !v->client) return o_pickup(pi, item);
+    kc::Handle ih;
+    kc::ItemState st;
+    kc::Vec3 at;
+    KenshiWorld* w = TheWorld();
+    if (!w || !item || !kenshi::DescribeGroundItem(item, ih, st, at)) return;
+    const SelectionInfo s = ClassifySelection(*v);
+    kc::Handle best;
+    float bestD = 1e30f;
+    for (const auto& h : s.mine) {
+        kc::Vec3 p;
+        kenshi::Character* c = w->Find(h);
+        if (!c || !kenshi::GetPosition(c, p)) continue;
+        const float d = (p.x - at.x) * (p.x - at.x) + (p.z - at.z) * (p.z - at.z);
+        if (d < bestD) { bestD = d; best = h; }
+    }
+    if (!best.valid()) { if (s.foreign) ToastForeign(); return; }
+    kc::Command c;
+    c.kind = kc::CommandKind::PickUp;
+    c.pos = at;
+    c.itemSid = st.templateSid;
+    w->QueueLocalOrder(best, c);
 }
 // Items on the ground belong to the host's world: its pickups and drops are replayed on clients,
 // whose own (for host-driven characters) are refused.
@@ -667,6 +696,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnMedKnockout, reinterpret_cast<void*>(&hk_medKnockout), reinterpret_cast<void**>(&o_medKnockout)},
         {kenshi::FnDeclareDead, reinterpret_cast<void*>(&hk_declareDead), reinterpret_cast<void**>(&o_declareDead)},
         {kenshi::FnReassessCollapse, reinterpret_cast<void*>(&hk_collapse), reinterpret_cast<void**>(&o_collapse)},
+        {kenshi::FnPickupItem, reinterpret_cast<void*>(&hk_pickup), reinterpret_cast<void**>(&o_pickup)},
         {kenshi::FnGiveItem, reinterpret_cast<void*>(&hk_giveItem), reinterpret_cast<void**>(&o_giveItem)},
         {kenshi::FnDropItemHuman, reinterpret_cast<void*>(&hk_dropItem), reinterpret_cast<void**>(&o_dropItem)},
         {kenshi::FnCreateScreenLabel, reinterpret_cast<void*>(&hk_createLabel), reinterpret_cast<void**>(&o_createLabel)},

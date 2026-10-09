@@ -85,6 +85,7 @@ void KenshiWorld::EndFrame() {
         pausedByHold_ = true;
     }
     if (active_ && client_ && live_ && !pendingLoot_.empty()) UpdatePendingLoot();
+    if (active_ && !client_ && live_ && !pickups_.empty()) UpdatePendingPickups();
     auto v = std::make_shared<HookView>();
     v->active = active_;
     v->client = client_;
@@ -509,8 +510,50 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
     switch (cmd.kind) {
     case kc::CommandKind::MoveTo: return CallPlayerMoveOrder(c, cmd.pos);
     case kc::CommandKind::Stop: return kenshi::Halt(c);
+    case kc::CommandKind::PickUp: {
+        // the item the client meant: same thing lying there
+        std::vector<void*> around;
+        kenshi::GroundItemsNear(cmd.pos, 30.0f, around);
+        void* item = nullptr;
+        float best = 15.0f;
+        kc::Handle itemHandle;
+        for (void* it : around) {
+            kc::Handle ih;
+            kc::ItemState st;
+            kc::Vec3 p;
+            if (!kenshi::DescribeGroundItem(it, ih, st, p) || st.templateSid != cmd.itemSid) continue;
+            const float d = Dist(p, cmd.pos);
+            if (d < best) { best = d; item = it; itemHandle = ih; }
+        }
+        if (!item) return false;
+        pickups_[h] = {itemHandle, NowSeconds() + 30.0};
+        return CallPlayerMoveOrder(c, cmd.pos);
+    }
     }
     return false;
+}
+
+void KenshiWorld::UpdatePendingPickups() {
+    constexpr float kReach = 15.0f;
+    const double now = NowSeconds();
+    for (auto it = pickups_.begin(); it != pickups_.end();) {
+        kenshi::Character* c = FindSquad(it->first);
+        void* item = kenshi::ResolveItem(it->second.item);
+        kc::Vec3 cp, ip;
+        kc::Handle ih;
+        kc::ItemState st;
+        if (!c || !item || !kenshi::ItemOnGround(item) || now > it->second.until || !kenshi::DescribeGroundItem(item, ih, st, ip)) {
+            it = pickups_.erase(it);
+            continue;
+        }
+        if (kenshi::GetPosition(c, cp) && Dist(cp, ip) < kReach) {
+            HostCallScope scope;
+            kenshi::CallGiveItem(c, item);
+            it = pickups_.erase(it);
+            continue;
+        }
+        ++it;
+    }
 }
 
 void KenshiWorld::QueueLocalOrder(const kc::Handle& h, const kc::Command& c) {
