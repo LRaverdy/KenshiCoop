@@ -41,3 +41,8 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   ragdoll quand on l'attache), et à la pose le corps est relâché à une position fausse, ce qui le projette
   (comme un ragdoll déplacé juste avant sa chute). À reprendre avec un test en jeu dédié (porter puis
   poser, regardé chez le client).
+- **Un PNJ invisible en combat chez 2 clients sur 3** (10/10 vers 00:38). Les rapports des clients le
+  confirment : chez nass4, 1 PNJ de l'hôte « pas encore là » ; chez Geoffrey, 31 en permanence ; rob, 0.
+  Ces PNJ n'existent pas dans le jeu du client, et sa recréation (modèle + faction) échoue. Voir pourquoi
+  (PNJ unique, modèle introuvable, zone pas chargée). Les mêmes rapports montrent aussi des persos décalés
+  de 300 à 466 unités (« max offset »), à éclaircir.
