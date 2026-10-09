@@ -84,6 +84,18 @@ enum Fn : int {
     FnEffectAffectObjects,      // void EffectHandler::affectObjects()   (a weather effect hurts the characters it reaches)
     FnEffectStop,               // void EffectHandler::stop()            (fades out; removed once faded)
     FnRegionUpdateEffects,      // void WeatherRegion::updateWeatherEffects()   (replaces the effect groups after a weather change)
+    FnAnimStartCombat,          // void AnimationClass::startCombatAnimation(CombatTechniqueData*, float speed, std::string extra)
+    FnAnimRunCombat,            // void AnimationClass::runCombatAnimation(CombatTechniqueData*, float speed, std::string extra)
+    FnAnimEndCombat,            // void AnimationClass::endCombatAnimation()
+    FnAnimPlayAction,           // void AnimationClass::playAction(AnimationData*, float speedMult, float initialWeight, bool isStumble)
+    FnAnimStopAction,           // bool AnimationClass::stopAction()
+    FnAnimStopActionNamed,      // bool AnimationClass::stopAction(const std::string& name)
+    FnAnimStartStumble,         // void AnimationClass::startStumble(AnimationData*)
+    FnAnimEndStumble,           // void AnimationClass::endStumble()
+    FnAnimSetCombatMode,        // void AnimationClass::setCombatMode(bool)
+    FnAnimSetCarryMode,         // void AnimationClass::setCarryMode(bool carried, bool left, bool right)
+    FnDrawWeapon,               // bool CharacterHuman::drawWeapon(Item*, std::string lastSection)
+    FnSheatheWeapon,            // void CharacterHuman::sheatheWeapon()
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -301,6 +313,34 @@ bool GetPaused();
 bool Teleport(Character* c, const kc::Vec3& pos, const kc::Quat& rot);
 bool SetDestination(Character* c, const kc::Vec3& dest);
 bool ReadPace(const Character* c, uint8_t& gait, float& pace);         // speed order and desired speed
+
+// Animations (AnimationClass, reached from the character; its owner is at a fixed offset).
+Character* AnimOwner(const void* animationClass);
+bool ReadStdString(const void* gameString, std::string& out);   // a std::string as Kenshi's compiler lays it out
+void* AnimationOf(const Character* c);
+std::string TechniqueName(const void* technique);       // CombatTechniqueData: its animation
+std::string AnimDataName(const void* animData);         // AnimationData: its data name
+void* FindTechnique(const std::string& name);           // in the game's list of every technique
+void* FindAnimData(const Character* c, const std::string& name);   // among the character's animations
+struct AnimModes {
+    std::string action;     // current action ("" none)
+    bool combat = false, carried = false, carryLeft = false, carryRight = false;
+};
+bool ReadAnimModes(const Character* c, AnimModes& out);
+std::string CurrentTechniqueName(const Character* c);   // the attack/block it is playing ("-" none)
+std::string CurrentStumbleName(const Character* c);     // the stumble it is playing ("-" none)
+bool WeaponInHands(const Character* c, std::string& itemSid, std::string& fromSection);   // false: hands empty
+bool CallStartCombatAnim(void* fn, Character* c, void* technique, float speed);
+bool CallAnimVoid(void* fn, Character* c);
+bool CallPlayAction(Character* c, void* animData, float speedMult, float weight, bool stumble);
+bool CallStopActionNamed(Character* c, const std::string& name);
+bool CallStartStumble(Character* c, void* animData);
+bool CallSetCombatMode(Character* c, bool on);
+bool CallSetCarryMode(Character* c, bool carried, bool left, bool right);
+std::string ItemTemplate(const void* item);                                        // its game data id
+bool CallDrawWeapon(Character* c, const std::string& itemSid, const std::string& section);   // the matching item it carries
+bool CallSheathe(Character* c);
+std::string DrawnFrom(const Character* c);   // section the weapon in its hands came from ("-": hands empty)
 bool WritePace(Character* c, uint8_t gait, float pace);
 bool SetPositionSimple(Character* c, const kc::Vec3& pos);
 bool IsMoving(const Character* c);

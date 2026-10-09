@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 11;
+constexpr uint16_t kProtocolVersion = 12;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -55,6 +55,7 @@ enum class Msg : uint8_t {
     Inventory = 20,   // S->C  full inventory of one character
     InvOp = 21,       // C->S  the client moved items (loot, equip, rearrange, drop)
     Effects = 22,     // S->C  weather effects the host's game placed (lightning, storms, gas clouds)
+    Anim = 23,        // S->C  animations the host's characters start and stop (attacks, actions, stumbles)
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -314,6 +315,38 @@ struct EffectsMsg {
 };
 constexpr uint32_t kMaxEffectsPerMsg = 4096;
 
+// ---- animations ----
+// What makes a character play a non-locomotion animation, as the host's game did it: an attack or
+// block technique, an action (sitting, working, healing...), a stumble, combat or carry mode. The
+// client's own game never starts these for the host's characters; it replays these instead.
+enum class AnimKind : uint8_t {
+    Combat = 1,       // name: technique animation, a: speed
+    CombatRun = 2,    //   (continuing technique)
+    EndCombat = 3,
+    Action = 4,       // name: animation data, a: speed multiplier, b: initial weight, flags 1: stumble
+    StopAction = 5,   // name: that action only ("" = any)
+    Stumble = 6,      // name: animation data
+    EndStumble = 7,
+    CombatMode = 8,   // flags 1: on
+    Carry = 9,        // flags 1: carried, 2: left hand, 4: right hand
+    State = 10,       // periodic: name = current action ("" none), flags 1: combat mode, 2/4/8: carry flags
+    DrawWeapon = 11,  // name: "<item template>\t<section it comes from>"
+    Sheathe = 12,
+    WeaponState = 13, // periodic: name "<item>\t<section>" in its hands, "" = hands empty
+};
+struct AnimEvent {
+    uint32_t netId = 0;
+    AnimKind kind = AnimKind::Action;
+    std::string name;
+    float a = 0, b = 0;
+    uint8_t flags = 0;
+};
+struct AnimMsg {
+    std::vector<AnimEvent> events;
+};
+constexpr uint32_t kMaxAnimEvents = 4096;
+constexpr size_t kMaxAnimNameLen = 200;
+
 // ---- world transfer ----
 struct WorldFile {
     std::string path;            // relative, '/'-separated, validated by ValidWorldPath
@@ -363,6 +396,7 @@ void Encode(Writer& w, const WeatherMsg& m);
 void Encode(Writer& w, const InventoryMsg& m);
 void Encode(Writer& w, const InvOp& m);
 void Encode(Writer& w, const EffectsMsg& m);
+void Encode(Writer& w, const AnimMsg& m);
 
 // Snapshots are split into packets that each fit `budget` bytes; every packet is self-contained.
 std::vector<std::vector<uint8_t>> EncodeSnapshot(const Snapshot& s, size_t budget = kSnapshotBudget);
@@ -389,6 +423,7 @@ bool Decode(Reader& r, WeatherMsg& m);
 bool Decode(Reader& r, InventoryMsg& m);
 bool Decode(Reader& r, InvOp& m);
 bool Decode(Reader& r, EffectsMsg& m);
+bool Decode(Reader& r, AnimMsg& m);
 bool Decode(Reader& r, Ping& m);
 
 // Name rules: 1..kMaxNameLen printable ASCII, no leading/trailing spaces.

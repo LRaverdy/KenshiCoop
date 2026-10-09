@@ -279,6 +279,10 @@ struct FakeWorld : IWorld {
         if (full) { out.full = true; out.spawned = fxLive; }
     }
     void ApplyEffects(const EffectsMsg& m) override { fxApplied.push_back(m); }
+    std::vector<std::pair<Handle, AnimEvent>> animPending;   // host: what its characters started
+    std::vector<std::pair<uint32_t, AnimEvent>> animApplied; // client: (serial of our character, event)
+    void TakeAnimEvents(std::vector<std::pair<Handle, AnimEvent>>& out, bool) override { out.swap(animPending); animPending.clear(); }
+    void ApplyAnim(const Handle& h, const AnimEvent& e) override { animApplied.emplace_back(h.serial, e); }
     TimeState GetTime() override { return time; }
     void SetTime(const TimeState& t) override { time = t; }
     void HoldForJoin(bool h) override { holding = h; }
@@ -422,6 +426,16 @@ static void TestWire() {
         EffectsMsg fx3; CHECK(!Decode(br, fx3));
     }
 
+    AnimMsg am;
+    AnimEvent ae; ae.netId = 12; ae.kind = AnimKind::Combat; ae.name = "attack_chop_long_name_over_15"; ae.a = 1.25f;
+    am.events = {ae};
+    ae.kind = AnimKind::State; ae.name = ""; ae.flags = 5; am.events.push_back(ae);
+    Writer aw; Encode(aw, am);
+    Reader ar(aw.data(), aw.size()); CHECK(PeekType(ar) == Msg::Anim);
+    AnimMsg am2; CHECK(Decode(ar, am2));
+    CHECK(am2.events.size() == 2 && am2.events[0].kind == AnimKind::Combat && am2.events[0].name == "attack_chop_long_name_over_15" &&
+          am2.events[0].a == 1.25f && am2.events[1].kind == AnimKind::State && am2.events[1].flags == 5 && am2.events[1].netId == 12);
+
     WorldChunk c; c.file = 2; c.path = "zone/zone.1.2.zone"; c.fileSize = 5; c.data = {1, 2, 3};
     Writer cw; Encode(cw, c);
     Reader cr(cw.data(), cw.size()); CHECK(PeekType(cr) == Msg::WorldChunk);
@@ -472,6 +486,7 @@ static void TestFuzz() {
     add([](Writer& w) { WeatherMsg m; m.regions.resize(2); m.regions[0].regionSid = "a"; m.regions[1].weatherSid = "b"; Encode(w, m); });
     add([](Writer& w) { InventoryMsg m; m.netId = 3; m.items.resize(2); for (auto& i : m.items) i.templateSid = "x"; Encode(w, m); });
     add([](Writer& w) { InvOp m; m.fromNetId = 1; m.toNetId = 2; m.item.templateSid = "x"; m.toSection = "main"; Encode(w, m); });
+    add([](Writer& w) { AnimMsg m; m.events.resize(2); m.events[0].netId = 3; m.events[0].name = "x"; m.events[1].netId = 4; Encode(w, m); });
     add([](Writer& w) {
         EffectsMsg m; m.spawned.resize(2); m.spawned[1].kind = EffectKind::Wandering; m.spawned[0].regionSid = "r";
         m.moved.resize(1); m.ended = {3}; Encode(w, m);
@@ -505,6 +520,7 @@ static void TestFuzz() {
         case Msg::Inventory: { InventoryMsg m; Decode(r, m); break; }
         case Msg::InvOp: { InvOp m; Decode(r, m); break; }
         case Msg::Effects: { EffectsMsg m; Decode(r, m); break; }
+        case Msg::Anim: { AnimMsg m; Decode(r, m); break; }
         }
     };
     for (int i = 0; i < 300000; ++i) {
@@ -822,6 +838,13 @@ static void TestWorldAuthority() {
     Run({{&host, &hw}, {&cli, &cw}}, 6.0, [&] { return arrived([](const EffectsMsg& m) { return m.full; }); });
     CHECK(arrived([](const EffectsMsg& m) { return m.full && m.spawned.empty(); }));
     CHECK(!arrived([](const EffectsMsg& m) { return !m.full && m.empty(); }));   // nothing empty goes out
+    // animations: an attack the host's NPC starts plays on the client's copy; unknown characters are skipped
+    AnimEvent swing; swing.kind = AnimKind::Combat; swing.name = "chop"; swing.a = 1.1f;
+    hw.animPending = {{FakeWorld::H(10), swing}, {FakeWorld::H(77), swing}};
+    cw.animApplied.clear();
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return !cw.animApplied.empty(); });
+    CHECK(cw.animApplied.size() == 1 && cw.animApplied[0].first == 10 && cw.animApplied[0].second.name == "chop" &&
+          cw.animApplied[0].second.a == 1.1f);
 
     // melee: the NPC engages squad member 1 on the host; the client's copy engages the same target
     hw.chars[10].fights = 1;

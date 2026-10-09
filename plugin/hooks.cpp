@@ -24,6 +24,7 @@ std::atomic<double> g_lastLiveTick{-1e9};
 std::mutex g_tickMutex;
 std::atomic<DWORD> g_liveThread{0}, g_menuThread{0};
 thread_local int g_hostCall = 0;   // >0 while KenshiCoop itself is calling into the game
+thread_local int g_animReplay = 0; // >0 while KenshiCoop replays one of the host's animations
 
 // ---- originals
 using MainLoopFn = void (*)(void* gw, float t);
@@ -65,6 +66,24 @@ EffectCtorFn o_effectCtor = nullptr;
 VoidFn o_effectAffect = nullptr;
 VoidFn o_effectStop = nullptr;
 VoidFn o_regionUpdateEffects = nullptr;
+using CombatAnimFn = void (*)(void* ac, void* technique, float speed, void* extra);
+using PlayActionFn = void (*)(void* ac, void* anim, float speedMult, float weight, bool stumble);
+using AnimBoolFn = bool (*)(void* ac);
+using AnimBoolStrFn = bool (*)(void* ac, const void* name);
+using AnimPtrFn = void (*)(void* ac, void* anim);
+using AnimSetBoolFn = void (*)(void* ac, bool on);
+using AnimCarryFn = void (*)(void* ac, bool carried, bool left, bool right);
+CombatAnimFn o_animStartCombat = nullptr, o_animRunCombat = nullptr;
+VoidFn o_animEndCombat = nullptr, o_animEndStumble = nullptr;
+PlayActionFn o_animPlayAction = nullptr;
+AnimBoolFn o_animStopAction = nullptr;
+AnimBoolStrFn o_animStopActionNamed = nullptr;
+AnimPtrFn o_animStartStumble = nullptr;
+AnimSetBoolFn o_animSetCombatMode = nullptr;
+AnimCarryFn o_animSetCarryMode = nullptr;
+using DrawWeaponFn = bool (*)(void* chr, void* item, void* section);
+DrawWeaponFn o_drawWeapon = nullptr;
+VoidFn o_sheatheWeapon = nullptr;
 VoidFn o_seasonGetNewWeather = nullptr;
 
 void SafeTick(bool live) {
@@ -290,6 +309,116 @@ void hk_regionUpdateEffects(void* region) {
         if (KenshiWorld* w = TheWorld(); w && !w->TakeEffectsRebuild(region)) return;
     o_regionUpdateEffects(region);
 }
+// Animations beyond walking (attacks, blocks, actions, stumbles, combat and carry modes): the host
+// reports every one its characters start or stop; a client never starts them by itself on the
+// host's characters and plays the host's instead (KenshiWorld::ApplyAnim, inside a HostCallScope).
+// Returns true when the call must not run here.
+bool AnimHookBlocked(void* ac, kc::AnimEvent* report) {
+    kenshi::Character* c = kenshi::AnimOwner(ac);
+    if (!c) return false;
+    if (KenshiWorld::ClientActive()) {
+        const bool blocked = !g_animReplay && KenshiWorld::View()->replicated.count(c) > 0;
+        static std::atomic<int> logged{0};
+        if (!g_animReplay && !blocked && report && logged.fetch_add(1) < 40)
+            Log("anim not blocked here: kind=%d name='%s' (character not driven by the host)", int(report->kind), report->name.c_str());
+        return blocked;
+    }
+    if (report && KenshiWorld::View()->active)
+        if (KenshiWorld* w = TheWorld()) w->NoteAnim(c, std::move(*report));
+    return false;
+}
+void hk_animStartCombat(void* ac, void* technique, float speed, void* extra) {
+    kc::AnimEvent e;
+    e.kind = kc::AnimKind::Combat;
+    e.name = kenshi::TechniqueName(technique);
+    e.a = speed;
+    if (!AnimHookBlocked(ac, &e)) o_animStartCombat(ac, technique, speed, extra);
+}
+void hk_animRunCombat(void* ac, void* technique, float speed, void* extra) {
+    kc::AnimEvent e;
+    e.kind = kc::AnimKind::CombatRun;
+    e.name = kenshi::TechniqueName(technique);
+    e.a = speed;
+    if (!AnimHookBlocked(ac, &e)) o_animRunCombat(ac, technique, speed, extra);
+}
+void hk_animEndCombat(void* ac) {
+    kc::AnimEvent e;
+    e.kind = kc::AnimKind::EndCombat;
+    if (!AnimHookBlocked(ac, &e)) o_animEndCombat(ac);
+}
+void hk_animPlayAction(void* ac, void* anim, float speedMult, float weight, bool stumble) {
+    kc::AnimEvent e;
+    e.kind = kc::AnimKind::Action;
+    e.name = kenshi::AnimDataName(anim);
+    e.a = speedMult;
+    e.b = weight;
+    e.flags = stumble ? 1 : 0;
+    if (!AnimHookBlocked(ac, &e)) o_animPlayAction(ac, anim, speedMult, weight, stumble);
+}
+bool hk_animStopAction(void* ac) {
+    kc::AnimEvent e;
+    e.kind = kc::AnimKind::StopAction;
+    return AnimHookBlocked(ac, &e) ? false : o_animStopAction(ac);
+}
+bool hk_animStopActionNamed(void* ac, const void* name) {
+    kc::AnimEvent e;
+    e.kind = kc::AnimKind::StopAction;
+    if (name) kenshi::ReadStdString(name, e.name);
+    return AnimHookBlocked(ac, &e) ? false : o_animStopActionNamed(ac, name);
+}
+void hk_animStartStumble(void* ac, void* anim) {
+    kc::AnimEvent e;
+    e.kind = kc::AnimKind::Stumble;
+    e.name = kenshi::AnimDataName(anim);
+    if (!AnimHookBlocked(ac, &e)) o_animStartStumble(ac, anim);
+}
+void hk_animEndStumble(void* ac) {
+    kc::AnimEvent e;
+    e.kind = kc::AnimKind::EndStumble;
+    if (!AnimHookBlocked(ac, &e)) o_animEndStumble(ac);
+}
+// The game sets these every frame: only changes are reported.
+void hk_animSetCombatMode(void* ac, bool on) {
+    kenshi::Character* c = kenshi::AnimOwner(ac);
+    kenshi::AnimModes m;
+    kc::AnimEvent e;
+    e.kind = kc::AnimKind::CombatMode;
+    e.flags = on ? 1 : 0;
+    const bool changed = !c || !kenshi::ReadAnimModes(c, m) || m.combat != on;
+    if (!AnimHookBlocked(ac, changed ? &e : nullptr)) o_animSetCombatMode(ac, on);
+}
+void hk_animSetCarryMode(void* ac, bool carried, bool left, bool right) {
+    kenshi::Character* c = kenshi::AnimOwner(ac);
+    kenshi::AnimModes m;
+    kc::AnimEvent e;
+    e.kind = kc::AnimKind::Carry;
+    e.flags = uint8_t((carried ? 1 : 0) | (left ? 2 : 0) | (right ? 4 : 0));
+    const bool changed = !c || !kenshi::ReadAnimModes(c, m) || m.carried != carried || m.carryLeft != left || m.carryRight != right;
+    if (!AnimHookBlocked(ac, changed ? &e : nullptr)) o_animSetCarryMode(ac, carried, left, right);
+}
+// Weapons drawn and put away follow the host too (otherwise a client sees the host's fighter
+// swinging bare hands).
+bool WeaponHookBlocked(void* chr, kc::AnimEvent* report) {
+    kenshi::Character* c = kenshi::IsCharacter(chr) ? static_cast<kenshi::Character*>(chr) : nullptr;
+    if (!c) return false;
+    if (KenshiWorld::ClientActive()) return !g_animReplay && KenshiWorld::View()->replicated.count(c) > 0;
+    if (KenshiWorld::View()->active)
+        if (KenshiWorld* w = TheWorld()) w->NoteAnim(c, std::move(*report));
+    return false;
+}
+bool hk_drawWeapon(void* chr, void* item, void* section) {
+    kc::AnimEvent e;
+    e.kind = kc::AnimKind::DrawWeapon;
+    std::string sec;
+    if (section) kenshi::ReadStdString(section, sec);
+    e.name = kenshi::ItemTemplate(item) + "\t" + sec;
+    return WeaponHookBlocked(chr, &e) ? false : o_drawWeapon(chr, item, section);
+}
+void hk_sheatheWeapon(void* chr) {
+    kc::AnimEvent e;
+    e.kind = kc::AnimKind::Sheathe;
+    if (!WeaponHookBlocked(chr, &e)) o_sheatheWeapon(chr);
+}
 // Diagnostics: who stops the effects a client placed for the host.
 void hk_effectStop(void* handler) {
     if (KenshiWorld::ClientActive() && !g_hostCall)
@@ -334,6 +463,8 @@ double LastLiveTick() { return g_lastLiveTick.load(); }
 
 HostCallScope::HostCallScope() { ++g_hostCall; }
 HostCallScope::~HostCallScope() { --g_hostCall; }
+AnimReplayScope::AnimReplayScope() { ++g_animReplay; ++g_hostCall; }
+AnimReplayScope::~AnimReplayScope() { --g_animReplay; --g_hostCall; }
 
 bool CallPlayerMoveOrder(kenshi::Character* c, const kc::Vec3& pos) {
     if (!o_moveOrder || !kenshi::IsCharacter(c)) return false;
@@ -367,6 +498,18 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnEffectAffectObjects, reinterpret_cast<void*>(&hk_effectAffect), reinterpret_cast<void**>(&o_effectAffect)},
         {kenshi::FnEffectStop, reinterpret_cast<void*>(&hk_effectStop), reinterpret_cast<void**>(&o_effectStop)},
         {kenshi::FnRegionUpdateEffects, reinterpret_cast<void*>(&hk_regionUpdateEffects), reinterpret_cast<void**>(&o_regionUpdateEffects)},
+        {kenshi::FnAnimStartCombat, reinterpret_cast<void*>(&hk_animStartCombat), reinterpret_cast<void**>(&o_animStartCombat)},
+        {kenshi::FnAnimRunCombat, reinterpret_cast<void*>(&hk_animRunCombat), reinterpret_cast<void**>(&o_animRunCombat)},
+        {kenshi::FnAnimEndCombat, reinterpret_cast<void*>(&hk_animEndCombat), reinterpret_cast<void**>(&o_animEndCombat)},
+        {kenshi::FnAnimPlayAction, reinterpret_cast<void*>(&hk_animPlayAction), reinterpret_cast<void**>(&o_animPlayAction)},
+        {kenshi::FnAnimStopAction, reinterpret_cast<void*>(&hk_animStopAction), reinterpret_cast<void**>(&o_animStopAction)},
+        {kenshi::FnAnimStopActionNamed, reinterpret_cast<void*>(&hk_animStopActionNamed), reinterpret_cast<void**>(&o_animStopActionNamed)},
+        {kenshi::FnAnimStartStumble, reinterpret_cast<void*>(&hk_animStartStumble), reinterpret_cast<void**>(&o_animStartStumble)},
+        {kenshi::FnAnimEndStumble, reinterpret_cast<void*>(&hk_animEndStumble), reinterpret_cast<void**>(&o_animEndStumble)},
+        {kenshi::FnAnimSetCombatMode, reinterpret_cast<void*>(&hk_animSetCombatMode), reinterpret_cast<void**>(&o_animSetCombatMode)},
+        {kenshi::FnAnimSetCarryMode, reinterpret_cast<void*>(&hk_animSetCarryMode), reinterpret_cast<void**>(&o_animSetCarryMode)},
+        {kenshi::FnDrawWeapon, reinterpret_cast<void*>(&hk_drawWeapon), reinterpret_cast<void**>(&o_drawWeapon)},
+        {kenshi::FnSheatheWeapon, reinterpret_cast<void*>(&hk_sheatheWeapon), reinterpret_cast<void**>(&o_sheatheWeapon)},
     };
     const MH_STATUS init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {

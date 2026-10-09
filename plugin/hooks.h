@@ -25,6 +25,14 @@ struct HostCallScope {
     HostCallScope(const HostCallScope&) = delete;
     HostCallScope& operator=(const HostCallScope&) = delete;
 };
+// Inside it, the animation hooks let a client play one of the host's animations (every other
+// animation call on the host's characters is refused on clients, ours included).
+struct AnimReplayScope {
+    AnimReplayScope();
+    ~AnimReplayScope();
+    AnimReplayScope(const AnimReplayScope&) = delete;
+    AnimReplayScope& operator=(const AnimReplayScope&) = delete;
+};
 
 // Character::playerMoveOrderDefault(nullptr, nullptr, pos) through the original function.
 bool CallPlayerMoveOrder(kenshi::Character* c, const kc::Vec3& pos);

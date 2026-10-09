@@ -48,6 +48,18 @@ const FunctionSig kFunctions[FnCount] = {
     {"EffectHandler::affectObjects", 0x1020E0, {0x48, 0x8B, 0xC4, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x81, 0xEC, 0x90}},
     {"EffectHandler::stop", 0x100B00, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xC7, 0x41, 0x58}},
     {"WeatherRegion::updateWeatherEffects", 0x9DCAF0, {0x48, 0x89, 0x4C, 0x24, 0x08, 0x53, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41}},
+    {"AnimationClass::startCombatAnimation", 0x5B7800, {0x40, 0x53, 0x55, 0x57, 0x41, 0x54, 0x48, 0x81, 0xEC, 0xC8, 0x00, 0x00}},
+    {"AnimationClass::runCombatAnimation", 0x5B7600, {0x40, 0x53, 0x55, 0x57, 0x41, 0x54, 0x48, 0x81, 0xEC, 0xC8, 0x00, 0x00}},
+    {"AnimationClass::endCombatAnimation", 0x5B3C60, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x83, 0xB9, 0xA8, 0x00, 0x00}},
+    {"AnimationClass::playAction(AnimationData*)", 0x51EAB0, {0x48, 0x85, 0xD2, 0x0F, 0x84, 0xBA, 0x01, 0x00, 0x00, 0x48, 0x89, 0x5C}},
+    {"AnimationClass::stopAction()", 0x51DFA0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x60, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE}},
+    {"AnimationClass::stopAction(name)", 0x51E0E0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B}},
+    {"AnimationClass::startStumble", 0x520490, {0x48, 0x85, 0xD2, 0x74, 0x62, 0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48}},
+    {"AnimationClass::endStumble", 0x51E840, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x81, 0x28, 0x02, 0x00}},
+    {"AnimationClass::setCombatMode", 0x51CC30, {0x84, 0xD2, 0x75, 0x0C, 0x83, 0xB9, 0x44, 0x02, 0x00, 0x00, 0x00, 0x0F}},
+    {"AnimationClass::setCarryMode", 0x51C8D0, {0xC7, 0x81, 0x40, 0x02, 0x00, 0x00, 0x00, 0x00, 0x80, 0xBF, 0x44, 0x88}},
+    {"CharacterHuman::drawWeapon", 0x5DBF80, {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48}},
+    {"CharacterHuman::sheatheWeapon", 0x5CC820, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x60, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE}},
 };
 
 namespace {
@@ -1470,6 +1482,222 @@ bool WritePace(Character* c, uint8_t gait, float pace) {
     if (Rd(m, CM_desiredSpeed, cur) && Rd(m, CM_speedOrders, order) && cur == pace && order == gait) return true;
     return Wr(m, CM_speedOrders, int32_t(gait)) && Wr(m, CM_desiredSpeed, pace);
 }
+
+namespace {
+constexpr uintptr_t CH_animation = 0x448;      // Character: AnimationClass*
+constexpr uintptr_t AC_owner = 0x2D8;          // AnimationClass: Character* me
+constexpr uintptr_t AC_animList = 0x2C0;       // AnimationClass: AnimsListsManager::AnimList*
+constexpr uintptr_t AL_allAnims = 0xB8;        // AnimList: unordered_map<string, AnimationData*>
+constexpr uintptr_t AC_reqAction = 0x210, AC_reqCarryL = 0x21E, AC_reqCarryR = 0x21F, AC_reqCarried = 0x220,
+                    AC_reqCombatMode = 0x244;  // AnimationRequirement (at +0xF0) fields
+constexpr uintptr_t AD_dataName = 0x8;         // AnimationData
+constexpr uintptr_t TQ_animation = 0x0;        // CombatTechniqueData
+constexpr uintptr_t kTechniqueList = 0x2011F78;   // lektor<CombatTechniqueData*>: every technique
+
+using FnCombatAnim = void (*)(void* ac, void* technique, float speed, void* extra);
+using FnPlayAction = void (*)(void* ac, void* anim, float speedMult, float weight, bool stumble);
+using FnAnimPtr = void (*)(void* ac, void* anim);
+using FnAnimBool3 = void (*)(void* ac, bool a, bool b, bool c);
+using FnAnimStr = bool (*)(void* ac, const void* name);
+bool SehCombatAnim(void* fn, void* ac, void* t, float speed, void* extra) {
+    __try { reinterpret_cast<FnCombatAnim>(fn)(ac, t, speed, extra); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool SehPlayAction(void* fn, void* ac, void* a, float s, float w, bool st) {
+    __try { reinterpret_cast<FnPlayAction>(fn)(ac, a, s, w, st); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool SehAnimPtr(void* fn, void* ac, void* a) {
+    __try { reinterpret_cast<FnAnimPtr>(fn)(ac, a); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool SehAnimBool3(void* fn, void* ac, bool a, bool b, bool c) {
+    __try { reinterpret_cast<FnAnimBool3>(fn)(ac, a, b, c); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool SehAnimStr(void* fn, void* ac, const void* name) {
+    __try { reinterpret_cast<FnAnimStr>(fn)(ac, name); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+bool ReadStdString(const void* p, std::string& out) { return ReadGameString(p, out); }
+
+Character* AnimOwner(const void* ac) {
+    void* c = nullptr;
+    return ac && Rd(ac, AC_owner, c) && IsCharacter(c) ? static_cast<Character*>(c) : nullptr;
+}
+
+void* AnimationOf(const Character* c) {
+    void* ac = nullptr;
+    return IsCharacter(c) && Rd(c, CH_animation, ac) && AnimOwner(ac) == c ? ac : nullptr;
+}
+
+std::string TechniqueName(const void* t) {
+    std::string s;
+    if (t) ReadGameString(reinterpret_cast<const uint8_t*>(t) + TQ_animation, s);
+    return s;
+}
+
+std::string AnimDataName(const void* a) {
+    std::string s;
+    if (a) ReadGameString(reinterpret_cast<const uint8_t*>(a) + AD_dataName, s);
+    return s;
+}
+
+void* FindTechnique(const std::string& name) {
+    static std::unordered_map<std::string, void*> cache;
+    if (name.empty()) return nullptr;
+    if (auto it = cache.find(name); it != cache.end()) return it->second;
+    // attacks, then blocks (and dodges), each a lektor<CombatTechniqueData*> right after the other
+    for (uintptr_t listRva : {kTechniqueList, kTechniqueList + 0x18, kTechniqueList + 0x30, kTechniqueList - 0x18}) {
+        const void* list = reinterpret_cast<const void*>(Addr(listRva));
+        uint32_t n = 0;
+        void** data = nullptr;
+        if (!Rd(list, off::LK_count, n) || !Rd(list, off::LK_data, data) || !data || n > 100000) continue;
+        for (uint32_t i = 0; i < n; ++i) {
+            void* t = nullptr;
+            if (Rd(data, i * sizeof(void*), t) && t && TechniqueName(t) == name) {
+                cache[name] = t;
+                return t;
+            }
+        }
+    }
+    return nullptr;
+}
+
+void* FindAnimData(const Character* c, const std::string& name) {
+    void* ac = AnimationOf(c);
+    void* list = nullptr;
+    if (!ac || name.empty() || !Rd(ac, AC_animList, list) || !list) return nullptr;
+    const uint8_t* map = reinterpret_cast<const uint8_t*>(list) + AL_allAnims;
+    uint64_t size = 0, bucketCount = 0;
+    void** buckets = nullptr;
+    void* node = nullptr;
+    if (!Rd(map, off::US_size, size) || size == 0 || size > 100000 || !Rd(map, off::US_bucketCount, bucketCount) ||
+        !Rd(map, off::US_buckets, buckets) || !buckets || !Rd(buckets, bucketCount * sizeof(void*), node))
+        return nullptr;
+    for (uint64_t i = 0; node && i < size; ++i) {
+        void* a = nullptr;
+        if (Rd(node, off::MapNode_mapped, a) && a && AnimDataName(a) == name) return a;
+        if (!Rd(node, off::USNode_next, node)) break;
+    }
+    return nullptr;
+}
+
+bool ReadAnimModes(const Character* c, AnimModes& out) {
+    void* ac = AnimationOf(c);
+    void* action = nullptr;
+    int32_t combat = 0;
+    uint8_t l = 0, r = 0, carried = 0;
+    if (!ac || !Rd(ac, AC_reqAction, action) || !Rd(ac, AC_reqCombatMode, combat) || !Rd(ac, AC_reqCarryL, l) || !Rd(ac, AC_reqCarryR, r) ||
+        !Rd(ac, AC_reqCarried, carried))
+        return false;
+    out.action = AnimDataName(action);
+    out.combat = combat == 1;
+    out.carried = carried != 0;
+    out.carryLeft = l != 0;
+    out.carryRight = r != 0;
+    return true;
+}
+
+std::string CurrentTechniqueName(const Character* c) {
+    constexpr uintptr_t AC_reqTechnique = 0x208;
+    void* ac = AnimationOf(c);
+    void* t = nullptr;
+    std::string n = ac && Rd(ac, AC_reqTechnique, t) && t ? TechniqueName(t) : "";
+    for (char& ch : n) if (ch == ' ') ch = '_';
+    return n.empty() ? "-" : n;
+}
+
+std::string ItemTemplate(const void* item);
+
+std::string CurrentStumbleName(const Character* c) {
+    constexpr uintptr_t AC_reqStumble = 0x228;
+    void* ac = AnimationOf(c);
+    void* a = nullptr;
+    std::string n = ac && Rd(ac, AC_reqStumble, a) && a ? AnimDataName(a) : "";
+    return n.empty() ? "-" : n;
+}
+
+bool WeaponInHands(const Character* c, std::string& itemSid, std::string& fromSection) {
+    constexpr uintptr_t CHH_weaponInHands = 0x6D8, CHH_sheathLocation = 0x6E0;
+    void* w = nullptr;
+    if (Vtable(c) != Addr(rva::VtCharacterHuman) || !Rd(c, CHH_weaponInHands, w) || !w) return false;
+    itemSid = ItemTemplate(w);
+    ReadGameString(reinterpret_cast<const uint8_t*>(c) + CHH_sheathLocation, fromSection);
+    return !itemSid.empty();
+}
+
+bool CallStartCombatAnim(void* fn, Character* c, void* technique, float speed) {
+    void* ac = AnimationOf(c);
+    GameString extra;
+    if (!ac || !technique || !fn || !MakeGameString("", extra)) return false;
+    return SehCombatAnim(fn, ac, technique, speed, &extra);   // the callee owns (and destroys) the by-value string
+}
+
+bool CallAnimVoid(void* fn, Character* c) {
+    void* ac = AnimationOf(c);
+    return ac && fn && CallVoid(fn, ac);
+}
+
+bool CallPlayAction(Character* c, void* animData, float speedMult, float weight, bool stumble) {
+    void* ac = AnimationOf(c);
+    return ac && animData && SehPlayAction(FnAddr(FnAnimPlayAction), ac, animData, speedMult, weight, stumble);
+}
+
+bool CallStopActionNamed(Character* c, const std::string& name) {
+    void* ac = AnimationOf(c);
+    if (!ac) return false;
+    if (name.empty()) return CallVoid(FnAddr(FnAnimStopAction), ac);
+    GameString s;
+    if (!MakeGameString(name, s)) return CallVoid(FnAddr(FnAnimStopAction), ac);
+    return SehAnimStr(FnAddr(FnAnimStopActionNamed), ac, &s);
+}
+
+bool CallStartStumble(Character* c, void* animData) {
+    void* ac = AnimationOf(c);
+    return ac && animData && SehAnimPtr(FnAddr(FnAnimStartStumble), ac, animData);
+}
+
+bool CallSetCombatMode(Character* c, bool on) {
+    void* ac = AnimationOf(c);
+    return ac && CallBoolArg(FnAddr(FnAnimSetCombatMode), ac, on);
+}
+
+bool CallSetCarryMode(Character* c, bool carried, bool left, bool right) {
+    void* ac = AnimationOf(c);
+    return ac && SehAnimBool3(FnAddr(FnAnimSetCarryMode), ac, carried, left, right);
+}
+
+namespace {
+using FnDraw = bool (*)(void* c, void* item, void* section);
+bool SehDraw(void* fn, void* c, void* item, void* section) {
+    __try { return reinterpret_cast<FnDraw>(fn)(c, item, section); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+std::string ItemTemplate(const void* item) {
+    void* gd = nullptr;
+    std::string sid;
+    if (item && Rd(item, off::RO_data, gd)) GameDataSid(gd, sid);
+    return sid;
+}
+
+bool CallDrawWeapon(Character* c, const std::string& itemSid, const std::string& section) {
+    void* inv = InventoryOf(c);
+    if (!inv || itemSid.empty()) return false;
+    for (void* it : InventoryItems(inv)) {
+        if (ItemTemplate(it) != itemSid) continue;
+        GameString s;
+        if (!MakeGameString(section, s)) return false;
+        return SehDraw(FnAddr(FnDrawWeapon), c, it, &s);   // the callee owns the by-value string
+    }
+    return false;
+}
+
+std::string DrawnFrom(const Character* c) {
+    std::string s;
+    if (Vtable(c) == Addr(rva::VtCharacterHuman)) ReadGameString(reinterpret_cast<const uint8_t*>(c) + 0x6E0, s);
+    return s.empty() ? "-" : s;
+}
+
+bool CallSheathe(Character* c) { return IsCharacter(c) && CallVoid(FnAddr(FnSheatheWeapon), c); }
 
 bool SetDestination(Character* c, const kc::Vec3& dest) {
     void* m = Movement(c);

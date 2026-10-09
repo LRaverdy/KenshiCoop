@@ -104,6 +104,10 @@ public:
     // host's to the game (applied by the weather update too, so this only stores them).
     virtual void ReadEffects(EffectsMsg& out, bool full) { out = EffectsMsg{}; (void)full; }
     virtual void ApplyEffects(const EffectsMsg& m) { (void)m; }
+    // Animations. Host: what its characters started/stopped since the last call (with `state`, also
+    // every character's current action and modes). Client: replay one on that character.
+    virtual void TakeAnimEvents(std::vector<std::pair<Handle, AnimEvent>>& out, bool state) { out.clear(); (void)state; }
+    virtual void ApplyAnim(const Handle& h, const AnimEvent& e) { (void)h; (void)e; }
 
     // Inventories. Host: read; execute a client's item movement (false = refused/impossible).
     virtual bool ReadInventory(const Handle& h, std::vector<ItemState>& out) = 0;
@@ -316,6 +320,7 @@ private:
     std::vector<std::pair<uint8_t, InvOp>> pendingInvOps_;   // host: run on the next live tick
     double weatherForceAt_ = 0;
     double effectsFullAt_ = 0;
+    double animStateAt_ = 0;
     std::vector<RegionWeather> lastWeather_;
     bool controllableDirty_ = true;
     uint32_t missingSquad_ = 0;

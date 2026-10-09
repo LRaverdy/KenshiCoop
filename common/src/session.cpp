@@ -228,6 +228,26 @@ void Session::HostTick(double now, bool live) {
             BroadcastReliable(out, true);
         }
     }
+    // Animations: every start/stop goes out the tick it happened; each character's current action
+    // and modes once a second (newcomers, anything missed).
+    {
+        std::vector<std::pair<Handle, AnimEvent>> evs;
+        const bool state = anyInGame && now >= animStateAt_;
+        if (state) animStateAt_ = now + 1.0;
+        world_.TakeAnimEvents(evs, state);
+        AnimMsg m;
+        for (auto& [h, e] : evs) {
+            auto it = byHandle_.find(h);
+            if (it == byHandle_.end()) continue;
+            e.netId = it->second;
+            m.events.push_back(std::move(e));
+        }
+        if (anyInGame && !m.events.empty()) {
+            Writer out(1024);
+            Encode(out, m);
+            BroadcastReliable(out, true);
+        }
+    }
     // Weather effects: every one the host's game places goes out as soon as it appears; the
     // complete live set every 5 s heals anything missed (and serves newcomers).
     {
@@ -1116,6 +1136,15 @@ void Session::ClientPacket(Msg type, Reader& r) {
     case Msg::Effects: {
         EffectsMsg m;
         if (state_ == SessionState::Connected && Decode(r, m)) world_.ApplyEffects(m);
+        break;
+    }
+    case Msg::Anim: {
+        AnimMsg m;
+        if (state_ != SessionState::Connected || !Decode(r, m)) break;
+        for (const auto& e : m.events) {
+            auto it = entities_.find(e.netId);
+            if (it != entities_.end()) world_.ApplyAnim(it->second.handle, e);
+        }
         break;
     }
     case Msg::Inventory: {

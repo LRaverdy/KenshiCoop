@@ -192,6 +192,11 @@ def dump(pid, name, radius=3000):
     os.makedirs(OUT_DIR, exist_ok=True)
     path = os.path.abspath(os.path.join(OUT_DIR, f"{name}.txt"))
     ok, text = cmd(pid, f"state {path} {radius}")
+    for _ in range(10):   # the world can read as unloaded for a frame (save, zone streaming): ask again
+        if ok or "no live world" not in text:
+            break
+        time.sleep(0.5)
+        ok, text = cmd(pid, f"state {path} {radius}")
     if not ok:
         raise RuntimeError(f"state dump failed on {pid}: {text}")
     return parse_state(path)
@@ -530,6 +535,43 @@ def exp_gait(host, cli, rounds=8):
     log("gait mismatches total:", bad_total)
 
 
+def exp_anim(host, cli, rounds=10):
+    """Fights and actions: every character plays the host's attack/block/action on the client too."""
+    time.sleep(8)
+    log("spawn", cmd(host, "spawnnpc 15 10"))
+    time.sleep(3)
+    for i in (0, 1, 2):
+        log("fight", i, cmd(host, f"fight {i}"))
+    worst = 0
+    seen_tech = 0
+    for r in range(rounds):
+        time.sleep(1.3 + 0.4 * (r % 3))
+        cmd(host, "pause 1")
+        time.sleep(2.0)
+        h, c = dump(host, f"h_anim{r}", 2000), dump(cli, f"c_anim{r}", 2000)
+        cmd(host, "pause 0")
+        bad = []
+        rows = 0
+        for k in set(h["char"]) & set(c["char"]):
+            hv, cv = h["char"][k], c["char"][k]
+            if "tech" not in hv:
+                continue
+            rows += 1
+            seen_tech += hv["tech"] != "-"
+            for f in ("tech", "action", "cmode", "drawn"):
+                if hv.get(f) != cv.get(f):
+                    bad.append((k[-12:], f, hv.get(f), cv.get(f)))
+        for k in set(h["squad"]) & set(c["squad"]):
+            hv, cv = h["squad"][k], c["squad"][k]
+            for f in ("tech", "action", "cmode", "drawn"):
+                if "tech" in hv and hv.get(f) != cv.get(f):
+                    bad.append(("squad" + k[-6:], f, hv.get(f), cv.get(f)))
+        worst = max(worst, len(bad))
+        fighting = sorted({(v.get("tech")) for v in list(h["char"].values()) + list(h["squad"].values()) if v.get("tech", "-") != "-"})
+        log(f"anim {r + 1}: chars {rows} mismatches {len(bad)} {bad[:5]} host techniques {fighting[:4]}")
+    log("anim worst:", worst, "technique samples:", seen_tech)
+
+
 def exp_bodies(host, cli):
     """Where does a knocked-out body lie on each side, over time, for each body mode?"""
     time.sleep(6)
@@ -763,6 +805,9 @@ def main():
     t.add_argument("--save", default="kctest_base")
     e = sub.add_parser("bodies")
     e.add_argument("--save", default="kctest_base")
+    an = sub.add_parser("anim")
+    an.add_argument("--save", default="kctest_base")
+    an.add_argument("--keep", action="store_true")
     ga = sub.add_parser("gait")
     ga.add_argument("--save", default="kctest_base")
     ga.add_argument("--keep", action="store_true")
@@ -788,7 +833,9 @@ def main():
         log("ready: host", host, "client", cli)
         return
     try:
-        if a.what == "gait":
+        if a.what == "anim":
+            exp_anim(host, cli)
+        elif a.what == "gait":
             exp_gait(host, cli)
         elif a.what == "fxlive":
             exp_fxlive(host, cli, a.minutes)

@@ -287,7 +287,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Effects)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Anim)) return std::nullopt;
     return Msg(t);
 }
 
@@ -530,6 +530,27 @@ bool Decode(Reader& r, EffectsMsg& m) {
     const uint32_t ne = r.count(kMaxEffectsPerMsg, 4);
     m.ended.resize(ne);
     for (auto& id : m.ended) id = r.u32();
+    return Done(r);
+}
+
+void Encode(Writer& w, const AnimMsg& m) {
+    w.u8(uint8_t(Msg::Anim));
+    w.varint(m.events.size());
+    for (const auto& e : m.events) {
+        w.varint(e.netId); w.u8(uint8_t(e.kind)); w.str(e.name); w.f32(e.a); w.f32(e.b); w.u8(e.flags);
+    }
+}
+bool Decode(Reader& r, AnimMsg& m) {
+    const uint32_t n = r.count(kMaxAnimEvents, 12);
+    m.events.resize(n);
+    for (auto& e : m.events) {
+        e.netId = GetU32Var(r);
+        const uint8_t k = r.u8();
+        if (k < uint8_t(AnimKind::Combat) || k > uint8_t(AnimKind::WeaponState)) return false;
+        e.kind = AnimKind(k);
+        e.name = r.str(kMaxAnimNameLen); e.a = r.f32(); e.b = r.f32(); e.flags = r.u8();
+        if (!r.ok() || e.netId == 0) return false;
+    }
     return Done(r);
 }
 

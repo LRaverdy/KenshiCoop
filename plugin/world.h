@@ -63,6 +63,10 @@ public:
     void ReadWeather(std::vector<kc::RegionWeather>& out) override;
     void ApplyWeather(const std::vector<kc::RegionWeather>& regions) override;
     void ReadEffects(kc::EffectsMsg& out, bool full) override;
+    void TakeAnimEvents(std::vector<std::pair<kc::Handle, kc::AnimEvent>>& out, bool state) override;
+    void ApplyAnim(const kc::Handle& h, const kc::AnimEvent& e) override;
+    // Host: an animation hook saw one of our characters start/stop something (any game thread).
+    void NoteAnim(kenshi::Character* c, kc::AnimEvent e);
     void ApplyEffects(const kc::EffectsMsg& m) override;
     kc::TimeState GetTime() override;
     // Called by the WeatherRegion::updateBT hook (background thread).
@@ -122,6 +126,7 @@ private:
     std::unordered_map<kc::Handle, FallPrep, HandleHash> fallPrep_;   // client: moving into place before a fall
     std::unordered_map<kc::Handle, double, HandleHash> fellAt_;      // client: when we made it fall
     std::unordered_set<const void*> applied_;                        // client: characters Apply drove this frame
+    std::unordered_map<const void*, double> replicatedAt_;           // client: when Apply last drove each one
     bool ReadyToFall(const kc::Handle& h, kenshi::Character* c, const kc::EntityState& at, double now);
     std::mutex ordersMutex_;
     std::vector<std::pair<kc::Handle, kc::Command>> orders_;
@@ -194,6 +199,9 @@ private:   // first few lifecycle events (tests)
     std::unordered_map<void*, std::unordered_set<void*>> fxStopped_;        // client: region -> handlers we stopped
     std::unordered_set<void*> fxRebuild_;                                   // client: regions whose weather we switched
     std::unordered_map<std::string, std::pair<std::string, std::string>> forcedWeather_;   // tests: region -> season, weather
+    std::mutex animMutex_;
+    std::vector<std::pair<kenshi::Character*, kc::AnimEvent>> animOut_;   // host: not taken by the session yet
+    std::unordered_map<kenshi::Character*, uint32_t> animLast_;            // host: last event reported per character
     std::mutex toastMutex_;
     std::vector<std::string> toasts_;
 

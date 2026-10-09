@@ -88,8 +88,16 @@ void KenshiWorld::EndFrame() {
     auto v = std::make_shared<HookView>();
     v->active = active_;
     v->client = client_;
-    v->replicated.swap(applied_);
+    // A character stays "driven by the host" for a second after its last update: a frame without
+    // one (paused, a skipped tick) must not hand it back to the client's own game for that frame.
+    const double nowView = NowSeconds();
+    for (const void* c : applied_) replicatedAt_[c] = nowView;
     applied_.clear();
+    for (auto it = replicatedAt_.begin(); it != replicatedAt_.end();) {
+        if (nowView - it->second > 1.0 || !active_ || !client_) { it = replicatedAt_.erase(it); continue; }
+        v->replicated.insert(it->first);
+        ++it;
+    }
     if (active_) {
         for (const kc::Handle& h : controllable_) {
             auto a = alias_.find(h);
@@ -799,6 +807,112 @@ void KenshiWorld::NoteEffectStop(void* handler, uintptr_t callerRva) {
             if (c.handler == handler) id = cid;
     static std::atomic<int> logged{0};
     if (id && logged.fetch_add(1) < 300) Log("effect %u stopped by the game (caller rva %llx)", id, (unsigned long long)callerRva);
+}
+
+void KenshiWorld::NoteAnim(kenshi::Character* c, kc::AnimEvent e) {
+    if (client_ || !active_ || !c) return;
+    std::lock_guard<std::mutex> lk(animMutex_);
+    // the game ends attacks, actions and stumbles every frame "just in case": one end is enough
+    const bool isEnd = e.kind == kc::AnimKind::EndCombat || e.kind == kc::AnimKind::StopAction || e.kind == kc::AnimKind::EndStumble ||
+                       e.kind == kc::AnimKind::Sheathe;
+    auto& last = animLast_[c];
+    const uint32_t sig = (uint32_t(e.kind) << 24) ^ uint32_t(std::hash<std::string>{}(e.name) & 0xFFFFFF);
+    if (isEnd && last == sig) return;
+    last = sig;
+    if (animOut_.size() < 20000) animOut_.emplace_back(c, std::move(e));
+}
+
+void KenshiWorld::TakeAnimEvents(std::vector<std::pair<kc::Handle, kc::AnimEvent>>& out, bool state) {
+    out.clear();
+    std::vector<std::pair<kenshi::Character*, kc::AnimEvent>> raw;
+    {
+        std::lock_guard<std::mutex> lk(animMutex_);
+        raw.swap(animOut_);
+    }
+    if (client_ || !active_) return;
+    for (auto& [c, e] : raw) {
+        kc::Handle h;
+        if (kenshi::IsCharacter(c) && kenshi::GetHandle(c, h) && h.valid()) out.emplace_back(h, std::move(e));
+    }
+    if (!state) return;
+    // every character the clients see: its current action and modes (the session drops unknown handles)
+    std::vector<kenshi::Character*> chars;
+    kenshi::ActiveCharacters(chars);
+    for (kenshi::Character* c : chars) {
+        kenshi::AnimModes m;
+        kc::Handle h;
+        if (!kenshi::ReadAnimModes(c, m) || !kenshi::GetHandle(c, h)) continue;
+        kc::AnimEvent e;
+        e.kind = kc::AnimKind::State;
+        e.name = m.action;
+        e.flags = uint8_t((m.combat ? 1 : 0) | (m.carried ? 2 : 0) | (m.carryLeft ? 4 : 0) | (m.carryRight ? 8 : 0));
+        out.emplace_back(h, std::move(e));
+        kc::AnimEvent w;
+        w.kind = kc::AnimKind::WeaponState;
+        std::string sid, sec;
+        if (kenshi::WeaponInHands(c, sid, sec)) w.name = sid + "\t" + sec;
+        out.emplace_back(h, std::move(w));
+    }
+}
+
+void KenshiWorld::ApplyAnim(const kc::Handle& h, const kc::AnimEvent& e) {
+    kenshi::Character* c = Find(h);
+    static int logged = 0;
+    if (logged < 300 && e.kind != kc::AnimKind::State && e.kind != kc::AnimKind::WeaponState && e.kind != kc::AnimKind::CombatMode) {
+        ++logged;
+        Log("anim in: idx=%u kind=%d name='%s' found=%d tech=%d data=%d", h.index, int(e.kind), e.name.c_str(), c ? 1 : 0,
+            e.kind <= kc::AnimKind::CombatRun && kenshi::FindTechnique(e.name) ? 1 : 0, c && kenshi::FindAnimData(c, e.name) ? 1 : 0);
+    }
+    if (!c || !client_ || kenshi::IsDead(c)) return;
+    AnimReplayScope scope;
+    switch (e.kind) {
+    case kc::AnimKind::Combat:
+    case kc::AnimKind::CombatRun:
+        if (void* t = kenshi::FindTechnique(e.name))
+            kenshi::CallStartCombatAnim(kenshi::FnAddr(e.kind == kc::AnimKind::Combat ? kenshi::FnAnimStartCombat : kenshi::FnAnimRunCombat), c, t, e.a);
+        break;
+    case kc::AnimKind::EndCombat: kenshi::CallAnimVoid(kenshi::FnAddr(kenshi::FnAnimEndCombat), c); break;
+    case kc::AnimKind::Action:
+        if (void* a = kenshi::FindAnimData(c, e.name)) kenshi::CallPlayAction(c, a, e.a, e.b, (e.flags & 1) != 0);
+        break;
+    case kc::AnimKind::StopAction: kenshi::CallStopActionNamed(c, e.name); break;
+    case kc::AnimKind::Stumble:
+        if (void* a = kenshi::FindAnimData(c, e.name)) kenshi::CallStartStumble(c, a);
+        break;
+    case kc::AnimKind::EndStumble: kenshi::CallAnimVoid(kenshi::FnAddr(kenshi::FnAnimEndStumble), c); break;
+    case kc::AnimKind::CombatMode: kenshi::CallSetCombatMode(c, (e.flags & 1) != 0); break;
+    case kc::AnimKind::Carry: kenshi::CallSetCarryMode(c, (e.flags & 1) != 0, (e.flags & 2) != 0, (e.flags & 4) != 0); break;
+    case kc::AnimKind::DrawWeapon: {
+        const size_t tab = e.name.find('\t');
+        kenshi::CallDrawWeapon(c, e.name.substr(0, tab), tab == std::string::npos ? "" : e.name.substr(tab + 1));
+        break;
+    }
+    case kc::AnimKind::Sheathe: kenshi::CallSheathe(c); break;
+    case kc::AnimKind::WeaponState: {
+        std::string sid, sec;
+        const bool armed = kenshi::WeaponInHands(c, sid, sec);
+        const std::string mine = armed ? sid + "\t" + sec : "";
+        if (mine == e.name) break;
+        if (armed) kenshi::CallSheathe(c);
+        if (!e.name.empty()) {
+            const size_t tab = e.name.find('\t');
+            kenshi::CallDrawWeapon(c, e.name.substr(0, tab), tab == std::string::npos ? "" : e.name.substr(tab + 1));
+        }
+        break;
+    }
+    case kc::AnimKind::State: {   // heal whatever an event did not carry (joined late, action started before we knew it)
+        kenshi::AnimModes m;
+        if (!kenshi::ReadAnimModes(c, m)) break;
+        if (m.action != e.name) {
+            if (e.name.empty()) kenshi::CallStopActionNamed(c, "");
+            else if (void* a = kenshi::FindAnimData(c, e.name)) kenshi::CallPlayAction(c, a, 1.0f, 0.0f, false);
+        }
+        const bool combat = (e.flags & 1) != 0, carried = (e.flags & 2) != 0, left = (e.flags & 4) != 0, right = (e.flags & 8) != 0;
+        if (m.combat != combat) kenshi::CallSetCombatMode(c, combat);
+        if (m.carried != carried || m.carryLeft != left || m.carryRight != right) kenshi::CallSetCarryMode(c, carried, left, right);
+        break;
+    }
+    }
 }
 
 void KenshiWorld::ReadEffects(kc::EffectsMsg& out, bool full) {

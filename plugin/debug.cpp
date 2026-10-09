@@ -66,6 +66,9 @@ void DumpCharacter(std::ostream& o, const char* tag, KenshiWorld& w, const kc::H
         bool mv = false;
         float sp = 0;
         if (kenshi::Character* ch = w.Find(h); ch && kenshi::GetMovement(ch, d, mv, sp)) o << " speed=" << sp;
+        kenshi::AnimModes am;
+        if (kenshi::Character* ch = w.Find(h); ch && kenshi::ReadAnimModes(ch, am))
+            o << " action=" << (am.action.empty() ? "-" : am.action) << " cmode=" << am.combat << " tech=" << kenshi::CurrentTechniqueName(ch) << " drawn=" << kenshi::DrawnFrom(ch);
     }
     kc::Handle ct;
     if (kenshi::Character* ch = w.Find(h); ch && kenshi::ReadCombat(ch, ct)) o << " combat=" << Key(w.HostHandleOf(ct));
