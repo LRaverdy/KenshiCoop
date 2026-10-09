@@ -58,3 +58,7 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   vues en « bâtons rouges » chez un client (état de construction des bâtiments existants mal synchronisé).
   Précision : l'hôte a terminé la réparation (il le voit construit), le client le voit toujours en
   chantier. L'avancement et la fin des travaux sur un bâtiment existant n'arrivent donc pas chez le client.
+- **Ramasser (voler) un objet par terre ne marche pas chez le client 4** (nass4, 10/10). À croiser avec le
+  journal : l'ordre « ramasser » part bien à l'hôte, qui doit retrouver le même objet par type et endroit
+  (à 15 unités près). Pistes : l'objet de la sauvegarde a un autre handle chez lui et n'est pas retrouvé,
+  ou le vol (objet d'un magasin, d'une faction) n'est pas traité comme tel côté hôte.
