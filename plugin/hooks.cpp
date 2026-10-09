@@ -81,8 +81,12 @@ AnimBoolStrFn o_animStopActionNamed = nullptr;
 AnimPtrFn o_animStartStumble = nullptr;
 AnimSetBoolFn o_animSetCombatMode = nullptr;
 AnimCarryFn o_animSetCarryMode = nullptr;
+AnimSetBoolFn o_animGuardLegs = nullptr, o_animGuardUpper = nullptr;
 using DrawWeaponFn = bool (*)(void* chr, void* item, void* section);
 DrawWeaponFn o_drawWeapon = nullptr;
+using CombatMoveFn = void (*)(void* mov, float ft, const float* pos, const float* dir, bool moving, float* repulsion, float* facingOut,
+                              bool defensive, int state, float raceSpeedMult);
+CombatMoveFn o_combatMove = nullptr;
 VoidFn o_sheatheWeapon = nullptr;
 VoidFn o_seasonGetNewWeather = nullptr;
 
@@ -387,6 +391,17 @@ void hk_animSetCombatMode(void* ac, bool on) {
     const bool changed = !c || !kenshi::ReadAnimModes(c, m) || m.combat != on;
     if (!AnimHookBlocked(ac, changed ? &e : nullptr)) o_animSetCombatMode(ac, on);
 }
+void HookGuard(void* ac, bool on, bool legs) {
+    kenshi::Character* c = kenshi::AnimOwner(ac);
+    kenshi::AnimModes m;
+    kc::AnimEvent e;
+    e.kind = legs ? kc::AnimKind::GuardLegs : kc::AnimKind::GuardUpper;
+    e.flags = on ? 1 : 0;
+    const bool changed = !c || !kenshi::ReadAnimModes(c, m) || (legs ? m.guardLegs : m.guardUpper) != on;
+    if (!AnimHookBlocked(ac, changed ? &e : nullptr)) (legs ? o_animGuardLegs : o_animGuardUpper)(ac, on);
+}
+void hk_animGuardLegs(void* ac, bool on) { HookGuard(ac, on, true); }
+void hk_animGuardUpper(void* ac, bool on) { HookGuard(ac, on, false); }
 void hk_animSetCarryMode(void* ac, bool carried, bool left, bool right) {
     kenshi::Character* c = kenshi::AnimOwner(ac);
     kenshi::AnimModes m;
@@ -418,6 +433,19 @@ void hk_sheatheWeapon(void* chr) {
     kc::AnimEvent e;
     e.kind = kc::AnimKind::Sheathe;
     if (!WeaponHookBlocked(chr, &e)) o_sheatheWeapon(chr);
+}
+// In a fight, a client's game turns each fighter toward its own idea of the target: the host's
+// facing replaces it.
+void hk_combatMove(void* mov, float ft, const float* pos, const float* dir, bool moving, float* repulsion, float* facingOut, bool defensive,
+                   int state, float raceSpeedMult) {
+    o_combatMove(mov, ft, pos, dir, moving, repulsion, facingOut, defensive, state, raceSpeedMult);
+    if (!facingOut || !KenshiWorld::ClientActive()) return;
+    auto v = KenshiWorld::View();
+    auto it = v->facing.find(mov);
+    if (it == v->facing.end()) return;
+    facingOut[0] = it->second.x;
+    facingOut[1] = it->second.y;
+    facingOut[2] = it->second.z;
 }
 // Diagnostics: who stops the effects a client placed for the host.
 void hk_effectStop(void* handler) {
@@ -510,6 +538,9 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnAnimSetCarryMode, reinterpret_cast<void*>(&hk_animSetCarryMode), reinterpret_cast<void**>(&o_animSetCarryMode)},
         {kenshi::FnDrawWeapon, reinterpret_cast<void*>(&hk_drawWeapon), reinterpret_cast<void**>(&o_drawWeapon)},
         {kenshi::FnSheatheWeapon, reinterpret_cast<void*>(&hk_sheatheWeapon), reinterpret_cast<void**>(&o_sheatheWeapon)},
+        {kenshi::FnAnimGuardLegs, reinterpret_cast<void*>(&hk_animGuardLegs), reinterpret_cast<void**>(&o_animGuardLegs)},
+        {kenshi::FnAnimGuardUpper, reinterpret_cast<void*>(&hk_animGuardUpper), reinterpret_cast<void**>(&o_animGuardUpper)},
+        {kenshi::FnCombatMovementUpdate, reinterpret_cast<void*>(&hk_combatMove), reinterpret_cast<void**>(&o_combatMove)},
     };
     const MH_STATUS init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {

@@ -68,7 +68,11 @@ void DumpCharacter(std::ostream& o, const char* tag, KenshiWorld& w, const kc::H
         if (kenshi::Character* ch = w.Find(h); ch && kenshi::GetMovement(ch, d, mv, sp)) o << " speed=" << sp;
         kenshi::AnimModes am;
         if (kenshi::Character* ch = w.Find(h); ch && kenshi::ReadAnimModes(ch, am))
-            o << " action=" << (am.action.empty() ? "-" : am.action) << " cmode=" << am.combat << " tech=" << kenshi::CurrentTechniqueName(ch) << " drawn=" << kenshi::DrawnFrom(ch);
+            o << " action=" << (am.action.empty() ? "-" : am.action) << " cmode=" << am.combat << " guard=" << am.guardLegs << am.guardUpper << " tech=" << kenshi::CurrentTechniqueName(ch) << " drawn=" << kenshi::DrawnFrom(ch);
+        kc::Vec3 fd;
+        kc::Quat q;
+        if (kenshi::Character* ch = w.Find(h); ch && kenshi::GetFacing(ch, fd) && kenshi::GetRotation(ch, q))
+            o << " face=" << fd.x << ',' << fd.y << ',' << fd.z << " rot=" << q.w << ',' << q.x << ',' << q.y << ',' << q.z;
     }
     kc::Handle ct;
     if (kenshi::Character* ch = w.Find(h); ch && kenshi::ReadCombat(ch, ct)) o << " combat=" << Key(w.HostHandleOf(ct));

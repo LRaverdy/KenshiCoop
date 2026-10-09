@@ -329,10 +329,12 @@ enum class AnimKind : uint8_t {
     EndStumble = 7,
     CombatMode = 8,   // flags 1: on
     Carry = 9,        // flags 1: carried, 2: left hand, 4: right hand
-    State = 10,       // periodic: name = current action ("" none), flags 1: combat mode, 2/4/8: carry flags
+    State = 10,       // periodic: name = current action ("" none), flags 1: combat mode, 2/4/8: carry flags, 16/32: guard legs/upper
     DrawWeapon = 11,  // name: "<item template>\t<section it comes from>"
     Sheathe = 12,
     WeaponState = 13, // periodic: name "<item>\t<section>" in its hands, "" = hands empty
+    GuardLegs = 14,   // flags 1: legs in combat idle (guard stance)
+    GuardUpper = 15,  // flags 1: upper body in combat idle
 };
 struct AnimEvent {
     uint32_t netId = 0;

@@ -546,7 +546,7 @@ bool Decode(Reader& r, AnimMsg& m) {
     for (auto& e : m.events) {
         e.netId = GetU32Var(r);
         const uint8_t k = r.u8();
-        if (k < uint8_t(AnimKind::Combat) || k > uint8_t(AnimKind::WeaponState)) return false;
+        if (k < uint8_t(AnimKind::Combat) || k > uint8_t(AnimKind::GuardUpper)) return false;
         e.kind = AnimKind(k);
         e.name = r.str(kMaxAnimNameLen); e.a = r.f32(); e.b = r.f32(); e.flags = r.u8();
         if (!r.ok() || e.netId == 0) return false;

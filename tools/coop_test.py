@@ -558,18 +558,41 @@ def exp_anim(host, cli, rounds=10):
                 continue
             rows += 1
             seen_tech += hv["tech"] != "-"
-            for f in ("tech", "action", "cmode", "drawn"):
+            for f in ("tech", "action", "cmode", "drawn", "guard"):
                 if hv.get(f) != cv.get(f):
                     bad.append((k[-12:], f, hv.get(f), cv.get(f)))
         for k in set(h["squad"]) & set(c["squad"]):
             hv, cv = h["squad"][k], c["squad"][k]
-            for f in ("tech", "action", "cmode", "drawn"):
+            for f in ("tech", "action", "cmode", "drawn", "guard"):
                 if "tech" in hv and hv.get(f) != cv.get(f):
                     bad.append(("squad" + k[-6:], f, hv.get(f), cv.get(f)))
+        # facing: angle between host and client directions
+        import math as _m
+        angs = []
+        for k in set(h["char"]) & set(c["char"]):
+            hf, cf = h["char"][k].get("face"), c["char"][k].get("face")
+            if hf and cf:
+                a = [float(x) for x in hf.split(",")]; b2 = [float(x) for x in cf.split(",")]
+                dot = (a[0] * b2[0] + a[2] * b2[2]) / ((_m.hypot(a[0], a[2]) or 1) * (_m.hypot(b2[0], b2[2]) or 1))
+                angs.append(round(_m.degrees(_m.acos(max(-1, min(1, dot)))), 1))
+        log(f"  facing error (deg) worst {sorted(angs)[-4:] if angs else []}")
         worst = max(worst, len(bad))
         fighting = sorted({(v.get("tech")) for v in list(h["char"].values()) + list(h["squad"].values()) if v.get("tech", "-") != "-"})
         log(f"anim {r + 1}: chars {rows} mismatches {len(bad)} {bad[:5]} host techniques {fighting[:4]}")
     log("anim worst:", worst, "technique samples:", seen_tech)
+    # squad life flags on the client, sampled fast (portraits flickering grey?)
+    flips = 0
+    last = {}
+    for i in range(30):
+        c = dump(cli, "c_vflags", 300)
+        for k, v in c["squad"].items():
+            f = v.get("vflags")
+            if k in last and last[k] != f:
+                flips += 1
+                log("  squad", k[-10:], "vflags", last[k], "->", f, "blood", v.get("blood"))
+            last[k] = f
+        time.sleep(0.15)
+    log("squad vflags flips:", flips)
 
 
 def exp_bodies(host, cli):

@@ -96,6 +96,9 @@ enum Fn : int {
     FnAnimSetCarryMode,         // void AnimationClass::setCarryMode(bool carried, bool left, bool right)
     FnDrawWeapon,               // bool CharacterHuman::drawWeapon(Item*, std::string lastSection)
     FnSheatheWeapon,            // void CharacterHuman::sheatheWeapon()
+    FnAnimGuardLegs,            // void AnimationClass::setCombatModeLegsIdle(bool)
+    FnAnimGuardUpper,           // void AnimationClass::setCombatModeUpperIdle(bool)
+    FnCombatMovementUpdate,     // void CharMovement::combatMovementUpdate(float, const Vector3& pos, const Vector3& dir, bool moving, Vector3& repulsion, Vector3& facingOut, bool defensive, swordStateEnum, float raceSpeedMult)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -312,6 +315,10 @@ bool GetPaused();
 // Game calls (game thread only). Return false if the call faulted or the object was invalid.
 bool Teleport(Character* c, const kc::Vec3& pos, const kc::Quat& rot);
 bool SetDestination(Character* c, const kc::Vec3& dest);
+bool GetFacing(const Character* c, kc::Vec3& dir);   // CharMovement facing direction
+bool FaceDirection(Character* c, const kc::Vec3& dir);   // the game turns the character that way
+void* MovementOf(const Character* c);                    // CharMovement*
+kc::Vec3 ForwardOf(const kc::Quat& q);                   // where a character with this rotation faces
 bool ReadPace(const Character* c, uint8_t& gait, float& pace);         // speed order and desired speed
 
 // Animations (AnimationClass, reached from the character; its owner is at a fixed offset).
@@ -325,6 +332,7 @@ void* FindAnimData(const Character* c, const std::string& name);   // among the 
 struct AnimModes {
     std::string action;     // current action ("" none)
     bool combat = false, carried = false, carryLeft = false, carryRight = false;
+    bool guardLegs = false, guardUpper = false;
 };
 bool ReadAnimModes(const Character* c, AnimModes& out);
 std::string CurrentTechniqueName(const Character* c);   // the attack/block it is playing ("-" none)
@@ -336,6 +344,7 @@ bool CallPlayAction(Character* c, void* animData, float speedMult, float weight,
 bool CallStopActionNamed(Character* c, const std::string& name);
 bool CallStartStumble(Character* c, void* animData);
 bool CallSetCombatMode(Character* c, bool on);
+bool CallSetGuard(Character* c, bool legs, bool on);
 bool CallSetCarryMode(Character* c, bool carried, bool left, bool right);
 std::string ItemTemplate(const void* item);                                        // its game data id
 bool CallDrawWeapon(Character* c, const std::string& itemSid, const std::string& section);   // the matching item it carries

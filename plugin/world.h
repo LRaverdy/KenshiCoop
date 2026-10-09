@@ -24,6 +24,7 @@ struct HookView {
     std::unordered_set<const void*> squadForeign;  // squad members this machine may not command
     std::unordered_set<kc::Handle, HandleHash> controllable;  // handles this machine may command
     std::unordered_set<const void*> replicated;    // client: characters driven by the host's state
+    std::unordered_map<const void*, kc::Vec3> facing;   // client: CharMovement -> where the host's character faces
 };
 
 class KenshiWorld final : public kc::IWorld {

@@ -98,6 +98,10 @@ void KenshiWorld::EndFrame() {
         v->replicated.insert(it->first);
         ++it;
     }
+    if (active_ && client_)
+        for (const auto& [h, st] : lastTarget_)
+            if (kenshi::Character* c = Find(h); c && v->replicated.count(c))
+                if (void* m = kenshi::MovementOf(c)) v->facing[m] = kenshi::ForwardOf(st.rot);
     if (active_) {
         for (const kc::Handle& h : controllable_) {
             auto a = alias_.find(h);
@@ -438,6 +442,13 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     } else if (it != lastDest_.end() || kenshi::IsMoving(c)) {
         kenshi::Halt(c);   // the host stopped: stop walking, the correction below settles it exactly
         lastDest_.erase(h);
+    }
+    // Standing still, it faces where the host's does (moving, the path turns it; in combat the
+    // combat movement hook imposes the host's facing).
+    if (!hostMoving || latest.combatTarget != 0) {
+        kc::Vec3 mine;
+        const kc::Vec3 want = kenshi::ForwardOf(target.rot);
+        if (kenshi::GetFacing(c, mine) && mine.x * want.x + mine.z * want.z < 0.999f) kenshi::FaceDirection(c, want);
     }
     // ...while its position is continuously pulled onto the host's: no drift, even when paused.
     if (err > 0.01f) {
@@ -845,7 +856,8 @@ void KenshiWorld::TakeAnimEvents(std::vector<std::pair<kc::Handle, kc::AnimEvent
         kc::AnimEvent e;
         e.kind = kc::AnimKind::State;
         e.name = m.action;
-        e.flags = uint8_t((m.combat ? 1 : 0) | (m.carried ? 2 : 0) | (m.carryLeft ? 4 : 0) | (m.carryRight ? 8 : 0));
+        e.flags = uint8_t((m.combat ? 1 : 0) | (m.carried ? 2 : 0) | (m.carryLeft ? 4 : 0) | (m.carryRight ? 8 : 0) | (m.guardLegs ? 16 : 0) |
+                          (m.guardUpper ? 32 : 0));
         out.emplace_back(h, std::move(e));
         kc::AnimEvent w;
         w.kind = kc::AnimKind::WeaponState;
@@ -882,6 +894,8 @@ void KenshiWorld::ApplyAnim(const kc::Handle& h, const kc::AnimEvent& e) {
     case kc::AnimKind::EndStumble: kenshi::CallAnimVoid(kenshi::FnAddr(kenshi::FnAnimEndStumble), c); break;
     case kc::AnimKind::CombatMode: kenshi::CallSetCombatMode(c, (e.flags & 1) != 0); break;
     case kc::AnimKind::Carry: kenshi::CallSetCarryMode(c, (e.flags & 1) != 0, (e.flags & 2) != 0, (e.flags & 4) != 0); break;
+    case kc::AnimKind::GuardLegs: kenshi::CallSetGuard(c, true, (e.flags & 1) != 0); break;
+    case kc::AnimKind::GuardUpper: kenshi::CallSetGuard(c, false, (e.flags & 1) != 0); break;
     case kc::AnimKind::DrawWeapon: {
         const size_t tab = e.name.find('\t');
         kenshi::CallDrawWeapon(c, e.name.substr(0, tab), tab == std::string::npos ? "" : e.name.substr(tab + 1));
@@ -910,6 +924,8 @@ void KenshiWorld::ApplyAnim(const kc::Handle& h, const kc::AnimEvent& e) {
         const bool combat = (e.flags & 1) != 0, carried = (e.flags & 2) != 0, left = (e.flags & 4) != 0, right = (e.flags & 8) != 0;
         if (m.combat != combat) kenshi::CallSetCombatMode(c, combat);
         if (m.carried != carried || m.carryLeft != left || m.carryRight != right) kenshi::CallSetCarryMode(c, carried, left, right);
+        if (m.guardLegs != ((e.flags & 16) != 0)) kenshi::CallSetGuard(c, true, (e.flags & 16) != 0);
+        if (m.guardUpper != ((e.flags & 32) != 0)) kenshi::CallSetGuard(c, false, (e.flags & 32) != 0);
         break;
     }
     }

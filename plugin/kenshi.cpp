@@ -60,6 +60,9 @@ const FunctionSig kFunctions[FnCount] = {
     {"AnimationClass::setCarryMode", 0x51C8D0, {0xC7, 0x81, 0x40, 0x02, 0x00, 0x00, 0x00, 0x00, 0x80, 0xBF, 0x44, 0x88}},
     {"CharacterHuman::drawWeapon", 0x5DBF80, {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48}},
     {"CharacterHuman::sheatheWeapon", 0x5CC820, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x60, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE}},
+    {"AnimationClass::setCombatModeLegsIdle", 0x51C920, {0x38, 0x91, 0x4C, 0x02, 0x00, 0x00, 0x88, 0x91, 0x4C, 0x02, 0x00, 0x00}},
+    {"AnimationClass::setCombatModeUpperIdle", 0x51C940, {0x38, 0x91, 0x4D, 0x02, 0x00, 0x00, 0x88, 0x91, 0x4D, 0x02, 0x00, 0x00}},
+    {"CharMovement::combatMovementUpdate", 0x2AF1E0, {0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x70, 0x10, 0x48}},
 };
 
 namespace {
@@ -1466,6 +1469,29 @@ constexpr uintptr_t CM_speedOrders = 0x20, CM_desiredSpeed = 0xBC;   // CharMove
 constexpr int32_t kMoveSpeedCount = 4;
 } // namespace
 
+bool GetFacing(const Character* c, kc::Vec3& dir) {
+    constexpr uintptr_t CM_facing = 0xD0;
+    void* m = Movement(c);
+    float d[3];
+    if (!m || !Rd(m, CM_facing, d)) return false;
+    dir = {d[0], d[1], d[2]};
+    return Finite(dir);
+}
+
+bool FaceDirection(Character* c, const kc::Vec3& dir) {
+    constexpr uintptr_t CM_vFaceDirection = 0x30;
+    void* m = Movement(c);
+    void* fn = m ? VSlot(m, CM_vFaceDirection) : nullptr;
+    const float d[3] = {dir.x, dir.y, dir.z};
+    return fn && Finite(dir) && CallPtrArg2(fn, m, const_cast<float*>(d));
+}
+
+void* MovementOf(const Character* c) { return Movement(c); }
+
+kc::Vec3 ForwardOf(const kc::Quat& q) {   // q * (0,0,1)
+    return {2 * (q.x * q.z + q.w * q.y), 2 * (q.y * q.z - q.w * q.x), 1 - 2 * (q.x * q.x + q.y * q.y)};
+}
+
 bool ReadPace(const Character* c, uint8_t& gait, float& pace) {
     void* m = Movement(c);
     int32_t order = 0;
@@ -1593,6 +1619,11 @@ bool ReadAnimModes(const Character* c, AnimModes& out) {
     out.carried = carried != 0;
     out.carryLeft = l != 0;
     out.carryRight = r != 0;
+    uint8_t gl = 0, gu = 0;
+    Rd(ac, 0x24C, gl);
+    Rd(ac, 0x24D, gu);
+    out.guardLegs = gl != 0;
+    out.guardUpper = gu != 0;
     return true;
 }
 
@@ -1658,6 +1689,11 @@ bool CallStartStumble(Character* c, void* animData) {
 bool CallSetCombatMode(Character* c, bool on) {
     void* ac = AnimationOf(c);
     return ac && CallBoolArg(FnAddr(FnAnimSetCombatMode), ac, on);
+}
+
+bool CallSetGuard(Character* c, bool legs, bool on) {
+    void* ac = AnimationOf(c);
+    return ac && CallBoolArg(FnAddr(legs ? FnAnimGuardLegs : FnAnimGuardUpper), ac, on);
 }
 
 bool CallSetCarryMode(Character* c, bool carried, bool left, bool right) {
