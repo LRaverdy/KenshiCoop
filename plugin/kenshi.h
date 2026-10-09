@@ -153,6 +153,7 @@ enum Fn : int {
     FnPickupCharacter,          // void Character::pickupObject(Character* who)   (puts a body on the shoulder)
     FnDropCarried,              // void Character::dropCarriedObject(bool ragdollHim, bool removeOnly)
     FnSetCurrentPlatoon,        // bool PlayerInterface::setCurrentPlatoon(Platoon*)   (the squad the squad bar shows)
+    FnShowLoadWindow,           // void SaveManager::showLoad()   (the game's "Load" window)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -363,6 +364,7 @@ bool IsRagdoll(Character* c);   // the body is physically on the ground (or carr
 bool GetGameHours(double& out);
 // Save management (deferred operations, executed by the game a frame later).
 bool SaveManagerBusy();                                     // a save/load is pending or running
+bool ShowLoadWindow();                                      // opens the game's "Load" window
 bool RequestSave(const std::string& name, std::string* folderOut);   // folder = where it will be written
 bool RequestLoad(const std::string& name);
 bool SaveFolder(std::string& out);                          // where this machine's saves live

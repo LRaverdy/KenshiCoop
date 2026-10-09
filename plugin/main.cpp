@@ -35,6 +35,7 @@ std::unique_ptr<kc::Session> g_session;
 bool g_overlayVisible = true;
 std::deque<std::pair<std::string, double>> g_toasts;   // text, expiry time
 bool g_wasReady = false;
+bool g_leftHostWorld = false;   // a client left the host's world: what it shows is only a copy
 bool g_menuWindowShown = false;   // the Multijoueur window opens by itself once, on the main menu
 double g_startedAt = 0;
 
@@ -376,6 +377,10 @@ void HandleOverlayActions() {
         case OverlayAction::Kind::Command:
             ConsoleCommand(a.text);
             break;
+        case OverlayAction::Kind::QuitGame:
+            Log("the player quits the game from the Multijoueur window");
+            LogClose();
+            ExitProcess(0);
         case OverlayAction::Kind::EditCharacter:
             if (!g_session->EditOwnCharacter()) Toast("Ton personnage n'est pas encore là.");
             break;
@@ -428,6 +433,7 @@ void PublishOverlay() {
     m.active = m.hosting || g_session->isClient();
     m.stateText = FrenchState(st);
     if (st == kc::SessionState::Failed && !g_session->lastError().empty()) m.errorText = FrenchError(g_session->lastError());
+    m.leftHostWorld = g_leftHostWorld && g_world->Ready();
     if (st == kc::SessionState::Downloading) m.download = float(g_session->downloadProgress());
     if (m.active) {
         m.players.push_back({g_session->localId(), g_cfg.name, 0, CharactersOf(g_session->localId()), true});
@@ -544,6 +550,19 @@ void LogAndConsoleUpkeep() {
     HostConsolePublish(std::move(m));
 }
 
+bool g_clientInWorld = false;
+void AfterLeavingHostWorld() {
+    const bool inWorld = g_session->state() == kc::SessionState::Connected;
+    if (inWorld || g_session->isHost()) g_leftHostWorld = false;
+    if (inWorld) { g_clientInWorld = true; return; }
+    if (!g_clientInWorld || g_session->isClient()) return;
+    g_clientInWorld = false;
+    Log("left the host's world: the local copy is paused (Escape > Load to play one of our own games)");
+    if (g_world->Ready() && !kenshi::GetPaused()) kenshi::CallUserPause(true);
+    g_leftHostWorld = true;
+    OverlayOpenMultiplayer();
+}
+
 void Tick(bool live) {
     g_world->BeginFrame(live);
     for (auto& t : g_world->TakeToasts()) Toast(t);
@@ -569,6 +588,7 @@ void Tick(bool live) {
     if (live) g_session->CountFrame();
     LogAndConsoleUpkeep();
     g_session->Tick(live);
+    AfterLeavingHostWorld();
     if (live) g_world->EndFrame();
     PublishOverlay();
 }

@@ -29,6 +29,7 @@ struct OverlayModel {
     bool hosting = false;
     std::string stateText;              // where the session stands, in French
     std::string errorText;              // why the last session ended, in French (empty: none)
+    bool leftHostWorld = false;         // a client that left: what it sees is only a copy of the host's world
     float download = -1;                // 0..1 while the host's world is downloading
     std::vector<OverlayPlayer> players; // everyone in the session, us included
     std::string name, address;          // current settings
@@ -47,7 +48,7 @@ struct OverlayModel {
 
 // What the player did in our windows; carried out on the game thread.
 struct OverlayAction {
-    enum class Kind { Host, Join, Leave, Command, DialogAnswer, EditCharacter } kind = Kind::Command;
+    enum class Kind { Host, Join, Leave, Command, DialogAnswer, EditCharacter, QuitGame } kind = Kind::Command;
     std::string name, address, text;
     uint16_t port = 0;
     int index = 0;                      // DialogAnswer

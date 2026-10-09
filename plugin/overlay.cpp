@@ -187,6 +187,14 @@ void DrawMultiplayer(const OverlayModel& m, float w, float h) {
     ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s", m.stateText.c_str());
     if (m.download >= 0) ImGui::ProgressBar(m.download, ImVec2(-1.0f, 0.0f));
     if (!m.errorText.empty()) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", m.errorText.c_str());
+    if (m.leftHostWorld) {
+        ImGui::Separator();
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420.0f);
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Tu n'es plus dans la partie de l'hôte : ce que tu vois n'en est qu'une copie, en pause.");
+        ImGui::TextUnformatted("Pour reprendre une de tes parties : Échap, puis Charger. Ou rejoins à nouveau ci-dessous.");
+        ImGui::PopTextWrapPos();
+        if (ImGui::Button("Quitter le jeu")) PushAction({OverlayAction::Kind::QuitGame, {}, {}, {}, 0});
+    }
     ImGui::Separator();
     if (!m.active) {
         ImGui::InputText("Ton nom", g_nameBuf, sizeof(g_nameBuf));

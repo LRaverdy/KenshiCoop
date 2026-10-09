@@ -1636,7 +1636,8 @@ void Session::ClientPacket(Msg type, Reader& r) {
                 if (it != entities_.end() && it->second.present) world_.ApplySay(it->second.handle, e.text, e.shout);
                 break;
             case DialogKind::Open:
-                dialog_ = DialogView{};
+                // the game may say what the other one says before it opens the window: keep it
+                if (dialog_.id != e.dialogId) dialog_ = DialogView{};
                 dialog_.open = true;
                 dialog_.id = e.dialogId;
                 dialog_.name = e.text;
