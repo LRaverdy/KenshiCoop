@@ -4,6 +4,12 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
 
 ## 10 octobre 2026
 
+- **PRIORITÉ — Les 3 clients plantent juste après une nouvelle prime** (10/10, 00:51:50–00:52:00 ; l'hôte
+  continue). Juste avant : Geoffrey crochète un coffre-fort (crime), l'ouvre, puis devient « recherché par
+  les Cités Unies pour 1000 cats » à 00:51:43 (sa première prime). Suspect : la synchro des primes (lot B)
+  crée chez chaque client la nouvelle entrée de prime avec l'operator[] du jeu (0x5E7EE0), jamais testé
+  en vraie partie. À confirmer avec le KenshiCoop.log / crashDump d'un client.
+
 - **Ville lointaine en « bâtons rouges »** : un client parti seul dans une autre ville voit ses bâtiments
   comme des chantiers (bâtons rouges), alors que l'hôte la voit normalement.
 - **Fenêtre du marchand chez l'hôte** : en 0.2.x, la fenêtre de commerce s'ouvre encore chez l'hôte et pas
