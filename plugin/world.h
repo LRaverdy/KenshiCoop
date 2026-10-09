@@ -273,6 +273,7 @@ private:
     std::unordered_map<kc::Handle, FallPrep, HandleHash> fallPrep_;   // client: moving into place before a fall
     std::unordered_map<kc::Handle, double, HandleHash> fellAt_;      // client: when we made it fall
     std::unordered_set<kc::Handle, HandleHash> carriedHere_;
+    std::unordered_map<kc::Handle, kc::CharBounties, HandleHash> hostBounties_;   // client: the host's, shown, not written
     struct HandTool { std::string sid; void* item = nullptr; kenshi::Character* who = nullptr; };
     std::unordered_map<kc::Handle, HandTool, HandleHash> handTools_;   // client: tools we put in hands   // client: host characters someone carries here
     std::unordered_set<const void*> applied_;                        // client: characters Apply drove this frame

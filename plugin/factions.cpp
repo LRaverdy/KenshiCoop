@@ -190,8 +190,8 @@ size_t KenshiWorld::ApplyFactions(const kc::FactionsMsg& m) {
     int32_t rank = 0;
     float trust = 0, badass = 0;
     if (Rd(prel, FR_rank, rank) && rank != m.playerRank) n += Wr(prel, FR_rank, m.playerRank);
-    if (Rd(prel, FR_trust, trust) && trust != m.reputationTrust) n += Wr(prel, FR_trust, m.reputationTrust);
-    if (Rd(prel, FR_badass, badass) && badass != m.reputationBadassery) n += Wr(prel, FR_badass, m.reputationBadassery);
+    if (Rd(prel, FR_trust, trust) && !kc::CloseEnough(trust, m.reputationTrust, 0.5f)) n += Wr(prel, FR_trust, m.reputationTrust);
+    if (Rd(prel, FR_badass, badass) && !kc::CloseEnough(badass, m.reputationBadassery, 0.5f)) n += Wr(prel, FR_badass, m.reputationBadassery);
     const auto bySid = FactionsBySid();
     HostCallScope scope;
     for (const auto& e : m.factions) {
@@ -202,7 +202,7 @@ size_t KenshiWorld::ApplyFactions(const kc::FactionsMsg& m) {
             if (!relations) return;
             void* d = RelationDataSeh(relations, about);   // made if this world has none yet
             kc::RelationState cur;
-            if (d && ReadRelation(d, cur) && !(cur == want) && WriteRelation(d, want)) ++n;
+            if (d && ReadRelation(d, cur) && !kc::SameRelation(cur, want) && WriteRelation(d, want)) ++n;
         };
         if (e.hasOurs) impose(prel, f, e.ours);
         void* rel = nullptr;
@@ -213,6 +213,11 @@ size_t KenshiWorld::ApplyFactions(const kc::FactionsMsg& m) {
 
 bool KenshiWorld::ReadBounties(const kc::Handle& h, kc::CharBounties& out) {
     out = kc::CharBounties{};
+    if (client_) {   // a client's game holds none: what it shows is the host's
+        auto it = hostBounties_.find(h);
+        if (it != hostBounties_.end()) out = it->second;
+        return Find(h) != nullptr;
+    }
     kenshi::Character* c = Find(h);
     if (!kenshi::IsCharacter(c)) return false;
     auto* bm = reinterpret_cast<uint8_t*>(c) + CH_bounties;
@@ -243,13 +248,30 @@ bool KenshiWorld::ReadBounties(const kc::Handle& h, kc::CharBounties& out) {
 }
 
 size_t KenshiWorld::ApplyBounties(const kc::Handle& h, const kc::CharBounties& want) {
-    // Off: every client crashed right after a new bounty appeared (10/10), and again on loading the
-    // host's save that held it. Bounties stay the host's business until this is understood.
-    (void)h; (void)want;
-    return 0;
     kenshi::Character* c = Find(h);
     if (!kenshi::IsCharacter(c)) return 0;
     auto* bm = reinterpret_cast<uint8_t*>(c) + CH_bounties;
+    if (client_) {
+        // Not written into a client's game. A bounty or a crime there wakes its own law enforcement
+        // (guards, bounty hunters) against a character the host drives: every client crashed within
+        // 7-17 s of a new bounty (10/10), and again on loading the host's save holding it, which no
+        // write of ours was involved in. The client keeps the host's copy (ReadBounties, the bounty
+        // command) and empties whatever its own game puts there: the law is the host's.
+        hostBounties_[h] = want;
+        size_t n = 0;
+        ForEachNode(bm, [&](void*, void* node) {
+            int32_t amount = 0;
+            uint32_t crimes = 0;
+            if (Rd(node, BN_amount, amount) && Rd(node, BN_crimes, crimes) && (amount || crimes)) {
+                Wr(node, BN_amount, int32_t(0));
+                Wr(node, BN_crimes, uint32_t(0));
+                ++n;
+            }
+        });
+        int32_t crime = 0;
+        if (Rd(bm, BM_crime, crime) && crime != 0 && Wr(bm, BM_crime, int32_t(0))) ++n;
+        return n;
+    }
     const auto bySid = FactionsBySid();
     size_t n = 0;
     // bounties the host no longer has: emptied (the entry itself stays, as the game's own clearing

@@ -2253,6 +2253,7 @@ void KenshiWorld::SetRole(bool client, bool active) {
     haveHostTime_ = false;
     pauseSeenAt_ = -1;
     lastDest_.clear();
+    hostBounties_.clear();
     postureSince_.clear();
     postureFixed_.clear();
     {
