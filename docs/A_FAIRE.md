@@ -46,3 +46,8 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   Ces PNJ n'existent pas dans le jeu du client, et sa recréation (modèle + faction) échoue. Voir pourquoi
   (PNJ unique, modèle introuvable, zone pas chargée). Les mêmes rapports montrent aussi des persos décalés
   de 300 à 466 unités (« max offset »), à éclaircir.
+- **Le perso de l'hôte en passif attaque quand un ami attaque** (10/10). L'hôte se met en passif ; quand un
+  client ordonne à son perso d'attaquer un PNJ, le perso de l'hôte part aussi à l'attaque. Pistes : l'ordre
+  du client est exécuté chez l'hôte en sélectionnant le perso du client ; si la sélection de l'hôte (son
+  perso) est encore active à ce moment-là, l'ordre « attaquer » part aussi pour lui. Vérifier que pendant
+  l'exécution seul le perso du client est sélectionné, et que le mode passif n'est pas retiré.
