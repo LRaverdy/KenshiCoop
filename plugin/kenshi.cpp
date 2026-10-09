@@ -105,6 +105,16 @@ const FunctionSig kFunctions[FnCount] = {
     {"PlayerInterface::focusCameraSelectedCharacter", 0x7F37F0, {0x48, 0x89, 0x5C, 0x24, 0x20, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B}},
     {"ActivePlatoon::addCharacterAt", 0x796620, {0x48, 0x85, 0xD2, 0x0F, 0x84, 0x1C, 0x04, 0x00, 0x00, 0x48, 0x8B, 0xC4}},
     {"PlayerInterface::createSquad", 0x7F4910, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B, 0x05, 0x73, 0xFD, 0x93}},
+    {"ForgottenGUI::closeCharacterEditor", 0x6E22B0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x48, 0x8B, 0x89}},
+    {"ForgottenGUI::showCharacterEditor", 0x6E32F0, {0x48, 0x89, 0x54, 0x24, 0x10, 0x56, 0x57, 0x41, 0x54, 0x48, 0x83, 0xEC}},
+    {"Character::setAppearanceData", 0x5B9E90, {0x48, 0x8B, 0xC4, 0x55, 0x57, 0x41, 0x54, 0x48, 0x8D, 0x68, 0xA1, 0x48}},
+    {"GameData bool map []", 0x6C7C0, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x81, 0xEC, 0x90}},
+    {"GameData string map []", 0x6D190, {0x48, 0x8B, 0xC4, 0x56, 0x57, 0x41, 0x54, 0x48, 0x81, 0xEC, 0x90, 0x00}},
+    {"GameData int map []", 0x6CF30, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x81, 0xEC, 0x90}},
+    {"GameData float map []", 0xB0AB0, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x81, 0xEC, 0x90}},
+    {"GameData vec3 map []", 0xB0D40, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x81, 0xEC, 0x90}},
+    {"GameData quat map []", 0x2E6110, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x81, 0xEC, 0x90}},
+    {"std::string::assign", 0x69BC0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
 };
 
 namespace {
@@ -742,6 +752,180 @@ bool MoveToSquad(void* squad, Character* c, int index) {
 void* NewSquad() {
     PlayerInterface* pi = Player();
     return pi ? NewSquadSeh(FnAddr(FnCreateSquad), pi) : nullptr;
+}
+
+namespace { void* FindGameData(const std::string& sid); }   // below
+
+namespace {
+// Character -> AnimationClass (+0x448) -> AppearanceBase (+0xE8) -> appearance GameData (+0x148)
+constexpr uintptr_t CH_anim = 0x448, ANIM_appearance = 0xE8, APP_data = 0x148;
+// GameData value maps (boost unordered_map<std::string, T>): nodes hold the key at +0x10 and the
+// value at +0x38; operator[] returns the pair (key, value): value at +0x28.
+constexpr uintptr_t GDM_bool = 0xF8, GDM_string = 0x138, GDM_int = 0x178, GDM_float = 0x1B8, GDM_vec = 0x238, GDM_quat = 0x278, GDM_refs = 0x2B8;
+constexpr uintptr_t kPairValue = 0x28, kNodeValue = 0x38;
+constexpr size_t kRefSize = 0x40;            // GameDataReference: values, sid string (+0x10), GameData* (+0x38)
+constexpr uintptr_t kTheGui = 0x21337B0, GUI_editor = 0x1C0;
+constexpr uintptr_t ED_charsData = 0x260, ED_charsCount = 0x268;
+constexpr uintptr_t kLektorCharVt = 0x16EFE88;
+constexpr int kEditDebug = 2;                // CharacterEditMode: race and gender can change, nothing randomised
+constexpr int kItemTypeRace = 7;
+
+void* AppearanceData(Character* c) {
+    void* anim = nullptr;
+    void* app = nullptr;
+    void* gd = nullptr;
+    if (!IsCharacter(c) || !Rd(c, CH_anim, anim) || !anim || !Rd(anim, ANIM_appearance, app) || !app || !Rd(app, APP_data, gd)) return nullptr;
+    return gd;
+}
+
+template <typename F>
+void ForEachNode(const void* gd, uintptr_t map, F&& f) {
+    const auto* m = reinterpret_cast<const uint8_t*>(gd) + map;
+    uint64_t size = 0, bucketCount = 0;
+    void** buckets = nullptr;
+    if (!Rd(m, off::US_size, size) || size == 0 || size > 4096 || !Rd(m, off::US_bucketCount, bucketCount) || !Rd(m, off::US_buckets, buckets) || !buckets)
+        return;
+    void* node = nullptr;
+    if (!Rd(buckets, bucketCount * sizeof(void*), node)) return;
+    std::string key;
+    for (uint64_t i = 0; node && i < size; ++i) {
+        if (ReadGameString(reinterpret_cast<uint8_t*>(node) + off::MapNode_key, key)) f(key, reinterpret_cast<uint8_t*>(node) + kNodeValue);
+        if (!Rd(node, off::USNode_next, node)) break;
+    }
+}
+
+using FnMapIndex = uint8_t* (*)(void* map, const void* key);
+uint8_t* MapSlotSeh(void* fn, void* map, const void* key) {
+    __try { return reinterpret_cast<FnMapIndex>(fn)(map, key); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+// The value slot for that key (inserted by the game's own operator[] when missing).
+uint8_t* ValueSlot(void* gd, uintptr_t map, Fn fn, const std::string& key) {
+    alignas(8) uint8_t gs[0x28];
+    GameStringView(key, gs);
+    uint8_t* pair = MapSlotSeh(FnAddr(fn), reinterpret_cast<uint8_t*>(gd) + map, gs);
+    return pair ? pair + kPairValue : nullptr;
+}
+using FnAssign = void* (*)(void* dst, const void* src, size_t pos, size_t n);
+bool AssignSeh(void* dst, const void* src) {
+    __try { reinterpret_cast<FnAssign>(FnAddr(FnStringAssign))(dst, src, 0, size_t(-1)); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool AssignGameString(void* dst, const std::string& value) {
+    std::string cur;
+    if (ReadGameString(dst, cur) && cur == value) return true;
+    alignas(8) uint8_t gs[0x28];
+    GameStringView(value, gs);
+    return AssignSeh(dst, gs);
+}
+using FnSetAppearance = void (*)(void* c, void* gd);
+bool SetAppearanceSeh(void* c, void* gd) {
+    __try { reinterpret_cast<FnSetAppearance>(FnAddr(FnSetAppearanceData))(c, gd); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+struct CharLektor {
+    uintptr_t vt;
+    uint32_t count, capacity;
+    void** data;
+};
+using FnShowEditor = void (*)(void* gui, CharLektor* chars, int mode, const void* races);
+bool ShowEditorSeh(CharLektor* lk) {
+    __try { reinterpret_cast<FnShowEditor>(FnAddr(FnShowCharacterEditor))(reinterpret_cast<void*>(Addr(kTheGui)), lk, kEditDebug, nullptr); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+using FnGameNew = void* (*)(size_t);
+} // namespace
+
+bool ReadAppearance(Character* c, kc::AppearanceMsg& out) {
+    out = kc::AppearanceMsg{};
+    void* gd = AppearanceData(c);
+    if (!gd) return false;
+    CharacterName(c, out.name);
+    using T = kc::AppearanceType;
+    ForEachNode(gd, GDM_bool, [&](const std::string& k, const uint8_t* v) { kc::AppearanceField f; f.type = T::Bool; f.key = k; f.b = *v != 0; out.fields.push_back(f); });
+    ForEachNode(gd, GDM_int, [&](const std::string& k, const uint8_t* v) { kc::AppearanceField f; f.type = T::Int; f.key = k; Rd(v, 0, f.i); out.fields.push_back(f); });
+    ForEachNode(gd, GDM_float, [&](const std::string& k, const uint8_t* v) { kc::AppearanceField f; f.type = T::Float; f.key = k; Rd(v, 0, f.f[0]); out.fields.push_back(f); });
+    ForEachNode(gd, GDM_string, [&](const std::string& k, const uint8_t* v) { kc::AppearanceField f; f.type = T::String; f.key = k; ReadGameString(v, f.s); out.fields.push_back(f); });
+    ForEachNode(gd, GDM_vec, [&](const std::string& k, const uint8_t* v) { kc::AppearanceField f; f.type = T::Vec3; f.key = k; SafeCopy(f.f, v, 12); out.fields.push_back(f); });
+    ForEachNode(gd, GDM_quat, [&](const std::string& k, const uint8_t* v) { kc::AppearanceField f; f.type = T::Quat; f.key = k; SafeCopy(f.f, v, 16); out.fields.push_back(f); });
+    ForEachNode(gd, GDM_refs, [&](const std::string& k, const uint8_t* v) {
+        kc::AppearanceField f;
+        f.type = T::Refs;
+        f.key = k;
+        const uint8_t* b = nullptr;
+        const uint8_t* e = nullptr;
+        if (Rd(v, 0, b) && Rd(v, 8, e) && b && e >= b && size_t(e - b) / kRefSize <= 64)
+            for (const uint8_t* r = b; r < e; r += kRefSize) { std::string sid; if (ReadGameString(r + 0x10, sid)) f.refs.push_back(sid); }
+        out.fields.push_back(f);
+    });
+    for (auto& f : out.fields) for (float& x : f.f) if (!std::isfinite(x)) x = 0;
+    if (out.fields.size() > kc::kMaxAppearanceFields) out.fields.resize(kc::kMaxAppearanceFields);
+    return true;
+}
+
+bool WriteAppearance(Character* c, const kc::AppearanceMsg& m) {
+    void* gd = AppearanceData(c);
+    if (!gd) return false;
+    using T = kc::AppearanceType;
+    int written = 0;
+    for (const auto& f : m.fields) {
+        uint8_t* v = nullptr;
+        switch (f.type) {
+        case T::Bool: if ((v = ValueSlot(gd, GDM_bool, FnMapBool, f.key))) { const uint8_t b = f.key == "in editor" ? 0 : f.b; Wr(v, 0, b); } break;
+        case T::Int: if ((v = ValueSlot(gd, GDM_int, FnMapInt, f.key))) Wr(v, 0, f.i); break;
+        case T::Float: if ((v = ValueSlot(gd, GDM_float, FnMapFloat, f.key))) Wr(v, 0, f.f[0]); break;
+        case T::String: if ((v = ValueSlot(gd, GDM_string, FnMapString, f.key))) AssignGameString(v, f.s); break;
+        case T::Vec3: if ((v = ValueSlot(gd, GDM_vec, FnMapVec3, f.key))) { for (int k = 0; k < 3; ++k) Wr(v, size_t(k) * 4, f.f[k]); } break;
+        case T::Quat: if ((v = ValueSlot(gd, GDM_quat, FnMapQuat, f.key))) { for (int k = 0; k < 4; ++k) Wr(v, size_t(k) * 4, f.f[k]); } break;
+        case T::Refs: {
+            // only an existing list of the same length is rewritten (the race: one entry)
+            ForEachNode(gd, GDM_refs, [&](const std::string& k, const uint8_t* lst) {
+                if (k != f.key) return;
+                uint8_t* b = nullptr;
+                uint8_t* e = nullptr;
+                if (!Rd(lst, 0, b) || !Rd(lst, 8, e) || !b || size_t(e - b) / kRefSize != f.refs.size()) return;
+                for (size_t i = 0; i < f.refs.size(); ++i) {
+                    uint8_t* r = b + i * kRefSize;
+                    void* target = FindGameData(f.refs[i]);
+                    if (!target) continue;
+                    AssignGameString(r + 0x10, f.refs[i]);
+                    Wr(r, 0x38, target);
+                }
+                v = b;
+            });
+            break;
+        }
+        }
+        written += v != nullptr;
+    }
+    if (!m.name.empty()) {
+        std::string cur;
+        if (!CharacterName(c, cur) || cur != m.name)
+            if (void* fn = VSlot(c, slot::RO_setName)) { alignas(8) uint8_t gs[0x28]; GameStringView(m.name, gs); CallStrBool(fn, c, gs, false); }
+    }
+    // same data object: the game sees what changed (race, gender) and rebuilds the body
+    return written > 0 && SetAppearanceSeh(c, gd);
+}
+
+bool OpenCharacterEditor(Character* c) {
+    if (!IsCharacter(c)) return false;
+    void** data = static_cast<void**>(reinterpret_cast<FnGameNew>(Addr(0xED6504))(sizeof(void*)));
+    if (!data) return false;
+    data[0] = c;
+    // by value: the callee owns this copy and frees its storage with the game's delete
+    CharLektor lk{Addr(kLektorCharVt), 1, 1, data};
+    return ShowEditorSeh(&lk);
+}
+
+void EditorCharacters(std::vector<Character*>& out) {
+    out.clear();
+    void* ed = nullptr;
+    void** data = nullptr;
+    uint32_t count = 0;
+    if (!Rd(reinterpret_cast<void*>(Addr(kTheGui)), GUI_editor, ed) || !ed || !Rd(ed, ED_charsData, data) || !Rd(ed, ED_charsCount, count) || !data ||
+        count > 64)
+        return;
+    for (uint32_t i = 0; i < count; ++i) {
+        void* c = nullptr;
+        if (Rd(data, i * sizeof(void*), c) && IsCharacter(c)) out.push_back(static_cast<Character*>(c));
+    }
 }
 
 bool IsStatOfCharacter(const void* statField) {

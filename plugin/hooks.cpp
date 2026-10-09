@@ -463,6 +463,18 @@ void hk_addAt(void* squad, void* c, int index) {
     w->QueueLocalOrder(h, cmd);
 }
 
+// The game's character editor was confirmed: its characters have new looks (and maybe a new name)
+// to show everyone. The editor commits them while it closes.
+using GuiFn = void (*)(void* gui);
+GuiFn o_closeEditor = nullptr;
+void hk_closeEditor(void* gui) {
+    std::vector<kenshi::Character*> chars;
+    kenshi::EditorCharacters(chars);
+    o_closeEditor(gui);
+    if (KenshiWorld* w = TheWorld(); w && KenshiWorld::View()->active)
+        for (kenshi::Character* c : chars) w->NoteEdited(c);
+}
+
 // Experience is the host's too: every gain (combat, training, walking, first aid...) ends in
 // increaseStat, refused on clients; the host's skill levels arrive in Progress messages.
 using IncreaseStatFn = void (*)(float* stat, float amount, float upperLimit);
@@ -950,6 +962,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnPickupItem, reinterpret_cast<void*>(&hk_pickup), reinterpret_cast<void**>(&o_pickup)},
         {kenshi::FnIncreaseStat, reinterpret_cast<void*>(&hk_increaseStat), reinterpret_cast<void**>(&o_increaseStat)},
         {kenshi::FnSquadAddCharacterAt, reinterpret_cast<void*>(&hk_addAt), reinterpret_cast<void**>(&o_addAt)},
+        {kenshi::FnCloseCharacterEditor, reinterpret_cast<void*>(&hk_closeEditor), reinterpret_cast<void**>(&o_closeEditor)},
         {kenshi::FnDialogueSay, reinterpret_cast<void*>(&hk_say), reinterpret_cast<void**>(&o_say)},
         {kenshi::FnDialogueSetInDialog, reinterpret_cast<void*>(&hk_setInDialog), reinterpret_cast<void**>(&o_setInDialog)},
         {kenshi::FnDialogueSetResponses, reinterpret_cast<void*>(&hk_setResponses), reinterpret_cast<void**>(&o_setResponses)},

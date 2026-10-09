@@ -338,6 +338,9 @@ void HandleOverlayActions() {
         case OverlayAction::Kind::Command:
             ConsoleCommand(a.text);
             break;
+        case OverlayAction::Kind::EditCharacter:
+            if (!g_session->EditOwnCharacter()) Toast("Ton personnage n'est pas encore là.");
+            break;
         case OverlayAction::Kind::DialogAnswer:
             g_session->AnswerDialog(a.index);
             break;

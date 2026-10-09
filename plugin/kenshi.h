@@ -142,6 +142,11 @@ enum Fn : int {
     FnFocusCamera,              // void PlayerInterface::focusCameraSelectedCharacter()
     FnSquadAddCharacterAt,      // void ActivePlatoon::addCharacterAt(RootObject*, int index)   (moves a character into a squad)
     FnCreateSquad,              // ActivePlatoon* PlayerInterface::createSquad()
+    FnCloseCharacterEditor,     // void ForgottenGUI::closeCharacterEditor()   (only the editor's confirm button calls it)
+    FnShowCharacterEditor,      // void ForgottenGUI::showCharacterEditor(lektor<Character*>, CharacterEditMode, const vector<GameDataReference>* races)
+    FnSetAppearanceData,        // void Character::setAppearanceData(GameDataCopyStandalone*)
+    FnMapBool, FnMapString, FnMapInt, FnMapFloat, FnMapVec3, FnMapQuat,   // GameData value maps: operator[](const std::string&) -> pair*
+    FnStringAssign,             // std::string& std::string::assign(const std::string&, size_t pos, size_t n)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -309,6 +314,12 @@ void SetSquadName(void* squad, const std::string& name);
 void SquadMembers(void* squad, std::vector<Character*>& out);   // the player characters in it
 bool MoveToSquad(void* squad, Character* c, int index);          // what dropping a portrait on a squad does
 void* NewSquad();                                              // what the "new squad" button does
+// Appearance: the character's appearance GameData, read whole / written back (then the game
+// rebuilds the body), plus its name. And the game's character editor, opened on one character.
+bool ReadAppearance(Character* c, kc::AppearanceMsg& out);
+bool WriteAppearance(Character* c, const kc::AppearanceMsg& m);
+bool OpenCharacterEditor(Character* c);
+void EditorCharacters(std::vector<Character*>& out);           // who the open editor works on
 bool CallStartPlayerConversation(Character* npc, Character* pc);   // tests: npc talks to pc (its default conversation)                // tests: Dialogue::say through the hooks   // the float lies inside a live character's CharStats
 // Conversations (Dialogue, Character+0x280).
 void* CharacterDialogue(Character* c);

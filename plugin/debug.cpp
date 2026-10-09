@@ -433,6 +433,59 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         snprintf(b, sizeof(b), "ok %.3f,%.3f,%.3f %s", p.x, p.y, p.z, Key(h).c_str());
         return b;
     }
+    if (cmd == "look") {   // look <name>: appearance summary of that squad member ('_' for spaces)
+        std::string who;
+        in >> who;
+        std::replace(who.begin(), who.end(), '_', ' ');
+        std::vector<kenshi::Character*> all;
+        kenshi::PlayerCharacters(all);
+        for (kenshi::Character* c : all) {
+            std::string n;
+            if (!kenshi::CharacterName(c, n) || n != who) continue;
+            kc::AppearanceMsg m;
+            if (!kenshi::ReadAppearance(c, m)) return "err no appearance";
+            std::ostringstream o;
+            o << "ok fields=" << m.fields.size();
+            for (const auto& f : m.fields) {
+                if (f.key == "Age" || f.key == "sex female" || f.key == "head" || f.key == "race" || f.key == "hair style" || f.key == "Hair Colour") {
+                    o << " " << f.key << "=";
+                    if (f.type == kc::AppearanceType::Float) o << f.f[0];
+                    else if (f.type == kc::AppearanceType::Bool) o << f.b;
+                    else if (f.type == kc::AppearanceType::String) o << f.s;
+                    else for (const auto& r : f.refs) o << r;
+                }
+            }
+            return o.str();
+        }
+        return "err no " + who;
+    }
+    if (cmd == "lookset") {   // lookset <name> <floatKey> <value>: change one slider of that squad member's looks (tests)
+        std::string who, key;
+        float v = 0;
+        in >> who >> key >> v;
+        for (auto* str : {&who, &key}) std::replace(str->begin(), str->end(), '_', ' ');
+        std::vector<kenshi::Character*> all;
+        kenshi::PlayerCharacters(all);
+        for (kenshi::Character* c : all) {
+            std::string n;
+            if (!kenshi::CharacterName(c, n) || n != who) continue;
+            kc::AppearanceMsg m;
+            m.name = n;
+            kc::AppearanceField f;
+            f.type = kc::AppearanceType::Float;
+            f.key = key;
+            f.f[0] = v;
+            m.fields.push_back(f);
+            HostCallScope scope;
+            return kenshi::WriteAppearance(c, m) ? "ok" : "err";
+        }
+        return "err no " + who;
+    }
+    if (cmd == "editchar") return s.EditOwnCharacter() ? "ok" : "err";   // client: the character editor on our own character
+    if (cmd == "editdone") {   // editdone: what the editor's confirm button does at the end
+        reinterpret_cast<void (*)(void*)>(kenshi::FnAddr(kenshi::FnCloseCharacterEditor))(reinterpret_cast<void*>(kenshi::Addr(0x21337B0)));
+        return "ok";
+    }
     if (cmd == "squads") {   // squads: the player's squads as this machine has them: "name: member,member | ..."
         std::vector<kc::IWorld::WorldSquad> ws;
         w.ReadSquads(ws);

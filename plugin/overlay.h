@@ -47,7 +47,7 @@ struct OverlayModel {
 
 // What the player did in our windows; carried out on the game thread.
 struct OverlayAction {
-    enum class Kind { Host, Join, Leave, Command, DialogAnswer } kind = Kind::Command;
+    enum class Kind { Host, Join, Leave, Command, DialogAnswer, EditCharacter } kind = Kind::Command;
     std::string name, address, text;
     uint16_t port = 0;
     int index = 0;                      // DialogAnswer

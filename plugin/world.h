@@ -67,6 +67,11 @@ public:
     void ApplyProgress(const kc::Handle& h, const std::vector<float>& stats) override;
     bool ReadMoney(int32_t& money) override { return kenshi::ReadPlayerMoney(money); }
     void ReadSquads(std::vector<WorldSquad>& out) override;
+    void TakeEditedCharacters(std::vector<kc::Handle>& out) override;
+    bool ReadAppearance(const kc::Handle& h, kc::AppearanceMsg& out) override;
+    void ApplyAppearance(const kc::Handle& h, const kc::AppearanceMsg& m) override;
+    bool OpenCharacterEditor(const kc::Handle& h) override;
+    void NoteEdited(kenshi::Character* c);   // hooks: the character editor was confirmed for it
     void ApplySquads(const std::vector<WorldSquad>& squads) override;
     void ApplyMoney(int32_t money) override { kenshi::WritePlayerMoney(money); }
     bool Order(const kc::Handle& h, const kc::Command& c) override;
@@ -250,6 +255,7 @@ private:   // first few lifecycle events (tests)
     std::vector<kc::GroundEvent> groundOut_;                                // host: not sent yet
     std::unordered_map<kc::Handle, kc::Handle, kc::HandleHash> groundAlias_;   // client: host item -> our copy
     std::vector<std::pair<kenshi::Character*, kc::ItemState>> localDrops_;   // client, under groundMutex_
+    std::vector<kenshi::Character*> edited_;   // characters whose looks the editor just changed
     double pauseSeenAt_ = -1;   // client: when the host's pause arrived (we pause a little later)
     std::mutex dialogMutex_;
     std::vector<WorldDialog> dialogEvents_;                 // host, under dialogMutex_

@@ -1218,6 +1218,8 @@ def main():
     fa = sub.add_parser("facing")
     fa.add_argument("--save", default="kctest_base")
     fa.add_argument("--keep", action="store_true")
+    mn = sub.add_parser("menu", help="host + a second game on the main menu (join by hand)")
+    mn.add_argument("--save", default="kctest_base")
     fo = sub.add_parser("four", help="1 host + 3 clients")
     fo.add_argument("--save", default="kctest_base")
     fo.add_argument("--clients", type=int, default=3)
@@ -1251,6 +1253,20 @@ def main():
     a = ap.parse_args()
     if a.what == "cmd":
         print(cmd(a.pid, " ".join(a.command)))
+        return
+    if a.what == "menu":   # a hosting game + a second game left on the main menu: the player joins by hand
+        kill_all()
+        host = launch()
+        log("host pid", host)
+        wait_for(host, lambda s: s.get("state") == "idle", 180, "host menu")
+        time.sleep(3)
+        log("load", cmd(host, f"load {a.save}"))
+        wait_for(host, lambda s: s.get("ready") == "1", 240, "host world")
+        log("host", cmd(host, "host"))
+        cli = launch(fake_steam_id=76561190000000002)
+        wait_for(cli, lambda s: s.get("state") == "idle", 240, "client menu")
+        arrange(host, cli)
+        log("ready: host", host, "client on the main menu", cli)
         return
     if a.what == "four":
         host, clis = setup_many(a.save, a.clients)

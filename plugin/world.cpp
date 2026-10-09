@@ -526,6 +526,40 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     }
 }
 
+void KenshiWorld::NoteEdited(kenshi::Character* c) {
+    if (std::find(edited_.begin(), edited_.end(), c) == edited_.end()) edited_.push_back(c);
+}
+
+void KenshiWorld::TakeEditedCharacters(std::vector<kc::Handle>& out) {
+    out.clear();
+    for (kenshi::Character* c : edited_) {
+        kc::Handle h;
+        if (kenshi::IsCharacter(c) && kenshi::GetHandle(c, h)) out.push_back(HostHandleOf(h));
+    }
+    edited_.clear();
+}
+
+bool KenshiWorld::ReadAppearance(const kc::Handle& h, kc::AppearanceMsg& out) {
+    kenshi::Character* c = Find(h);
+    return c && kenshi::ReadAppearance(c, out);
+}
+
+void KenshiWorld::ApplyAppearance(const kc::Handle& h, const kc::AppearanceMsg& m) {
+    kenshi::Character* c = Find(h);
+    if (!c) return;
+    HostCallScope scope;
+    Log("appearance of %s applied: %s", m.name.c_str(), kenshi::WriteAppearance(c, m) ? "ok" : "failed");
+}
+
+bool KenshiWorld::OpenCharacterEditor(const kc::Handle& h) {
+    kenshi::Character* c = Find(h);
+    if (!c || !live_) return false;
+    HostCallScope scope;
+    const bool ok = kenshi::OpenCharacterEditor(c);
+    Log("character editor opened: %s", ok ? "ok" : "failed");
+    return ok;
+}
+
 void KenshiWorld::ReadSquads(std::vector<WorldSquad>& out) {
     out.clear();
     std::vector<kenshi::Character*> all;

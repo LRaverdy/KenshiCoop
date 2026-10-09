@@ -149,6 +149,8 @@ void Session::Leave() {
     dialogOwner_.clear();
     lastSquads_ = SquadsMsg{};
     haveSquads_ = false;
+    pendingLooks_.clear();
+    editRequest_ = 0;
     pendingAnswers_.clear();
     missingSquad_ = 0;
     localId_ = 0;
@@ -209,6 +211,18 @@ void Session::HostTick(double now, bool live) {
     pendingInvOps_.clear();
     for (const auto& a : pendingAnswers_) world_.DialogAnswer(a.dialogId, a.index);
     pendingAnswers_.clear();
+    // A player's new looks: applied here, then shown to everyone else.
+    for (auto& [from, m] : pendingLooks_) {
+        auto it = entities_.find(m.netId);
+        if (it == entities_.end() || !it->second.squad || it->second.owner != from) { log_("ignored looks for a character the player does not own"); continue; }
+        world_.ApplyAppearance(it->second.handle, m);
+        Writer w;
+        Encode(w, m);
+        for (auto& [pid, p] : players_) if (p.inGame && pid != from) SendReliable(p.peer, w);
+        log_("new looks for " + m.name);
+    }
+    pendingLooks_.clear();
+    SendEditedAppearances();
     // The host's own orders execute natively in its world; nothing to intercept.
     scratchOrders_.clear();
     world_.TakeLocalOrders(scratchOrders_);
@@ -459,6 +473,16 @@ void Session::FinishJoin(RemotePlayer& p) {
     nextWeather_ = 0;
     effectsFullAt_ = clock_() + 1.0;   // and every weather effect once that weather is in place
     AddChat("* " + p.name + " is in the world");
+    squadsAt_ = -1e9;   // the newcomer gets the squads now
+    PlayerSync& s = sync_[p.id];
+    if (s.ownCreated && s.own.valid()) {
+        if (auto it = byHandle_.find(s.own); it != byHandle_.end()) {
+            Writer w;
+            Encode(w, EditCharacter{it->second});
+            SendReliable(p.peer, w);
+        }
+        s.ownCreated = false;
+    }
 }
 
 bool Session::Configure(const std::string& name, uint16_t port) {
@@ -700,6 +724,32 @@ void Session::SendSquads(double now) {
     BroadcastReliable(w, true);
 }
 
+// Characters edited in the game's character editor here: the host shows its own edits to everyone,
+// a client sends the edits of its own characters to the host.
+void Session::SendEditedAppearances() {
+    world_.TakeEditedCharacters(scratchEdited_);
+    for (const auto& h : scratchEdited_) {
+        Entity* e = entityByHandle(h);
+        if (!e || !e->squad) continue;
+        if (isClient() && e->owner != localId_) continue;
+        AppearanceMsg m;
+        if (!world_.ReadAppearance(h, m)) continue;
+        m.netId = e->netId;
+        Writer w;
+        Encode(w, m);
+        if (isHost()) BroadcastReliable(w, true);
+        else SendReliable(net_.serverPeer(), w);
+        log_("sent the new looks of " + m.name + " (" + std::to_string(m.fields.size()) + " values)");
+    }
+}
+
+bool Session::EditOwnCharacter() {
+    if (!isClient()) return false;
+    for (auto& [id, e] : entities_)
+        if (e.squad && e.owner == localId_ && e.present) return world_.OpenCharacterEditor(e.handle);
+    return false;
+}
+
 void Session::AnswerDialog(int index) {
     if (state_ != SessionState::Connected || !dialog_.open || dialog_.waiting || index < 0 || index >= int(dialog_.replies.size())) return;
     DialogReply r;
@@ -854,6 +904,12 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
     case Msg::Command: {
         Command c;
         if (pl->inGame && Decode(r, c) && pendingCommands_.size() < 1024) pendingCommands_.emplace_back(pl->id, c);
+        break;
+    }
+    case Msg::Appearance: {
+        AppearanceMsg m;
+        if (!pl->inGame || !Decode(r, m)) break;
+        if (pendingLooks_.size() < 16) pendingLooks_.emplace_back(pl->id, std::move(m));
         break;
     }
     case Msg::DialogReply: {
@@ -1233,6 +1289,14 @@ void Session::ClientTick(double now, bool live) {
         e.statsDirty = false;
     }
     if (restats && haveMoney_) world_.ApplyMoney(hostMoney_);
+    if (editRequest_) {
+        auto it = entities_.find(editRequest_);
+        if (it != entities_.end() && it->second.present && world_.OpenCharacterEditor(it->second.handle)) {
+            editRequest_ = 0;
+            AddChat("* Crée ton personnage, puis valide : tout le monde le verra ainsi.");
+        }
+    }
+    SendEditedAppearances();
     // Squads: split our characters as the host does (again now and then: stand-ins, late arrivals).
     if (haveSquads_ && now - squadsAt_ > 2.0) {
         squadsAt_ = now;
@@ -1441,6 +1505,17 @@ void Session::ClientPacket(Msg type, Reader& r) {
                 break;
             }
         }
+        break;
+    }
+    case Msg::Appearance: {
+        AppearanceMsg m;
+        if (state_ != SessionState::Connected || !Decode(r, m)) break;
+        if (auto it = entities_.find(m.netId); it != entities_.end() && it->second.present) world_.ApplyAppearance(it->second.handle, m);
+        break;
+    }
+    case Msg::EditCharacter: {
+        EditCharacter m;
+        if (state_ == SessionState::Connected && Decode(r, m)) editRequest_ = m.netId;
         break;
     }
     case Msg::Squads: {

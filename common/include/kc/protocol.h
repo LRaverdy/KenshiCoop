@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 19;
+constexpr uint16_t kProtocolVersion = 20;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -62,6 +62,8 @@ enum class Msg : uint8_t {
     Dialog = 27,      // S->C  speech bubbles; conversations of the receiving player's characters
     DialogReply = 28, // C->S  the player picked an answer in a conversation
     Squads = 29,      // S->C  how the player faction's characters are split into squads
+    Appearance = 30,  // both  a character's looks and name, made in the game's character editor
+    EditCharacter = 31, // S->C  open the character editor on your new character
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -291,6 +293,32 @@ struct SquadsMsg {
     std::vector<SquadInfo> squads;
 };
 
+// A character's appearance: every value of its appearance GameData (race, gender, head, hair,
+// sliders...) and its name.
+enum class AppearanceType : uint8_t { Bool = 1, Int = 2, Float = 3, String = 4, Vec3 = 5, Quat = 6, Refs = 7 };
+constexpr size_t kMaxAppearanceFields = 1024;
+struct AppearanceField {
+    AppearanceType type = AppearanceType::Float;
+    std::string key;
+    bool b = false;
+    int32_t i = 0;
+    float f[4] = {0, 0, 0, 0};          // Float: f[0]; Vec3: x y z; Quat: w x y z
+    std::string s;                      // String
+    std::vector<std::string> refs;      // Refs: string ids of the referenced GameData
+    bool operator==(const AppearanceField& o) const {
+        return type == o.type && key == o.key && b == o.b && i == o.i && f[0] == o.f[0] && f[1] == o.f[1] && f[2] == o.f[2] &&
+               f[3] == o.f[3] && s == o.s && refs == o.refs;
+    }
+};
+struct AppearanceMsg {
+    uint32_t netId = 0;
+    std::string name;
+    std::vector<AppearanceField> fields;
+};
+struct EditCharacter {
+    uint32_t netId = 0;
+};
+
 struct Ping {
     double t = 0;  // sender clock, echoed back in Pong
 };
@@ -514,6 +542,10 @@ void Encode(Writer& w, const GroundMsg& m);
 std::vector<std::vector<uint8_t>> EncodeSnapshot(const Snapshot& s, size_t budget = kSnapshotBudget);
 void Encode(Writer& w, const ProgressMsg& m);
 void Encode(Writer& w, const SquadsMsg& m);
+void Encode(Writer& w, const AppearanceMsg& m);
+bool Decode(Reader& r, AppearanceMsg& m);
+void Encode(Writer& w, const EditCharacter& m);
+bool Decode(Reader& r, EditCharacter& m);
 bool Decode(Reader& r, SquadsMsg& m);
 void Encode(Writer& w, const DialogMsg& m);
 bool Decode(Reader& r, DialogMsg& m);

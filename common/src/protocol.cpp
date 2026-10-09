@@ -409,12 +409,72 @@ bool Decode(Reader& r, SquadsMsg& m) {
     return Done(r);
 }
 
+void Encode(Writer& w, const AppearanceMsg& m) {
+    w.u8(uint8_t(Msg::Appearance));
+    w.varint(m.netId);
+    w.str(m.name);
+    w.varint(m.fields.size());
+    for (const auto& f : m.fields) {
+        w.u8(uint8_t(f.type));
+        w.str(f.key);
+        switch (f.type) {
+        case AppearanceType::Bool: w.boolean(f.b); break;
+        case AppearanceType::Int: w.i32(f.i); break;
+        case AppearanceType::Float: w.f32(f.f[0]); break;
+        case AppearanceType::String: w.str(f.s); break;
+        case AppearanceType::Vec3: for (int k = 0; k < 3; ++k) w.f32(f.f[k]); break;
+        case AppearanceType::Quat: for (int k = 0; k < 4; ++k) w.f32(f.f[k]); break;
+        case AppearanceType::Refs:
+            w.varint(f.refs.size());
+            for (const auto& r : f.refs) w.str(r);
+            break;
+        }
+    }
+}
+bool Decode(Reader& r, AppearanceMsg& m) {
+    m.netId = GetU32Var(r);
+    m.name = r.str(kMaxNameLen * 4);
+    const uint32_t n = r.count(kMaxAppearanceFields, 2);
+    m.fields.resize(n);
+    for (auto& f : m.fields) {
+        const uint8_t t = r.u8();
+        if (t < uint8_t(AppearanceType::Bool) || t > uint8_t(AppearanceType::Refs)) return false;
+        f.type = AppearanceType(t);
+        f.key = r.str(256);
+        switch (f.type) {
+        case AppearanceType::Bool: f.b = r.boolean(); break;
+        case AppearanceType::Int: f.i = r.i32(); break;
+        case AppearanceType::Float: f.f[0] = r.f32(); break;
+        case AppearanceType::String: f.s = r.str(kMaxSidLen * 4); break;
+        case AppearanceType::Vec3: for (int k = 0; k < 3; ++k) f.f[k] = r.f32(); break;
+        case AppearanceType::Quat: for (int k = 0; k < 4; ++k) f.f[k] = r.f32(); break;
+        case AppearanceType::Refs: {
+            const uint32_t k = r.count(64, 1);
+            f.refs.resize(k);
+            for (auto& s : f.refs) s = r.str(kMaxSidLen);
+            break;
+        }
+        }
+        for (float v : f.f) if (!std::isfinite(v)) return false;
+        if (!r.ok() || f.key.empty()) return false;
+    }
+    return Done(r) && m.netId != 0;
+}
+void Encode(Writer& w, const EditCharacter& m) {
+    w.u8(uint8_t(Msg::EditCharacter));
+    w.varint(m.netId);
+}
+bool Decode(Reader& r, EditCharacter& m) {
+    m.netId = GetU32Var(r);
+    return Done(r) && m.netId != 0;
+}
+
 void EncodePing(Writer& w, const Ping& m, bool pong) { w.u8(uint8_t(pong ? Msg::Pong : Msg::Ping)); w.f64(m.t); }
 bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Squads)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::EditCharacter)) return std::nullopt;
     return Msg(t);
 }
 

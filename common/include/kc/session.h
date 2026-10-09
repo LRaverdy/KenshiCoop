@@ -142,6 +142,12 @@ public:
     };
     virtual void ReadSquads(std::vector<WorldSquad>& out) { out.clear(); }
     virtual void ApplySquads(const std::vector<WorldSquad>& squads) { (void)squads; }
+    // Appearance (the game's character editor). Characters whose looks were just edited here; read,
+    // apply and edit them.
+    virtual void TakeEditedCharacters(std::vector<Handle>& out) { out.clear(); }
+    virtual bool ReadAppearance(const Handle& h, AppearanceMsg& out) { (void)h; (void)out; return false; }
+    virtual void ApplyAppearance(const Handle& h, const AppearanceMsg& m) { (void)h; (void)m; }
+    virtual bool OpenCharacterEditor(const Handle& h) { (void)h; return false; }
     // Client: items the local player dropped from a character (asked of the host, not done locally).
     virtual void TakeLocalDrops(std::vector<std::pair<Handle, ItemState>>& out) { out.clear(); }
 
@@ -256,6 +262,8 @@ public:
         bool waiting = false;   // an answer was sent, the next line has not come yet
     };
     const DialogView& dialog() const { return dialog_; }
+    // Client: open the game's character editor on our own character (its looks go to everyone).
+    bool EditOwnCharacter();
     void AnswerDialog(int index);
 
 private:
@@ -331,6 +339,7 @@ private:
     void SendProgress(double now);
     void SendDialogs();
     void SendSquads(double now);
+    void SendEditedAppearances();
     void SendBind(const Entity& e, PeerId to, const Handle& previous = Handle{});
     void SendInventories(double now, bool force, PeerId onlyTo);
     void ClientInventoryDiff(double now);
@@ -383,6 +392,9 @@ private:
     std::unordered_map<uint32_t, uint8_t> dialogOwner_;   // host: conversation -> the player it was sent to
     std::vector<IWorld::WorldDialog> scratchDialogs_;
     std::vector<DialogReply> pendingAnswers_;   // host
+    std::vector<std::pair<uint8_t, AppearanceMsg>> pendingLooks_;   // host: from players, applied on the next live tick
+    uint32_t editRequest_ = 0;             // client: the host asked us to make our new character
+    std::vector<Handle> scratchEdited_;
     bool haveMoney_ = false;               // client
     int32_t hostMoney_ = 0;
     double nextTimeState_ = 0;

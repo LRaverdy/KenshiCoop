@@ -493,6 +493,18 @@ static void TestWire() {
         Reader rr(rw.data(), rw.size()); CHECK(PeekType(rr) == Msg::DialogReply);
         DialogReply rep2; CHECK(Decode(rr, rep2) && rep2.dialogId == 3 && rep2.index == 1);
     }
+    {   // a character's looks
+        AppearanceMsg look; look.netId = 7; look.name = "Nassim";
+        AppearanceField f1; f1.type = AppearanceType::Float; f1.key = "Age"; f1.f[0] = 33.5f;
+        AppearanceField f2; f2.type = AppearanceType::Refs; f2.key = "race"; f2.refs = {"17-gamedata.quack"};
+        AppearanceField f3; f3.type = AppearanceType::Quat; f3.key = "q"; f3.f[0] = 1; f3.f[3] = 0.5f;
+        AppearanceField f4; f4.type = AppearanceType::String; f4.key = "head"; f4.s = "1234-gamedata.base";
+        look.fields = {f1, f2, f3, f4};
+        Writer aw2; Encode(aw2, look);
+        Reader ar2(aw2.data(), aw2.size()); CHECK(PeekType(ar2) == Msg::Appearance);
+        AppearanceMsg look2; CHECK(Decode(ar2, look2));
+        CHECK(look2.netId == 7 && look2.name == "Nassim" && look2.fields.size() == 4 && look2.fields[0] == f1 && look2.fields[1] == f2 && look2.fields[2] == f3 && look2.fields[3] == f4);
+    }
     {   // hunger travels with the vitals
         VitalsMsg vm; vm.entities.resize(1); vm.entities[0].netId = 2; vm.entities[0].hunger = 250.5f;
         auto pk = EncodeVitals(vm)[0];
@@ -591,6 +603,8 @@ static void TestFuzz() {
         case Msg::Ground: { GroundMsg m; Decode(r, m); break; }
         case Msg::Progress: { ProgressMsg m; Decode(r, m); break; }
         case Msg::Dialog: { DialogMsg m; Decode(r, m); break; }
+        case Msg::Appearance: { AppearanceMsg m; Decode(r, m); break; }
+        case Msg::Squads: { SquadsMsg m; Decode(r, m); break; }
         case Msg::DialogReply: { DialogReply m; Decode(r, m); break; }
         }
     };

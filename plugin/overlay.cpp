@@ -233,6 +233,16 @@ void DrawMultiplayer(const OverlayModel& m, float w, float h) {
             ImGui::TextDisabled("L'hôte doit ouvrir le port UDP %d (ou utilisez un VPN de jeu).", g_portBuf);
         }
     } else {
+        if (!m.hosting) {
+            if (ImGui::Button("Modifier mon personnage")) {
+                OverlayAction a;
+                a.kind = OverlayAction::Kind::EditCharacter;
+                PushAction(std::move(a));
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("(l'éditeur de Kenshi ; tout le monde verra le résultat)");
+            ImGui::Separator();
+        }
         if (m.hosting && !m.steamId.empty()) {
             ImGui::Text("Code Steam : %s", m.steamId.c_str());
             ImGui::SameLine();
