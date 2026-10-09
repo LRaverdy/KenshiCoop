@@ -243,6 +243,10 @@ bool KenshiWorld::ReadBounties(const kc::Handle& h, kc::CharBounties& out) {
 }
 
 size_t KenshiWorld::ApplyBounties(const kc::Handle& h, const kc::CharBounties& want) {
+    // Off: every client crashed right after a new bounty appeared (10/10), and again on loading the
+    // host's save that held it. Bounties stay the host's business until this is understood.
+    (void)h; (void)want;
+    return 0;
     kenshi::Character* c = Find(h);
     if (!kenshi::IsCharacter(c)) return 0;
     auto* bm = reinterpret_cast<uint8_t*>(c) + CH_bounties;
