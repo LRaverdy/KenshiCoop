@@ -72,6 +72,9 @@ enum class Msg : uint8_t {
     ContainerOpened = 37, // S->C  it is there: here is the container's netId (its items follow as an Inventory)
     ContainerClose = 38,  // both  the window is closed (client) / must close (host: caught stealing, too far)
     TradeOpen = 39,       // S->C  trade with a merchant: its shop counters (their items follow), its cats
+    // ---- lot B: factions
+    Factions = 43,        // S->C  the player faction's relations with every faction, both ways
+    Bounties = 44,        // S->C  bounties, crimes and prison sentences of the squad's characters
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -681,5 +684,56 @@ Quat UnpackQuat(uint32_t v);
 
 // FNV-1a 64, used for mod list / world fingerprints.
 uint64_t Fnv1a64(const void* data, size_t n, uint64_t seed = 0xcbf29ce484222325ull);
+
+// ---- lot B: factions
+// Relations and bounties are the host's: clients never change them (their hooks refuse it) and
+// impose the host's values, so faction screens, "wanted" states and NPC attitudes shown match.
+struct RelationState {   // what one faction feels about another (FactionRelations::RelationData)
+    bool alliance = false, peace = false, war = false, coexists = false;
+    float relation = 0, trustPositives = 0, trustNegatives = 0, strength = 0;
+    bool operator==(const RelationState&) const = default;
+};
+struct FactionRelationEntry {
+    std::string factionSid;
+    bool hasOurs = false, hasTheirs = false;
+    RelationState ours;     // the player faction toward it
+    RelationState theirs;   // it toward the player faction
+    bool operator==(const FactionRelationEntry&) const = default;
+};
+struct FactionsMsg {
+    int32_t playerRank = 0;
+    float reputationTrust = 0, reputationBadassery = 0;
+    std::vector<FactionRelationEntry> factions;
+    bool operator==(const FactionsMsg&) const = default;
+};
+struct BountyEntry {
+    std::string factionSid;     // the faction that wants the character
+    int32_t amount = 0;
+    uint32_t crimes = 0;        // bit per CrimeEnum
+    bool claimed = false;
+    uint64_t since = 0;         // TimeOfDay the bounty was set (raw)
+    bool operator==(const BountyEntry&) const = default;
+};
+struct CharBounties {
+    uint32_t netId = 0;
+    std::vector<BountyEntry> bounties;
+    int32_t crime = 0;              // the crime being committed now (CrimeEnum, 0: none)
+    std::string crimeFactionSid;    // against whom
+    float crimeExpiry = 0;
+    float prisonSentence = 0;       // hours of prison still to serve
+    uint64_t prisonBegan = 0;       // TimeOfDay (raw)
+    std::string accessPassSid;      // faction that gave an access pass ("" none)
+    uint64_t accessPassUntil = 0;   // TimeOfDay (raw)
+    bool operator==(const CharBounties&) const = default;
+};
+struct BountiesMsg {
+    std::vector<CharBounties> chars;
+    bool operator==(const BountiesMsg&) const = default;
+};
+constexpr uint32_t kMaxFactions = 2048, kMaxBountiesPerChar = 128, kMaxBountyChars = 256;
+void Encode(Writer& w, const FactionsMsg& m);
+bool Decode(Reader& r, FactionsMsg& m);
+void Encode(Writer& w, const BountiesMsg& m);
+bool Decode(Reader& r, BountiesMsg& m);
 
 } // namespace kc

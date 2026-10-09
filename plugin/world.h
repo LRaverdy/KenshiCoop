@@ -89,6 +89,11 @@ public:
     bool TradeWindowBusy() override { return kenshi::MouseHoldsItem(); }
     void SetMoneyOf(const kc::Handle& who, int32_t money) override;
     std::string CharacterNameOf(const kc::Handle& h) override;
+    // ---- lot B: factions (plugin/factions.cpp)
+    bool ReadFactions(kc::FactionsMsg& out) override;
+    size_t ApplyFactions(const kc::FactionsMsg& m) override;
+    bool ReadBounties(const kc::Handle& h, kc::CharBounties& out) override;
+    size_t ApplyBounties(const kc::Handle& h, const kc::CharBounties& b) override;
     // Hooks (host): the game asked for a trade window for another player's character (any thread);
     // the host's own trade window (to show it again when another player changed the stock).
     void QueueTradeRequest(const kc::Handle& looter, const kc::Handle& trader);

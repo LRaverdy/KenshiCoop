@@ -402,11 +402,31 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
 - Les projectiles, l'utilisation des tourelles par un client et les animations propres au tir ne
   sont ni traités ni vérifiés.
 
-### Factions, relations, primes ❌
-- Chez les clients, le jeu n'a pas le droit de modifier les relations ni les primes : les hooks
-  refusent ces changements.
-- Celles de l'hôte ne sont pas encore envoyées : elles restent celles de la sauvegarde jusqu'au
-  prochain « Resync ».
+### Factions, relations, primes, crimes 🟡 (implémenté, à vérifier en jeu)
+- **Le joueur** voit partout les mêmes relations de sa faction avec chaque faction (écran des
+  factions : valeur, alliance, guerre, paix), dans les deux sens (ce que chaque faction pense de la
+  faction du joueur compte pour les PNJ et l'interface). Il voit aussi le même rang et la même
+  réputation, et, pour chaque personnage de l'escouade, les mêmes primes (montant par faction,
+  crimes), le crime en cours, la peine de prison restante et le laissez-passer.
+- **Fonctionnement** :
+  - l'hôte relit chaque seconde les relations de la faction du joueur et les primes de l'escouade ;
+    il envoie `Factions` / `Bounties` dès qu'une valeur change, à tout le monde, plus un envoi
+    complet toutes les 15 s et à chaque joueur qui arrive ;
+  - le client impose ces valeurs à son jeu (écriture directe des données de relation et de prime ;
+    une relation ou une prime absente est créée avec les fonctions du jeu), à l'arrivée du message
+    puis toutes les 2 s : si le jeu local les a changées, elles reviennent à celles de l'hôte ;
+  - les hooks existants empêchent toujours le jeu du client de décider seul d'un crime, d'une prime
+    ou d'un changement de relation ; ce qui vient de l'hôte (dialogue « payer sa prime », guerre
+    déclarée, prime fixée par un garde) arrive par ces messages ;
+  - le journal de l'hôte note chaque changement (« relations: … now -80 at war », « bounty: … wanted
+    by … for 1500 cats », « crime: … », « prison: … »).
+- **Limites** :
+  - une prime que l'hôte n'a plus est vidée (montant et crimes à 0) chez le client plutôt que
+    retirée : l'interface ne l'affiche plus, comme chez l'hôte ;
+  - les relations entre deux factions qui ne sont pas celle du joueur ne sont pas envoyées (elles
+    ne changent que l'IA, qui tourne chez l'hôte) ;
+  - la victime d'un crime en cours (un PNJ précis) n'est pas envoyée, seulement la faction.
+- **Test en jeu** : `python tools/coop_test.py factions` (voir [TESTS.md](TESTS.md)).
 
 ### Précision des PNJ lointains 🟡 implémenté, à vérifier en jeu
 - Loin de l'escouade du client (plus de 300 unités), le jeu ne déplace un personnage que quelques
