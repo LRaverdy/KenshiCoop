@@ -36,6 +36,15 @@ struct AnimReplayScope {
     AnimReplayScope& operator=(const AnimReplayScope&) = delete;
 };
 
+// Host: a client's player order (Command kind Task), given to `c` alone exactly as the game's UI
+// gives it to a selection.
+bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, void* building);
+
+// Client: `c` says this line (a speech bubble, as the host's game showed it).
+bool ReplaySay(kenshi::Character* c, const std::string& text, bool shout);
+// Host: the player answered in a conversation shown on their screen.
+bool CallReplyClicked(void* dialogue, int index);
+
 // Character::playerMoveOrderDefault(nullptr, nullptr, pos) through the original function.
 bool CallPlayerMoveOrder(kenshi::Character* c, const kc::Vec3& pos);
 

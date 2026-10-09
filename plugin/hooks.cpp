@@ -182,19 +182,74 @@ void hk_playerMove(void* pi, const float* pos, void* building) {
     o_playerMove(pi, pos, building);
 }
 
-// Orders that are not synchronized yet. On a client they are refused (executing them locally
-// would make the client's world diverge); on the host they are refused only when the selection
-// contains another player's character.
-bool AllowUnsyncedOrder(int task) {
-    auto v = KenshiWorld::View();
-    if (g_hostCall || !v->active) return true;
-    if (v->client) {
-        Log("client order refused (task %d)", task);
-        if (KenshiWorld* w = TheWorld()) w->Toast("Only movement and loot orders are synchronized in this version.");
+// Orders whose result is a window on the screen of whoever gives them (trade, containers): the
+// host would open it on its own screen. Not synchronized yet. (Conversations are: the host sends
+// the window to the player whose character talks, see KenshiWorld::NoteDialogWindow.)
+bool OpensWindow(int task) {
+    switch (task) {
+    case 55:    // RECRUIT_AT_JOBCENTER
+    case 118:   // SHOPPING
+    case 119:   // BUY_SHIT
+    case 124:   // OPERATE_STORAGE
+    case 284:   // LOOT_CONTAINER
+        return true;
+    default:
         return false;
     }
-    if (ClassifySelection(*v).foreign) { ToastForeign(); return false; }
-    return true;
+}
+
+// A player order given through the game's UI. The host runs every order: on a client it becomes
+// a command for each of the player's selected characters (or the nearest one), executed by the
+// host's game for that character alone; the result comes back like everything else. On the host
+// an order is refused only when the selection contains another player's character.
+// Returns true when the caller must run the original function.
+bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subjectHandle, void* building, const float* loc,
+                bool shift, bool add) {
+    auto v = KenshiWorld::View();
+    if (g_hostCall || !v->active) return true;
+    const SelectionInfo s = ClassifySelection(*v);
+    if (!v->client) {
+        if (s.foreign) { ToastForeign(); return false; }
+        return true;
+    }
+    KenshiWorld* w = TheWorld();
+    if (!w) return false;
+    if (OpensWindow(task)) {
+        Log("client order refused (task %d opens a window)", task);
+        w->Toast("Commercer et ouvrir un coffre ne sont pas encore synchronises.");
+        return false;
+    }
+    if (s.mine.empty()) {
+        if (s.foreign) ToastForeign();
+        return false;
+    }
+    kc::Command c;
+    c.kind = kc::CommandKind::Task;
+    c.via = via;
+    c.task = task;
+    c.shift = shift;
+    c.add = add;
+    if (loc) c.pos = {loc[0], loc[1], loc[2]};
+    if (subjectHandle) c.subject = *subjectHandle;
+    else if (subject) kenshi::ObjectHandle(subject, c.subject);
+    if (building) kenshi::ObjectHandle(building, c.building);
+    std::vector<kc::Handle> who = s.mine;
+    if (via == kc::TaskVia::TaskNearest && loc && who.size() > 1) {   // the game picks the nearest one
+        kc::Handle best = who.front();
+        float bestD = 1e30f;
+        for (const auto& h : who) {
+            kc::Vec3 p;
+            kenshi::Character* ch = w->FindSquad(h);
+            if (!ch || !kenshi::GetPosition(ch, p)) continue;
+            const float d = (p.x - loc[0]) * (p.x - loc[0]) + (p.z - loc[2]) * (p.z - loc[2]);
+            if (d < bestD) { bestD = d; best = h; }
+        }
+        who = {best};
+    }
+    Log("client order task %d (via %d) for %zu character(s) asked of the host", task, int(via), who.size());
+    for (const auto& h : who) w->QueueLocalOrder(h, c);
+    if (s.foreign) ToastForeign();
+    return false;
 }
 
 // Looting a knocked-out or dead character from a client: the looter walks there through the host
@@ -227,23 +282,27 @@ bool ClientLoot(int task, kenshi::Character* target) {
 
 void hk_addOrder(void* pi, void* building, int task, void* subject, bool shift, bool addDontClear, const float* loc) {
     if (ClientLoot(task, kenshi::IsCharacter(subject) ? static_cast<kenshi::Character*>(subject) : nullptr)) return;
-    if (AllowUnsyncedOrder(task)) o_addOrder(pi, building, task, subject, shift, addDontClear, loc);
+    if (RouteOrder(kc::TaskVia::AddOrder, task, subject, nullptr, building, loc, shift, addDontClear))
+        o_addOrder(pi, building, task, subject, shift, addDontClear, loc);
 }
 void hk_newTask(void* pi, int task, const void* targetHand, void* building, const float* clickPos, bool addDontClear) {
     kc::Handle th;
-    if (ClientLoot(task, kenshi::HandleFromHand(targetHand, th) ? kenshi::Resolve(th) : nullptr)) return;
-    if (AllowUnsyncedOrder(task)) o_newTask(pi, task, targetHand, building, clickPos, addDontClear);
+    const bool haveTarget = kenshi::HandleFromHand(targetHand, th);
+    if (ClientLoot(task, haveTarget ? kenshi::Resolve(th) : nullptr)) return;
+    if (RouteOrder(kc::TaskVia::NewTask, task, nullptr, haveTarget ? &th : nullptr, building, clickPos, false, addDontClear))
+        o_newTask(pi, task, targetHand, building, clickPos, addDontClear);
 }
 // The right-click "loot" on a body goes through this one (the nearest selected character acts).
 void hk_addTaskNearest(void* pi, void* building, int task, void* subject, bool shift, const float* loc, bool noAnimals) {
     if (ClientLoot(task, kenshi::IsCharacter(subject) ? static_cast<kenshi::Character*>(subject) : nullptr)) return;
-    if (AllowUnsyncedOrder(task)) o_addTaskNearest(pi, building, task, subject, shift, loc, noAnimals);
+    if (RouteOrder(kc::TaskVia::TaskNearest, task, subject, nullptr, building, loc, shift, noAnimals))
+        o_addTaskNearest(pi, building, task, subject, shift, loc, noAnimals);
 }
 void hk_addJob(void* pi, int task, void* subject, bool shift, bool add, const float* loc) {
-    if (AllowUnsyncedOrder(task)) o_addJob(pi, task, subject, shift, add, loc);
+    if (RouteOrder(kc::TaskVia::AddJob, task, subject, nullptr, nullptr, loc, shift, add)) o_addJob(pi, task, subject, shift, add, loc);
 }
 void hk_setOrder(void* pi, int order) {
-    if (AllowUnsyncedOrder(-order)) o_setOrder(pi, order);
+    if (RouteOrder(kc::TaskVia::SetOrder, order, nullptr, nullptr, nullptr, nullptr, false, false)) o_setOrder(pi, order);
 }
 void hk_stopMove(void* pi) {
     auto v = KenshiWorld::View();
@@ -290,6 +349,102 @@ void hk_medDamage(void* med, void* part, const void* damage, bool loadingSavesta
 void hk_medKnockout(void* med, float skill01) {
     if (KenshiWorld::ClientActive() && !g_hostCall) return;
     o_medKnockout(med, skill01);
+}
+// ---- conversations and the AI's decisions
+// The host's world decides everything an NPC does: on clients every decision point of the AI is
+// refused (tasks, squad AI, crimes and bounties, faction relations, raids, conversations), and the
+// host's speech bubbles and conversation windows are replayed.
+bool IsLiveThread() { return GetCurrentThreadId() == g_liveThread.load(); }
+bool ClientRefuses() { return KenshiWorld::ClientActive() && !g_hostCall; }
+
+using SayFn = void (*)(void* d, const void* text, void* line);
+SayFn o_say = nullptr;
+void hk_say(void* d, const void* text, void* line) {
+    if (ClientRefuses()) return;
+    if (!g_hostCall && KenshiWorld::View()->active) {
+        std::string s;
+        if (KenshiWorld* w = TheWorld(); w && kenshi::ReadStdString(text, s) && !s.empty()) w->NoteSay(d, s);
+    }
+    o_say(d, text, line);
+}
+using DialogBoolFn = void (*)(void* d, bool on);
+DialogBoolFn o_setInDialog = nullptr;
+void hk_setInDialog(void* d, bool on) {
+    auto v = KenshiWorld::View();
+    // another player's conversation: it opens on their screen, not on the host's
+    if (v->active && !v->client && IsLiveThread()) {
+        if (KenshiWorld* w = TheWorld(); w && w->NoteDialogWindow(d, on)) return;
+    }
+    o_setInDialog(d, on);
+}
+using DialogFn = void (*)(void* d);
+DialogFn o_setResponses = nullptr, o_setReplyText = nullptr;
+void hk_setResponses(void* d) {
+    auto v = KenshiWorld::View();
+    if (v->active && !v->client && IsLiveThread()) {
+        if (KenshiWorld* w = TheWorld(); w && w->NoteDialogText(d)) return;
+    }
+    o_setResponses(d);
+}
+void hk_setReplyText(void* d) {
+    auto v = KenshiWorld::View();
+    if (v->active && !v->client && IsLiveThread()) {
+        if (KenshiWorld* w = TheWorld(); w && w->NoteDialogText(d)) return;
+    }
+    o_setReplyText(d);
+}
+using ReplyClickedFn = void (*)(void* d, int index);
+ReplyClickedFn o_replyClicked = nullptr;
+using SendEventFn = bool (*)(void* d, void* who, int ev);
+SendEventFn o_sendEvent = nullptr;
+bool hk_sendEvent(void* d, void* who, int ev) { return ClientRefuses() ? false : o_sendEvent(d, who, ev); }
+using SendEventOverrideFn = bool (*)(void* d, void* who, int ev, bool force);
+SendEventOverrideFn o_sendEventOverride = nullptr;
+bool hk_sendEventOverride(void* d, void* who, int ev, bool force) { return ClientRefuses() ? false : o_sendEventOverride(d, who, ev, force); }
+using StartConvFn = bool (*)(void* d, void* target, void* line, int ev, bool force);
+StartConvFn o_startConv = nullptr;
+bool hk_startConv(void* d, void* target, void* line, int ev, bool force) { return ClientRefuses() ? false : o_startConv(d, target, line, ev, force); }
+using StartPlayerConvFn = bool (*)(void* d, void* target, void* line);
+StartPlayerConvFn o_startPlayerConv = nullptr;
+bool hk_startPlayerConv(void* d, void* target, void* line) { return ClientRefuses() ? false : o_startPlayerConv(d, target, line); }
+using PtrFn = void (*)(void* self, void* p);
+PtrFn o_doActions = nullptr, o_assessCrimes = nullptr, o_assignBounty = nullptr;
+void hk_doActions(void* d, void* line) { if (!ClientRefuses()) o_doActions(d, line); }
+void hk_assessCrimes(void* s, void* c) { if (!ClientRefuses()) o_assessCrimes(s, c); }
+void hk_assignBounty(void* b, void* f) { if (!ClientRefuses()) o_assignBounty(b, f); }
+using TaskUpdateFn = void (*)(void* ts, const float* pos, float time);
+TaskUpdateFn o_taskUpdate = nullptr;
+void hk_taskUpdate(void* ts, const float* pos, float time) { if (!ClientRefuses()) o_taskUpdate(ts, pos, time); }
+using FloatBoolFn = void (*)(void* self, float t, bool b);
+FloatBoolFn o_dialogAssessment = nullptr;
+void hk_dialogAssessment(void* s, float t, bool b) { if (!ClientRefuses()) o_dialogAssessment(s, t, b); }
+using FloatFn = void (*)(void* self, float t);
+FloatFn o_bbUpdate = nullptr, o_bbPeriodic = nullptr, o_uniquePeriodic = nullptr;
+void hk_bbUpdate(void* b, float t) { if (!ClientRefuses()) o_bbUpdate(b, t); }
+void hk_bbPeriodic(void* b, float t) { if (!ClientRefuses()) o_bbPeriodic(b, t); }
+void hk_uniquePeriodic(void* m, float t) { if (!ClientRefuses()) o_uniquePeriodic(m, t); }
+VoidFn o_warPeriodic = nullptr;
+void hk_warPeriodic(void* m) { if (!ClientRefuses()) o_warPeriodic(m); }
+using AffectAmountFn = void (*)(void* r, void* f, float amount, float mult);
+AffectAmountFn o_affectAmount = nullptr;
+void hk_affectAmount(void* r, void* f, float amount, float mult) { if (!ClientRefuses()) o_affectAmount(r, f, amount, mult); }
+using AffectEventFn = void (*)(void* r, void* f, int ev, float mult);
+AffectEventFn o_affectEvent = nullptr;
+void hk_affectEvent(void* r, void* f, int ev, float mult) { if (!ClientRefuses()) o_affectEvent(r, f, ev, mult); }
+using SetRelationFn = void (*)(void* r, void* f, float to);
+SetRelationFn o_setRelation = nullptr;
+void hk_setRelation(void* r, void* f, float to) { if (!ClientRefuses()) o_setRelation(r, f, to); }
+using SetCrimeFn = bool (*)(void* b, int crime, void* against, const void* agnst);
+SetCrimeFn o_setCrime = nullptr;
+bool hk_setCrime(void* b, int crime, void* against, const void* agnst) { return ClientRefuses() ? false : o_setCrime(b, crime, against, agnst); }
+
+// Experience is the host's too: every gain (combat, training, walking, first aid...) ends in
+// increaseStat, refused on clients; the host's skill levels arrive in Progress messages.
+using IncreaseStatFn = void (*)(float* stat, float amount, float upperLimit);
+IncreaseStatFn o_increaseStat = nullptr;
+void hk_increaseStat(float* stat, float amount, float upperLimit) {
+    if (KenshiWorld::ClientActive() && !g_hostCall) return;
+    o_increaseStat(stat, amount, upperLimit);
 }
 // Nor do they decide a collapse (pain, crippled limbs): it would leave a character the host has
 // standing lying on the ground, flickering between hurt and unconscious.
@@ -675,6 +830,73 @@ HostCallScope::~HostCallScope() { --g_hostCall; }
 AnimReplayScope::AnimReplayScope() { ++g_animReplay; ++g_hostCall; }
 AnimReplayScope::~AnimReplayScope() { --g_animReplay; --g_hostCall; }
 
+namespace {
+bool SaySeh(void* d, const void* gs) {
+    __try {
+        o_say(d, gs, nullptr);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+bool ReplyClickedSeh(void* d, int index) {
+    __try {
+        o_replyClicked(d, index);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool ReplaySay(kenshi::Character* c, const std::string& text, bool shout) {
+    void* d = kenshi::CharacterDialogue(c);
+    if (!d || !o_say) return false;
+    alignas(8) uint8_t gs[0x28];
+    kenshi::GameStringView(text, gs);
+    kenshi::SetDialogueShouting(d, shout);
+    HostCallScope scope;
+    return SaySeh(d, gs);
+}
+
+bool CallReplyClicked(void* dialogue, int index) {
+    if (!kenshi::DialogueOwner(dialogue)) return false;
+    if (!o_replyClicked) o_replyClicked = reinterpret_cast<ReplyClickedFn>(kenshi::FnAddr(kenshi::FnDialogueReplyClicked));
+    HostCallScope scope;
+    return ReplyClickedSeh(dialogue, index);
+}
+
+namespace {
+bool CallTaskSeh(void* pi, const kc::Command& cmd, void* subject, void* building, const float* loc, const void* hand) {
+    __try {
+        switch (cmd.via) {
+        case kc::TaskVia::AddOrder: o_addOrder(pi, building, cmd.task, subject, cmd.shift, cmd.add, loc); break;
+        case kc::TaskVia::NewTask: o_newTask(pi, cmd.task, hand, building, loc, cmd.add); break;
+        case kc::TaskVia::TaskNearest: o_addTaskNearest(pi, building, cmd.task, subject, cmd.shift, loc, cmd.add); break;
+        case kc::TaskVia::AddJob: o_addJob(pi, cmd.task, subject, cmd.shift, cmd.add, loc); break;
+        case kc::TaskVia::SetOrder: o_setOrder(pi, cmd.task); break;
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, void* building) {
+    void* pi = kenshi::Player();
+    if (!pi || !kenshi::IsCharacter(c)) return false;
+    const float loc[3] = {cmd.pos.x, cmd.pos.y, cmd.pos.z};
+    alignas(8) uint8_t hand[kenshi::off::HandSize];
+    kenshi::MakeHand(cmd.subject, hand);
+    bool ok = false;
+    kenshi::WithSelection(c, [&] {
+        HostCallScope scope;
+        ok = CallTaskSeh(pi, cmd, subject, building, loc, hand);
+    });
+    return ok;
+}
+
 bool CallPlayerMoveOrder(kenshi::Character* c, const kc::Vec3& pos) {
     if (!o_moveOrder || !kenshi::IsCharacter(c)) return false;
     const float p[3] = {pos.x, pos.y, pos.z};
@@ -701,6 +923,28 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnDeclareDead, reinterpret_cast<void*>(&hk_declareDead), reinterpret_cast<void**>(&o_declareDead)},
         {kenshi::FnReassessCollapse, reinterpret_cast<void*>(&hk_collapse), reinterpret_cast<void**>(&o_collapse)},
         {kenshi::FnPickupItem, reinterpret_cast<void*>(&hk_pickup), reinterpret_cast<void**>(&o_pickup)},
+        {kenshi::FnIncreaseStat, reinterpret_cast<void*>(&hk_increaseStat), reinterpret_cast<void**>(&o_increaseStat)},
+        {kenshi::FnDialogueSay, reinterpret_cast<void*>(&hk_say), reinterpret_cast<void**>(&o_say)},
+        {kenshi::FnDialogueSetInDialog, reinterpret_cast<void*>(&hk_setInDialog), reinterpret_cast<void**>(&o_setInDialog)},
+        {kenshi::FnDialogueSetResponses, reinterpret_cast<void*>(&hk_setResponses), reinterpret_cast<void**>(&o_setResponses)},
+        {kenshi::FnDialogueSetReplyText, reinterpret_cast<void*>(&hk_setReplyText), reinterpret_cast<void**>(&o_setReplyText)},
+        {kenshi::FnDialogueSendEvent, reinterpret_cast<void*>(&hk_sendEvent), reinterpret_cast<void**>(&o_sendEvent)},
+        {kenshi::FnDialogueSendEventOverride, reinterpret_cast<void*>(&hk_sendEventOverride), reinterpret_cast<void**>(&o_sendEventOverride)},
+        {kenshi::FnDialogueStartConversation, reinterpret_cast<void*>(&hk_startConv), reinterpret_cast<void**>(&o_startConv)},
+        {kenshi::FnDialogueStartPlayerConversation, reinterpret_cast<void*>(&hk_startPlayerConv), reinterpret_cast<void**>(&o_startPlayerConv)},
+        {kenshi::FnDialogueDoActions, reinterpret_cast<void*>(&hk_doActions), reinterpret_cast<void**>(&o_doActions)},
+        {kenshi::FnTaskSystemUpdate, reinterpret_cast<void*>(&hk_taskUpdate), reinterpret_cast<void**>(&o_taskUpdate)},
+        {kenshi::FnSensoryDialogAssessment, reinterpret_cast<void*>(&hk_dialogAssessment), reinterpret_cast<void**>(&o_dialogAssessment)},
+        {kenshi::FnSensoryAssessCrimes, reinterpret_cast<void*>(&hk_assessCrimes), reinterpret_cast<void**>(&o_assessCrimes)},
+        {kenshi::FnBlackboardUpdate, reinterpret_cast<void*>(&hk_bbUpdate), reinterpret_cast<void**>(&o_bbUpdate)},
+        {kenshi::FnBlackboardPeriodic, reinterpret_cast<void*>(&hk_bbPeriodic), reinterpret_cast<void**>(&o_bbPeriodic)},
+        {kenshi::FnFactionWarPeriodic, reinterpret_cast<void*>(&hk_warPeriodic), reinterpret_cast<void**>(&o_warPeriodic)},
+        {kenshi::FnUniqueSquadPeriodic, reinterpret_cast<void*>(&hk_uniquePeriodic), reinterpret_cast<void**>(&o_uniquePeriodic)},
+        {kenshi::FnAffectRelationsAmount, reinterpret_cast<void*>(&hk_affectAmount), reinterpret_cast<void**>(&o_affectAmount)},
+        {kenshi::FnAffectRelationsEvent, reinterpret_cast<void*>(&hk_affectEvent), reinterpret_cast<void**>(&o_affectEvent)},
+        {kenshi::FnSetRelation, reinterpret_cast<void*>(&hk_setRelation), reinterpret_cast<void**>(&o_setRelation)},
+        {kenshi::FnSetCrime, reinterpret_cast<void*>(&hk_setCrime), reinterpret_cast<void**>(&o_setCrime)},
+        {kenshi::FnAssignBounty, reinterpret_cast<void*>(&hk_assignBounty), reinterpret_cast<void**>(&o_assignBounty)},
         {kenshi::FnGiveItem, reinterpret_cast<void*>(&hk_giveItem), reinterpret_cast<void**>(&o_giveItem)},
         {kenshi::FnDropItemHuman, reinterpret_cast<void*>(&hk_dropItem), reinterpret_cast<void**>(&o_dropItem)},
         {kenshi::FnCreateScreenLabel, reinterpret_cast<void*>(&hk_createLabel), reinterpret_cast<void**>(&o_createLabel)},

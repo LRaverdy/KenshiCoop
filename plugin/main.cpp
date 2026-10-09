@@ -334,6 +334,9 @@ void HandleOverlayActions() {
         case OverlayAction::Kind::Command:
             ConsoleCommand(a.text);
             break;
+        case OverlayAction::Kind::DialogAnswer:
+            g_session->AnswerDialog(a.index);
+            break;
         }
     }
 }
@@ -390,6 +393,14 @@ void PublishOverlay() {
     m.address = g_cfg.joinAddress;
     m.port = g_cfg.port;
     m.fullConsole = !g_session->isClient();
+    if (const auto& d = g_session->dialog(); d.open && g_session->isClient()) {
+        m.dialogOpen = true;
+        m.dialogId = d.id;
+        m.dialogName = d.name;
+        m.dialogText = d.text;
+        m.dialogReplies = d.replies;
+        m.dialogWaiting = d.waiting;
+    }
     const double now = NowSeconds();
     while (!g_toasts.empty() && g_toasts.front().second < now) g_toasts.pop_front();
     for (auto& t : g_toasts) m.toasts.push_back(t.first);

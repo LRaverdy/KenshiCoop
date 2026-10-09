@@ -481,6 +481,15 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     }
 }
 
+bool KenshiWorld::ReadProgress(const kc::Handle& h, std::vector<float>& stats) {
+    kenshi::Character* c = Find(h);
+    return c && kenshi::ReadStats(c, stats);
+}
+
+void KenshiWorld::ApplyProgress(const kc::Handle& h, const std::vector<float>& stats) {
+    if (kenshi::Character* c = Find(h)) kenshi::WriteStats(c, stats);
+}
+
 void KenshiWorld::ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) {
     kenshi::Character* c = Find(h);
     if (!c) return;
@@ -489,6 +498,13 @@ void KenshiWorld::ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) {
     // where the host's character collapsed.
     const bool dies = (v.flags & kc::kVitDead) && !kenshi::IsDead(c);
     const bool faints = !dies && (v.flags & kc::kVitUnconscious) && !kenshi::IsUnconscious(c) && !kenshi::IsDead(c);
+    // Already on the ground: only the state is missing. Sleep, hunger and blood loss knock out
+    // without a timer, and what keeps them going on the host (its AI tasks) does not run here, so
+    // the local medical update would wake them at once: impose the host's state.
+    if (faints && (kenshi::IsRagdoll(c) || kenshi::IsDown(c))) {
+        kenshi::SetUnconscious(c, true);
+        return;
+    }
     if (!dies && !faints) return;
     auto at = lastTarget_.find(h);
     const double now = NowSeconds();
@@ -529,8 +545,112 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
         pickups_[h] = {itemHandle, NowSeconds() + 30.0};
         return CallPlayerMoveOrder(c, cmd.pos);
     }
+    case kc::CommandKind::Task: {
+        void* subject = kenshi::ResolveObject(cmd.subject);
+        void* building = kenshi::ResolveObject(cmd.building);
+        if (cmd.subject.valid() && !subject) Log("client task %d: its subject is not in the host's world", cmd.task);
+        const bool ok = RunPlayerTask(c, cmd, subject, building);
+        Log("client task %d (via %d) run for a character: %s", cmd.task, int(cmd.via), ok ? "ok" : "failed");
+        return ok;
+    }
     }
     return false;
+}
+
+// ---- conversations
+void KenshiWorld::NoteSay(void* dialogue, const std::string& text) {
+    kenshi::Character* me = kenshi::DialogueOwner(dialogue);
+    kc::Handle h;
+    if (!me || !kenshi::GetHandle(me, h)) return;
+    WorldDialog d;
+    d.kind = kc::DialogKind::Say;
+    d.speaker = h;
+    d.text = text;
+    d.shout = kenshi::DialogueShouting(dialogue);
+    std::lock_guard<std::mutex> lk(dialogMutex_);
+    if (dialogEvents_.size() < 512) dialogEvents_.push_back(std::move(d));
+}
+
+bool KenshiWorld::RemoteDialogParties(void* dialogue, kenshi::Character*& pc, kenshi::Character*& other) {
+    auto v = View();
+    kenshi::Character* me = kenshi::DialogueOwner(dialogue);
+    kenshi::Character* target = kenshi::DialogueTarget(dialogue);
+    if (me && v->squadForeign.count(me)) { pc = me; other = target; return true; }
+    if (target && v->squadForeign.count(target)) { pc = target; other = me; return true; }
+    return false;
+}
+
+bool KenshiWorld::NoteDialogWindow(void* dialogue, bool open) {
+    std::lock_guard<std::mutex> lk(dialogMutex_);
+    auto known = remoteDialogs_.find(dialogue);
+    kenshi::Character* pc = nullptr;
+    kenshi::Character* other = nullptr;
+    const bool remote = RemoteDialogParties(dialogue, pc, other);
+    if (!remote && known == remoteDialogs_.end()) return false;
+    WorldDialog d;
+    d.kind = open ? kc::DialogKind::Open : kc::DialogKind::Close;
+    if (pc) kenshi::GetHandle(pc, d.pc);
+    if (other) {
+        kenshi::GetHandle(other, d.speaker);
+        kenshi::CharacterName(other, d.text);
+    }
+    if (open) {
+        if (known == remoteDialogs_.end()) known = remoteDialogs_.emplace(dialogue, nextDialogId_++).first;
+        d.dialogId = known->second;
+        Log("conversation %u opened for another player's character", d.dialogId);
+    } else {
+        if (known == remoteDialogs_.end()) return true;
+        d.dialogId = known->second;
+        remoteDialogs_.erase(known);
+        Log("conversation %u closed", d.dialogId);
+    }
+    dialogEvents_.push_back(std::move(d));
+    return true;
+}
+
+bool KenshiWorld::NoteDialogText(void* dialogue) {
+    std::lock_guard<std::mutex> lk(dialogMutex_);
+    auto known = remoteDialogs_.find(dialogue);
+    kenshi::Character* pc = nullptr;
+    kenshi::Character* other = nullptr;
+    if (known == remoteDialogs_.end()) {
+        if (!RemoteDialogParties(dialogue, pc, other)) return false;
+        known = remoteDialogs_.emplace(dialogue, nextDialogId_++).first;   // text before the window: open it now
+    } else {
+        RemoteDialogParties(dialogue, pc, other);
+    }
+    WorldDialog d;
+    d.kind = kc::DialogKind::Text;
+    d.dialogId = known->second;
+    if (pc) kenshi::GetHandle(pc, d.pc);
+    if (other) kenshi::GetHandle(other, d.speaker);
+    kenshi::ReadDialogueWindowText(dialogue, d.text, d.replies);
+    dialogEvents_.push_back(std::move(d));
+    return true;
+}
+
+void KenshiWorld::TakeDialogEvents(std::vector<WorldDialog>& out) {
+    std::lock_guard<std::mutex> lk(dialogMutex_);
+    out.swap(dialogEvents_);
+    dialogEvents_.clear();
+}
+
+void KenshiWorld::ApplySay(const kc::Handle& speaker, const std::string& text, bool shout) {
+    if (kenshi::Character* c = Find(speaker); c && ReplaySay(c, text, shout)) {
+        ++saysApplied;
+        lastSay = text;
+    }
+}
+
+void KenshiWorld::DialogAnswer(uint32_t dialogId, int index) {
+    void* dialogue = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(dialogMutex_);
+        for (const auto& [d, id] : remoteDialogs_)
+            if (id == dialogId) { dialogue = d; break; }
+    }
+    if (!dialogue) return;
+    Log("conversation %u: the player answered %d (%s)", dialogId, index, CallReplyClicked(dialogue, index) ? "ok" : "failed");
 }
 
 void KenshiWorld::QueueLocalDrop(kenshi::Character* c, void* item) {
@@ -626,7 +746,13 @@ void KenshiWorld::TakeLocalOrders(std::vector<std::pair<kc::Handle, kc::Command>
     std::lock_guard<std::mutex> lk(ordersMutex_);
     out.swap(orders_);
     orders_.clear();
-    for (auto& [h, c] : out) h = HostHandleOf(h);   // orders name our characters as the host knows them
+    for (auto& [h, c] : out) {   // orders name our characters (and what they act on) as the host knows them
+        h = HostHandleOf(h);
+        if (c.kind != kc::CommandKind::Task || !c.subject.valid()) continue;
+        c.subject = HostHandleOf(c.subject);
+        for (const auto& [host, local] : groundAlias_)
+            if (local == c.subject) { c.subject = host; break; }
+    }
 }
 
 void KenshiWorld::WeatherRegionTick(void* region, bool afterUpdate) {

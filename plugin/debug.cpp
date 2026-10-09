@@ -337,6 +337,122 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         snprintf(b, sizeof(b), "ok on-ground %s %.1f,%.1f,%.1f", st.templateSid.c_str(), p.x, p.y, p.z);
         return b;
     }
+    if (cmd == "stats") {   // stats <squadIndex>: its skill levels, comma separated
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        std::vector<float> st;
+        if (idx >= squad.size() || !kenshi::ReadStats(w.FindSquad(squad[idx]), st)) return "err no stats";
+        std::ostringstream o;
+        o << "ok ";
+        for (size_t i = 0; i < st.size(); ++i) o << (i ? "," : "") << st[i];
+        kc::EntityVitals v;
+        if (kenshi::ReadVitals(w.FindSquad(squad[idx]), v)) o << " hunger=" << v.hunger;
+        return o.str();
+    }
+    if (cmd == "xp") {   // xp <squadIndex> <statIndex> <amount>: an experience gain, as the game gives one (refused on clients)
+        size_t idx = 0, stat = 0;
+        float amount = 0;
+        in >> idx >> stat >> amount;
+        auto squad = SortedSquad(w);
+        std::vector<float> before, after;
+        kenshi::Character* c = idx < squad.size() ? w.FindSquad(squad[idx]) : nullptr;
+        if (!c || !kenshi::ReadStats(c, before) || stat >= before.size()) return "err no such character or stat";
+        if (!kenshi::GainExperience(c, stat, amount)) return "err call failed";
+        kenshi::ReadStats(c, after);
+        char b[96];
+        snprintf(b, sizeof(b), "ok %.4f -> %.4f", before[stat], after[stat]);
+        return b;
+    }
+    if (cmd == "money") {   // money [set]: the player faction's cats (host: set them)
+        int32_t m = 0;
+        std::string set;
+        if (in >> set) { if (!kenshi::WritePlayerMoney(std::stoi(set))) return "err"; }
+        return kenshi::ReadPlayerMoney(m) ? "ok " + std::to_string(m) : "err no money";
+    }
+    if (cmd == "say") {   // say <squadIndex> <text...>: that character says it aloud (through the game's Dialogue::say)
+        size_t idx = 0;
+        in >> idx;
+        std::string text;
+        std::getline(in, text);
+        while (!text.empty() && text.front() == ' ') text.erase(text.begin());
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size() || text.empty()) return "err need a character and a text";
+        return kenshi::CallSay(w.FindSquad(squad[idx]), text) ? "ok" : "err say failed";
+    }
+    if (cmd == "says") return "ok " + std::to_string(w.saysApplied) + " " + w.lastSay;   // client: bubbles replayed, last one
+    if (cmd == "taskreq") {   // taskreq <selectIndex> <task> <subjectIndex>: select that squad member alone, give the order (as the UI does)
+        size_t sel = 0, subj = 0;
+        int task = 0;
+        in >> sel >> task >> subj;
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size() || subj >= squad.size()) return "err no such squad member";
+        bool ok = false;
+        kenshi::WithSelection(w.FindSquad(squad[sel]), [&] { ok = kenshi::CallAddTaskNearest(task, w.FindSquad(squad[subj])); });
+        return ok ? "ok" : "err call failed";
+    }
+    if (cmd == "talkreq") {   // talkreq <selectIndex>: select that squad member alone, order it to talk to the nearest NPC
+        size_t sel = 0;
+        in >> sel;
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kc::Vec3 mp, p;
+        if (!kenshi::GetPosition(me, mp)) return "err";
+        std::vector<kenshi::Character*> all;
+        kenshi::ActiveCharacters(all);
+        kenshi::Character* best = nullptr;
+        float bestD = 1e30f;
+        for (kenshi::Character* c : all) {
+            kc::Handle h;
+            if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsDown(c) || !kenshi::GetPosition(c, p)) continue;
+            const float d = (p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z);
+            if (d < bestD) { bestD = d; best = c; }
+        }
+        if (!best) return "err no NPC around";
+        std::string name;
+        kenshi::CharacterName(best, name);
+        bool ok = false;
+        kenshi::WithSelection(me, [&] { ok = kenshi::CallAddTaskNearest(12, best); });   // PLAYER_TALK_TO
+        return ok ? "ok " + name + " at " + std::to_string(int(std::sqrt(bestD))) : "err call failed";
+    }
+    if (cmd == "convo") {   // convo <squadIndex> <k>: (host) the k-th nearest NPC starts a conversation with that squad member
+        size_t sel = 0, k = 0;
+        in >> sel >> k;
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kc::Vec3 mp, p;
+        if (!kenshi::GetPosition(me, mp)) return "err";
+        std::vector<kenshi::Character*> all;
+        kenshi::ActiveCharacters(all);
+        std::vector<std::pair<float, kenshi::Character*>> nearby;
+        for (kenshi::Character* c : all) {
+            kc::Handle h;
+            if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsDown(c) || !kenshi::GetPosition(c, p)) continue;
+            nearby.emplace_back((p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z), c);
+        }
+        std::sort(nearby.begin(), nearby.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        if (k >= nearby.size()) return "err not that many NPCs";
+        std::string name;
+        kenshi::CharacterName(nearby[k].second, name);
+        HostCallScope scope;
+        const bool ok = kenshi::CallStartPlayerConversation(nearby[k].second, me);
+        return (ok ? "ok " : "err ") + name + " at " + std::to_string(int(std::sqrt(nearby[k].first)));
+    }
+    if (cmd == "dialog") {   // dialog: the conversation window this client shows (client)
+        const auto& d = s.dialog();
+        std::ostringstream o;
+        o << "ok open=" << d.open << " id=" << d.id << " waiting=" << d.waiting << " name=" << d.name << " | " << d.text << " |";
+        for (const auto& r : d.replies) o << " [" << r << "]";
+        return o.str();
+    }
+    if (cmd == "answer") {   // answer <index>: pick that answer in the conversation window (client)
+        int i = 0;
+        in >> i;
+        s.AnswerDialog(i);
+        return "ok";
+    }
     if (cmd == "fxhurry") return "ok " + std::to_string(w.HurryEffects());   // fxhurry: every effect group places one now
     if (cmd == "setweather") {   // setweather <regionSid> <seasonSid> <weatherSid>
         std::string region, season, weather;

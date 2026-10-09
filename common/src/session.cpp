@@ -53,7 +53,15 @@ uint64_t InventoryHash(const std::vector<ItemState>& items) {
 }
 
 bool VitalsChanged(const EntityVitals& a, const EntityVitals& b) {
-    return std::fabs(a.blood - b.blood) > 0.05f || std::fabs(a.koTimer - b.koTimer) > 0.5f || a.flags != b.flags || a.parts != b.parts;
+    return std::fabs(a.blood - b.blood) > 0.05f || std::fabs(a.koTimer - b.koTimer) > 0.5f || std::fabs(a.hunger - b.hunger) > 0.5f ||
+           a.flags != b.flags || a.parts != b.parts;
+}
+
+bool StatsChanged(const std::vector<float>& a, const std::vector<float>& b) {
+    if (a.size() != b.size()) return true;
+    for (size_t i = 0; i < a.size(); ++i)
+        if (std::fabs(a[i] - b[i]) > 0.0005f) return true;
+    return false;
 }
 
 } // namespace
@@ -134,6 +142,11 @@ void Session::Leave() {
     dlFiles_.shrink_to_fit();
     dlComplete_ = importStarted_ = false;
     haveTime_ = false;
+    haveMoney_ = false;
+    moneySent_ = false;
+    dialog_ = DialogView{};
+    dialogOwner_.clear();
+    pendingAnswers_.clear();
     missingSquad_ = 0;
     localId_ = 0;
     if (holding_) {
@@ -191,6 +204,8 @@ void Session::HostTick(double now, bool live) {
     for (auto& [from, op] : pendingInvOps_) HostInvOp(from, op);
     if (!pendingInvOps_.empty()) nextInventory_ = 0;   // show the result right away
     pendingInvOps_.clear();
+    for (const auto& a : pendingAnswers_) world_.DialogAnswer(a.dialogId, a.index);
+    pendingAnswers_.clear();
     // The host's own orders execute natively in its world; nothing to intercept.
     scratchOrders_.clear();
     world_.TakeLocalOrders(scratchOrders_);
@@ -212,6 +227,12 @@ void Session::HostTick(double now, bool live) {
     }
     // Weather: sent the tick any region's weather changes (before the effects that weather places),
     // and in full every 10 s.
+    if (anyInGame) SendDialogs();
+    else { world_.TakeDialogEvents(scratchDialogs_); scratchDialogs_.clear(); }
+    if (anyInGame && now >= nextProgress_) {
+        nextProgress_ = now + 1.0;
+        SendProgress(now);
+    }
     if (anyInGame && now >= nextWeather_) {
         nextWeather_ = now;
         std::vector<RegionWeather> w;
@@ -590,6 +611,101 @@ void Session::SendVitals(double now) {
     }
 }
 
+// Lines said aloud go to everyone who knows the speaker; a conversation window goes to the owner of
+// the character in it (the host's game shows it to nobody).
+void Session::SendDialogs() {
+    world_.TakeDialogEvents(scratchDialogs_);
+    if (scratchDialogs_.empty()) return;
+    DialogMsg says;
+    std::unordered_map<uint8_t, DialogMsg> perPlayer;
+    for (auto& d : scratchDialogs_) {
+        auto sp = byHandle_.find(d.speaker);
+        DialogEvent e;
+        e.kind = d.kind;
+        e.dialogId = d.dialogId;
+        e.netId = sp != byHandle_.end() ? sp->second : 0;
+        e.text = std::move(d.text);
+        e.shout = d.shout;
+        e.replies = std::move(d.replies);
+        if (d.kind == DialogKind::Say) {
+            if (e.netId) says.events.push_back(std::move(e));
+            continue;
+        }
+        auto pc = byHandle_.find(d.pc);
+        auto ent = pc != byHandle_.end() ? entities_.find(pc->second) : entities_.end();
+        uint8_t owner = 0;
+        if (ent != entities_.end() && ent->second.squad) owner = ent->second.owner;
+        else if (auto o = dialogOwner_.find(d.dialogId); o != dialogOwner_.end()) owner = o->second;
+        if (!owner || owner == hostId_) continue;
+        if (d.kind == DialogKind::Close) dialogOwner_.erase(d.dialogId);
+        else dialogOwner_[d.dialogId] = owner;
+        perPlayer[owner].events.push_back(std::move(e));
+    }
+    scratchDialogs_.clear();
+    for (auto& [pid, p] : players_) {
+        if (!p.inGame) continue;
+        if (!says.events.empty()) {
+            Writer w;
+            Encode(w, says);
+            SendReliable(p.peer, w);
+        }
+        if (auto it = perPlayer.find(pid); it != perPlayer.end()) {
+            Writer w;
+            Encode(w, it->second);
+            SendReliable(p.peer, w);
+        }
+    }
+}
+
+void Session::AnswerDialog(int index) {
+    if (state_ != SessionState::Connected || !dialog_.open || dialog_.waiting || index < 0 || index >= int(dialog_.replies.size())) return;
+    DialogReply r;
+    r.dialogId = dialog_.id;
+    r.index = index;
+    Writer w;
+    Encode(w, r);
+    SendReliable(net_.serverPeer(), w);
+    dialog_.waiting = true;
+}
+
+// Skill levels change slowly (a few thousandths per hit or per minute of training): what changed is
+// sent once a second, everything every 20 s; the money when it changes.
+void Session::SendProgress(double now) {
+    std::unordered_map<uint32_t, std::vector<float>> cur;
+    for (auto& [id, e] : entities_) {
+        std::vector<float> s;
+        if (world_.ReadProgress(e.handle, s) && s.size() == kStatCount) cur[id] = std::move(s);
+    }
+    int32_t money = 0;
+    const bool haveMoney = world_.ReadMoney(money);
+    const bool moneyNew = haveMoney && (!moneySent_ || money != lastMoney_ || now - moneyAt_ > 20.0);
+    if (moneyNew) { moneySent_ = true; lastMoney_ = money; moneyAt_ = now; }
+    for (auto& [pid, p] : players_) {
+        if (!p.inGame) continue;
+        auto& sent = sync_[pid].sent;
+        ProgressMsg m;
+        m.hasMoney = haveMoney;
+        m.money = money;
+        for (const auto& [id, s] : cur) {
+            Sent& last = sent[id];
+            if (!StatsChanged(s, last.stats) && now - last.statsAt < 20.0) continue;
+            last.stats = s;
+            last.statsAt = now;
+            m.chars.push_back({id, s});
+            if (m.chars.size() >= 64) {
+                Writer w;
+                Encode(w, m);
+                SendReliable(p.peer, w);
+                m.chars.clear();
+            }
+        }
+        if (m.chars.empty() && !moneyNew) continue;
+        Writer w;
+        Encode(w, m);
+        SendReliable(p.peer, w);
+    }
+}
+
 void Session::SendBind(const Entity& e, PeerId to, const Handle& previous) {
     Bind b;
     b.netId = e.netId;
@@ -689,6 +805,14 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
     case Msg::Command: {
         Command c;
         if (pl->inGame && Decode(r, c) && pendingCommands_.size() < 1024) pendingCommands_.emplace_back(pl->id, c);
+        break;
+    }
+    case Msg::DialogReply: {
+        DialogReply a;
+        if (!pl->inGame || !Decode(r, a)) break;
+        auto o = dialogOwner_.find(a.dialogId);
+        if (o == dialogOwner_.end() || o->second != pl->id) { log_("ignored an answer to a conversation player " + std::to_string(pl->id) + " is not in"); break; }
+        if (pendingAnswers_.size() < 64) pendingAnswers_.push_back(a);
         break;
     }
     case Msg::InvOp: {
@@ -1050,6 +1174,16 @@ void Session::ClientTick(double now, bool live) {
         world_.ApplyVitals(e.handle, e.vitals);
         e.vitalsDirty = false;
     }
+    // Skill levels and money: the client gains no experience of its own (see hk_increaseStat), so
+    // the host's values only need imposing when they arrive, and now and then (respawned stand-ins).
+    const bool restats = now >= nextStatsApply_;
+    if (restats) nextStatsApply_ = now + 3.0;
+    for (auto& [id, e] : entities_) {
+        if (!e.present || e.stats.empty() || !(restats || e.statsDirty)) continue;
+        world_.ApplyProgress(e.handle, e.stats);
+        e.statsDirty = false;
+    }
+    if (restats && haveMoney_) world_.ApplyMoney(hostMoney_);
 
     if (now >= nextPing_) {
         nextPing_ = now + kPingInterval;
@@ -1216,6 +1350,46 @@ void Session::ClientPacket(Msg type, Reader& r) {
             it->second.vitals = std::move(v);
             it->second.haveVitals = true;
             it->second.vitalsDirty = true;
+        }
+        break;
+    }
+    case Msg::Dialog: {
+        DialogMsg m;
+        if (state_ != SessionState::Connected || !Decode(r, m)) break;
+        for (auto& e : m.events) {
+            auto it = entities_.find(e.netId);
+            switch (e.kind) {
+            case DialogKind::Say:
+                if (it != entities_.end() && it->second.present) world_.ApplySay(it->second.handle, e.text, e.shout);
+                break;
+            case DialogKind::Open:
+                dialog_ = DialogView{};
+                dialog_.open = true;
+                dialog_.id = e.dialogId;
+                dialog_.name = e.text;
+                break;
+            case DialogKind::Text:
+                if (!dialog_.open || dialog_.id != e.dialogId) { dialog_ = DialogView{}; dialog_.open = true; dialog_.id = e.dialogId; }
+                if (!e.text.empty()) dialog_.text = std::move(e.text);
+                dialog_.replies = std::move(e.replies);
+                dialog_.waiting = false;
+                break;
+            case DialogKind::Close:
+                if (dialog_.id == e.dialogId) dialog_ = DialogView{};
+                break;
+            }
+        }
+        break;
+    }
+    case Msg::Progress: {
+        ProgressMsg m;
+        if (state_ != SessionState::Connected || !Decode(r, m)) break;
+        if (m.hasMoney) { hostMoney_ = m.money; haveMoney_ = true; world_.ApplyMoney(m.money); }
+        for (auto& c : m.chars) {
+            auto it = entities_.find(c.netId);
+            if (it == entities_.end()) continue;
+            it->second.stats = std::move(c.stats);
+            it->second.statsDirty = true;
         }
         break;
     }

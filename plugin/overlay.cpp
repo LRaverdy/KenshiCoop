@@ -68,7 +68,8 @@ void PushAction(OverlayAction a) {
     g_actions.push_back(std::move(a));
 }
 
-bool Interactive() { return g_mpOpen.load() || g_consoleOpen.load(); }
+std::atomic<bool> g_dialogOpen{false};
+bool Interactive() { return g_mpOpen.load() || g_consoleOpen.load() || g_dialogOpen.load(); }
 
 void ReleaseRTV() {
     if (g_rtv) { g_rtv->Release(); g_rtv = nullptr; }
@@ -139,6 +140,34 @@ void DrawStatus(const OverlayModel& m, float w, float h) {
 
 void CopyTo(char* buf, size_t n, const std::string& s) {
     strncpy_s(buf, n, s.c_str(), _TRUNCATE);
+}
+
+// A conversation in the host's world: what the other one says, and the answers to pick.
+void DrawDialog(const OverlayModel& m, float w, float h) {
+    ImGui::SetNextWindowPos(ImVec2(w * 0.5f, h * 0.62f), ImGuiCond_Appearing, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(std::min(620.0f, w - 32.0f), 0.0f), ImGuiCond_Always);
+    const std::string title = (m.dialogName.empty() ? std::string("Conversation") : m.dialogName) + "###kcdialog";
+    if (!ImGui::Begin(title.c_str(), nullptr, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse)) {
+        ImGui::End();
+        return;
+    }
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(m.dialogText.empty() ? "..." : m.dialogText.c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::Separator();
+    ImGui::BeginDisabled(m.dialogWaiting);
+    for (size_t i = 0; i < m.dialogReplies.size(); ++i) {
+        const std::string label = std::to_string(i + 1) + ". " + m.dialogReplies[i] + "##r" + std::to_string(i);
+        if (ImGui::Selectable(label.c_str())) {
+            OverlayAction a;
+            a.kind = OverlayAction::Kind::DialogAnswer;
+            a.index = int(i);
+            PushAction(std::move(a));
+        }
+    }
+    ImGui::EndDisabled();
+    if (m.dialogReplies.empty()) ImGui::TextDisabled("(la conversation continue...)");
+    ImGui::End();
 }
 
 void DrawMultiplayer(const OverlayModel& m, float w, float h) {
@@ -282,6 +311,7 @@ void Render(IDXGISwapChain* swap) {
     DrawStatus(m, io.DisplaySize.x, io.DisplaySize.y);
     if (g_mpOpen) DrawMultiplayer(m, io.DisplaySize.x, io.DisplaySize.y);
     if (g_consoleOpen) DrawConsole(m, io.DisplaySize.x, io.DisplaySize.y);
+    if (m.dialogOpen) DrawDialog(m, io.DisplaySize.x, io.DisplaySize.y);
     io.MouseDrawCursor = interactive && io.WantCaptureMouse;   // the game may hide the system cursor
     ImGui::Render();
     g_wantKeyboard = interactive && io.WantCaptureKeyboard;
@@ -497,6 +527,7 @@ bool OverlayInstall(std::string* err) {
 
 void OverlayPublish(OverlayModel model) {
     std::lock_guard<std::mutex> lk(g_modelMutex);
+    g_dialogOpen = model.dialogOpen;
     g_model = std::move(model);
 }
 

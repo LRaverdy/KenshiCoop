@@ -63,6 +63,10 @@ public:
                    std::vector<kc::Handle>& adopted) override;
     void Apply(const kc::Handle& h, const kc::EntityState& target, const kc::EntityState& latest) override;
     void ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) override;
+    bool ReadProgress(const kc::Handle& h, std::vector<float>& stats) override;
+    void ApplyProgress(const kc::Handle& h, const std::vector<float>& stats) override;
+    bool ReadMoney(int32_t& money) override { return kenshi::ReadPlayerMoney(money); }
+    void ApplyMoney(int32_t money) override { kenshi::WritePlayerMoney(money); }
     bool Order(const kc::Handle& h, const kc::Command& c) override;
     void TakeLocalOrders(std::vector<std::pair<kc::Handle, kc::Command>>& out) override;
     bool ReadInventory(const kc::Handle& h, std::vector<kc::ItemState>& out) override;
@@ -120,6 +124,16 @@ public:
     void QueueLocalOrder(const kc::Handle& h, const kc::Command& c);
     void UpdatePendingPickups();   // host: characters walking to an item a client asked them to take
     void TakeLocalDrops(std::vector<std::pair<kc::Handle, kc::ItemState>>& out) override;
+    // Conversations (hooks, any thread for NoteSay; the game thread for the window ones). The window
+    // ones return true when the conversation is another player's (the host's window stays shut).
+    void NoteSay(void* dialogue, const std::string& text);
+    bool NoteDialogWindow(void* dialogue, bool open);
+    bool NoteDialogText(void* dialogue);
+    void TakeDialogEvents(std::vector<WorldDialog>& out) override;
+    void ApplySay(const kc::Handle& speaker, const std::string& text, bool shout) override;
+    void DialogAnswer(uint32_t dialogId, int index) override;
+    int saysApplied = 0;          // tests (client): speech bubbles replayed
+    std::string lastSay;
     void QueueLocalDrop(kenshi::Character* c, void* item);   // client: the player dropped it (any thread)
     // Client: the local player wants `looter` (one of its characters) to loot `target`, a knocked-out
     // or dead character. It walks there through the host; the loot window opens once it is close.
@@ -233,6 +247,12 @@ private:   // first few lifecycle events (tests)
     std::vector<kc::GroundEvent> groundOut_;                                // host: not sent yet
     std::unordered_map<kc::Handle, kc::Handle, kc::HandleHash> groundAlias_;   // client: host item -> our copy
     std::vector<std::pair<kenshi::Character*, kc::ItemState>> localDrops_;   // client, under groundMutex_
+    std::mutex dialogMutex_;
+    std::vector<WorldDialog> dialogEvents_;                 // host, under dialogMutex_
+    std::unordered_map<void*, uint32_t> remoteDialogs_;    // host: Dialogue* shown to another player -> id
+    uint32_t nextDialogId_ = 1;
+    // the other player's character in it (and who it talks with), or false
+    bool RemoteDialogParties(void* dialogue, kenshi::Character*& pc, kenshi::Character*& other);
     struct PendingPickup { kc::Handle item; double until; };
     std::unordered_map<kc::Handle, PendingPickup, kc::HandleHash> pickups_;   // host: character -> item it goes to take             // client: last damage number shown on each               // client: "<char>|<anim>" -> last attempt
     std::mutex toastMutex_;

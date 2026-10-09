@@ -34,13 +34,20 @@ struct OverlayModel {
     std::string name, address;          // current settings
     uint16_t port = 0;
     bool fullConsole = false;           // host: every console command; client: read-only ones
+    // conversation of one of our characters, held in the host's world
+    bool dialogOpen = false;
+    uint32_t dialogId = 0;
+    std::string dialogName, dialogText;
+    std::vector<std::string> dialogReplies;
+    bool dialogWaiting = false;
 };
 
 // What the player did in our windows; carried out on the game thread.
 struct OverlayAction {
-    enum class Kind { Host, Join, Leave, Command } kind = Kind::Command;
+    enum class Kind { Host, Join, Leave, Command, DialogAnswer } kind = Kind::Command;
     std::string name, address, text;
     uint16_t port = 0;
+    int index = 0;                      // DialogAnswer
 };
 
 bool OverlayInstall(std::string* err);      // hooks IDXGISwapChain::Present / ResizeBuffers, DirectInput reads

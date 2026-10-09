@@ -204,16 +204,35 @@ void Encode(Writer& w, const Command& m) {
     PutVec(w, m.pos);
     w.boolean(m.run);
     if (m.kind == CommandKind::PickUp) w.str(m.itemSid);
+    if (m.kind == CommandKind::Task) {
+        w.u8(uint8_t(m.via));
+        w.i32(m.task);
+        w.boolean(m.shift);
+        w.boolean(m.add);
+        PutHandle(w, m.subject);
+        PutHandle(w, m.building);
+    }
 }
 bool Decode(Reader& r, Command& m) {
     m.seq = GetU32Var(r);
     m.netId = GetU32Var(r);
     const uint8_t k = r.u8();
-    if (k < 1 || k > 3) return false;
+    if (k < 1 || k > 4) return false;
     m.kind = CommandKind(k);
     m.pos = GetVec(r);
     m.run = r.boolean();
     if (m.kind == CommandKind::PickUp) m.itemSid = r.str(kMaxSidLen);
+    if (m.kind == CommandKind::Task) {
+        const uint8_t via = r.u8();
+        if (via < uint8_t(TaskVia::AddOrder) || via > uint8_t(TaskVia::SetOrder)) return false;
+        m.via = TaskVia(via);
+        m.task = r.i32();
+        m.shift = r.boolean();
+        m.add = r.boolean();
+        m.subject = GetHandle(r);
+        m.building = GetHandle(r);
+        if (m.task < -1000 || m.task > 1000) return false;
+    }
     return Done(r) && m.netId != 0;
 }
 
@@ -235,11 +254,12 @@ void PutVitals(Writer& w, const EntityVitals& e) {
     w.varint(e.netId);
     w.f32(e.blood);
     w.f32(e.koTimer);
+    w.f32(e.hunger);
     w.u8(e.flags);
     w.u8(uint8_t(e.parts.size()));
     for (const auto& p : e.parts) { w.f32(p.flesh); w.f32(p.stun); w.f32(p.bandage); }
 }
-constexpr size_t kMinVitalsBytes = 1 + 4 + 4 + 1 + 1;
+constexpr size_t kMinVitalsBytes = 1 + 4 + 4 + 4 + 1 + 1;
 } // namespace
 
 std::vector<std::vector<uint8_t>> EncodeVitals(const VitalsMsg& v, size_t budget) {
@@ -275,6 +295,7 @@ bool Decode(Reader& r, VitalsMsg& m) {
         e.netId = GetU32Var(r);
         e.blood = r.f32();
         e.koTimer = r.f32();
+        e.hunger = r.f32();
         e.flags = r.u8();
         const uint8_t np = r.u8();
         if (np > kMaxBodyParts || size_t(np) * 12 > r.remaining()) return false;
@@ -285,12 +306,82 @@ bool Decode(Reader& r, VitalsMsg& m) {
     return Done(r);
 }
 
+void Encode(Writer& w, const ProgressMsg& m) {
+    w.u8(uint8_t(Msg::Progress));
+    w.boolean(m.hasMoney);
+    if (m.hasMoney) w.i32(m.money);
+    w.varint(m.chars.size());
+    for (const auto& c : m.chars) {
+        w.varint(c.netId);
+        for (size_t i = 0; i < kStatCount; ++i) w.f32(i < c.stats.size() ? c.stats[i] : 0.0f);
+    }
+}
+bool Decode(Reader& r, ProgressMsg& m) {
+    m.hasMoney = r.boolean();
+    if (m.hasMoney) m.money = r.i32();
+    const uint32_t n = r.count(kMaxEntitiesPerMsg, 1 + 4 * kStatCount);
+    m.chars.resize(n);
+    for (auto& c : m.chars) {
+        c.netId = GetU32Var(r);
+        c.stats.resize(kStatCount);
+        for (auto& s : c.stats) {
+            s = r.f32();
+            if (!std::isfinite(s) || s < 0.0f || s > 1000.0f) return false;
+        }
+        if (!r.ok() || c.netId == 0) return false;
+    }
+    return Done(r);
+}
+
+void Encode(Writer& w, const DialogMsg& m) {
+    w.u8(uint8_t(Msg::Dialog));
+    w.varint(m.events.size());
+    for (const auto& e : m.events) {
+        w.u8(uint8_t(e.kind));
+        w.varint(e.dialogId);
+        w.varint(e.netId);
+        w.str(e.text.size() > kMaxDialogText ? e.text.substr(0, kMaxDialogText) : e.text);
+        w.boolean(e.shout);
+        const size_t n = std::min(e.replies.size(), kMaxDialogReplies);
+        w.varint(n);
+        for (size_t i = 0; i < n; ++i) w.str(e.replies[i].size() > kMaxDialogText ? e.replies[i].substr(0, kMaxDialogText) : e.replies[i]);
+    }
+}
+bool Decode(Reader& r, DialogMsg& m) {
+    const uint32_t n = r.count(256, 5);
+    m.events.resize(n);
+    for (auto& e : m.events) {
+        const uint8_t k = r.u8();
+        if (k < uint8_t(DialogKind::Say) || k > uint8_t(DialogKind::Close)) return false;
+        e.kind = DialogKind(k);
+        e.dialogId = GetU32Var(r);
+        e.netId = GetU32Var(r);
+        e.text = r.str(kMaxDialogText);
+        e.shout = r.boolean();
+        const uint32_t nr = r.count(kMaxDialogReplies, 1);
+        e.replies.resize(nr);
+        for (auto& s : e.replies) s = r.str(kMaxDialogText);
+        if (!r.ok()) return false;
+    }
+    return Done(r);
+}
+void Encode(Writer& w, const DialogReply& m) {
+    w.u8(uint8_t(Msg::DialogReply));
+    w.varint(m.dialogId);
+    w.i32(m.index);
+}
+bool Decode(Reader& r, DialogReply& m) {
+    m.dialogId = GetU32Var(r);
+    m.index = r.i32();
+    return Done(r) && m.index >= 0 && m.index < int32_t(kMaxDialogReplies);
+}
+
 void EncodePing(Writer& w, const Ping& m, bool pong) { w.u8(uint8_t(pong ? Msg::Pong : Msg::Ping)); w.f64(m.t); }
 bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Ground)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::DialogReply)) return std::nullopt;
     return Msg(t);
 }
 

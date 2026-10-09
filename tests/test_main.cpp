@@ -453,6 +453,50 @@ static void TestWire() {
         GroundMsg g3; CHECK(Decode(gr2, g3));
         CHECK(g3.events.size() == 2 && g3.events[0].state.quantity == 2 && g3.events[0].pos.z == 3 && g3.events[1].kind == GroundKind::PickedUp);
     }
+    {   // skill levels and money
+        ProgressMsg pm; pm.hasMoney = true; pm.money = 12345;
+        CharProgress cp; cp.netId = 9; cp.stats.assign(kStatCount, 0.0f); cp.stats[0] = 17.25f; cp.stats[kStatCount - 1] = 3.5f;
+        pm.chars = {cp};
+        Writer pw; Encode(pw, pm);
+        Reader pr(pw.data(), pw.size()); CHECK(PeekType(pr) == Msg::Progress);
+        ProgressMsg pm2; CHECK(Decode(pr, pm2));
+        CHECK(pm2.hasMoney && pm2.money == 12345 && pm2.chars.size() == 1 && pm2.chars[0].netId == 9 &&
+              pm2.chars[0].stats.size() == kStatCount && pm2.chars[0].stats[0] == 17.25f && pm2.chars[0].stats[kStatCount - 1] == 3.5f);
+        pm.chars[0].stats[3] = -5.0f;   // nonsense levels are refused
+        Writer pw2; Encode(pw2, pm);
+        Reader pr2(pw2.data(), pw2.size()); PeekType(pr2);
+        ProgressMsg pm3; CHECK(!Decode(pr2, pm3));
+    }
+    {   // a player task with its subject
+        Command tc; tc.netId = 3; tc.kind = CommandKind::Task; tc.via = TaskVia::TaskNearest; tc.task = 25; tc.shift = true;
+        tc.subject.type = 1; tc.subject.index = 77; tc.building.index = 4; tc.pos = {1, 2, 3};
+        Writer tw; Encode(tw, tc);
+        Reader tr(tw.data(), tw.size()); CHECK(PeekType(tr) == Msg::Command);
+        Command tc2; CHECK(Decode(tr, tc2));
+        CHECK(tc2.kind == CommandKind::Task && tc2.via == TaskVia::TaskNearest && tc2.task == 25 && tc2.shift && !tc2.add &&
+              tc2.subject.index == 77 && tc2.building.index == 4 && tc2.pos.y == 2);
+    }
+    {   // speech bubbles and a conversation window
+        DialogMsg dm;
+        DialogEvent say; say.kind = DialogKind::Say; say.netId = 5; say.text = "Hey you! Stop right there."; say.shout = true;
+        DialogEvent txt; txt.kind = DialogKind::Text; txt.dialogId = 3; txt.netId = 5; txt.text = "What do you want?"; txt.replies = {"Nothing", "Join me"};
+        dm.events = {say, txt};
+        Writer dw; Encode(dw, dm);
+        Reader dr(dw.data(), dw.size()); CHECK(PeekType(dr) == Msg::Dialog);
+        DialogMsg dm2; CHECK(Decode(dr, dm2));
+        CHECK(dm2.events.size() == 2 && dm2.events[0].shout && dm2.events[0].text == say.text && dm2.events[1].dialogId == 3 &&
+              dm2.events[1].replies.size() == 2 && dm2.events[1].replies[1] == "Join me");
+        DialogReply rep; rep.dialogId = 3; rep.index = 1;
+        Writer rw; Encode(rw, rep);
+        Reader rr(rw.data(), rw.size()); CHECK(PeekType(rr) == Msg::DialogReply);
+        DialogReply rep2; CHECK(Decode(rr, rep2) && rep2.dialogId == 3 && rep2.index == 1);
+    }
+    {   // hunger travels with the vitals
+        VitalsMsg vm; vm.entities.resize(1); vm.entities[0].netId = 2; vm.entities[0].hunger = 250.5f;
+        auto pk = EncodeVitals(vm)[0];
+        Reader vr(pk.data(), pk.size()); PeekType(vr);
+        VitalsMsg vm2; CHECK(Decode(vr, vm2) && vm2.entities.size() == 1 && vm2.entities[0].hunger == 250.5f);
+    }
 
     WorldChunk c; c.file = 2; c.path = "zone/zone.1.2.zone"; c.fileSize = 5; c.data = {1, 2, 3};
     Writer cw; Encode(cw, c);
@@ -509,6 +553,8 @@ static void TestFuzz() {
         EffectsMsg m; m.spawned.resize(2); m.spawned[1].kind = EffectKind::Wandering; m.spawned[0].regionSid = "r";
         m.moved.resize(1); m.ended = {3}; Encode(w, m);
     });
+    { DialogMsg dm; DialogEvent e; e.netId = 1; e.text = "hi"; e.replies = {"a", "b"}; dm.events = {e}; add([&](Writer& w) { Encode(w, dm); }); }
+    { ProgressMsg pm; pm.hasMoney = true; CharProgress cp; cp.netId = 1; cp.stats.assign(kStatCount, 1.0f); pm.chars = {cp}; add([&](Writer& w) { Encode(w, pm); }); }
     { VitalsMsg v; v.entities.resize(2); for (auto& e : v.entities) { e.netId = 4; e.parts.resize(3); } seeds.push_back(EncodeVitals(v)[0]); }
     { Snapshot s; s.entities.resize(3); for (auto& e : s.entities) e.netId = 7; seeds.push_back(EncodeSnapshot(s)[0]); }
 
@@ -541,6 +587,9 @@ static void TestFuzz() {
         case Msg::Anim: { AnimMsg m; Decode(r, m); break; }
         case Msg::AnimFrame: { AnimFrameMsg m; Decode(r, m); break; }
         case Msg::Ground: { GroundMsg m; Decode(r, m); break; }
+        case Msg::Progress: { ProgressMsg m; Decode(r, m); break; }
+        case Msg::Dialog: { DialogMsg m; Decode(r, m); break; }
+        case Msg::DialogReply: { DialogReply m; Decode(r, m); break; }
         }
     };
     for (int i = 0; i < 300000; ++i) {

@@ -73,7 +73,7 @@ def dismiss_launcher(pid, timeout=25):
                 user32.PostMessageW(hwnd, 0x0111, 1, 0)   # WM_COMMAND IDOK
                 log("dismissed the Kenshi launcher")
                 return True
-            if w >= 800:
+            if w >= 640:
                 return False   # the game window is up: no launcher this time
         time.sleep(0.5)
     return False
@@ -312,11 +312,16 @@ def setup(save, name="Tester"):
 
 
 def arrange(host, cli):
-    """Cascade the two game windows so both stay reachable on one screen."""
-    for i, pid in enumerate((host, cli)):
-        for hwnd, w, h in windows_of(pid):
-            if w >= 800:
-                user32.SetWindowPos(hwnd, 0, i * 620, i * 300, 0, 0, 0x0001 | 0x0004)   # SWP_NOSIZE | SWP_NOZORDER
+    """Side by side: host on the left half of the screen, client on the right."""
+    sw = user32.GetSystemMetrics(0)
+    wins = [hwnd for pid in (host, cli) for hwnd, w, h in windows_of(pid) if w >= 640]
+    if len(wins) != 2:
+        return
+    r = wt.RECT()
+    user32.GetWindowRect(wins[1], ctypes.byref(r))   # the client's window was never squeezed by the screen edge
+    W, H = r.right - r.left, r.bottom - r.top
+    user32.SetWindowPos(wins[0], 0, 0, 0, W, H, 0x0004)        # SWP_NOZORDER
+    user32.SetWindowPos(wins[1], 0, sw - W, 0, W, H, 0x0004)
 
 
 def frozen_check(host, cli, label, radius=3000):
@@ -640,6 +645,64 @@ def exp_animframe(host, cli, rounds=10):
     log("animframe worst differing sets:", worst_set, "worst time diff:", round(worst_t, 3))
 
 
+def exp_progress(host, cli):
+    """Skill levels, money, speech bubbles and player orders: the host's world decides, the client follows."""
+    time.sleep(8)
+    def stats(pid, i):
+        ok, t = cmd(pid, f"stats {i}")
+        return [float(x) for x in t.split()[1].split(",")] if ok else None
+    h0, c0 = stats(host, 0), stats(cli, 0)
+    log("stats equal at start:", h0 == c0, "| hunger", cmd(host, "stats 0")[1].split()[-1], cmd(cli, "stats 0")[1].split()[-1])
+    log("host xp:", cmd(host, "xp 0 1 5"))
+    log("client xp (must be refused):", cmd(cli, "xp 0 2 5"))
+    time.sleep(2.5)
+    h1, c1 = stats(host, 0), stats(cli, 0)
+    diff = [(i, h1[i], c1[i]) for i in range(len(h1)) if abs(h1[i] - c1[i]) > 1e-3]
+    log("after xp: differences", diff, "| melee attack host", h1[1], "client", c1[1])
+    log("money host", cmd(host, "money"), "client", cmd(cli, "money"))
+    log("set money", cmd(host, "money 4321"))
+    time.sleep(2.5)
+    log("money client after set:", cmd(cli, "money"))
+    before = cmd(cli, "says")[1]
+    log("host say", cmd(host, "say 1 Salut, ceci est un test de bulle de dialogue assez longue."))
+    time.sleep(1.5)
+    log("client bubbles:", before, "->", cmd(cli, "says")[1])
+    # a player order from the client (follow squad member 0): only the client's own character obeys
+    for i in range(6):
+        log("client taskreq", i, cmd(cli, f"taskreq {i} 44 0"))
+    time.sleep(1)
+    log("host moves squad 0", cmd(host, "moverel 0 250 0"))
+    time.sleep(20)
+    for i in range(6):
+        log("pos", i, "host", cmd(host, f"pos {i}")[1], "client", cmd(cli, f"pos {i}")[1])
+
+
+def exp_talk(host, cli):
+    """An NPC talks to the client's own character: the conversation runs in the host's world, its window opens on the client."""
+    time.sleep(6)
+    for k in range(8):
+        for i in range(6):
+            ok, t = cmd(host, f"convo {i} {k}")
+            if ok:
+                log("host convo", i, k, t)
+                break
+        else:
+            continue
+        for _ in range(10):
+            time.sleep(0.5)
+            ok, t = cmd(cli, "dialog")
+            if "open=1" in t:
+                break
+        log("client dialog:", t)
+        if "open=1" in t:
+            time.sleep(1.5)
+            log("client dialog:", cmd(cli, "dialog")[1])
+            log("answer 0", cmd(cli, "answer 0"))
+            time.sleep(3)
+            log("client dialog after answer:", cmd(cli, "dialog")[1])
+            return
+
+
 def exp_ground(host, cli):
     """An item the host drops lies at the same spot on the client; once picked up, it is gone there too."""
     time.sleep(8)
@@ -923,6 +986,12 @@ def main():
     cp = sub.add_parser("clientpickup")
     cp.add_argument("--save", default="kctest_base")
     cp.add_argument("--keep", action="store_true")
+    tk = sub.add_parser("talk")
+    tk.add_argument("--save", default="kctest_base")
+    tk.add_argument("--keep", action="store_true")
+    pg = sub.add_parser("progress")
+    pg.add_argument("--save", default="kctest_base")
+    pg.add_argument("--keep", action="store_true")
     gr = sub.add_parser("ground")
     gr.add_argument("--save", default="kctest_base")
     gr.add_argument("--keep", action="store_true")
@@ -957,7 +1026,11 @@ def main():
         log("ready: host", host, "client", cli)
         return
     try:
-        if a.what == "clientpickup":
+        if a.what == "talk":
+            exp_talk(host, cli)
+        elif a.what == "progress":
+            exp_progress(host, cli)
+        elif a.what == "clientpickup":
             exp_clientpickup(host, cli)
         elif a.what == "ground":
             exp_ground(host, cli)

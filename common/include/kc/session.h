@@ -115,6 +115,25 @@ public:
     // Items on the ground. Host: dropped/picked up since the last call. Client: replay one.
     virtual void TakeGroundEvents(std::vector<GroundEvent>& out) { out.clear(); }
     virtual void ApplyGround(const GroundEvent& e) { (void)e; }
+    // Progression. Host: a character's skill levels (kStatCount values), the player faction's money.
+    // Client: impose the host's.
+    virtual bool ReadProgress(const Handle& h, std::vector<float>& stats) { (void)h; stats.clear(); return false; }
+    virtual void ApplyProgress(const Handle& h, const std::vector<float>& stats) { (void)h; (void)stats; }
+    virtual bool ReadMoney(int32_t& money) { (void)money; return false; }
+    virtual void ApplyMoney(int32_t money) { (void)money; }
+    // Conversations. Host: lines said and conversation windows of other players' characters since the
+    // last call (`speaker` says / talks with `pc`). Client: show a line said by `speaker`.
+    struct WorldDialog {
+        DialogKind kind = DialogKind::Say;
+        uint32_t dialogId = 0;
+        Handle speaker, pc;
+        std::string text;
+        bool shout = false;
+        std::vector<std::string> replies;
+    };
+    virtual void TakeDialogEvents(std::vector<WorldDialog>& out) { out.clear(); }
+    virtual void ApplySay(const Handle& speaker, const std::string& text, bool shout) { (void)speaker; (void)text; (void)shout; }
+    virtual void DialogAnswer(uint32_t dialogId, int index) { (void)dialogId; (void)index; }   // host
     // Client: items the local player dropped from a character (asked of the host, not done locally).
     virtual void TakeLocalDrops(std::vector<std::pair<Handle, ItemState>>& out) { out.clear(); }
 
@@ -216,6 +235,16 @@ public:
     // client (diagnostics): newest state received from the host and the state being rendered now
     bool TargetOf(const Handle& h, EntityState& latest, EntityState& rendered) const;
     size_t joiningPlayers() const;                            // host: players still loading the world
+    // Client: the conversation window of one of our characters (open = false: none).
+    struct DialogView {
+        bool open = false;
+        uint32_t id = 0;
+        std::string name, text;
+        std::vector<std::string> replies;
+        bool waiting = false;   // an answer was sent, the next line has not come yet
+    };
+    const DialogView& dialog() const { return dialog_; }
+    void AnswerDialog(int index);
 
 private:
     struct Sample { double t; EntityState s; };
@@ -231,6 +260,8 @@ private:
         bool haveVitals = false;
         bool vitalsDirty = false;
         EntityVitals vitals;
+        std::vector<float> stats;            // client: the host's skill levels (empty = none yet)
+        bool statsDirty = false;
         bool hasSpawn = false;               // host sent how to recreate it
         SpawnInfo spawn;
         bool spawned = false;                // client created a stand-in for it
@@ -257,6 +288,8 @@ private:
         double at = -1e9;
         EntityVitals vitals;
         double vitalsAt = -1e9;
+        std::vector<float> stats;
+        double statsAt = -1e9;
     };
     struct PlayerSync {
         std::unordered_map<uint32_t, Sent> sent;
@@ -282,6 +315,8 @@ private:
     void UpdateInterest();                   // host: (un)bind squad members and nearby NPCs
     void SendSnapshots(double now);
     void SendVitals(double now);
+    void SendProgress(double now);
+    void SendDialogs();
     void SendBind(const Entity& e, PeerId to, const Handle& previous = Handle{});
     void SendInventories(double now, bool force, PeerId onlyTo);
     void ClientInventoryDiff(double now);
@@ -322,6 +357,17 @@ private:
     uint32_t cmdSeq_ = 0;
     double nextSnapshot_ = 0;
     double nextVitals_ = 0;
+    double nextProgress_ = 0;
+    double nextStatsApply_ = 0;
+    bool moneySent_ = false;
+    int32_t lastMoney_ = 0;
+    double moneyAt_ = -1e9;
+    DialogView dialog_;                    // client
+    std::unordered_map<uint32_t, uint8_t> dialogOwner_;   // host: conversation -> the player it was sent to
+    std::vector<IWorld::WorldDialog> scratchDialogs_;
+    std::vector<DialogReply> pendingAnswers_;   // host
+    bool haveMoney_ = false;               // client
+    int32_t hostMoney_ = 0;
     double nextTimeState_ = 0;
     double nextInterest_ = 0;
     double nextPing_ = 0;

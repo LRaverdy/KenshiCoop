@@ -77,6 +77,31 @@ const FunctionSig kFunctions[FnCount] = {
     {"AnimationClass::animationSelection", 0x520500, {0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x7C, 0x24, 0x20, 0x41, 0x54}},
     {"CharMovement::trackAnimationMovement", 0x65E240, {0x48, 0x83, 0xEC, 0x28, 0x38, 0x91, 0x7C, 0x03, 0x00, 0x00, 0x74, 0x17}},
     {"CharMovement::combatMovementUpdate", 0x2AF1E0, {0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x70, 0x10, 0x48}},
+    {"increaseStat", 0x8C5DF0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0xF3, 0x0F, 0x10, 0x05, 0x0A, 0x65}},
+    {"PlayerInterface::objectSelected", 0x7F7F20, {0x48, 0x85, 0xD2, 0x0F, 0x84, 0xD6, 0x04, 0x00, 0x00, 0x53, 0x57, 0x41}},
+    {"PlayerInterface::unselectAll", 0x7F8DA0, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x83, 0xB9, 0xA0, 0x02, 0x00}},
+    {"Dialogue::say", 0x67FD80, {0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48}},
+    {"Dialogue::setInDialog", 0x6746A0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B}},
+    {"Dialogue::setResponesGUI", 0x674070, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x48, 0x8B, 0x0D}},
+    {"Dialogue::setConversationReplyGUI", 0x674170, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x60, 0x48, 0xC7, 0x44, 0x24, 0x28, 0xFE}},
+    {"Dialogue::replyClicked", 0x683DF0, {0x48, 0x8B, 0xC4, 0x56, 0x57, 0x41, 0x54, 0x48, 0x83, 0xEC, 0x60, 0x48}},
+    {"Dialogue::sendEvent", 0x684990, {0x44, 0x89, 0x44, 0x24, 0x18, 0x53, 0x55, 0x57, 0x41, 0x55, 0x48, 0x83}},
+    {"Dialogue::sendEventOverride", 0x685660, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
+    {"Dialogue::startConversation", 0x683F90, {0x40, 0x56, 0x57, 0x41, 0x54, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x38, 0x45}},
+    {"Dialogue::startPlayerConversation", 0x684320, {0x48, 0x8B, 0xC4, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x83, 0xEC, 0x70}},
+    {"Dialogue::_doActions", 0x680560, {0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56}},
+    {"AITaskSytem::update", 0x50D920, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x80, 0xB9, 0x6D, 0x02, 0x00, 0x00}},
+    {"SensoryData::dialogAssessmentUpdate", 0x85A5F0, {0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x6C, 0x24, 0x20, 0x57, 0x48}},
+    {"SensoryData::assessCrimes", 0x854D10, {0x40, 0x53, 0x55, 0x56, 0x41, 0x55, 0x48, 0x83, 0xEC, 0x28, 0x4C, 0x8D}},
+    {"Blackboard::update", 0x26A320, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
+    {"Blackboard::periodicUpdate", 0x2732B0, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x0F, 0x29, 0x74, 0x24, 0x20, 0x48}},
+    {"FactionWarMgr::periodicUpdate", 0x9CB310, {0x48, 0x8B, 0xC4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
+    {"FactionUniqueSquadManager::periodicUpdate", 0x2DD680, {0x48, 0x83, 0xEC, 0x18, 0x48, 0xC7, 0x04, 0x24, 0xFE, 0xFF, 0xFF, 0xFF}},
+    {"FactionRelations::affectRelations(amount)", 0x6B2EA0, {0x48, 0x85, 0xD2, 0x0F, 0x84, 0xDF, 0x00, 0x00, 0x00, 0x48, 0x89, 0x5C}},
+    {"FactionRelations::affectRelations(event)", 0x6B2D20, {0x48, 0x85, 0xD2, 0x0F, 0x84, 0x2E, 0x01, 0x00, 0x00, 0x48, 0x89, 0x5C}},
+    {"FactionRelations::setRelation", 0x6B4D80, {0x48, 0x89, 0x54, 0x24, 0x10, 0x48, 0x83, 0xEC, 0x38, 0x48, 0x8D, 0x54}},
+    {"BountyManager::setCrime", 0x852C80, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
+    {"BountyManager::assignBountyForCrimes", 0x853EC0, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xF9, 0xE8, 0x4B, 0xA9}},
 };
 
 namespace {
@@ -390,6 +415,28 @@ void ActiveCharacters(std::vector<Character*>& out) {
     for (void* p : raw) if (IsCharacter(p)) out.push_back(static_cast<Character*>(p));
 }
 
+bool ObjectHandle(const void* rootObject, kc::Handle& out) {
+    return rootObject && ReadHandle(reinterpret_cast<const uint8_t*>(rootObject) + off::RO_handle, out) && out.valid();
+}
+
+void* ResolveObject(const kc::Handle& h) {
+    if (!h.valid()) return nullptr;
+    if (Character* c = Resolve(h)) return c;
+    return ResolveItem(h);
+}
+
+void MakeHand(const kc::Handle& h, void* out) {
+    auto* hand = static_cast<uint8_t*>(out);
+    std::memset(hand, 0, off::HandSize);
+    const uintptr_t vt = Addr(rva::VtHand);
+    std::memcpy(hand, &vt, 8);
+    std::memcpy(hand + off::H_type, &h.type, 4);
+    std::memcpy(hand + off::H_container, &h.container, 4);
+    std::memcpy(hand + off::H_containerSerial, &h.containerSerial, 4);
+    std::memcpy(hand + off::H_index, &h.index, 4);
+    std::memcpy(hand + off::H_serial, &h.serial, 4);
+}
+
 bool HandleFromHand(const void* hand, kc::Handle& out) {
     return hand && ReadHandle(hand, out) && out.valid();
 }
@@ -504,10 +551,10 @@ bool ReadVitals(Character* c, kc::EntityVitals& out) {
     void* m = Medical(c);
     if (!m) return false;
     bool unc = false, dead = false;
-    if (!Rd(m, off::MS_blood, out.blood) || !Rd(m, off::MS_koTimer, out.koTimer) ||
+    if (!Rd(m, off::MS_blood, out.blood) || !Rd(m, off::MS_koTimer, out.koTimer) || !Rd(m, off::MS_hunger, out.hunger) ||
         !Rd(m, off::MS_unconscious, unc) || !Rd(m, off::MS_dead, dead))
         return false;
-    if (!std::isfinite(out.blood) || !std::isfinite(out.koTimer)) return false;
+    if (!std::isfinite(out.blood) || !std::isfinite(out.koTimer) || !std::isfinite(out.hunger)) return false;
     out.flags = uint8_t((unc ? kc::kVitUnconscious : 0) | (dead ? kc::kVitDead : 0));
     out.parts.clear();
     const auto* lk = reinterpret_cast<const uint8_t*>(m) + off::MS_anatomy;
@@ -528,11 +575,214 @@ bool ReadVitals(Character* c, kc::EntityVitals& out) {
     return true;
 }
 
+namespace {
+constexpr uintptr_t CH_stats = 0x450;   // CharStats* (Character::getStats)
+// CharStats fields of every StatsEnumerated with one of its own (from getStatRef's jump table):
+// strength, melee attack, labouring, science, engineering, robotics, weapon smithing, armour smithing,
+// medic, thieving, turrets, farming, cooking, stealth, athletics, dexterity, melee defence,
+// toughness, assassination, swimming, perception, katanas, sabres, hackers, heavy weapons, blunt,
+// martial arts, dodge, polearms, crossbows, friendly fire, lockpicking, bow smithing, mass combat.
+constexpr uintptr_t kStatOffsets[kc::kStatCount] = {
+    0x80, 0x120, 0xE4, 0xE0, 0xCC, 0xDC, 0xD0, 0xD4, 0x98, 0xAC, 0x114, 0xE8, 0xEC, 0xA4, 0x94, 0x88, 0x124,
+    0x90, 0xB8, 0xA8, 0x8C, 0xF8, 0xFC, 0x100, 0x108, 0x104, 0x10C, 0xF0, 0x118, 0x110, 0xF4, 0xB0, 0xD8, 0x9C};
+constexpr uintptr_t GW_playerPtr = 0x580, PI_faction = 0x2A0, FA_ownerships = 0x80, OW_money = 0x88;
+
+void* StatsOf(Character* c) {
+    void* s = nullptr;
+    if (!IsCharacter(c) || !Rd(c, CH_stats, s) || !s) return nullptr;
+    Character* me = nullptr;
+    return Rd(s, 0x10, me) && me == c ? s : nullptr;   // CharStats::me
+}
+void* PlayerOwnerships() {
+    PlayerInterface* pi = Player();
+    void* f = nullptr;
+    void* o = nullptr;
+    if (!pi || !Rd(pi, PI_faction, f) || !f || !Rd(f, FA_ownerships, o)) return nullptr;
+    return o;
+}
+} // namespace
+
+bool ReadStats(Character* c, std::vector<float>& out) {
+    out.clear();
+    void* s = StatsOf(c);
+    if (!s) return false;
+    out.resize(kc::kStatCount);
+    for (size_t i = 0; i < kc::kStatCount; ++i)
+        if (!Rd(s, kStatOffsets[i], out[i]) || !std::isfinite(out[i]) || out[i] < 0.0f || out[i] > 1000.0f) {
+            out.clear();
+            return false;
+        }
+    return true;
+}
+
+bool WriteStats(Character* c, const std::vector<float>& stats) {
+    void* s = StatsOf(c);
+    if (!s || stats.size() != kc::kStatCount) return false;
+    for (size_t i = 0; i < kc::kStatCount; ++i) {
+        float cur = 0;
+        if (Rd(s, kStatOffsets[i], cur) && cur != stats[i]) Wr(s, kStatOffsets[i], stats[i]);
+    }
+    return true;
+}
+
+bool ReadPlayerMoney(int32_t& out) {
+    void* o = PlayerOwnerships();
+    return o && Rd(o, OW_money, out);
+}
+
+bool WritePlayerMoney(int32_t money) {
+    void* o = PlayerOwnerships();
+    int32_t cur = 0;
+    if (!o || !Rd(o, OW_money, cur)) return false;
+    if (cur != money) Wr(o, OW_money, money);
+    return true;
+}
+
+bool GainExperience(Character* c, size_t statIndex, float amount) {
+    void* s = StatsOf(c);
+    if (!s || statIndex >= kc::kStatCount) return false;
+    using FnIncrease = void (*)(float*, float, float);
+    auto* field = reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(s) + kStatOffsets[statIndex]);
+    reinterpret_cast<FnIncrease>(FnAddr(FnIncreaseStat))(field, amount, 100.0f);
+    return true;
+}
+
+bool CallSay(Character* c, const std::string& text) {
+    void* d = CharacterDialogue(c);
+    if (!d) return false;
+    alignas(8) uint8_t gs[0x28];
+    GameStringView(text, gs);
+    using FnSay = void (*)(void*, const void*, void*);
+    reinterpret_cast<FnSay>(FnAddr(FnDialogueSay))(d, gs, nullptr);
+    return true;
+}
+
+namespace {
+using FnSendEvent = bool (*)(void*, void*, int);
+constexpr int kEvPlayerTalkToMe = 1;   // EventTriggerEnum::EV_PLAYER_TALK_TO_ME
+bool StartConvSeh(void* fn, void* d, void* pc, bool& result) {
+    __try {
+        result = reinterpret_cast<FnSendEvent>(fn)(d, pc, kEvPlayerTalkToMe);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool CallStartPlayerConversation(Character* npc, Character* pc) {
+    void* d = CharacterDialogue(npc);
+    bool result = false;
+    return d && IsCharacter(pc) && StartConvSeh(FnAddr(FnDialogueSendEvent), d, pc, result) && result;
+}
+
+bool IsStatOfCharacter(const void* statField) {
+    // the stat functions get `this` + offset: walk back to a CharStats whose `me` points back at it
+    const auto p = reinterpret_cast<uintptr_t>(statField);
+    for (uintptr_t off : kStatOffsets) {
+        Character* me = nullptr;
+        void* back = nullptr;
+        const auto s = reinterpret_cast<void*>(p - off);
+        if (Rd(s, 0x10, me) && IsCharacter(me) && Rd(me, CH_stats, back) && back == s) return true;
+    }
+    return false;
+}
+
+void WithSelection(Character* only, const std::function<void()>& fn) {
+    PlayerInterface* pi = Player();
+    if (!pi || !IsCharacter(only)) return;
+    std::vector<kc::Handle> before;
+    SelectedHandles(before);
+    using FnSel = void (*)(void*, void*, bool);
+    using FnClear = void (*)(void*);
+    auto sel = reinterpret_cast<FnSel>(FnAddr(FnObjectSelected));
+    auto clear = reinterpret_cast<FnClear>(FnAddr(FnUnselectAll));
+    clear(pi);
+    sel(pi, only, true);
+    fn();
+    clear(pi);
+    for (const auto& h : before) {
+        void* o = Resolve(h);
+        if (!o) o = ResolveItem(h);
+        if (o) sel(pi, o, true);
+    }
+}
+
+namespace {
+constexpr uintptr_t CH_dialogue = 0x280;    // Dialogue*
+constexpr uintptr_t DL_shouting = 0x149, DL_me = 0x150, DL_target = 0x158;   // bool, Character*, hand
+constexpr uintptr_t DL_responses = 0x258, DL_npcReply = 0x278;               // vector<std::string>, std::string
+constexpr size_t kGameStringSize = 0x28;
+} // namespace
+
+void* CharacterDialogue(Character* c) {
+    void* d = nullptr;
+    if (!IsCharacter(c) || !Rd(c, CH_dialogue, d) || !d) return nullptr;
+    Character* me = nullptr;
+    return Rd(d, DL_me, me) && me == c ? d : nullptr;
+}
+
+Character* DialogueOwner(const void* dialogue) {
+    Character* me = nullptr;
+    if (!dialogue || !Rd(dialogue, DL_me, me) || !IsCharacter(me)) return nullptr;
+    void* back = nullptr;
+    return Rd(me, CH_dialogue, back) && back == dialogue ? me : nullptr;
+}
+
+Character* DialogueTarget(const void* dialogue) {
+    kc::Handle h;
+    if (!dialogue || !ReadHandle(reinterpret_cast<const uint8_t*>(dialogue) + DL_target, h) || !h.valid()) return nullptr;
+    return Resolve(h);
+}
+
+bool DialogueShouting(const void* dialogue) {
+    bool v = false;
+    return dialogue && Rd(dialogue, DL_shouting, v) && v;
+}
+
+void SetDialogueShouting(void* dialogue, bool shout) {
+    if (dialogue) Wr(dialogue, DL_shouting, shout);
+}
+
+bool ReadDialogueWindowText(const void* dialogue, std::string& text, std::vector<std::string>& replies) {
+    text.clear();
+    replies.clear();
+    if (!dialogue || !ReadGameString(reinterpret_cast<const uint8_t*>(dialogue) + DL_npcReply, text)) return false;
+    const uint8_t* first = nullptr;
+    const uint8_t* last = nullptr;
+    const auto* v = reinterpret_cast<const uint8_t*>(dialogue) + DL_responses;
+    if (!Rd(v, 0, first) || !Rd(v, 8, last) || !first || last < first) return true;
+    const size_t n = size_t(last - first) / kGameStringSize;
+    for (size_t i = 0; i < n && i < kc::kMaxDialogReplies; ++i) {
+        std::string s;
+        if (!ReadGameString(first + i * kGameStringSize, s)) break;
+        replies.push_back(std::move(s));
+    }
+    return true;
+}
+
+void GameStringView(const std::string& s, void* out) {
+    auto* raw = static_cast<uint8_t*>(out);
+    std::memset(raw, 0, kGameStringSize);
+    const uint64_t size = s.size();
+    if (s.size() < 16) {
+        std::memcpy(raw, s.data(), s.size());
+        const uint64_t cap = 15;
+        std::memcpy(raw + 0x18, &cap, 8);
+    } else {
+        const char* p = s.c_str();
+        std::memcpy(raw, &p, 8);
+        std::memcpy(raw + 0x18, &size, 8);
+    }
+    std::memcpy(raw + 0x10, &size, 8);
+}
+
 bool WriteVitals(Character* c, const kc::EntityVitals& v) {
     void* m = Medical(c);
     if (!m) return false;
     Wr(m, off::MS_blood, v.blood);
     Wr(m, off::MS_koTimer, v.koTimer);
+    Wr(m, off::MS_hunger, v.hunger);
     // The local medical update may decide on its own that the character died or fainted (it sets
     // these before asking for the death, which clients refuse): the host's state wins. Falling and
     // dying themselves are replayed separately, so only the "it did not happen" side is written.
@@ -566,6 +816,10 @@ bool IsUnconscious(Character* c) {
     bool v = false;
     void* m = Medical(c);
     return m && Rd(m, off::MS_unconscious, v) && v;
+}
+
+void SetUnconscious(Character* c, bool on) {
+    if (void* m = Medical(c)) Wr(m, off::MS_unconscious, on);
 }
 
 bool IsRagdoll(Character* c) {

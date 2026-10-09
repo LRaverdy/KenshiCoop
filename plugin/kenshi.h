@@ -6,6 +6,7 @@
 // re-checked at startup; on any mismatch the plugin stays disabled instead of risking a crash.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 #include "kc/protocol.h"
@@ -113,6 +114,31 @@ enum Fn : int {
     FnAnimationSelection,       // void AnimationClass::animationSelection(float time)   (picks what to play each frame)
     FnTrackAnimationMovement,   // void CharMovement::trackAnimationMovement(bool)   (animations move the character)
     FnCombatMovementUpdate,     // void CharMovement::combatMovementUpdate(float, const Vector3& pos, const Vector3& dir, bool moving, Vector3& repulsion, Vector3& facingOut, bool defensive, swordStateEnum, float raceSpeedMult)
+    FnIncreaseStat,             // void increaseStat(float& stat, float amount, float upperLimit)   (every experience gain ends here)
+    FnObjectSelected,           // void PlayerInterface::objectSelected(RootObject*, bool select)
+    FnUnselectAll,              // void PlayerInterface::unselectAll()
+    FnDialogueSay,              // void Dialogue::say(const std::string& text, DialogLineData* line)   (every speech bubble)
+    FnDialogueSetInDialog,      // void Dialogue::setInDialog(bool on)   (shows / hides the conversation window)
+    FnDialogueSetResponses,     // void Dialogue::setResponesGUI()   (the answers into the window)
+    FnDialogueSetReplyText,     // void Dialogue::setConversationReplyGUI()   (what the other one says into the window)
+    FnDialogueReplyClicked,     // void Dialogue::replyClicked(int)
+    FnDialogueSendEvent,        // bool Dialogue::sendEvent(Character*, EventTriggerEnum)
+    FnDialogueSendEventOverride,// bool Dialogue::sendEventOverride(Character*, EventTriggerEnum, bool)
+    FnDialogueStartConversation,// bool Dialogue::startConversation(Character*, DialogLineData*, EventTriggerEnum, bool)
+    FnDialogueStartPlayerConversation,// bool Dialogue::startPlayerConversation(Character*, DialogLineData*)
+    FnDialogueDoActions,        // void Dialogue::_doActions(DialogLineData*)   (recruit, bounties, relations... of a line)
+    FnTaskSystemUpdate,         // void AITaskSytem::update(Vector3 position, float time)   (runs the current task)
+    FnSensoryDialogAssessment,  // void SensoryData::dialogAssessmentUpdate(float, bool)   (notices crimes, decides to talk)
+    FnSensoryAssessCrimes,      // void SensoryData::assessCrimes(Character*)
+    FnBlackboardUpdate,         // void Blackboard::update(float)   (squad AI)
+    FnBlackboardPeriodic,       // void Blackboard::periodicUpdate(float)
+    FnFactionWarPeriodic,       // void FactionWarMgr::periodicUpdate()   (raids, campaigns)
+    FnUniqueSquadPeriodic,      // void FactionUniqueSquadManager::periodicUpdate(float)
+    FnAffectRelationsAmount,    // void FactionRelations::affectRelations(Faction*, float amount, float mult)
+    FnAffectRelationsEvent,     // void FactionRelations::affectRelations(Faction*, FactionEvent, float mult)
+    FnSetRelation,              // void FactionRelations::setRelation(Faction*, float)
+    FnSetCrime,                 // bool BountyManager::setCrime(CrimeEnum, Faction*, const hand&)
+    FnAssignBounty,             // void BountyManager::assignBountyForCrimes(Faction*)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -176,6 +202,7 @@ inline constexpr uintptr_t CC_active = 0x130;       // bool combatModeActive
 inline constexpr uintptr_t CC_target = 0x298;       // hand: attack target
 
 // MedicalSystem
+inline constexpr uintptr_t MS_hunger = 0x60;         // float (MedicalSystem::isReallyHungry reads it)
 inline constexpr uintptr_t MS_blood = 0x70;          // float
 inline constexpr uintptr_t MS_koTimer = 0xA0;        // float
 inline constexpr uintptr_t MS_me = 0xE0;             // Character*
@@ -242,6 +269,9 @@ void ActiveCharacters(std::vector<Character*>& out);
 void DeadBodies(std::vector<Character*>& out);   // corpses: they leave the active list when they die   // every character the game is updating
 Character* Resolve(const kc::Handle& h);               // game handle -> live character (or null)
 bool HandleFromHand(const void* hand, kc::Handle& out); // reads a game `hand` object
+bool ObjectHandle(const void* rootObject, kc::Handle& out);   // any RootObject (character, item, building)
+void* ResolveObject(const kc::Handle& h);                    // any RootObject, or null
+void MakeHand(const kc::Handle& h, void* out);               // writes a game `hand` (off::HandSize bytes)
 // Opens the game's loot window between two characters (what reaching a body with a loot order does).
 bool OpenLootWindow(Character* looter, Character* target);
 // tests: the order a right-click on `subject` gives to the nearest selected character
@@ -259,8 +289,30 @@ bool IsDown(Character* c);
 Character* AICharacter(const AI* ai);
 Character* MedicalCharacter(const void* medical);
 bool ReadVitals(Character* c, kc::EntityVitals& out);
+// Skill levels (kc::kStatCount floats, in kStatOffsets order) and the player faction's money.
+bool ReadStats(Character* c, std::vector<float>& out);
+bool WriteStats(Character* c, const std::vector<float>& stats);
+bool ReadPlayerMoney(int32_t& out);
+bool WritePlayerMoney(int32_t money);
+bool IsStatOfCharacter(const void* statField);
+bool GainExperience(Character* c, size_t statIndex, float amount);   // tests: increaseStat on that stat
+bool CallSay(Character* c, const std::string& text);
+bool CallStartPlayerConversation(Character* npc, Character* pc);   // tests: npc talks to pc (its default conversation)                // tests: Dialogue::say through the hooks   // the float lies inside a live character's CharStats
+// Conversations (Dialogue, Character+0x280).
+void* CharacterDialogue(Character* c);
+Character* DialogueOwner(const void* dialogue);          // Dialogue::me, when it points back
+Character* DialogueTarget(const void* dialogue);         // who it talks with (conversationTarget)
+bool DialogueShouting(const void* dialogue);
+void SetDialogueShouting(void* dialogue, bool shout);
+// What the other one says now and the answers the player can pick (what the window would show).
+bool ReadDialogueWindowText(const void* dialogue, std::string& text, std::vector<std::string>& replies);
+// A std::string the game can read (const&) for as long as `s` lives; 0x28 bytes.
+void GameStringView(const std::string& s, void* out);
+// Orders: make `only` the whole selection, run `fn`, then restore the player's selection.
+void WithSelection(Character* only, const std::function<void()>& fn);
 bool IsDead(Character* c);
 bool IsUnconscious(Character* c);
+void SetUnconscious(Character* c, bool on);   // the medical state only (no fall, no timer)
 bool IsRagdoll(Character* c);   // the body is physically on the ground (or carried)
 
 bool GetGameHours(double& out);

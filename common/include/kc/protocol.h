@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 16;
+constexpr uint16_t kProtocolVersion = 17;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -58,6 +58,9 @@ enum class Msg : uint8_t {
     Anim = 23,        // S->C  animations the host's characters start and stop (attacks, actions, stumbles)
     AnimFrame = 24,   // S->C  (unreliable) every animation each nearby character is playing: name, time, weight
     Ground = 25,      // S->C  items dropped on and picked up from the ground in the host's world
+    Progress = 26,    // S->C  skill levels of characters, the player faction's money
+    Dialog = 27,      // S->C  speech bubbles; conversations of the receiving player's characters
+    DialogReply = 28, // C->S  the player picked an answer in a conversation
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -187,6 +190,15 @@ enum class CommandKind : uint8_t {
     MoveTo = 1,  // walk/run to `pos`
     Stop = 2,
     PickUp = 3,  // take the item `itemSid` lying at `pos`
+    Task = 4,    // a player order (first aid, eat, use a bed, open a door...) given through the game's UI
+};
+// Which PlayerInterface function the client's UI called for a Task (the host calls the same one).
+enum class TaskVia : uint8_t {
+    AddOrder = 1,      // addOrderSelectedCharacters(building, task, subject, shift, addDontClear, pos)
+    NewTask = 2,       // newPlayerTaskSelectedCharacters(task, target, building, pos, addDontClear)
+    TaskNearest = 3,   // addTaskNearestSelectedCharacter(building, task, subject, shift, pos, noAnimals)
+    AddJob = 4,        // addJobSelectedCharacters(task, subject, shift, add, pos)
+    SetOrder = 5,      // setOrderSelectedCharacters(order)
 };
 struct Command {
     uint32_t seq = 0;
@@ -195,6 +207,12 @@ struct Command {
     Vec3 pos;
     bool run = false;
     std::string itemSid;   // PickUp
+    // Task
+    TaskVia via = TaskVia::AddOrder;
+    int32_t task = 0;
+    bool shift = false, add = false;
+    Handle subject;        // the object the order is about (character, item, building), as the host knows it
+    Handle building;       // the building the character goes into, if any
 };
 
 struct TimeState {
@@ -214,12 +232,51 @@ struct EntityVitals {
     uint32_t netId = 0;
     float blood = 0;
     float koTimer = 0;
+    float hunger = 0;
     uint8_t flags = 0;
     std::vector<PartVitals> parts;
 };
 struct VitalsMsg {
     uint32_t tick = 0;
     std::vector<EntityVitals> entities;
+};
+
+// Skill levels: the integer part is the level, the fraction the progress to the next one.
+constexpr size_t kStatCount = 34;   // every stat with a field of its own (see kenshi.cpp kStatOffsets)
+struct CharProgress {
+    uint32_t netId = 0;
+    std::vector<float> stats;   // kStatCount values
+};
+struct ProgressMsg {
+    bool hasMoney = false;
+    int32_t money = 0;          // the player faction's cats
+    std::vector<CharProgress> chars;
+};
+
+// Conversations happen in the host's world. Lines said aloud (speech bubbles) are shown to
+// everyone; the conversation window of a player's character opens on that player's screen.
+enum class DialogKind : uint8_t {
+    Say = 1,     // netId says `text` (shout: louder bubble)
+    Open = 2,    // a conversation window opens: netId = who the player talks with, text = their name
+    Text = 3,    // what they say now (text) and the answers the player can pick (replies)
+    Close = 4,
+};
+constexpr size_t kMaxDialogText = 2000;
+constexpr size_t kMaxDialogReplies = 16;
+struct DialogEvent {
+    DialogKind kind = DialogKind::Say;
+    uint32_t dialogId = 0;   // which conversation (Open/Text/Close)
+    uint32_t netId = 0;
+    std::string text;
+    bool shout = false;
+    std::vector<std::string> replies;
+};
+struct DialogMsg {
+    std::vector<DialogEvent> events;
+};
+struct DialogReply {
+    uint32_t dialogId = 0;
+    int32_t index = 0;       // position in the last `replies`
 };
 
 struct Ping {
@@ -443,6 +500,12 @@ void Encode(Writer& w, const GroundMsg& m);
 
 // Snapshots are split into packets that each fit `budget` bytes; every packet is self-contained.
 std::vector<std::vector<uint8_t>> EncodeSnapshot(const Snapshot& s, size_t budget = kSnapshotBudget);
+void Encode(Writer& w, const ProgressMsg& m);
+void Encode(Writer& w, const DialogMsg& m);
+bool Decode(Reader& r, DialogMsg& m);
+void Encode(Writer& w, const DialogReply& m);
+bool Decode(Reader& r, DialogReply& m);
+bool Decode(Reader& r, ProgressMsg& m);
 std::vector<std::vector<uint8_t>> EncodeVitals(const VitalsMsg& v, size_t budget = kSnapshotBudget);
 std::vector<std::vector<uint8_t>> EncodeAnimFrames(const AnimFrameMsg& m, size_t budget = kSnapshotBudget);
 
