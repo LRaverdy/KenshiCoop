@@ -206,6 +206,10 @@ public:
     virtual size_t ApplyFactions(const FactionsMsg& m) { (void)m; return 0; }
     virtual bool ReadBounties(const Handle& h, CharBounties& out) { (void)h; out = CharBounties{}; return false; }
     virtual size_t ApplyBounties(const Handle& h, const CharBounties& b) { (void)h; (void)b; return 0; }
+    // ---- fix G5: the job list (Tâches panel) of a character, by kind in order. Host: read it.
+    // Client: remove from ours the jobs the host's no longer has.
+    virtual bool ReadJobs(const Handle& h, std::vector<int32_t>& jobs) { (void)h; jobs.clear(); return false; }
+    virtual void ApplyJobs(const Handle& h, const std::vector<int32_t>& jobs) { (void)h; (void)jobs; }
     // ---- lot A: doors and locks. Host: the doors and locked furniture within `radius` of the points,
     // as they are; is this container locked (it cannot be looked into); run a door button a client
     // clicked. Client: impose one door's state (found by kind and place; false: not here); the door
@@ -679,6 +683,16 @@ private:
     void ClientDoorsPacket(Reader& r);
     void ResetDoors();
     // ---- end lot A
+    // ---- fix G5: job lists (session_jobs.cpp). Host: what each squad member's list was when last
+    // sent. Client: the host's lists, imposed (dirty: just received).
+    std::unordered_map<uint32_t, std::vector<int32_t>> jobsSent_;
+    std::unordered_map<uint32_t, std::vector<int32_t>> hostJobs_;
+    std::unordered_set<uint32_t> jobsDirty_;
+    double nextJobs_ = 0, jobsFullAt_ = 0, jobsReapplyAt_ = 0;
+    void HostJobs(double now);
+    void ClientJobs(double now);
+    void ClientJobsPacket(Reader& r);
+    void ResetJobs();
     // ---- lot D: prisons (session_prisons.cpp)
     std::unordered_map<uint32_t, CaptiveState> captiveSent_;   // host: last state sent per character
     double nextCaptives_ = 0, captivesFullAt_ = 0;

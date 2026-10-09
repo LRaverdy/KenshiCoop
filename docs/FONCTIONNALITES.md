@@ -261,6 +261,13 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   - 🟡 miner ou utiliser une machine (bug signalé par les amis, corrigé depuis par la recherche
     « type + endroit ») ;
   - 🟡 les autres ordres.
+- **Sélection mixte chez l'hôte** (fix G5) : si la sélection de l'hôte contient le perso d'un autre
+  joueur, ce perso en est retiré et l'ordre (déplacement, arrêt, mode passif...) part aux persos de
+  l'hôte ; avant, l'ordre entier était refusé. Expérience `passive`.
+- **Panneau Tâches** (fix G5) : retirer une tâche (croix) ou la déplacer chez un client est fait par
+  l'hôte sur son perso ; l'hôte envoie les listes de tâches et le client retire ce que l'hôte n'a
+  plus (message `JobList`). Les tâches ajoutées n'apparaissent pas encore dans la liste du client.
+  Expérience `jobs`.
 - **Refusés côté client** : recruter au centre d'emploi (55), commerce (118, 119), et les tâches de
   stockage des PNJ (124, 284). Le joueur voit le message « Commercer et ouvrir un coffre ne sont
   pas encore synchronises. » (texte à mettre à jour : les coffres marchent, voir plus bas).
@@ -383,7 +390,9 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   ouverte sur ce marchand, chez un autre joueur ou chez l'hôte, se rafraîchit d'elle-même : elle
   ne propose plus cet objet. L'argent du joueur et celui du marchand sont ceux de l'hôte.
 - **Fonctionnement** :
-  - l'hôte intercepte la fenêtre que son jeu ouvrirait pour le personnage d'un autre joueur ;
+  - l'hôte intercepte la fenêtre que son jeu ouvrirait pour le personnage d'un autre joueur, quel
+    que soit le côté où ce perso arrive (dialogue lancé par le joueur ou par le marchand, clic
+    droit) et même pendant l'exécution de l'ordre du client (fix G5, expérience `tradepaths`) ;
   - il envoie à ce joueur le marchand et les meubles d'où il vend (ses comptoirs, les meubles de
     son bâtiment), traités comme des contenants ouverts ;
   - le client ouvre la vraie fenêtre de commerce du jeu ;

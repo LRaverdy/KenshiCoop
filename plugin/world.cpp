@@ -1031,6 +1031,36 @@ void KenshiWorld::ApplyFloor(const kc::Handle& h, uint8_t group) {
     if (kenshi::WriteFloorGroup(c, group)) Log("floor: %s now on floor group %d (was %d), as on the host", KeyOf(h).c_str(), int(group), int(g));
 }
 
+// ---- fix G5: job lists
+bool KenshiWorld::ReadJobs(const kc::Handle& h, std::vector<int32_t>& jobs) {
+    jobs.clear();
+    kenshi::Character* c = FindSquad(h);
+    if (!c) return false;
+    const int n = kenshi::PermajobCount(c);
+    for (int i = 0; i < n; ++i) jobs.push_back(kenshi::PermajobType(c, i));
+    return true;
+}
+
+// Client: the jobs our copy has that the host's character no longer has are removed (a job never
+// comes back once the host dropped it). Jobs are never added here: the host's game runs them.
+void KenshiWorld::ApplyJobs(const kc::Handle& h, const std::vector<int32_t>& jobs) {
+    kenshi::Character* c = FindSquad(h);
+    if (!c) return;
+    std::unordered_map<int32_t, int> left;
+    for (int32_t j : jobs) ++left[j];
+    std::vector<int> drop;
+    const int n = kenshi::PermajobCount(c);
+    for (int i = 0; i < n; ++i) {
+        auto it = left.find(kenshi::PermajobType(c, i));
+        if (it != left.end() && it->second > 0) --it->second;
+        else drop.push_back(i);
+    }
+    if (drop.empty()) return;
+    HostCallScope scope;
+    for (auto it = drop.rbegin(); it != drop.rend(); ++it) kenshi::RemovePermajob(c, *it);
+    Log("jobs: %s had %zu job(s) the host's character no longer has: removed", KeyOf(h).c_str(), drop.size());
+}
+
 int KenshiWorld::TeleportCharacters(const std::vector<kc::Handle>& who, const kc::Vec3& to) {
     int n = 0;
     HostCallScope scope;
@@ -1191,8 +1221,12 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
     }
     case kc::CommandKind::SquadMove: {
         kenshi::Character* other = cmd.subject.valid() ? kenshi::Resolve(cmd.subject) : nullptr;
-        void* target = other ? kenshi::SquadOf(other) : kenshi::NewSquad();
-        const bool ok = kenshi::MoveToSquad(target, c, cmd.task);
+        // creating or filling a squad selects it in the host's squad bar: the host's selection stays
+        bool ok = false;
+        kenshi::KeepSelection([&] {
+            void* target = other ? kenshi::SquadOf(other) : kenshi::NewSquad();
+            ok = kenshi::MoveToSquad(target, c, cmd.task);
+        });
         Log("client squad change run for a character: %s", ok ? "ok" : "failed");
         return ok;
     }

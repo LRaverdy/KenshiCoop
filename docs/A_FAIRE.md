@@ -21,8 +21,15 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   comme des chantiers (bâtons rouges), alors que l'hôte la voit normalement.
   → Corrigé (à tester en jeu) : le client bloquait toute avancée de construction ; il ne bloque plus que
   celle des bâtiments des joueurs.
-- **Fenêtre du marchand chez l'hôte** : en 0.2.x, la fenêtre de commerce s'ouvre encore chez l'hôte et pas
-  chez le client (au moins dans un des cas de dialogue ou de clic).
+- ✅ **Fenêtre du marchand chez l'hôte** (corrigé, fix G5, à vérifier en jeu) : en 0.2.x, la fenêtre de
+  commerce s'ouvre encore chez l'hôte et pas chez le client (au moins dans un des cas de dialogue ou de clic).
+  Trouvé : toutes les fenêtres passent par `showTradeWindow` (désassemblage : 2 appelants seulement,
+  l'action de dialogue « commercer » et la tâche de fouille/commerce du clic droit), mais le mod ne la
+  détournait que si le perso du joueur était le **premier** côté et **hors** d'un appel du mod. Or
+  l'action de dialogue passe (cible, propriétaire du dialogue) : quand c'est le joueur qui a lancé la
+  conversation, son perso arrive en second et la fenêtre s'ouvrait chez l'hôte ; et l'ordre du client
+  (clic droit) et sa réponse au dialogue sont exécutés par le mod, donc ignorés. Maintenant : quel que
+  soit le côté et qui appelle, une fenêtre pour le perso d'un autre joueur part chez lui.
 - ~~**Plantage après un resync**~~ (corrigé, fix G6, à vérifier en jeu) : après un resync, un client n'avait
   plus les cartes de ses personnages dans la barre d'escouade, puis son jeu a planté.
   Trouvé : au rechargement du monde, le mod ne vidait qu'une partie de son état. Des pointeurs vers les
@@ -41,7 +48,15 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   perso monte ou descend dans un bâtiment (comme le fait le jeu en solo). Piste : chez le client, les persos
   sont placés à la position de l'hôte au lieu de prendre l'escalier eux-mêmes, et l'étage courant du
   personnage (qui pilote l'affichage) n'est pas mis à jour.
-- **Tâches qu'un client ne peut pas supprimer** (« suivre »…) : toujours là après la 0.2.0. Le bouton stop
+- ✅ **Tâches qu'un client ne peut pas supprimer** (corrigé, fix G5, à vérifier en jeu). Trouvé : la croix
+  du panneau Tâches (`OrderCellView::onRemove`), `OrdersPanel::removeJob` et le glisser
+  (`movePermajob`) appellent directement `Character::removePermajob` / `movePermajob` du perso, sans
+  passer par les ordres que le mod intercepte. Maintenant ces fonctions (et `Character::removeJob`)
+  sont détournées chez le client : l'hôte fait la même chose sur son perso (nouvelles valeurs
+  `TaskVia` 6 à 8 de la commande `Task`), et l'hôte envoie les listes de tâches (message `JobList`,
+  68) : le client retire de la sienne ce que l'hôte n'a plus. Limite : une tâche ajoutée n'apparaît
+  pas dans la liste du client (elle n'y est que par la sauvegarde, après un resync).
+  Ancienne description : toujours là après la 0.2.0. Le bouton stop
   arrête maintenant la tâche en cours chez l'hôte, mais retirer une tâche de la liste des tâches du perso
   (panneau Tâches, clic sur la croix) ne passe que par le jeu du client : l'hôte la garde, et elle revient.
   À faire : intercepter la suppression d'une tâche (et « tout effacer ») côté client et l'exécuter chez
@@ -98,7 +113,17 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   Le « max offset » venait des persos loin de l'escouade du client : là, son jeu les fait à peine
   tourner et ignore les positions qu'on leur écrit, et personne ne les voit. L'écart n'est plus
   compté au-delà de 300 unités de l'escouade. Test : expérience `missing`.
-- **Le perso de l'hôte en passif attaque quand un ami attaque** (10/10). L'hôte se met en passif ; quand un
+- ✅ **Le perso de l'hôte en passif attaque quand un ami attaque** (corrigé, fix G5, à vérifier en jeu).
+  Trouvé : l'ordre du client lui-même ne touche que son perso (désassemblage de
+  `addOrderSelectedCharacters` : il parcourt la sélection, réduite à ce perso pendant l'appel). La
+  cause est la sélection de l'hôte : dès qu'elle contenait un perso d'un autre joueur (clic ou cadre
+  dessus, escouade créée pour un client), le mod **refusait en bloc** les ordres de l'hôte. Le bouton
+  « passif » de la barre s'affichait activé (le panneau bascule le bouton avant l'appel) mais le mode
+  n'était jamais posé sur son perso, qui défendait donc l'ami ; et l'hôte ne pouvait plus déplacer son
+  propre perso (« sa sélection passe sur les persos des autres »). Maintenant les persos des autres
+  joueurs sont retirés de la sélection de l'hôte et l'ordre part à ses persos ; l'escouade créée ou
+  rejointe pour un client ne change plus la sélection de l'hôte.
+  Ancienne description : l'hôte se met en passif ; quand un
   client ordonne à son perso d'attaquer un PNJ, le perso de l'hôte part aussi à l'attaque. Pistes : l'ordre
   du client est exécuté chez l'hôte en sélectionnant le perso du client ; si la sélection de l'hôte (son
   perso) est encore active à ce moment-là, l'ordre « attaquer » part aussi pour lui. Vérifier que pendant

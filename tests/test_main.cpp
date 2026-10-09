@@ -48,6 +48,7 @@ struct FakeChar {
     uint32_t fights = 0;   // serial of the character it fights
     std::vector<ItemState> items;
     CaptiveState cap;      // lot D: cage, shackles, slavery (netId unused)
+    std::vector<int32_t> jobs;   // fix G5: its job list (Tâches panel), by kind
 };
 
 struct FakeWorld : IWorld {
@@ -459,6 +460,23 @@ struct FakeWorld : IWorld {
         it->second.cap = s;
         it->second.cap.netId = 0;
         ++captiveApplies;
+    }
+    // ---- fix G5: job lists
+    bool ReadJobs(const Handle& h, std::vector<int32_t>& out) override {
+        auto it = chars.find(h.serial);
+        if (it == chars.end()) return false;
+        out = it->second.jobs;
+        return true;
+    }
+    void ApplyJobs(const Handle& h, const std::vector<int32_t>& host) override {   // as KenshiWorld: removals only
+        auto it = chars.find(h.serial);
+        if (it == chars.end()) return;
+        std::map<int32_t, int> left;
+        for (int32_t j : host) ++left[j];
+        std::vector<int32_t> kept;
+        for (int32_t j : it->second.jobs)
+            if (left[j] > 0) { --left[j]; kept.push_back(j); }
+        it->second.jobs = kept;
     }
     // ---- lot B: factions: the player faction's relations, bounties per character (serial)
     FactionsMsg factions;
@@ -936,6 +954,16 @@ static void TestWire() {
         Writer baw; Encode(baw, ba);
         Reader bar(baw.data(), baw.size()); CHECK(PeekType(bar) == Msg::BuildAction);
         BuildAction ba2; CHECK(Decode(bar, ba2) && ba2.kind == BuildActionKind::Dismantle && ba2.arg == 2 && ba2.pos.z == 3);
+    }
+    {   // fix G5: job lists, and the Tâches panel's commands
+        JobListMsg jl; jl.entries = {{3, {16, 87, 16}}, {4, {}}};
+        Writer jw; Encode(jw, jl);
+        Reader jr(jw.data(), jw.size()); CHECK(PeekType(jr) == Msg::JobList);
+        JobListMsg jl2; CHECK(Decode(jr, jl2) && jl2.entries.size() == 2 && jl2.entries[0].jobs == jl.entries[0].jobs && jl2.entries[1].jobs.empty());
+        Command rc; rc.netId = 3; rc.kind = CommandKind::Task; rc.via = TaskVia::MovePermajob; rc.task = 87; rc.pos = {2, 0, 0};
+        Writer cw2; Encode(cw2, rc);
+        Reader cr2(cw2.data(), cw2.size()); PeekType(cr2);
+        Command rc2; CHECK(Decode(cr2, rc2) && rc2.via == TaskVia::MovePermajob && rc2.task == 87 && rc2.pos.x == 2);
     }
     {   // hunger travels with the vitals
         VitalsMsg vm; vm.entities.resize(1); vm.entities[0].netId = 2; vm.entities[0].hunger = 250.5f;
@@ -1982,6 +2010,26 @@ static void TestCaptives() {
     CHECK(cw.captiveApplies == applies);
 }
 
+static void TestJobs() {   // fix G5
+    std::printf("session: a job the host's character no longer has is gone from the client's list too\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    AtMenu(cw);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    hw.chars[2].jobs = {16, 87};
+    cw.chars[2].jobs = {16, 87, 16};
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cw.chars[2].jobs.size() == 2; });
+    CHECK((cw.chars[2].jobs == std::vector<int32_t>{16, 87}));
+    hw.chars[2].jobs = {87};   // the host's character stops following
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cw.chars[2].jobs.size() == 1; });
+    CHECK((cw.chars[2].jobs == std::vector<int32_t>{87}));
+}
+
 static void TestRanged() {   // lot C
     std::printf("session: ranged combat: the host's shots are fired again on clients, aims and turrets follow\n");
     FakeWorld hw, cw;
@@ -2097,6 +2145,7 @@ int main() {
     TestFactions();
     TestDoors();   // lot A
     TestFloorsAndStall();   // fix G6
+    TestJobs();   // fix G5
     TestManyPlayers();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

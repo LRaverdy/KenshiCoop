@@ -259,7 +259,7 @@ bool Decode(Reader& r, Command& m) {
     }
     if (m.kind == CommandKind::Task) {
         const uint8_t via = r.u8();
-        if (via < uint8_t(TaskVia::AddOrder) || via > uint8_t(TaskVia::SetOrder)) return false;
+        if (via < uint8_t(TaskVia::AddOrder) || via > uint8_t(TaskVia::RemoveJob)) return false;
         m.via = TaskVia(via);
         m.task = r.i32();
         m.shift = r.boolean();
@@ -751,7 +751,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || (t > uint8_t(Msg::BuildAction) && t != uint8_t(Msg::Stall) && t != uint8_t(Msg::Floors))) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || (t > uint8_t(Msg::BuildAction) && t != uint8_t(Msg::JobList) && t != uint8_t(Msg::Stall) && t != uint8_t(Msg::Floors))) return std::nullopt;
     return Msg(t);
 }
 
@@ -1243,6 +1243,30 @@ bool Decode(Reader& r, BuildStateMsg& m) {
         e.progress = r.f32();
         e.flags = r.u8();
         if (!e.netId || e.sid.empty()) return false;
+    }
+    return Done(r);
+}
+void Encode(Writer& w, const JobListMsg& m) {
+    w.u8(uint8_t(Msg::JobList));
+    w.varint(uint32_t(m.entries.size()));
+    for (const auto& e : m.entries) {
+        w.varint(e.netId);
+        w.varint(uint32_t(e.jobs.size()));
+        for (int32_t j : e.jobs) w.i32(j);
+    }
+}
+bool Decode(Reader& r, JobListMsg& m) {
+    const uint32_t n = r.count(kMaxJobLists, 2);
+    m.entries.resize(n);
+    for (auto& e : m.entries) {
+        e.netId = GetU32Var(r);
+        const uint32_t k = r.count(kMaxJobsPerCharacter, 4);
+        e.jobs.resize(k);
+        for (auto& j : e.jobs) {
+            j = r.i32();
+            if (j < 0 || j > 1000) return false;
+        }
+        if (!r.ok() || e.netId == 0) return false;
     }
     return Done(r);
 }

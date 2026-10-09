@@ -161,6 +161,12 @@ const FunctionSig kFunctions[FnCount] = {
     // ---- admin console
     {"Character::healCompletely", 0x6464C0, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48}},
     {"ForgottenGUI::showInventoryBuilding", 0x6E6640, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x48, 0x89}},
+    // ---- fix G5
+    {"Character::removePermajob", 0x5C9000, {0x48, 0x8B, 0x89, 0x50, 0x06, 0x00, 0x00, 0x48, 0x8B, 0x49, 0x20, 0xE9}},
+    {"Character::movePermajob", 0x5C8FC0, {0x48, 0x8B, 0x89, 0x50, 0x06, 0x00, 0x00, 0x48, 0x8B, 0x49, 0x20, 0xE9}},
+    {"Character::removeJob", 0x5C8EB0, {0x48, 0x8B, 0x89, 0x50, 0x06, 0x00, 0x00, 0x48, 0x8B, 0x49, 0x20, 0xE9}},
+    {"Character::getPermajob", 0x5C8EF0, {0x48, 0x8B, 0x81, 0x50, 0x06, 0x00, 0x00, 0x48, 0x8B, 0x48, 0x20, 0xE9}},
+    {"Character::getPermajobCount", 0x5C8F30, {0x48, 0x8B, 0x81, 0x50, 0x06, 0x00, 0x00, 0x48, 0x8B, 0x48, 0x20, 0xE9}},
 };
 
 namespace {
@@ -3568,6 +3574,88 @@ bool WriteFloorGroup(Character* c, int32_t group) {
         return false;
     }
     return true;
+}
+
+// ---- fix G5: selection kept, job lists
+namespace {
+using FnIntOfConst = int (*)(const void* self);
+using FnIntOfInt = int (*)(const void* self, int i);
+using FnTwoInts = void (*)(void* self, int a, int b);
+bool IntOfSeh(void* fn, const void* self, int& out) {
+    __try { out = reinterpret_cast<FnIntOfConst>(fn)(self); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool IntOfIntSeh(void* fn, const void* self, int i, int& out) {
+    __try { out = reinterpret_cast<FnIntOfInt>(fn)(self, i); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool TwoIntsSeh(void* fn, void* self, int a, int b) {
+    __try { reinterpret_cast<FnTwoInts>(fn)(self, a, b); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+// the job functions go through Character::ai (+0x650) -> AI::orders (+0x20)
+bool HasOrdersReceiver(Character* c) {
+    void* ai = nullptr;
+    void* orders = nullptr;
+    return IsCharacter(c) && Rd(c, 0x650, ai) && ai && Rd(ai, 0x20, orders) && orders;
+}
+} // namespace
+
+void KeepSelection(const std::function<void()>& fn) {
+    PlayerInterface* pi = Player();
+    if (!pi) { fn(); return; }
+    std::vector<kc::Handle> before;
+    SelectedHandles(before);
+    constexpr uintptr_t PI_selectedCharacter = 0xF0, PI_currentPlatoon = 0x2A8;
+    uint8_t savedHand[off::HandSize] = {};
+    void* savedPlatoon = nullptr;
+    SafeCopy(savedHand, reinterpret_cast<uint8_t*>(pi) + PI_selectedCharacter, sizeof(savedHand));
+    Rd(pi, PI_currentPlatoon, savedPlatoon);
+    fn();
+    std::vector<kc::Handle> after;
+    SelectedHandles(after);
+    void* nowPlatoon = nullptr;
+    Rd(pi, PI_currentPlatoon, nowPlatoon);
+    if (after == before && nowPlatoon == savedPlatoon) return;
+    using FnSel = void (*)(void*, void*, bool);
+    using FnClear = void (*)(void*);
+    reinterpret_cast<FnClear>(FnAddr(FnUnselectAll))(pi);
+    for (const auto& h : before) {
+        void* o = Resolve(h);
+        if (!o) o = ResolveItem(h);
+        if (o) reinterpret_cast<FnSel>(FnAddr(FnObjectSelected))(pi, o, true);
+    }
+    if (savedPlatoon && Rd(pi, PI_currentPlatoon, nowPlatoon) && nowPlatoon != savedPlatoon) ShowPlatoonSeh(pi, savedPlatoon);
+    for (size_t k = 0; k < sizeof(savedHand); ++k) Wr(reinterpret_cast<uint8_t*>(pi) + PI_selectedCharacter, k, savedHand[k]);
+}
+
+void UnselectObject(void* obj) {
+    PlayerInterface* pi = Player();
+    if (!pi || !obj) return;
+    using FnSel = void (*)(void*, void*, bool);
+    reinterpret_cast<FnSel>(FnAddr(FnObjectSelected))(pi, obj, false);
+}
+
+int PermajobCount(Character* c) {
+    int n = 0;
+    if (!HasOrdersReceiver(c) || !IntOfSeh(FnAddr(FnCharPermajobCount), c, n) || n < 0 || n > 256) return 0;
+    return n;
+}
+
+int PermajobType(Character* c, int slot) {
+    int t = -1;
+    if (slot < 0 || slot >= PermajobCount(c) || !IntOfIntSeh(FnAddr(FnCharGetPermajob), c, slot, t)) return -1;
+    return t;
+}
+
+bool RemovePermajob(Character* c, int slot) {
+    return slot >= 0 && slot < PermajobCount(c) && CallInt(FnAddr(FnCharRemovePermajob), c, slot);
+}
+
+bool MovePermajob(Character* c, int from, int to) {
+    const int n = PermajobCount(c);
+    return from >= 0 && from < n && to >= 0 && to < n && from != to && TwoIntsSeh(FnAddr(FnCharMovePermajob), c, from, to);
+}
+
+bool RemoveJobKind(Character* c, int task) {
+    return HasOrdersReceiver(c) && task >= 0 && CallInt(FnAddr(FnCharRemoveJob), c, task);
 }
 
 } // namespace kenshi

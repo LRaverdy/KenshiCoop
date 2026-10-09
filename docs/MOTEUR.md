@@ -180,6 +180,16 @@ Les signatures sont celles du commentaire du code.
 | 122 | `FnClearUsageNodes` | `Building::clearUsageNodes` | `0x54C4D0` | — | lot E : ce que fait le mode construction à un bâtiment neuf |
 | 123 | `FnCalculateSaleValue` | `Building::calculateSaleValue` | `0x7AD300` | — | lot E : prix d'un bâtiment à vendre |
 
+| fix G5 | `FnCharRemovePermajob` | `Character::removePermajob(int slot)` | `0x5C9000` | oui | croix du panneau Tâches (`OrderCellView::onRemove` `0x7268B0`, `OrdersPanel::removeJob` `0x7265A0`) ; client : demandé à l'hôte |
+| fix G5 | `FnCharMovePermajob` | `Character::movePermajob(int, int)` | `0x5C8FC0` | oui | glisser une tâche dans le panneau (`OrdersPanel::moveJob`, `notifyEndDropOrder`) |
+| fix G5 | `FnCharRemoveJob` | `Character::removeJob(TaskType)` | `0x5C8EB0` | oui | `removeJobSelectedCharacters` (`0x7F5C80`) |
+| fix G5 | `FnCharGetPermajob` | `Character::getPermajob(int) const` | `0x5C8EF0` | — | type de la tâche d'un emplacement |
+| fix G5 | `FnCharPermajobCount` | `Character::getPermajobCount() const` | `0x5C8F30` | — | nombre de tâches |
+
+Les cinq passent par `Character::ai` (+0x650) puis `AI::orders` (+0x20, `OrdersReceiver`, tâches
+à +0x90 nombre et +0x98 tableau de `Tasker*`). `Character::clearPermajobs` (`0x5C8FE0`) n'a aucun
+appelant : le panneau n'a pas de « tout effacer » propre.
+
 L'ordre de la table doit suivre celui de l'énumération `Fn` : la vérification des prologues ne voit
 pas deux lignes inversées (chaque adresse correspond bien à ses octets). Deux lignes l'étaient
 (`getValidInventoryPosition` / `existsItemInFootprint`, sans effet car jamais appelées) ; c'est
@@ -265,6 +275,7 @@ Vtables (pour reconnaître un objet) :
 |---|---|
 | +0xF0 | `hand` du personnage sélectionné (panneau de détails) |
 | +0x208 | ensemble des `hand` sélectionnés |
+| +0x220 / +0x228 / +0x240 | file des sélectionnés parcourue par les fonctions « *SelectedCharacters » (début, nombre, blocs) |
 | +0x2A0 | `Faction*` du joueur |
 | +0x2A8 | escouade montrée par la barre d'escouade (`setCurrentPlatoon`) |
 | +0x2B0 | `lektor<Character*>` des personnages du joueur |
@@ -629,6 +640,16 @@ Tâches par défaut d'un clic droit sur un meuble, selon la recherche :
 
 ## 6. Comportements observés
 
+- `PlayerInterface::addOrderSelectedCharacters` (`0x7F9E20`) parcourt la sélection et appelle
+  `Character::addOrder` (`0x5D20D0`) sur chacun, immédiatement ; pour une attaque (tâches 5, 16, 61)
+  sur un personnage, il appelle aussi `Character::rememberCharacter(cible, 4)` (`0x6744A0`) sur
+  l'attaquant seul. Rien ne passe aux autres membres de l'escouade.
+- `OrdersPanel::passiveButtonCallback` (`0x721640`) bascule le bouton **avant** d'appeler
+  `setOrderSelectedCharacters(13)` : si cet appel est refusé, le bouton s'affiche activé sans que
+  le mode soit posé.
+- `PlayerInterface::objectSelected` (`0x7F7F20`) écrit aussi un `hand` global (`0x21345D0`) et
+  `PlayerInterface`+0xF0 ; `unselectAll` les vide.
+
 - `UseableStuff` : ensemble des occupants (`std::set<hand>`) à +0x3D0, taille à +0x3E0 (lit libre :
   0). `BuildingFunction` (ordre de l'énumération) : 1 mine, 6 lit, 8 cage, 9 boutique, 12 tourelle,
   18 décor, 27 gisement naturel.
@@ -720,11 +741,15 @@ Recherche faite le 9 octobre 2026 pour le commerce. Fiabilité de chaque fait :
   - Deux appelants seulement :
     - `Task_Loot_Order::startAction`, avec le type 3 ;
     - l'assistant `0x9524F0`.
-- **Assistant `0x9524F0`** `(?, Character* pnj, Character* joueur, int type)` [D]
-  - Appelle `showTradeWindow(&joueur->hand, &pnj->hand, type)`.
+- **Assistant `0x9524F0`** `(?, Character* x, Character* y, int type)` [D]
+  - Appelle `showTradeWindow(&y->hand, &x->hand, type)`.
   - Appelé par `Dialogue::_doActions` (`0x680560`) pour l'action de dialogue `DA_TRADE` (1) :
-    d'abord `endDialogue`, puis l'assistant avec `pnj = Dialogue+0x150` (celui qui parle) et le
-    type 1.
+    d'abord `endDialogue`, puis l'assistant avec `x = Dialogue+0x150` (le propriétaire du
+    dialogue) et `y` = l'autre, type 1. Donc `a` = l'autre, `b` = le propriétaire : si le dialogue
+    est celui du perso du joueur, le joueur arrive **en second** (fix G5 : le mod regarde les deux
+    côtés).
+  - L'ordre d'un client et sa réponse au dialogue sont exécutés chez l'hôte dans un appel du mod :
+    le détournement de `showTradeWindow` ne doit pas dépendre de « qui appelle ».
 - **`closeTradeWindow`** `0x791890` : met +0x5C à 1. Appelé par `Task_Loot_Order::endAction`
   (`0x3466A0`). [D]
 - **`ForgottenGUI::update`** `0x6EA070` [D]

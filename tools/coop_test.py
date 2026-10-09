@@ -1324,6 +1324,119 @@ def exp_facing(host, cli):
     log("FACING worst diff while running:", round(worst), "deg | client samples not really moving:", still)
 
 
+# ---- fix G5: client orders never reach the host's characters; the Tâches panel; trade windows
+def exp_passive(host, cli):
+    """The host's character is passive; the client orders its own character to attack an NPC: only the
+    client's character engages. Then the host's selection holds the client's character too: the host's
+    passive toggle still reaches the host's own character (it used to be refused as a whole)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    mine = 0 if own != 0 else 1   # a host character
+    log("host passive on its own character:", cmd(host, f"orderreq {mine} 13"))
+    time.sleep(1)
+    m = cmd(host, f"modes {mine}")[1]
+    check("passif : le perso de l'hote est passif", len(m.split()) > 1 and int(m.split()[1]) & 32, m)
+    log("spawn an NPC near the client's character:", cmd(host, f"spawnnpc 40 0 {own}"))
+    time.sleep(3)
+    log("client orders an attack:", cmd(cli, f"attackreq {own}"))
+    host_engaged = cli_engaged = False
+    for _ in range(20):
+        time.sleep(0.5)
+        cli_engaged |= cmd(host, f"combat {own}")[1].startswith("ok 1")
+        host_engaged |= cmd(host, f"combat {mine}")[1].startswith("ok 1")
+    check("passif : le perso du client attaque", cli_engaged, cmd(host, f"combat {own}")[1])
+    check("passif : le perso de l'hote n'attaque pas", not host_engaged, cmd(host, f"combat {mine}")[1])
+    m = cmd(host, f"modes {mine}")[1]
+    check("passif : toujours passif apres l'ordre du client", int(m.split()[1]) & 32, m)
+    # a mixed selection on the host: its toggle goes to its own character, the client's one is left out
+    log("host selects both:", cmd(host, f"selectset {mine} {own}"))
+    before_cli = cmd(host, f"modes {own}")[1]
+    log("host toggles passive off:", cmd(host, "selorder 13"))
+    time.sleep(1)
+    m = cmd(host, f"modes {mine}")[1]
+    check("selection mixte : le mode passe chez le perso de l'hote", not (int(m.split()[1]) & 32), m)
+    check("selection mixte : le perso du client n'est pas touche", cmd(host, f"modes {own}")[1] == before_cli, cmd(host, f"modes {own}")[1])
+    summary()
+
+
+def exp_jobs(host, cli):
+    """The client gives its character a job (follow another squad member), then removes it from its
+    Tâches panel (the cross): the job is gone on the host too and does not come back on the client."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    other = 0 if own != 0 else 1
+    log("client: follow job", cmd(cli, f"jobreq {own} 44 {other}"))
+    jobs = "?"
+    for _ in range(10):
+        time.sleep(0.5)
+        jobs = cmd(host, f"jobs {own}")[1]
+        if jobs.startswith("ok") and jobs.split()[1] != "0":
+            break
+    log("host jobs:", jobs, "| client jobs:", cmd(cli, f"jobs {own}")[1])
+    check("taches : le travail est chez l'hote", jobs.startswith("ok") and jobs.split()[1] != "0", jobs)
+    cjobs = cmd(cli, f"jobs {own}")[1]
+    if not (cjobs.startswith("ok") and cjobs.split()[1] != "0"):
+        log("the client's list does not show it (it only removes what the host lost); resync to get it")
+        cmd(host, "resync")
+        time.sleep(40)
+        cjobs = cmd(cli, f"jobs {own}")[1]
+    log("client removes slot 0:", cmd(cli, f"jobremove {own} 0"))
+    time.sleep(3)
+    jobs_h, jobs_c = cmd(host, f"jobs {own}")[1], cmd(cli, f"jobs {own}")[1]
+    check("taches : retire chez l'hote", jobs_h.split()[1:2] == ["0"] or len(jobs_h.split()) < len(jobs.split()), f"{jobs} -> {jobs_h}")
+    time.sleep(5)
+    jobs_c2 = cmd(cli, f"jobs {own}")[1]
+    check("taches : ne revient pas chez le client", jobs_c2 == jobs_c and jobs_c2.split()[1:] == jobs_h.split()[1:], f"{jobs_c} -> {jobs_c2} (hote {jobs_h})")
+    summary()
+
+
+def exp_tradepaths(host, cli, merchant="Marchand"):
+    """The client trades with a merchant through a conversation (its own talk order, then the trade
+    answer) and through a right click (loot/trade order): the window opens on the client only."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+
+    def window_on_client(label):
+        state = "?"
+        for _ in range(40):
+            time.sleep(0.5)
+            state = cmd(cli, "tradestate")[1]
+            if "open=1" in state:
+                break
+        hs = cmd(host, "tradestate")[1]
+        check(f"commerce ({label}) : la fenetre s'ouvre chez le client", "open=1" in state, state)
+        check(f"commerce ({label}) : rien ne s'ouvre chez l'hote", "windows=0" in hs, hs)
+        cmd(cli, "closewindows")
+        cmd(host, "closewindows")
+        time.sleep(3)
+
+    # 1. right click on the merchant: LOOT_TARGET on a standing merchant (Task_Loot_Order, type 3)
+    log("client right-click trade:", cmd(cli, f"npcreq {own} 26 {merchant}"))
+    window_on_client("clic droit")
+    # 2. a conversation the client starts (talk order), then the merchant's trade answer
+    log("client talks to the merchant:", cmd(cli, f"npcreq {own} 12 {merchant}"))
+    dialog = "?"
+    for _ in range(40):
+        time.sleep(0.5)
+        dialog = cmd(cli, "dialog")[1]
+        if "open=1" in dialog:
+            break
+    log("client dialog:", dialog)
+    replies = re.findall(r"\[([^\]]*)\]", dialog)
+    pick = next((i for i, r in enumerate(replies) if any(k in r.lower() for k in ("commerc", "affaire", "achet", "vend", "trade", "marchand"))), None)
+    check("commerce (dialogue) : le dialogue propose de commercer", pick is not None, dialog)
+    if pick is not None:
+        log("client answers", pick, cmd(cli, f"answer {pick}"))
+        window_on_client("dialogue")
+    summary()
+
+
 def exp_kosquad(host, cli):
     """Squad members knocked out on the host fall and stay down on the client, then get up together."""
     time.sleep(6)
@@ -2250,6 +2363,14 @@ def main():
     ad = sub.add_parser("admin")
     ad.add_argument("--save", default="kctest_base")
     ad.add_argument("--keep", action="store_true")
+    for name, save, helptext in (("passive", "kctest_base", "fix G5: a client's attack leaves the passive host's character alone"),
+                                 ("jobs", "kctest_base", "fix G5: a job removed in the client's Tâches panel is gone on the host"),
+                                 ("tradepaths", "kctest_town", "fix G5: trading by conversation and right click opens on the client only")):
+        g5 = sub.add_parser(name, help=helptext)
+        g5.add_argument("--save", default=save)
+        g5.add_argument("--keep", action="store_true")
+        if name == "tradepaths":
+            g5.add_argument("--merchant", default="Marchand", help="part of the merchant's name ('_' for spaces)")
     td = sub.add_parser("trade", help="a client trades with a merchant: purchase, sale, stock everywhere")
     td.add_argument("--save", default="kctest_town")
     td.add_argument("--keep", action="store_true")
@@ -2400,6 +2521,12 @@ def main():
             exp_admin(host, cli)
         elif a.what == "trade":
             exp_trade(host, cli, a.merchant)
+        elif a.what == "passive":
+            exp_passive(host, cli)
+        elif a.what == "jobs":
+            exp_jobs(host, cli)
+        elif a.what == "tradepaths":
+            exp_tradepaths(host, cli, a.merchant)
         elif a.what == "progress":
             exp_progress(host, cli)
         elif a.what == "clientpickup":
