@@ -70,6 +70,7 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 
 | Expérience | Ce qu'elle vérifie |
 |---|---|
+| `doors` (`kctest_town`, lot A) | portes ouvertes / fermées / verrouillées comme chez l'hôte ; le jeu du client ne les change pas seul ; bouton et ordres du client exécutés chez l'hôte ; crochetage ; coffre verrouillé fermé pour le client |
 | `suite` | **tout en une session, RÉUSSI / ÉCHEC point par point** (ci-dessous) |
 | `four` (`--clients 3`) | 1 hôte + 3 clients : chaque client comparé à l'hôte **et aux autres clients** ; chacun ne commande que son personnage |
 | `run` (`--quick`) | scénario complet avec rapport de désynchronisation |
@@ -271,6 +272,20 @@ l'escouade triée par handle.
 | `bedreq <i>` | ce membre seul reçoit l'ordre de dormir dans le lit libre le plus proche (tâche 258) |
 | `minereq <i>` | ce membre seul reçoit l'ordre d'exploiter la mine la plus proche (tâche 87) |
 | `tradegui` | type de fenêtre de commerce en attente dans l'interface (0 = aucune) |
+
+**Portes et serrures (lot A)** — `<qui>` : index dans l'escouade (autour de qui chercher) ; `<quoi>` :
+`door` (la porte la plus proche), `lock` (le meuble à serrure le plus proche) ou une partie du nom
+(`_` pour les espaces).
+
+| Commande | Rôle |
+|---|---|
+| `doors <qui> <quoi>` | les portes ou serrures à moins de 600 unités : `nom/d<état>/f<drapeaux>/L<niveau>@distance` |
+| `doorstate <qui> <quoi>` | état de la plus proche : type, état, drapeaux, niveau, ouverture |
+| `doorset <qui> <quoi> open\|close\|lock\|unlock\|break\|fix` | change la plus proche comme le ferait le jeu de l'hôte |
+| `doorlocal <qui> <quoi> open\|…` | la même chose sans `HostCallScope` : ce que tenterait le jeu d'un client (doit être refusé) |
+| `doorbutton <qui> <quoi> open\|lock` | clic sur le bouton du panneau de la porte (chez un client : part à l'hôte) |
+| `doororder <qui> <tâche> <quoi>` | ordre comme un clic droit : 72 ouvrir, 73 fermer, 76 crocheter, 77 verrouiller, 78 déverrouiller, 81 défoncer |
+| `doorsknown` | portes envoyées (hôte) ou connues ici (client), et nombre d'applications réussies |
 
 **Météo**
 

@@ -25,6 +25,7 @@ struct HostCallScope {
     HostCallScope(const HostCallScope&) = delete;
     HostCallScope& operator=(const HostCallScope&) = delete;
 };
+bool InHostCall();   // a HostCallScope is alive on this thread (lot A: doors, other files' hooks)
 // Inside it, the animation hooks let a client play one of the host's animations (every other
 // animation call on the host's characters is refused on clients, ours included).
 std::string AnimHookStats();   // tests

@@ -15,6 +15,8 @@
 #include <thread>
 #include <vector>
 
+#include <process.h>
+
 #include "kc/protocol.h"
 #include "kc/session.h"
 
@@ -345,6 +347,37 @@ struct FakeWorld : IWorld {
         bounties[h.serial] = want;
         return 1;
     }
+    // ---- lot A: doors and locks (key: sid; the fake world has one door per kind)
+    std::map<std::string, DoorState> doors;
+    std::vector<DoorRequest> doorReqs;      // client: buttons the player clicked
+    std::set<uint32_t> lockedBoxes;         // host: containers whose lock holds
+    std::vector<ContainerRequest> containerReqs;   // client: right clicks on containers
+    int doorApplies = 0;
+    void ReadDoors(const std::vector<Vec3>& centers, float radius, std::vector<DoorState>& out) override {
+        out.clear();
+        for (auto& [sid, d] : doors)
+            for (auto& c : centers)
+                if (Dist(c, d.pos) <= radius) { out.push_back(d); break; }
+    }
+    bool ApplyDoor(const DoorState& d) override {
+        auto it = doors.find(d.sid);
+        if (it == doors.end() || Dist(it->second.pos, d.pos) > 10) return false;
+        ++doorApplies;
+        it->second = d;
+        return true;
+    }
+    bool ExecuteDoorRequest(const DoorRequest& r) override {
+        auto it = doors.find(r.sid);
+        if (it == doors.end()) return false;
+        DoorState& d = it->second;
+        if (r.action == DoorAction::OpenButton) d.state = (d.state == 1 || d.state == 2) ? 0 : 1;
+        else d.flags ^= kDoorLocked;
+        return true;
+    }
+    void TakeDoorRequests(std::vector<DoorRequest>& out) override { out.swap(doorReqs); doorReqs.clear(); }
+    bool ContainerLocked(const Handle& h) override { return h.type == 0 && lockedBoxes.count(h.serial) != 0; }
+    void TakeContainerRequests(std::vector<ContainerRequest>& out) override { out.swap(containerReqs); containerReqs.clear(); }
+    // ---- end lot A
     std::vector<RegionWeather> weather;
     void ReadWeather(std::vector<RegionWeather>& out) override { out = weather; }
     void ApplyWeather(const std::vector<RegionWeather>& r) override { weather = r; }
@@ -415,7 +448,9 @@ static void Run(std::vector<std::pair<Session*, FakeWorld*>> s, double seconds, 
     }
 }
 
-static uint16_t g_port = 31337;
+// Loopback ports for the sessions of this run: their own range per process (several test runs at
+// once, e.g. in parallel worktrees, would otherwise connect to each other's hosts).
+static uint16_t g_port = uint16_t(20000 + (_getpid() % 1400) * 32);
 
 static void SetupHost(FakeWorld& host) {
     for (uint32_t i = 1; i <= 3; ++i) {
@@ -595,6 +630,26 @@ static void TestWire() {
         EditState es; CHECK(Decode(er, es) && es.editing);
         CHECK(std::string(TaskLabel(258)) == "sleep" && std::string(TaskLabel(9999)) == "?");
     }
+    {   // ---- lot A: doors and locks
+        DoorsMsg dm; dm.full = true;
+        DoorState a; a.sid = "door-1"; a.pos = {1, 2, 3}; a.kind = DoorKind::Door; a.state = 2; a.flags = kDoorHasLock | kDoorWantsLock; a.lockLevel = 45; a.openAmount = 0.5f;
+        DoorState b; b.sid = "chest-1"; b.pos = {-4, 0, 9}; b.kind = DoorKind::Lock; b.flags = kDoorHasLock | kDoorLocked; b.lockLevel = 80;
+        dm.doors = {a, b};
+        Writer dw; Encode(dw, dm);
+        Reader dr(dw.data(), dw.size()); CHECK(PeekType(dr) == Msg::Doors);
+        DoorsMsg dm2; CHECK(Decode(dr, dm2));
+        CHECK(dm2.full && dm2.doors.size() == 2 && dm2.doors[0].sid == "door-1" && dm2.doors[0].state == 2 && dm2.doors[0].lockLevel == 45 &&
+              dm2.doors[0].openAmount == 0.5f && dm2.doors[0].sameState(a) && dm2.doors[1].kind == DoorKind::Lock && dm2.doors[1].pos.z == 9 &&
+              (dm2.doors[1].flags & kDoorLocked));
+        dm.doors[0].state = 7;   // not a door state
+        Writer bw; Encode(bw, dm);
+        Reader br(bw.data(), bw.size()); PeekType(br);
+        DoorsMsg dm3; CHECK(!Decode(br, dm3));
+        DoorRequest rq; rq.sid = "door-1"; rq.pos = {1, 2, 3}; rq.action = DoorAction::LockButton;
+        Writer qw; Encode(qw, rq);
+        Reader qr(qw.data(), qw.size()); CHECK(PeekType(qr) == Msg::DoorRequest);
+        DoorRequest rq2; CHECK(Decode(qr, rq2) && rq2.action == DoorAction::LockButton && rq2.pos.y == 2 && rq2.sid == "door-1");
+    }
     {   // trading: the window with the shop's counters, then a purchase with its price
         TradeOpen to; to.traderNetId = 40; to.looterNetId = 7; to.traderMoney = -3;
         to.counters = {{41, "box-a", {1, 2, 3}}, {42, "box-b", {4, 5, 6}}};
@@ -708,6 +763,8 @@ static void TestFuzz() {
     add([](Writer& w) { ContainerOpened m; m.netId = 9; m.looterNetId = 2; m.sid = "chest"; Encode(w, m); });
     add([](Writer& w) { Encode(w, ContainerClose{9, "trop loin"}); });
     add([](Writer& w) { TradeOpen m; m.traderNetId = 4; m.looterNetId = 2; m.counters = {{5, "box", {1, 2, 3}}}; Encode(w, m); });
+    add([](Writer& w) { DoorsMsg m; DoorState d; d.sid = "door"; d.flags = kDoorHasLock; d.lockLevel = 3; m.doors = {d, d}; Encode(w, m); });   // lot A
+    add([](Writer& w) { DoorRequest m; m.sid = "door"; Encode(w, m); });   // lot A
     add([](Writer& w) { InvOp m; m.fromNetId = 5; m.toNetId = 2; m.item.templateSid = "x"; m.traderNetId = 4; m.price = 12; Encode(w, m); });
     add([](Writer& w) {   // lot B
         FactionsMsg m; FactionRelationEntry e; e.factionSid = "f"; e.hasOurs = true; e.ours.relation = 5; m.factions = {e, e}; Encode(w, m);
@@ -760,6 +817,8 @@ static void TestFuzz() {
         case Msg::TradeOpen: { TradeOpen m; Decode(r, m); break; }
         case Msg::Factions: { FactionsMsg m; Decode(r, m); break; }
         case Msg::Bounties: { BountiesMsg m; Decode(r, m); break; }
+        case Msg::Doors: { DoorsMsg m; Decode(r, m); break; }          // lot A
+        case Msg::DoorRequest: { DoorRequest m; Decode(r, m); break; } // lot A
         default: break;
         }
     };
@@ -1242,6 +1301,61 @@ static void TestInventories() {
     CHECK(hw.chars[2].items.size() == 2 && cw.chars[2].items == hw.chars[2].items);
 }
 
+// ---- lot A: doors and locks
+static void TestDoors() {
+    std::printf("session: doors and locks near the players follow the host; door buttons go to the host; a locked chest stays shut\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);   // squad at x = 100, 200, 300
+    auto door = [](const char* sid, Vec3 p, DoorKind k, uint8_t state, uint8_t flags, int level) {
+        DoorState d; d.sid = sid; d.pos = p; d.kind = k; d.state = state; d.flags = flags; d.lockLevel = level; return d;
+    };
+    hw.doors["gate"] = door("gate", {120, 0, 10}, DoorKind::Door, 0, kDoorHasLock, 30);
+    hw.doors["chest"] = door("chest", {210, 0, 5}, DoorKind::Lock, 0, kDoorHasLock | kDoorLocked, 60);
+    hw.doors["far"] = door("far", {9000, 0, 0}, DoorKind::Door, 0, 0, 0);
+    hw.boxes[700] = {"chest", {210, 0, 5}, {}};
+    hw.lockedBoxes.insert(700);
+    AtMenu(cw);
+    cw.doors = hw.doors;                       // the client's save has the same doors...
+    cw.doors["gate"].state = 1;                // ...in another state (the host played since)
+    cw.doors["chest"].flags = kDoorHasLock;
+    cw.boxes = hw.boxes;
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cw.doors["gate"].state == 0 && (cw.doors["chest"].flags & kDoorLocked); });
+    CHECK(cw.doors["gate"].state == 0 && cw.doors["gate"].lockLevel == 30);
+    CHECK((cw.doors["chest"].flags & kDoorLocked) && cw.doors["chest"].lockLevel == 60);
+    CHECK(host.doorsKnown() == 2);             // the far door is not sent
+    // the host opens the gate, then locks the chest's twin... the client follows
+    hw.doors["gate"].state = 1;
+    hw.doors["gate"].flags |= kDoorBroken;
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cw.doors["gate"].state == 1 && (cw.doors["gate"].flags & kDoorBroken); });
+    CHECK(cw.doors["gate"].state == 1 && (cw.doors["gate"].flags & kDoorBroken));
+    // a local change on the client is undone by the host's state (re-imposed now and then)
+    cw.doors["gate"].state = 0;
+    Run({{&host, &hw}, {&cli, &cw}}, 5.0, [&] { return cw.doors["gate"].state == 1; });
+    CHECK(cw.doors["gate"].state == 1);
+    // the client player clicks the gate's lock button: the host's game runs it, everyone sees it
+    hw.doors["gate"].state = 0;
+    hw.doors["gate"].flags = kDoorHasLock;
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return cw.doors["gate"].state == 0 && !(cw.doors["gate"].flags & kDoorBroken); });
+    DoorRequest rq; rq.sid = "gate"; rq.pos = {120, 0, 10}; rq.action = DoorAction::LockButton;
+    cw.doorReqs.push_back(rq);
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return (hw.doors["gate"].flags & kDoorLocked) && (cw.doors["gate"].flags & kDoorLocked); });
+    CHECK((hw.doors["gate"].flags & kDoorLocked) && (cw.doors["gate"].flags & kDoorLocked));
+    // a locked chest is not opened for a client player (its lock must be picked first)
+    host.Assign(FakeWorld::H(2), 2);
+    Run({{&host, &hw}, {&cli, &cw}}, 1.5);
+    const size_t chatBefore = cli.chatLog().size();
+    cw.containerReqs.push_back({FakeWorld::H(2), "chest", {210, 0, 5}});
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return cli.chatLog().size() > chatBefore; });
+    CHECK(cli.chatLog().size() > chatBefore && cli.chatLog().back().find("verrouill") != std::string::npos);
+    CHECK(!cw.tradeWindow);
+}
+
 static void TestTrade() {
     std::printf("session: trading with a merchant: the window opens on the player's screen, purchases and sales replayed with their price\n");
     FakeWorld hw, cw;
@@ -1430,6 +1544,7 @@ int main() {
     TestInventories();
     TestTrade();
     TestFactions();
+    TestDoors();   // lot A
     TestManyPlayers();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

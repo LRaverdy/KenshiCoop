@@ -1126,6 +1126,87 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         return "err no such merchant";
     }
+    // ---- lot A: doors and locks. <who> is a squad index (around whom to look); <what> picks the
+    // nearest object: "door" (any door), "lock" (any locked-able furniture: chest, cage...), or a part
+    // of its name ('_' for spaces).
+    if (cmd == "doors" || cmd == "doorstate" || cmd == "doorset" || cmd == "doorlocal" || cmd == "doorbutton" || cmd == "doororder" ||
+        cmd == "doorsknown") {
+        if (cmd == "doorsknown") return "ok known=" + std::to_string(s.doorsKnown()) + " applied=" + std::to_string(s.doorsApplied());
+        size_t who = 0;
+        std::string what = "door", action;
+        int task = 0;
+        in >> who;
+        if (cmd == "doororder") in >> task;
+        in >> what >> action;
+        std::replace(what.begin(), what.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        if (who >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[who]);
+        kc::Vec3 mp, p;
+        if (!kenshi::GetPosition(me, mp)) return "err";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(mp, cmd == "doors" ? 600.0f : 1500.0f, objs);
+        void* best = nullptr;
+        float bestD = 1e30f;
+        kc::DoorState bestState;
+        std::string bestName, list;
+        int count = 0;
+        for (void* o : objs) {
+            kc::DoorState d;
+            std::string sid, name;
+            if (!kenshi::ReadDoor(o, d) || !kenshi::ObjectTemplate(o, sid) || !kenshi::ObjectPosition(o, p)) continue;
+            kenshi::TemplateDisplayName(sid, name);
+            const bool isDoor = d.kind == kc::DoorKind::Door;
+            if (what == "door" ? !isDoor : what == "lock" ? isDoor : name.find(what) == std::string::npos) continue;
+            const float dd = (p.x - mp.x) * (p.x - mp.x) + (p.y - mp.y) * (p.y - mp.y) + (p.z - mp.z) * (p.z - mp.z);
+            ++count;
+            if (cmd == "doors" && count <= 25)
+                list += " " + name + "/" + (isDoor ? "d" : "l") + std::to_string(d.state) + "/f" + std::to_string(d.flags) + "/L" +
+                        std::to_string(d.lockLevel) + "@" + std::to_string(int(std::sqrt(dd)));
+            if (dd < bestD) { bestD = dd; best = o; bestState = d; bestName = name; }
+        }
+        if (cmd == "doors") return "ok " + std::to_string(count) + list;
+        if (!best) return "err no such door around";
+        auto describe = [&](void* o) {
+            kc::DoorState d;
+            kenshi::ReadDoor(o, d);
+            char b[160];
+            snprintf(b, sizeof(b), "ok %s kind=%d state=%d flags=%d level=%d amount=%.2f", bestName.c_str(), int(d.kind), int(d.state), int(d.flags),
+                     d.lockLevel, double(d.openAmount));
+            return std::string(b);
+        };
+        if (cmd == "doorstate") return describe(best);
+        if (cmd == "doorbutton") {   // the door panel's button, exactly as a click (clients: goes to the host)
+            if (bestState.kind != kc::DoorKind::Door) return "err not a door";
+            return kenshi::PressDoorButton(best, action == "lock" ? kc::DoorAction::LockButton : kc::DoorAction::OpenButton) ? describe(best)
+                                                                                                                       : "err call failed";
+        }
+        if (cmd == "doororder") {   // the order a right click gives (72 open, 73 close, 76 pick lock, 77 lock, 78 unlock, 81 bash)
+            kenshi::GetPosition(me, mp);
+            kenshi::ObjectPosition(best, p);
+            bool ok = false;
+            kenshi::WithSelection(me, [&] { ok = kenshi::CallAddTaskNearestObject(task, best, p); });
+            return (ok ? "ok " : "err ") + bestName + " at " + std::to_string(int(std::sqrt(bestD)));
+        }
+        // doorset (as the host's game would: through HostCallScope) / doorlocal (no scope: what the
+        // client's own game would try, which must be refused there)
+        kc::DoorState d = bestState;
+        if (action == "open") d.state = 1;
+        else if (action == "close") d.state = 0;
+        else if (action == "lock") d.flags |= kc::kDoorLocked;
+        else if (action == "unlock") d.flags &= uint8_t(~kc::kDoorLocked);
+        else if (action == "break") d.flags |= kc::kDoorBroken;
+        else if (action == "fix") d.flags &= uint8_t(~kc::kDoorBroken);
+        else return "err action: open close lock unlock break fix";
+        if ((action == "lock" || action == "unlock") && !(d.flags & kc::kDoorHasLock)) return "err it has no lock";
+        if (cmd == "doorset") {
+            HostCallScope scope;
+            if (!kenshi::ApplyDoorState(best, d)) return "err apply failed";
+        } else if (!kenshi::ApplyDoorState(best, d)) {
+            return "err apply failed";
+        }
+        return describe(best);
+    }
     if (cmd == "closewindows") return kenshi::CloseInventoryWindows() ? "ok" : "err";   // every inventory / trade window here
     if (cmd == "tradegui") {   // the trade window request the game has not consumed yet (type 0 = none)
         int type = -1;

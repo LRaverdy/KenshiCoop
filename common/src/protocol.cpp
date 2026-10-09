@@ -565,6 +565,56 @@ const char* StandingOrderLabel(int order) {
 
 void EncodeResync(Writer& w) { w.u8(uint8_t(Msg::Resync)); }
 
+// ---- lot A: doors
+void Encode(Writer& w, const DoorsMsg& m) {
+    w.u8(uint8_t(Msg::Doors));
+    w.boolean(m.full);
+    const size_t n = std::min<size_t>(m.doors.size(), kMaxDoorsPerMsg);
+    w.varint(n);
+    for (size_t i = 0; i < n; ++i) {
+        const DoorState& d = m.doors[i];
+        w.str(d.sid);
+        PutVec(w, d.pos);
+        w.u8(uint8_t(d.kind));
+        w.u8(d.state);
+        w.u8(d.flags);
+        w.varint(uint32_t(std::max(d.lockLevel, 0)));
+        w.f32(d.openAmount);
+    }
+}
+bool Decode(Reader& r, DoorsMsg& m) {
+    m.full = r.boolean();
+    const uint32_t n = r.count(kMaxDoorsPerMsg, 20);
+    m.doors.resize(n);
+    for (auto& d : m.doors) {
+        d.sid = r.str(kMaxSidLen);
+        d.pos = GetVec(r);
+        const uint8_t k = r.u8();
+        if (k < 1 || k > 2) return false;
+        d.kind = DoorKind(k);
+        d.state = r.u8();
+        d.flags = r.u8();
+        d.lockLevel = int32_t(std::min<uint32_t>(GetU32Var(r), 1000000));
+        d.openAmount = r.f32();
+        if (d.sid.empty() || d.state > 3) return false;
+    }
+    return Done(r);
+}
+void Encode(Writer& w, const DoorRequest& m) {
+    w.u8(uint8_t(Msg::DoorRequest));
+    w.str(m.sid);
+    PutVec(w, m.pos);
+    w.u8(uint8_t(m.action));
+}
+bool Decode(Reader& r, DoorRequest& m) {
+    m.sid = r.str(kMaxSidLen);
+    m.pos = GetVec(r);
+    const uint8_t a = r.u8();
+    m.action = DoorAction(a);
+    return Done(r) && !m.sid.empty() && (a == 1 || a == 2);
+}
+// ---- end lot A
+
 void Encode(Writer& w, const TradeOpen& m) {
     w.u8(uint8_t(Msg::TradeOpen));
     w.varint(m.traderNetId);

@@ -383,10 +383,32 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   - la pose d'un bâtiment n'est pas interceptée : un bâtiment posé par un client n'existerait a
     priori que chez lui (non testé, à éviter pour l'instant).
 
-### Portes, serrures, crochetage ❌
-- Les ordres (ouvrir, fermer, crocheter, verrouiller, forcer) partent à l'hôte et y sont exécutés.
-- L'état des portes (ouverte, fermée, verrouillée, niveau de serrure) n'est pas encore envoyé aux
-  clients.
+### Portes, serrures, crochetage 🟡 (implémenté, à vérifier en jeu)
+- **Le joueur** voit chaque porte comme chez l'hôte : ouverte ou fermée (avec l'animation et le son
+  du jeu), verrouillée ou non, défoncée. Les serrures des meubles (coffres, cages, chaînes) suivent
+  aussi : un coffre verrouillé chez l'hôte l'est chez tout le monde.
+- **Ses actions** :
+  - ordres sur une porte (ouvrir, fermer, crocheter, verrouiller, déverrouiller, défoncer) : comme
+    tous les ordres, ils partent à l'hôte, dont le jeu les exécute avec le personnage du joueur ;
+    le résultat (porte ouverte, serrure crochetée ou non, expérience) revient comme tout changement ;
+  - boutons du panneau d'une porte (« Ouvrir / Fermer », « Verrouiller ») : le clic part à l'hôte,
+    qui appuie sur le même bouton dans son jeu ;
+  - un coffre verrouillé ne s'ouvre pas pour un client : message « C'est verrouillé : il faut
+    d'abord crocheter la serrure. ».
+- **Fonctionnement** :
+  - toutes les 0,5 s, l'hôte lit les portes et serrures à moins de 40 m de chaque membre de
+    l'escouade et envoie celles qui ont changé ; toutes les 5 s, il les envoie toutes ;
+  - le client retrouve chaque objet par type et endroit (les handles diffèrent d'une machine à
+    l'autre) et impose l'état de l'hôte, puis le réimpose toutes les 3 s (zone chargée plus tard,
+    changement local) ;
+  - chez un client, le jeu ne peut plus ouvrir, fermer, verrouiller ni déverrouiller une porte de
+    lui-même (hooks sur `openDoor`, `closeDoor`, `lockDoor`, `unlockDoor`).
+- **À vérifier en jeu** (expérience `doors`) : que les portes sont bien dans la grille des
+  bâtiments de la zone (sinon elles ne seraient pas trouvées), le crochetage par un client, le
+  bouton du panneau, le coffre verrouillé.
+- **Limites** : une porte fermée chez l'hôte peut rester ouverte un court instant chez le client
+  (le temps du message) ; un personnage du client ne passe jamais une porte que l'hôte a laissée
+  fermée.
 
 ### Prisons, cages, chaînes, esclavage, peines ❌
 - Rien de spécifique pour l'instant. Le mod lit l'état « dans une cage » (`inSomething` = 2) pour

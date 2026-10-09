@@ -94,6 +94,15 @@ public:
     size_t ApplyFactions(const kc::FactionsMsg& m) override;
     bool ReadBounties(const kc::Handle& h, kc::CharBounties& out) override;
     size_t ApplyBounties(const kc::Handle& h, const kc::CharBounties& b) override;
+    // ---- lot A: doors and locks (plugin/doors.cpp)
+    void ReadDoors(const std::vector<kc::Vec3>& centers, float radius, std::vector<kc::DoorState>& out) override;
+    bool ContainerLocked(const kc::Handle& container) override;
+    bool ExecuteDoorRequest(const kc::DoorRequest& r) override;
+    bool ApplyDoor(const kc::DoorState& d) override;
+    void TakeDoorRequests(std::vector<kc::DoorRequest>& out) override;
+    void QueueDoorRequest(void* door, kc::DoorAction action);   // hooks (client): a door button the player clicked
+    void* FindDoor(const std::string& sid, const kc::Vec3& pos);   // the same door here (kind and place)
+    // ---- end lot A
     // Hooks (host): the game asked for a trade window for another player's character (any thread);
     // the host's own trade window (to show it again when another player changed the stock).
     void QueueTradeRequest(const kc::Handle& looter, const kc::Handle& trader);
@@ -291,6 +300,11 @@ private:   // first few lifecycle events (tests)
     std::vector<std::pair<kenshi::Character*, kc::ItemState>> localDrops_;   // client, under groundMutex_
     std::vector<kenshi::Character*> edited_;   // characters whose looks the editor just changed
     std::vector<ContainerRequest> containerReqs_;   // client: right clicks on containers, for the host
+    // ---- lot A: doors
+    std::mutex doorMutex_;
+    std::vector<kc::DoorRequest> doorReqs_;                          // client, under doorMutex_
+    std::unordered_map<std::string, kc::Handle> doorCache_;         // kind and place -> our handle of it
+    // ---- end lot A
     std::mutex tradeMutex_;
     std::vector<TradeRequest> tradeReqs_;            // host, under tradeMutex_
     kc::Handle hostTradeLooter_, hostTradeTrader_;   // host: our own last trade window (under tradeMutex_)

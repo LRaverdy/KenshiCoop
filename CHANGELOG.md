@@ -21,6 +21,11 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
   la peine de prison et le laissez-passer de chaque personnage de l'escouade sont ceux de l'hôte
   chez tout le monde ; le jeu d'un client ne peut pas garder les siens (réimposés toutes les 2 s).
   Messages `Factions` (43) et `Bounties` (44) ; expérience `python tools/coop_test.py factions`.
+- **Portes et serrures (lot A, à vérifier en jeu)** : les portes (ouvertes, fermées, verrouillées,
+  défoncées) et les serrures des meubles (coffres, cages) près des joueurs suivent l'hôte ; le jeu
+  d'un client ne change plus une porte de lui-même ; les boutons du panneau d'une porte cliqués par
+  un client sont exécutés par l'hôte ; un coffre verrouillé ne s'ouvre pas pour un client (il faut
+  crocheter). Messages `Doors` (40) et `DoorRequest` (41) ; expérience `doors`.
 
 ## 9 octobre 2026 (soir)
 

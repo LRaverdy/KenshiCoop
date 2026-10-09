@@ -293,6 +293,8 @@ format, et une version différente est refusée à la connexion.
 | 38 | ContainerClose | ⇄ | fenêtre fermée (client) ou à fermer (hôte : vol repéré, trop loin) |
 | 43 | Factions | H→C | relations de la faction du joueur avec chaque faction, dans les deux sens ; rang et réputation |
 | 44 | Bounties | H→C | primes par faction, crime en cours, peine de prison et laissez-passer de chaque personnage de l'escouade |
+| 40 | Doors | H→C | portes et serrures près des joueurs : ouverte/fermée, verrouillée, niveau de serrure, cassée (lot A) |
+| 41 | DoorRequest | C→H | le joueur a cliqué un bouton du panneau d'une porte (ouvrir, verrouiller) (lot A) |
 
 ## Les flux, système par système
 
@@ -394,6 +396,24 @@ format, et une version différente est refusée à la connexion.
 4. Les fonctions du jeu qui créent une entrée manquante : `FactionRelations::getRelationData`
    (`0x6B4C60`) et l'`operator[]` de la table des primes (`0x5E7EE0`). Le reste est écrit
    directement (voir [MOTEUR.md](MOTEUR.md), « Factions, relations et primes »).
+### Portes et serrures (`HostDoors`, `ClientDoors`, `common/src/session_doors.cpp`, `plugin/doors.cpp`)
+1. Toutes les 0,5 s, l'hôte lit (`KenshiWorld::ReadDoors`) les portes (`DoorStuff`) et les meubles
+   à serrure (`DoorLock`) à moins de 400 unités de chaque membre de l'escouade. Une entrée : type,
+   endroit, état de la porte, ouverture, drapeaux (verrouillée, cassée, serrure cassée, se verrouille
+   en se fermant), niveau de serrure.
+2. Il envoie à tous les joueurs en jeu celles qui ont changé (`Doors`), et toutes les 5 s la liste
+   complète (par morceaux de 256).
+3. Le client garde l'état de l'hôte par « type + endroit ». Il retrouve sa copie de l'objet
+   (`FindDoor`, mise en cache par handle) et applique l'état (`ApplyDoor`, sous `HostCallScope`) :
+   ouvrir et fermer par les fonctions du jeu, verrou et niveau écrits directement. Il réapplique
+   tout toutes les 3 s (64 objets par image au plus).
+4. Chez le client, les hooks `openDoor`, `closeDoor`, `lockDoor`, `unlockDoor` refusent tout appel
+   hors `HostCallScope`. Les hooks des boutons du panneau (`openButton`, `lockButton`) mettent le
+   clic en file : il part à l'hôte en `DoorRequest`, et l'hôte appuie sur le même bouton
+   (`ExecuteDoorRequest`).
+5. Les ordres sur une porte (tâches 72, 73, 76, 77, 78, 81) passent par le chemin normal des
+   ordres : la porte est retrouvée chez l'hôte par type et endroit.
+6. `HostContainers` refuse d'ouvrir un contenant dont la serrure tient (`ContainerLocked`).
 
 ### Contenants (`HostContainers`, `ClientContainers`)
 1. Clic droit chez le client : `ContainerOpen` avec le personnage, le type et l'endroit.
