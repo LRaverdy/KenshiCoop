@@ -379,6 +379,24 @@ bool OpenLootWindow(Character* looter, Character* target) {
     return CallShowTrade(FnAddr(FnShowTradeWindow), reinterpret_cast<void*>(Addr(rva::TradeGui)), a, b, kTradeLooting);
 }
 
+void DeadBodies(std::vector<Character*>& out) {
+    out.clear();
+    GameWorld* w = World();
+    if (!w) return;
+    const auto* map = reinterpret_cast<const uint8_t*>(w) + off::GW_deathParade;
+    uint64_t size = 0, bucketCount = 0;
+    void** buckets = nullptr;
+    if (!Rd(map, off::US_size, size) || size == 0 || size > 65536) return;
+    if (!Rd(map, off::US_bucketCount, bucketCount) || !Rd(map, off::US_buckets, buckets) || !buckets || bucketCount > (1u << 24)) return;
+    void* node = nullptr;
+    if (!Rd(buckets, bucketCount * sizeof(void*), node)) return;
+    for (uint64_t i = 0; node && i < size; ++i) {
+        void* c = nullptr;
+        if (Rd(node, off::HandMapNode_mapped, c) && IsCharacter(c)) out.push_back(static_cast<Character*>(c));
+        if (!Rd(node, off::USNode_next, node)) break;
+    }
+}
+
 Character* Resolve(const kc::Handle& h) {
     // Build a real `hand` (its vtable pointer is copied from a live one) and ask the game.
     static uintptr_t handVtable = 0;

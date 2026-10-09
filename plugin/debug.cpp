@@ -331,6 +331,19 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             }
             if (inRange) DumpCharacter(o, "char", w, h);
         }
+        kenshi::DeadBodies(all);
+        for (kenshi::Character* c : all) {
+            kc::Handle h;
+            kc::Vec3 p;
+            if (!kenshi::GetHandle(c, h) || !kenshi::GetPosition(c, p)) continue;
+            o << "dead " << Key(w.HostHandleOf(h)) << " isdead=" << kenshi::IsDead(c) << " pos=" << p.x << ',' << p.y << ',' << p.z << '\n';
+            bool inRange = false;
+            for (const auto& ctr : centers) {
+                const float dx = ctr.x - p.x, dy = ctr.y - p.y, dz = ctr.z - p.z;
+                if (dx * dx + dy * dy + dz * dz <= radius * radius) { inRange = true; break; }
+            }
+            if (inRange) DumpCharacter(o, "char", w, h);   // corpses are compared like everyone else
+        }
         o << "end\n";
         return "ok";
     }

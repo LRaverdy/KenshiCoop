@@ -83,6 +83,8 @@ inline constexpr uintptr_t GW_frameSpeedMult = 0x700;  // float
 inline constexpr uintptr_t GW_player = 0x580;          // PlayerInterface*
 inline constexpr uintptr_t GW_paused = 0x8B9;          // bool
 inline constexpr uintptr_t GW_charUpdateList = 0x750;  // boost::unordered_set<Character*>: every active character
+inline constexpr uintptr_t GW_deathParade = 0x708;     // boost::unordered_map<hand, Character*>: dead bodies
+inline constexpr uintptr_t HandMapNode_mapped = 0x30;  // boost unordered_map<hand, T*> node: mapped pointer
 inline constexpr uintptr_t GW_gamedataBySid = 0xF0;    // GameDataManager(+0x20)::gamedataSID: boost::unordered_map<std::string, GameData*>
 inline constexpr uintptr_t GW_factory = 0x4A0;         // RootObjectFactory*
 inline constexpr uintptr_t GW_factionMgr = 0x4A8;      // FactionManager*: +0 lektor<Faction*> participants
@@ -195,7 +197,8 @@ PlayerInterface* Player();             // null when no game is loaded
 bool IsCharacter(const void* obj);
 
 void PlayerCharacters(std::vector<Character*>& out);
-void ActiveCharacters(std::vector<Character*>& out);   // every character the game is updating
+void ActiveCharacters(std::vector<Character*>& out);
+void DeadBodies(std::vector<Character*>& out);   // corpses: they leave the active list when they die   // every character the game is updating
 Character* Resolve(const kc::Handle& h);               // game handle -> live character (or null)
 bool HandleFromHand(const void* hand, kc::Handle& out); // reads a game `hand` object
 // Opens the game's loot window between two characters (what reaching a body with a loot order does).

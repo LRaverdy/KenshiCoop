@@ -120,17 +120,25 @@ void KenshiWorld::PlayerCharacters(std::vector<kc::Handle>& out) {
 }
 
 void KenshiWorld::NearbyCharacters(const std::vector<kc::Vec3>& centers, float radius, std::vector<kc::Handle>& out) {
-    kenshi::ActiveCharacters(scratch_);
-    for (kenshi::Character* c : scratch_) {
-        kc::Vec3 p;
-        if (!kenshi::GetPosition(c, p)) continue;
-        bool inRange = radius <= 0;   // 0 = every character the game keeps active
-        for (const auto& ctr : centers) if (Dist(ctr, p) <= radius) { inRange = true; break; }
-        if (!inRange) continue;
-        kc::Handle h;
-        if (kenshi::GetHandle(c, h) && h.valid()) {
-            out.push_back(h);
-            resolved_[h] = c;
+    // Bodies stay in the world after they leave the active list: the ones near the players are
+    // replicated too, so they lie at the same place and can be looted.
+    constexpr float kCorpseRadius = 1000.0f;
+    std::unordered_set<kc::Handle, HandleHash> seen;
+    for (int pass = 0; pass < 2; ++pass) {
+        if (pass == 0) kenshi::ActiveCharacters(scratch_);
+        else kenshi::DeadBodies(scratch_);
+        const float r = pass == 0 ? radius : (radius > 0 ? std::min(radius, kCorpseRadius) : kCorpseRadius);
+        for (kenshi::Character* c : scratch_) {
+            kc::Vec3 p;
+            if (!kenshi::GetPosition(c, p)) continue;
+            bool inRange = r <= 0;   // 0 = every character the game keeps active
+            for (const auto& ctr : centers) if (Dist(ctr, p) <= r) { inRange = true; break; }
+            if (!inRange) continue;
+            kc::Handle h;
+            if (kenshi::GetHandle(c, h) && h.valid() && seen.insert(h).second) {
+                out.push_back(h);
+                resolved_[h] = c;
+            }
         }
     }
 }

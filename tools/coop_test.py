@@ -492,6 +492,35 @@ def exp_items(host, cli):
         log(args, "->", cmd(host, "mkitem " + args))
 
 
+def exp_dead(host, cli):
+    time.sleep(6)
+    log("give", cmd(host, "give 2 0"))
+    ok, text = cmd(host, "spawnnpc 12 8")
+    key = text.split()[1]
+    time.sleep(5)
+    for side, pid in (("host", host), ("cli", cli)):
+        cmd(pid, f"state {os.path.abspath(os.path.join(OUT_DIR, side + '_dead0.txt'))} 300")
+    log("kill", cmd(host, "kill"))
+    time.sleep(6)
+    for side, pid in (("host", host), ("cli", cli)):
+        path = os.path.abspath(os.path.join(OUT_DIR, side + "_dead1.txt"))
+        cmd(pid, f"state {path} 300")
+        lines = [l.strip() for l in open(path, encoding="utf-8", errors="replace") if l.startswith("dead ")]
+        log(side, "dead bodies:", len(lines), [l[:120] for l in lines[:8]], "spawned npc in dead list:", any(key in l for l in lines))
+    # the corpse stays replicated: the client loots it
+    h, c = dump(host, "h_corpse", 300), dump(cli, "c_corpse", 300)
+    log("corpse entity on client:", any(e["key"] == key for e in c["entity"].values()))
+    log("corpse inv host:", h["char"].get(key, {}).get("inv"))
+    log("loot corpse", cmd(cli, f"invmove {key} squad0 worn"))
+    time.sleep(4)
+    h, c = dump(host, "h_corpse2", 300), dump(cli, "c_corpse2", 300)
+    sq = sorted(h["squad"], key=lambda k: (int(k.split(":")[3]), int(k.split(":")[4])))[0]
+    log("corpse inv host/cli after:", h["char"].get(key, {}).get("inv"), "|", c["char"].get(key, {}).get("inv"))
+    log("looter inv host/cli after:", h["squad"][sq].get("inv"), "|", c["squad"][sq].get("inv"))
+    r = compare(h, c, "corpse looted")
+    log("inventory_mismatch", r["inventory_mismatch"], "down_bodies", r["down_bodies_worst"])
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="what", required=True)
@@ -499,6 +528,8 @@ def main():
     r.add_argument("--save", default="kctest_base")
     r.add_argument("--keep", action="store_true", help="leave the instances running")
     r.add_argument("--quick", action="store_true")
+    dd = sub.add_parser("dead")
+    dd.add_argument("--save", default="kctest_base")
     it = sub.add_parser("items")
     it.add_argument("--save", default="kctest_base")
     lu = sub.add_parser("lootui")
@@ -525,6 +556,8 @@ def main():
             exp_lootui(host, cli)
         elif a.what == "items":
             exp_items(host, cli)
+        elif a.what == "dead":
+            exp_dead(host, cli)
         else:
             scenario(host, cli, a.quick)
     finally:
