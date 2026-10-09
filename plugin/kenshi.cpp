@@ -1150,6 +1150,16 @@ void WithSelection(Character* only, const std::function<void()>& fn) {
         ShowPlatoonSeh(pi, savedPlatoon);
     }
     for (size_t k = 0; k < sizeof(savedHand); ++k) Wr(reinterpret_cast<uint8_t*>(pi) + PI_selectedCharacter, k, savedHand[k]);
+    // the character the order was for stays selected only if it already was
+    kc::Handle oh;
+    std::vector<kc::Handle> after;
+    SelectedHandles(after);
+    if (GetHandle(only, oh) && std::find(before.begin(), before.end(), oh) == before.end() &&
+        std::find(after.begin(), after.end(), oh) != after.end()) {
+        clear(pi);
+        for (const auto& h : before)
+            if (void* o = Resolve(h)) sel(pi, o, true);
+    }
 }
 
 namespace {

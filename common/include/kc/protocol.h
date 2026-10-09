@@ -1,4 +1,4 @@
-// KenshiCoop wire protocol.
+﻿// KenshiCoop wire protocol.
 //
 // Authority model: the host runs the only authoritative simulation. Clients send commands
 // (orders for the characters they own) and render the state the host replicates. Nothing a
@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 29;
+constexpr uint16_t kProtocolVersion = 30;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;

@@ -528,7 +528,11 @@ void hk_showTrade(void* gui, const void* a, const void* b, int type) {
         kenshi::Character* ca = kenshi::HandleFromHand(a, ha) ? kenshi::Resolve(ha) : nullptr;
         const bool other = kenshi::HandleFromHand(b, hb);
         if (ca && v->squadForeign.count(ca)) {
-            if (type == 1 && other) w->QueueTradeRequest(ha, hb);   // TW_MONEY_TRADING
+            // TW_MONEY_TRADING (a merchant's "let's trade"), or TW_AUTO on a merchant standing there
+            // (a right click on it): a trade window for that player
+            kenshi::Character* cb = other ? kenshi::Resolve(hb) : nullptr;
+            const bool merchant = cb && !kenshi::IsDead(cb) && !kenshi::IsDown(cb) && !kenshi::IsUnconscious(cb);
+            if (other && (type == 1 || (type == 3 && merchant))) w->QueueTradeRequest(ha, hb);
             else Log("trade window type %d for another player's character: not opened here", type);
             return;
         }

@@ -294,7 +294,13 @@ void DrawMultiplayer(const OverlayModel& m, float w, float h) {
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Chaque joueur recharge ton monde tel qu'il est maintenant (quelques secondes, la partie attend).");
             ImGui::SameLine();
         }
-        if (ImGui::Button("Quitter la session")) PushAction({OverlayAction::Kind::Leave, {}, {}, {}, 0});
+        // the host's leave closes the game for everyone: a second click confirms it
+        static double leaveArmedAt = -1e9;
+        const bool armed = m.hosting && ImGui::GetTime() - leaveArmedAt < 4.0;
+        if (ImGui::Button(armed ? "Confirmer : fermer la partie pour tous" : "Quitter la session")) {
+            if (m.hosting && !armed) leaveArmedAt = ImGui::GetTime();
+            else { leaveArmedAt = -1e9; PushAction({OverlayAction::Kind::Leave, {}, {}, {}, 0}); }
+        }
     }
     ImGui::End();
     if (!open) g_mpOpen = false;

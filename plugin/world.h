@@ -270,6 +270,7 @@ private:
     struct FallPrep { double start, lastMove; };
     std::unordered_map<kc::Handle, FallPrep, HandleHash> fallPrep_;   // client: moving into place before a fall
     std::unordered_map<kc::Handle, double, HandleHash> fellAt_;      // client: when we made it fall
+    std::unordered_set<kc::Handle, HandleHash> carriedHere_;   // client: host characters someone carries here
     std::unordered_set<const void*> applied_;                        // client: characters Apply drove this frame
     std::unordered_map<const void*, double> replicatedAt_;           // client: when Apply last drove each one
     bool ReadyToFall(const kc::Handle& h, kenshi::Character* c, const kc::EntityState& at, double now);

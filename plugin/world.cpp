@@ -491,6 +491,8 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         }
     }
     applied_.insert(c);
+    // on someone's shoulder here: never pulled, stood up or teleported off it
+    if (carriedHere_.count(h) && kenshi::IsRagdoll(c)) return;
     kc::EntityState& last = lastTarget_[h];
     last = target;
     last.flags = latest.flags;
@@ -552,7 +554,10 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     // NPC shut in a house here while it fights outside on the host): neither the locomotion nor the
     // pull below gets it there. No progress for a second: put it exactly where the host has it.
     if (haveHostTime_ && hostTime_.paused) stuck_.erase(h);   // nothing moves while paused: start over afterwards
-    if (!(haveHostTime_ && hostTime_.paused)) {
+    // Stuck detection: off. In real fights it teleported characters dozens of times a second
+    // (walls crossed, invisible or moonwalking NPCs, flying bodies); the continuous pull is enough.
+    static bool kStuckDetection = false;   // (static: one place to turn it back on)
+    if (kStuckDetection && !(haveHostTime_ && hostTime_.paused)) {
         const float stuckErr = 3.0f * std::max(1.0f, haveHostTime_ ? hostTime_.speed : 1.0f);
         Stuck& sk = stuck_[h];
         if (err > stuckErr) {
@@ -890,6 +895,8 @@ void KenshiWorld::ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& 
         kenshi::DropCarried(c);
         Log("carry: %s puts a body down as on the host", carry ? "swaps and" : "");
     }
+    if (carry && who) carriedHere_.insert(carried);
+    else if (carrying) carriedHere_.erase(HostHandleOf(local));
     if (carry && who && (!carrying || kenshi::Resolve(local) != who)) {
         const bool ok = kenshi::CarryCharacter(c, who);
         Log("carry: a body goes on the shoulder as on the host (%s)", ok ? "ok" : "failed");
@@ -1004,10 +1011,25 @@ void KenshiWorld::ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) {
 bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
     kenshi::Character* c = FindSquad(h);
     if (!c) return false;
+    // A client's order only ever moves that client's characters: never one the host commands (a
+    // stale handle after a squad change once made a player's orders move the host's character).
+    if (!client_) {
+        auto v = View();
+        if (!v->squadForeign.count(c)) {
+            Log("client order refused: the character it resolves to is not another player's");
+            return false;
+        }
+    }
     HostCallScope scope;   // lets the call through our own order-blocking hooks
     switch (cmd.kind) {
     case kc::CommandKind::MoveTo: return CallPlayerMoveOrder(c, cmd.pos);
-    case kc::CommandKind::Stop: return kenshi::Halt(c);
+    case kc::CommandKind::Stop: {
+        // the client's "stop": also ends the task it was doing (follow, operate...), not just the walk
+        const bool ok = kenshi::Halt(c);
+        kenshi::DropLocalTasks(c);
+        Log("client stop: character halted and its current task dropped");
+        return ok;
+    }
     case kc::CommandKind::PickUp: {
         // the item the client meant: same thing lying there
         std::vector<void*> around;
