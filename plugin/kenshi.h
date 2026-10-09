@@ -100,6 +100,7 @@ enum Fn : int {
     FnAnimGuardUpper,           // void AnimationClass::setCombatModeUpperIdle(bool)
     FnSingleAnimUpdate,         // void AnimationClassBase::SingleAnimation::update(float masterTime, float frameTime, bool sounds)
     FnRunAnimationLayer,        // void AnimationClass::runAnimation(AnimationData*, float speed, AnimationLayerEnum, float blend)
+    FnReassessCollapse,         // void MedicalSystem::reassessCollapseMode(bool medic, bool agony)   (decides a collapse)
     FnAnimationSelection,       // void AnimationClass::animationSelection(float time)   (picks what to play each frame)
     FnTrackAnimationMovement,   // void CharMovement::trackAnimationMovement(bool)   (animations move the character)
     FnCombatMovementUpdate,     // void CharMovement::combatMovementUpdate(float, const Vector3& pos, const Vector3& dir, bool moving, Vector3& repulsion, Vector3& facingOut, bool defensive, swordStateEnum, float raceSpeedMult)

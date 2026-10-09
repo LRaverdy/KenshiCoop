@@ -56,6 +56,8 @@ AIUpdateFn o_aiUpdate4 = nullptr;
 AIUpdateFn o_aiPeriodic = nullptr;
 MedDamageFn o_medDamage = nullptr;
 MedKnockoutFn o_medKnockout = nullptr;
+using CollapseFn = void (*)(void* med, bool medic, bool agony);
+CollapseFn o_collapse = nullptr;
 DeclareDeadFn o_declareDead = nullptr;
 using RagdollModeFn = void (*)(void*, bool, int);
 RagdollModeFn o_ragdollMode = nullptr;
@@ -272,6 +274,12 @@ void hk_medDamage(void* med, void* part, const void* damage, bool loadingSavesta
 void hk_medKnockout(void* med, float skill01) {
     if (KenshiWorld::ClientActive() && !g_hostCall) return;
     o_medKnockout(med, skill01);
+}
+// Nor do they decide a collapse (pain, crippled limbs): it would leave a character the host has
+// standing lying on the ground, flickering between hurt and unconscious.
+void hk_collapse(void* med, bool medic, bool agony) {
+    if (KenshiWorld::ClientActive() && !g_hostCall) return;
+    o_collapse(med, medic, agony);
 }
 void hk_declareDead(void* chr) {
     if (KenshiWorld::ClientActive() && !g_hostCall) return;
@@ -579,6 +587,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnMedApplyDamage, reinterpret_cast<void*>(&hk_medDamage), reinterpret_cast<void**>(&o_medDamage)},
         {kenshi::FnMedKnockout, reinterpret_cast<void*>(&hk_medKnockout), reinterpret_cast<void**>(&o_medKnockout)},
         {kenshi::FnDeclareDead, reinterpret_cast<void*>(&hk_declareDead), reinterpret_cast<void**>(&o_declareDead)},
+        {kenshi::FnReassessCollapse, reinterpret_cast<void*>(&hk_collapse), reinterpret_cast<void**>(&o_collapse)},
         {kenshi::FnRagdollMode, reinterpret_cast<void*>(&hk_ragdollMode), reinterpret_cast<void**>(&o_ragdollMode)},
         {kenshi::FnCreateRandomCharacter, reinterpret_cast<void*>(&hk_createRandomCharacter), reinterpret_cast<void**>(&o_createChar)},
         {kenshi::FnRegionUpdateBT, reinterpret_cast<void*>(&hk_regionUpdateBT), reinterpret_cast<void**>(&o_regionUpdateBT)},
