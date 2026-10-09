@@ -399,6 +399,10 @@ void* JobTool(Character* c);
 void* SetHandTool(Character* c, void* current, const std::string& sid);
 // God mode (host): these characters take no damage and are never knocked out.
 void SetGodMode(Character* c, bool on);
+void ForgetGodModes();   // a new world: the characters it named are gone
+// ---- fix G6: the floor a character is on (CharMovement::floorGroup; 9 = ground floor)
+bool ReadFloorGroup(const Character* c, int32_t& group);
+bool WriteFloorGroup(Character* c, int32_t group);
 bool GodMode(const void* c);   // tests: increaseStat on that stat
 bool CallSay(Character* c, const std::string& text);
 bool FocusCamera(Character* c);   // tests: the camera goes to that character

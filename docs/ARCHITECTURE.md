@@ -166,6 +166,12 @@ Ordre dans `Tick()` (`main.cpp`) :
   | 2 | non fiable, séquencé | `Vitals` |
 
 - Chaque type de message n'est accepté que sur son canal.
+- Un pair muet est coupé après 15 s (`enet_peer_timeout` 5 s / 15 s), ce qui repère vite un jeu
+  planté. `Net::ExpectSilence` porte ce délai à 30 s / 2 min pendant qu'un jeu charge une zone
+  (TP admin, message `Stall`), puis le remet.
+- Un nouveau monde (`KenshiWorld::BeginFrame`) est un autre joueur ou une escouade dont les objets
+  ont changé, pas une simple coupure du tick. Il remet tout l'état lié au monde à zéro
+  (`ResetWorldBound`) : alias, pointeurs, demandes en attente, caches.
 - Sérialisation little-endian vérifiée à chaque lecture (`kc/wire.h`) : varints, chaînes bornées.
 - Les quaternions sont compressés sur 32 bits (« smallest three »).
 
@@ -302,6 +308,8 @@ format, et une version différente est refusée à la connexion.
 | 53 | BuildState | H→C | lot E : avancement des chantiers suivis (terminé, en pause, en démontage), avec type et endroit |
 | 54 | BuildRemove | H→C | lot E : un bâtiment suivi a été détruit pour de bon chez l'hôte |
 | 55 | BuildAction | ⇄ | lot E : acheter / démonter (client : demande ; hôte : rejeu d'un achat chez tous) |
+| 70 | Stall | H→C | fix G6 : ton jeu va se figer (TP lointaine, zone à charger), la connexion attend jusqu'à 2 min |
+| 71 | Floors | H→C | fix G6 : groupe d'étage (`CharMovement::floorGroup`) des persos, à chaque changement et toutes les 5 s |
 
 ## Les flux, système par système
 

@@ -112,6 +112,24 @@ bool Decode(Reader& r, PlayerInfo& m) { m.id = r.u8(); m.name = r.str(kMaxNameLe
 
 void Encode(Writer& w, const PlayerLeft& m) { w.u8(uint8_t(Msg::PlayerLeft)); w.u8(m.id); }
 bool Decode(Reader& r, PlayerLeft& m) { m.id = r.u8(); return Done(r); }
+void Encode(Writer& w, const StallMsg& m) { w.u8(uint8_t(Msg::Stall)); w.u16(m.seconds); }
+bool Decode(Reader& r, StallMsg& m) { m.seconds = r.u16(); return Done(r); }
+void Encode(Writer& w, const FloorsMsg& m) {
+    w.u8(uint8_t(Msg::Floors));
+    w.varint(m.entries.size());
+    for (const auto& e : m.entries) { w.varint(e.netId); w.u8(e.group); }
+}
+bool Decode(Reader& r, FloorsMsg& m) {
+    const uint32_t n = r.count(kMaxEntitiesPerMsg, 2);
+    m.entries.resize(n);
+    for (auto& e : m.entries) {
+        const uint64_t id = r.varint();
+        e.netId = uint32_t(id);
+        e.group = r.u8();
+        if (!r.ok() || id == 0 || id > 0xFFFFFFFFull) return false;
+    }
+    return Done(r);
+}
 
 void Encode(Writer& w, const Chat& m) { w.u8(uint8_t(Msg::Chat)); w.u8(m.from); w.str(m.text); }
 bool Decode(Reader& r, Chat& m) { m.from = r.u8(); m.text = r.str(kMaxChatLen * 4); return Done(r); }
@@ -733,7 +751,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::BuildAction)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || (t > uint8_t(Msg::BuildAction) && t != uint8_t(Msg::Stall) && t != uint8_t(Msg::Floors))) return std::nullopt;
     return Msg(t);
 }
 

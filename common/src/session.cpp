@@ -163,6 +163,7 @@ void Session::Leave() {
     trade_ = ClientTrade{};
     ResetFactions();
     ResetDoors();   // lot A
+    floorSent_.clear(); floors_.clear(); nextFloors_ = nextFloorsFull_ = 0; floorPlayers_ = 0;   // fix G6
     captiveSent_.clear(); captives_.clear(); captivesDirty_.clear();   // lot D: prisons
     haveMoneyBase_ = false;
     unsentSpend_ = 0;
@@ -235,6 +236,7 @@ void Session::HostTick(double now, bool live) {
     HostCaptives(now);   // lot D: prisons
     HostRanged(now);   // lot C
     HostBuildings(now);
+    HostFloors(now);   // fix G6
     // A player's new looks: applied here, then shown to everyone else.
     for (auto& [from, m] : pendingLooks_) {
         auto it = entities_.find(m.netId);
@@ -537,6 +539,46 @@ bool Session::Configure(const std::string& name, uint16_t port) {
     cfg_.name = name;
     cfg_.port = port;
     return true;
+}
+
+// Floors: on a client the characters are placed where the host's are, so they never take the
+// stairs themselves and keep the floor they had; the game shows the floor of the selected
+// character. The host sends each character's floor group when it changes (and all of them now
+// and then, for whoever joined since).
+void Session::HostFloors(double now) {
+    if (now < nextFloors_) return;
+    nextFloors_ = now + 0.25;
+    size_t inGame = 0;
+    for (auto& [pid, p] : players_) inGame += p.inGame;
+    const bool full = now >= nextFloorsFull_ || inGame > floorPlayers_;   // a newcomer gets everyone's at once
+    floorPlayers_ = inGame;
+    if (full) nextFloorsFull_ = now + 5.0;
+    FloorsMsg m;
+    for (auto& [id, e] : entities_) {
+        uint8_t g = 0;
+        if (e.container || !world_.ReadFloor(e.handle, g)) continue;
+        auto it = floorSent_.find(id);
+        const bool changed = it == floorSent_.end() || it->second != g;
+        if (!changed && !(full && g != 9)) continue;   // 9: ground floor, what a character has by default
+        floorSent_[id] = g;
+        if (m.entries.size() < kMaxEntitiesPerMsg) m.entries.push_back({id, g});
+    }
+    for (auto it = floorSent_.begin(); it != floorSent_.end();) it = entities_.count(it->first) ? std::next(it) : floorSent_.erase(it);
+    if (m.entries.empty()) return;
+    Writer w;
+    Encode(w, m);
+    BroadcastReliable(w, true);
+}
+
+void Session::ExpectStall(uint8_t playerId, double seconds) {
+    auto it = players_.find(playerId);
+    if (!isHost() || it == players_.end()) return;
+    net_.ExpectSilence(it->second.peer, seconds);
+    Writer w;
+    Encode(w, StallMsg{uint16_t(std::clamp(seconds, 1.0, 600.0))});
+    SendReliable(it->second.peer, w);
+    net_.Flush();   // before this game freezes too, or the client's
+    log_(it->second.name + " may freeze while loading a zone: the connection waits up to 2 minutes");
 }
 
 bool Session::KickPlayer(uint8_t playerId) {
@@ -1910,6 +1952,12 @@ void Session::ClientTick(double now, bool live) {
             if (e.present && e.haveInv) { e.invDirty = true; e.invRetry = 0; }
         }
     }
+    for (auto it = floors_.begin(); it != floors_.end();) {   // fix G6
+        auto e = entities_.find(it->first);
+        if (e == entities_.end()) { it = floors_.erase(it); continue; }
+        if (e->second.present) world_.ApplyFloor(e->second.handle, it->second);
+        ++it;
+    }
     if (missing != missingSquad_ && missing > missingSquad_)
         log_(std::to_string(missing) + " host squad members are missing in the local world");
     missingSquad_ = missing;
@@ -2150,6 +2198,19 @@ void Session::ClientPacket(Msg type, Reader& r) {
         if (!Decode(r, m) || m.id == localId_) break;
         players_[m.id] = RemotePlayer{m.id, m.name};
         AddChat("* " + m.name + " rejoint la partie...", "* " + m.name + " is joining...");
+        break;
+    }
+    case Msg::Floors: {   // fix G6
+        FloorsMsg m;
+        if (!Decode(r, m)) break;
+        for (const auto& e : m.entries) floors_[e.netId] = e.group;
+        break;
+    }
+    case Msg::Stall: {   // fix G6
+        StallMsg m;
+        if (!Decode(r, m)) break;
+        net_.ExpectSilence(kNoPeer, m.seconds);
+        log_("the host teleports us far: the connection waits while the zone loads");
         break;
     }
     case Msg::PlayerLeft: {
@@ -2479,6 +2540,9 @@ void Session::OnDisconnect(PeerId peer) {
     if (!pl) return;
     const uint8_t id = pl->id;
     const std::string name = pl->name;
+    if (!pl->inGame)
+        log_(name + " left while joining (" + (sync_[id].kicked ? "removed" : "connection lost: their game quit or crashed while loading") +
+             "): the world is no longer held for them");
     players_.erase(id);
     sync_.erase(id);
     // the leaver's characters go back to the host so they are never left uncontrolled

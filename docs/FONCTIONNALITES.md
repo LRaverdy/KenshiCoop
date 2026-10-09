@@ -187,7 +187,14 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   - un PNJ absent chez le client est recréé à partir de son modèle et de sa faction ;
   - un PNJ que le jeu du client crée de lui-même remplace un PNJ manquant de même type (PNJ
     uniques), sinon il est retiré ;
-  - les cadavres à moins de 1000 unités d'un joueur restent synchronisés.
+  - les cadavres à moins de 1000 unités d'un joueur restent synchronisés ;
+  - un remplaçant que le jeu du client a supprimé (mort, zone déchargée) est recréé (fix G6).
+
+### Étages dans les bâtiments 🟡 implémenté, à vérifier en jeu
+- **Le joueur** voit l'étage affiché suivre un perso qui monte ou descend, comme en solo.
+- **Fonctionnement** : l'hôte envoie l'étage de chaque perso (`CharMovement::floorGroup`, message
+  71). Le client l'écrit sur sa copie, qui sinon garde l'étage d'avant puisqu'elle est seulement
+  placée. Expérience `floor`.
 
 ---
 

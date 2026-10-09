@@ -128,6 +128,10 @@ public:
     // The tool a character's current job puts in its hands (template; empty: none). Client: show it.
     virtual bool ReadTool(const Handle& h, std::string& sid) { (void)h; sid.clear(); return false; }
     virtual void ApplyTool(const Handle& h, const std::string& sid) { (void)h; (void)sid; }
+    // The floor a character is on inside a building (the game's floor group); client: put it there,
+    // which is what makes the floor shown follow a character taking the stairs. fix G6
+    virtual bool ReadFloor(const Handle& h, uint8_t& group) { (void)h; (void)group; return false; }
+    virtual void ApplyFloor(const Handle& h, uint8_t group) { (void)h; (void)group; }
     virtual bool ReadMoney(int32_t& money) { (void)money; return false; }
     virtual void ApplyMoney(int32_t money) { (void)money; }
     // Conversations. Host: lines said and conversation windows of other players' characters since the
@@ -345,6 +349,8 @@ public:
     void Assign(const Handle& h, uint8_t playerId);
     // Host: remove a player from the session (false: no such player, or not hosting).
     bool KickPlayer(uint8_t playerId);
+    // Host: that player's game is about to freeze (a far teleport): the link survives it. fix G6
+    void ExpectStall(uint8_t playerId, double seconds);
     void SendChat(const std::string& text);
 
     SessionState state() const { return state_; }
@@ -594,6 +600,12 @@ private:
     std::vector<BuildAction> scratchBuildActions_;
     std::vector<Handle> scratchRemoved_;
     void HostBuildings(double now);
+    // ---- fix G6: floors
+    void HostFloors(double now);
+    std::unordered_map<uint32_t, uint8_t> floorSent_;   // host: last floor group sent per netId
+    double nextFloors_ = 0, nextFloorsFull_ = 0;
+    size_t floorPlayers_ = 0;                           // host: players in the world at the last send
+    std::unordered_map<uint32_t, uint8_t> floors_;      // client: the host's floor group per netId
     void ClientBuildings(double now);
     void HostBuildingPacket(RemotePlayer& from, Msg type, Reader& r);
     void ClientBuildingPacket(Msg type, Reader& r);

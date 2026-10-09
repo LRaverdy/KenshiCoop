@@ -300,6 +300,14 @@ struct FakeWorld : IWorld {
     bool tradeWindow = false;                          // client: the trade window is open
     int tradeWindowOpens = 0;
     bool ReadMoney(int32_t& m) override { m = money; return true; }
+    std::map<uint32_t, uint8_t> floors;   // fix G6: floor group per character serial (absent: 9, the ground floor)
+    bool ReadFloor(const Handle& h, uint8_t& g) override {
+        if (!chars.count(h.serial)) return false;
+        auto it = floors.find(h.serial);
+        g = it == floors.end() ? 9 : it->second;
+        return true;
+    }
+    void ApplyFloor(const Handle& h, uint8_t g) override { if (chars.count(h.serial)) floors[h.serial] = g; }
     void ApplyMoney(int32_t m) override { money = m; }
     void TakeTradeRequests(std::vector<TradeRequest>& out) override { out.swap(tradeReqs); tradeReqs.clear(); }
     bool ShopCounters(const Handle& trader, std::vector<ShopCounter>& out) override {
@@ -609,6 +617,17 @@ static void TestWire() {
     Reader hr(hw.data(), hw.size());
     CHECK(PeekType(hr) == Msg::Hello);
     Hello h2; CHECK(Decode(hr, h2)); CHECK(h2.name == "Beep" && h2.modsHash == 6);
+    {   // fix G6: the stall notice
+        Writer sw; Encode(sw, StallMsg{90});
+        Reader sr(sw.data(), sw.size());
+        CHECK(PeekType(sr) == Msg::Stall);
+        StallMsg s2; CHECK(Decode(sr, s2)); CHECK(s2.seconds == 90);
+        FloorsMsg f; f.entries = {{3, 10}, {70000, 9}};
+        Writer fw; Encode(fw, f);
+        Reader fr(fw.data(), fw.size());
+        CHECK(PeekType(fr) == Msg::Floors);
+        FloorsMsg f2; CHECK(Decode(fr, f2)); CHECK(f2.entries.size() == 2 && f2.entries[1].netId == 70000 && f2.entries[0].group == 10);
+    }
 
     Snapshot s; s.tick = 9; s.hostTime = 12.5;
     for (uint32_t i = 1; i <= 300; ++i) {
@@ -963,6 +982,8 @@ static void TestFuzz() {
     add([](Writer& w) { BuildStateMsg m; m.entries = {{1, "hut", {1, 2, 3}, 5, 1}}; Encode(w, m); });
     add([](Writer& w) { Encode(w, BuildRemove{4, "hut", {}}); });
     add([](Writer& w) { BuildAction m; m.sid = "shop"; Encode(w, m); });
+    add([](Writer& w) { Encode(w, StallMsg{90}); });   // fix G6
+    add([](Writer& w) { FloorsMsg m; m.entries = {{3, 10}, {9, 9}}; Encode(w, m); });
     add([](Writer& w) {   // lot B
         FactionsMsg m; FactionRelationEntry e; e.factionSid = "f"; e.hasOurs = true; e.ours.relation = 5; m.factions = {e, e}; Encode(w, m);
     });
@@ -1016,6 +1037,8 @@ static void TestFuzz() {
         case Msg::BuildState: { BuildStateMsg m; Decode(r, m); break; }
         case Msg::BuildRemove: { BuildRemove m; Decode(r, m); break; }
         case Msg::BuildAction: { BuildAction m; Decode(r, m); break; }
+        case Msg::Stall: { StallMsg m; Decode(r, m); break; }
+        case Msg::Floors: { FloorsMsg m; Decode(r, m); break; }
         case Msg::Shots: { ShotsMsg m; Decode(r, m); break; }      // lot C
         case Msg::Ranged: { RangedMsg m; Decode(r, m); break; }
         case Msg::Captives: { CaptivesMsg m; Decode(r, m); break; }
@@ -1560,6 +1583,37 @@ static void TestDoors() {
     CHECK(!cw.tradeWindow);
 }
 
+// fix G6
+static void TestFloorsAndStall() {
+    std::printf("session: a character upstairs on the host is upstairs on clients; a far teleport warns the player's game\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    AtMenu(cw);
+    hw.floors[2] = 11;   // already upstairs when the client joins
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cw.floors.count(2) && cw.floors[2] == 11; });
+    CHECK(cw.floors.count(2) && cw.floors[2] == 11);
+    CHECK(!cw.floors.count(1) || cw.floors[1] == 9);
+    // it takes the stairs down, another goes up: the client follows both
+    hw.floors[2] = 9;
+    hw.floors[3] = 10;
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cw.floors[2] == 9 && cw.floors.count(3) && cw.floors[3] == 10; });
+    CHECK(cw.floors[2] == 9 && cw.floors.count(3) && cw.floors[3] == 10);
+    // the client's game moved it on its own (a local stair step): the host's floor comes back
+    cw.floors[3] = 9;
+    Run({{&host, &hw}, {&cli, &cw}}, 1.0, [&] { return cw.floors[3] == 10; });
+    CHECK(cw.floors[3] == 10);
+    // a far teleport: the client is told, and both stay connected
+    host.ExpectStall(cli.localId(), 120.0);
+    Run({{&host, &hw}, {&cli, &cw}}, 1.0);
+    CHECK(cli.state() == SessionState::Connected && host.players().size() >= 1);
+}
+
 static void TestTrade() {
     std::printf("session: trading with a merchant: the window opens on the player's screen, purchases and sales replayed with their price\n");
     FakeWorld hw, cw;
@@ -1916,6 +1970,7 @@ int main() {
     TestCaptives();
     TestFactions();
     TestDoors();   // lot A
+    TestFloorsAndStall();   // fix G6
     TestManyPlayers();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
