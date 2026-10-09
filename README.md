@@ -7,15 +7,24 @@ et appliqué à l'identique chez les clients.
 
 ## Installation
 
-1. Fermer Kenshi.
-2. Dans PowerShell, depuis ce dossier :
-   ```powershell
-   .\build.ps1      # compile (Visual Studio 2022 requis)
-   .\install.ps1    # copie KenshiCoop.dll dans le dossier de Kenshi et l'ajoute à Plugins_x64.cfg
-   ```
-   Désinstaller : `.\install.ps1 -Uninstall`.
-3. Chaque joueur doit avoir **le même Kenshi (1.0.68) et les mêmes mods**, dans le même ordre
-   (le mod refuse la connexion sinon, avec un message clair).
+**Chez toi (avec les sources)** — Kenshi fermé, dans PowerShell depuis ce dossier :
+```powershell
+.\build.ps1      # compile (Visual Studio 2022 requis)
+.\install.ps1    # copie KenshiCoop.dll dans le dossier de Kenshi et l'ajoute à Plugins_x64.cfg
+.\package.ps1    # fabrique dist\KenshiCoop.zip à envoyer aux amis
+```
+Désinstaller : `.\install.ps1 -Uninstall`.
+
+**Chez un ami (sans rien compiler)** — lui envoyer `dist\KenshiCoop.zip`. Il le décompresse, ferme
+Kenshi et double-clique `Installer.bat` (Kenshi est retrouvé tout seul dans ses bibliothèques
+Steam ; `Desinstaller.bat` pour enlever le mod).
+
+Chaque joueur doit avoir **le même Kenshi (1.0.68 Steam) et les mêmes mods**, dans le même ordre
+(le mod refuse la connexion sinon, avec un message clair).
+
+**Réseau** : l'hôte doit être joignable en UDP sur le port 27960. Soit il redirige ce port sur sa
+box vers son PC (et donne son IP publique), soit vous utilisez un VPN de jeu (Radmin VPN, ZeroTier,
+Tailscale...) et l'ami met l'IP du VPN de l'hôte dans `join_address`.
 
 Réglages : `KenshiCoop.ini` dans le dossier de Kenshi (créé au premier lancement).
 

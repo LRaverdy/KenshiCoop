@@ -111,12 +111,17 @@ struct FakeWorld : IWorld {
     uint64_t Fingerprint() override { return fp; }
     uint64_t GameBuild() override { return build; }
     uint64_t ModsHash() override { return mods; }
-    void PlayerCharacters(std::vector<Handle>& out) override { for (auto& [s, c] : chars) if (c.squad) out.push_back(H(s)); }
+    Handle Hc(uint32_t s) const {   // the handle as the game currently gives it
+        Handle h = H(s);
+        if (auto it = container.find(s); it != container.end()) h.container = it->second;
+        return h;
+    }
+    void PlayerCharacters(std::vector<Handle>& out) override { for (auto& [s, c] : chars) if (c.squad) out.push_back(Hc(s)); }
     void NearbyCharacters(const std::vector<Vec3>& centers, float radius, std::vector<Handle>& out) override {
         for (auto& [s, c] : chars) {
             if (c.squad) continue;
-            if (radius <= 0) { out.push_back(H(s)); continue; }   // 0 = every active character
-            for (auto& ctr : centers) if (Dist(c.pos, ctr) <= radius) { out.push_back(H(s)); break; }
+            if (radius <= 0) { out.push_back(Hc(s)); continue; }   // 0 = every active character
+            for (auto& ctr : centers) if (Dist(c.pos, ctr) <= radius) { out.push_back(Hc(s)); break; }
         }
     }
     bool Exists(const Handle& h) override { return chars.count(h.serial) != 0; }
@@ -148,6 +153,10 @@ struct FakeWorld : IWorld {
         auto it = chars.find(h.serial);
         if (it != chars.end()) it->second.fights = fight ? target.serial : 0;
     }
+    uint64_t Identity(const Handle& h) override { return chars.count(h.serial) ? 0x1000 + h.serial : 0; }
+    std::vector<std::pair<Handle, Handle>> rehandles;
+    std::map<uint32_t, uint32_t> container;   // serial -> current container (part of the handle)
+    void Rehandle(const Handle& from, const Handle& to) override { rehandles.emplace_back(from, to); }
     bool ReadSpawnInfo(const Handle& h, SpawnInfo& out) override {
         auto it = chars.find(h.serial);
         if (it == chars.end()) return false;
@@ -562,6 +571,20 @@ static void TestOwnCharacter() {
     CHECK(bw.chars.count(hw.named["Client"]) == 1);     // the first player's character came with the save
     CHECK(bw.controllable.size() == 1 && !bw.controllable.empty() && bw.controllable[0].serial == second);
     CHECK(cw.controllable.size() == 1 && !cw.controllable.empty() && cw.controllable[0].serial == hw.named["Client"]);
+
+    std::printf("session: a character whose handle changes (death, new squad) stays the same entity\n");
+    const uint32_t mine = hw.named["Client"];
+    size_t entitiesBefore = cliA.entityCount();
+    hw.container[mine] = 77;   // e.g. the host moved it to another squad
+    Run({{&host, &hw}, {&cliA, &cw}, {&cliB, &bw}}, 3.0, [&] { return !cw.rehandles.empty() && !bw.rehandles.empty(); });
+    CHECK(cw.rehandles.size() == 1 && bw.rehandles.size() == 1);
+    if (!cw.rehandles.empty()) {
+        CHECK(cw.rehandles[0].first.container == 0 && cw.rehandles[0].second.container == 77);
+        CHECK(cw.rehandles[0].second.serial == mine);
+    }
+    CHECK(cliA.entityCount() == entitiesBefore);        // no unbind / new entity
+    Run({{&host, &hw}, {&cliA, &cw}, {&cliB, &bw}}, 1.0);
+    CHECK(cw.controllable.size() == 1 && !cw.controllable.empty() && cw.controllable[0].container == 77);   // still ours
 }
 
 static void TestSessionReplication() {

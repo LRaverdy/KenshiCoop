@@ -547,12 +547,6 @@ bool GetGameHours(double& out) {
     return Rd(clock, off::Clock_hours, out) && std::isfinite(out) && out >= 0;
 }
 
-bool SetGameHours(double hours) {
-    void* clock = nullptr;
-    if (!std::isfinite(hours) || hours < 0) return false;
-    if (!Rd(reinterpret_cast<void*>(Addr(rva::GameClockOwner)), 0, clock) || !clock) return false;
-    return Wr(clock, off::Clock_hours, hours);
-}
 
 namespace {
 void* SaveManagerInstance() { return CallNoArgPtr(FnAddr(FnSaveManagerGet)); }

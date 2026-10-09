@@ -258,7 +258,6 @@ bool ReadRegionWeather(void* region, kc::RegionWeather& out);
 bool WriteRegionWeather(void* region, const kc::RegionWeather& w);   // returns false if ids are unknown here
 bool ExpireRegionWeather(void* region);   // the game rolls a new weather on its next update (tests)
 bool StandUp(Character* c);   // clears the unconscious flag, leaves ragdoll, normal posture
-bool SetGameHours(double hours);
 
 float GetFrameSpeed();
 bool GetPaused();

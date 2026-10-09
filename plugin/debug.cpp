@@ -244,6 +244,13 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         w.RequestLoot(squad[idx], t);
         return "ok";
     }
+    if (cmd == "hours") {   // hours: the game clock
+        double now = -1;
+        kenshi::GetGameHours(now);
+        char buf[64];
+        snprintf(buf, sizeof buf, "ok %.4f", now);
+        return buf;
+    }
     if (cmd == "lootorder") {   // lootorder <target>: the right-click "loot" path, with the current selection
         std::string k;
         in >> k;

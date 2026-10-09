@@ -124,6 +124,7 @@ void Encode(Writer& w, const Bind& m) {
         w.str(m.spawn.name);
         w.f32(m.spawn.age);
     }
+    PutHandle(w, m.previous);
 }
 bool Decode(Reader& r, Bind& m) {
     m.netId = GetU32Var(r);
@@ -140,6 +141,7 @@ bool Decode(Reader& r, Bind& m) {
         m.spawn.name = r.str(kMaxNameLen * 4);
         m.spawn.age = r.f32();
     }
+    m.previous = GetHandle(r);
     return Done(r) && m.netId != 0;
 }
 

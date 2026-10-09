@@ -45,6 +45,8 @@ public:
     bool Read(const kc::Handle& h, kc::EntityState& out) override;
     bool ReadVitals(const kc::Handle& h, kc::EntityVitals& out) override;
     bool ReadSpawnInfo(const kc::Handle& h, kc::SpawnInfo& out) override;
+    uint64_t Identity(const kc::Handle& h) override { return reinterpret_cast<uint64_t>(Find(h)); }
+    void Rehandle(const kc::Handle& from, const kc::Handle& to) override;
     bool ReadCombat(const kc::Handle& h, kc::Handle& target) override;
     void ApplyCombat(const kc::Handle& h, bool fight, const kc::Handle& target) override;
     bool Spawn(const kc::Handle& h, const kc::SpawnInfo& info, const kc::EntityState& at) override;
@@ -133,7 +135,6 @@ private:
     double exportStableSince_ = 0;
     bool haveHostTime_ = false;
     kc::TimeState hostTime_;
-    double hostPausedAt_ = 0;   // client: when the host's pause arrived (we settle a moment first)
     std::mutex weatherMutex_;   // weather is advanced by a game background thread
     std::unordered_map<void*, kc::RegionWeather> seenRegions_;          // host: last state of each region
     std::unordered_map<std::string, kc::RegionWeather> hostWeather_;    // client: what the host has

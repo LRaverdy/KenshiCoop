@@ -16,7 +16,6 @@ float Dist(const kc::Vec3& a, const kc::Vec3& b) {
     const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
-constexpr double kClockTolerance = 0.02;  // in-game hours (~1 game minute) before the clock is corrected
 // Save slot names (<= 15 chars: passed to the game as inline VS2010 strings).
 constexpr const char* kExportSlot = "KenshiCoopHost";
 constexpr const char* kImportSlot = "KenshiCoopJoin";
@@ -74,15 +73,10 @@ void KenshiWorld::EndFrame() {
     // Clients run the host's clock: speed and pause are imposed every frame, so local keys
     // (space, F2/F3/F4) have no lasting effect.
     if (active_ && client_ && haveHostTime_) {
-        // Same calls as the space bar / speed keys, so the game's own speed UI follows too.
-        // Positions cannot be corrected once paused: when the host pauses, everyone first walks the
-        // last bit to where the host froze them (Apply halts them there), then the game pauses.
-        constexpr double kSettleBeforePause = 0.4;
-        const double now = NowSeconds();
-        if (!hostTime_.paused) hostPausedAt_ = 0;
-        else if (hostPausedAt_ == 0) hostPausedAt_ = now;
-        const bool pause = hostTime_.paused && now - hostPausedAt_ >= kSettleBeforePause;
-        if (kenshi::GetPaused() != pause) kenshi::CallUserPause(pause);
+        // Same calls as the space bar / speed keys, so the game's own speed UI follows too. The pause
+        // is immediate: running on a little to settle positions would put our clock ahead of the
+        // host's (the game recomputes its clock from its own counter, it cannot be set back).
+        if (kenshi::GetPaused() != hostTime_.paused) kenshi::CallUserPause(hostTime_.paused);
         if (!hostTime_.paused && std::fabs(kenshi::GetFrameSpeed() - hostTime_.speed) > 1e-3f) kenshi::CallSetFrameSpeed(hostTime_.speed);
     }
     // While players join, the host's world stays frozen even if someone presses unpause.
@@ -97,8 +91,11 @@ void KenshiWorld::EndFrame() {
     v->replicated.swap(applied_);
     applied_.clear();
     if (active_) {
-        v->controllable = controllable_;
-        for (auto& [h, c] : squad_) if (!controllable_.count(h)) v->squadForeign.insert(c);
+        for (const kc::Handle& h : controllable_) {
+            auto a = alias_.find(h);
+            v->controllable.insert(a != alias_.end() ? a->second : h);
+        }
+        for (auto& [h, c] : squad_) if (!v->controllable.count(h)) v->squadForeign.insert(c);
     }
     clientActive_.store(active_ && client_, std::memory_order_relaxed);
     view_.store(std::shared_ptr<const HookView>(std::move(v)), std::memory_order_release);
@@ -323,6 +320,17 @@ void KenshiWorld::Reconcile(const std::vector<kc::Handle>& known, const std::vec
     }
 }
 
+void KenshiWorld::Rehandle(const kc::Handle& from, const kc::Handle& to) {
+    // Our copy keeps whatever handle it has here: the host's new handle now points to it.
+    auto a = alias_.find(from);
+    const kc::Handle local = a != alias_.end() ? a->second : from;
+    if (a != alias_.end()) alias_.erase(a);
+    if (local != to) alias_[to] = local;
+    resolved_.erase(from);
+    resolved_.erase(to);
+    if (auto t = lastTarget_.find(from); t != lastTarget_.end()) { lastTarget_[to] = t->second; lastTarget_.erase(from); }
+}
+
 void KenshiWorld::Despawn(const kc::Handle& h) {
     auto a = alias_.find(h);
     if (a == alias_.end()) return;
@@ -402,17 +410,14 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
 
     const float err = Dist(local, target.pos);
     HostCallScope scope;
-    // Far off (late join, lag spike, teleport on the host): snap straight to the host state. And
-    // when the host pauses: distant NPCs, which the game moves only a few times a second along
-    // their path (ignoring the gentle correction below), are put exactly where the host froze them.
-    const bool settlingForPause = haveHostTime_ && hostTime_.paused;
-    if (err > cfg_.snapDistance || (settlingForPause && err > 0.3f && !squad_.count(h))) {
+    // Far off (late join, lag spike, teleport on the host): snap straight to the host state.
+    if (err > cfg_.snapDistance) {
         kenshi::Teleport(c, target.pos, target.rot);
         lastDest_.erase(h);
         return;
     }
     // The game's own locomotion animates the character (walking toward the host's destination)...
-    const bool hostMoving = (latest.flags & kc::kFlagMoving) != 0 && !(haveHostTime_ && hostTime_.paused);
+    const bool hostMoving = (latest.flags & kc::kFlagMoving) != 0;
     auto it = lastDest_.find(h);
     if (hostMoving) {
         if (it == lastDest_.end() || Dist(it->second, latest.dest) > cfg_.destEpsilon) {
@@ -521,6 +526,7 @@ void KenshiWorld::TakeLocalOrders(std::vector<std::pair<kc::Handle, kc::Command>
     std::lock_guard<std::mutex> lk(ordersMutex_);
     out.swap(orders_);
     orders_.clear();
+    for (auto& [h, c] : out) h = HostHandleOf(h);   // orders name our characters as the host knows them
 }
 
 void KenshiWorld::WeatherRegionTick(void* region, bool afterUpdate) {
@@ -594,12 +600,12 @@ kc::TimeState KenshiWorld::GetTime() {
     return t;
 }
 
+// The clock itself is not written: the game recomputes its hours from an internal counter every
+// frame. Clients start from the host's save and run at the host's speed, paused when it is, so
+// both clocks stay together (measured: under 0.01 h apart after 15 minutes at x3).
 void KenshiWorld::SetTime(const kc::TimeState& t) {
     hostTime_ = t;
     haveHostTime_ = true;
-    double local = 0;
-    if (t.gameHours > 0 && kenshi::GetGameHours(local) && std::fabs(local - t.gameHours) > kClockTolerance)
-        kenshi::SetGameHours(t.gameHours);
 }
 
 void KenshiWorld::HoldForJoin(bool hold) {

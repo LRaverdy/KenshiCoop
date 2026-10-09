@@ -4,3 +4,4 @@ build-*/
 .vs/
 test_out/
 __pycache__/
+dist/

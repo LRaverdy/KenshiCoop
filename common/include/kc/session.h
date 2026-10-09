@@ -68,6 +68,11 @@ public:
     virtual void ApplyCombat(const Handle& h, bool fight, const Handle& target) = 0;
     // Host: what a client needs to recreate this character if its world lacks it.
     virtual bool ReadSpawnInfo(const Handle& h, SpawnInfo& out) = 0;
+    // Host: a stable identity of the object at `h` (0 if none). Kenshi changes a character's handle
+    // when it dies or changes squad; the identity tells it is still the same character.
+    virtual uint64_t Identity(const Handle& h) = 0;
+    // Client: the host's character known as `from` is now known as `to`.
+    virtual void Rehandle(const Handle& from, const Handle& to) = 0;
     // Client: create a local stand-in for host character `h` (later found through Exists/Read/...
     // under the host's handle), and remove it again.
     virtual bool Spawn(const Handle& h, const SpawnInfo& info, const EntityState& at) = 0;
@@ -222,6 +227,7 @@ private:
         double missingSince = -1;            // client: when it was last found missing locally
         // host
         bool keep = false;                   // scratch flag for interest updates
+        uint64_t identity = 0;               // IWorld::Identity when bound
     };
     struct Sent {                            // host: what a player last received for an entity
         EntityState state;
@@ -253,7 +259,7 @@ private:
     void UpdateInterest();                   // host: (un)bind squad members and nearby NPCs
     void SendSnapshots(double now);
     void SendVitals(double now);
-    void SendBind(const Entity& e, PeerId to);
+    void SendBind(const Entity& e, PeerId to, const Handle& previous = Handle{});
     void SendInventories(double now, bool force, PeerId onlyTo);
     void ClientInventoryDiff(double now);
     void HostInvOp(uint8_t from, const InvOp& op);
@@ -286,6 +292,7 @@ private:
     std::unordered_map<uint32_t, Entity> entities_;  // netId -> entity
     std::unordered_map<Handle, uint32_t, HandleHash> byHandle_;  // handle -> netId
     std::vector<std::pair<Handle, uint8_t>> owners_;  // host: explicit squad assignments
+    std::unordered_map<uint64_t, uint32_t> byIdentity_;   // host: IWorld::Identity -> netId
     uint32_t nextNetId_ = 1;
     uint32_t tick_ = 0;
     uint32_t cmdSeq_ = 0;

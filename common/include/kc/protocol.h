@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 8;
+constexpr uint16_t kProtocolVersion = 9;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -147,6 +147,7 @@ struct Bind {
     bool squad = false;    // member of the shared player squad (must exist on every machine)
     bool hasSpawn = false;
     SpawnInfo spawn;
+    Handle previous;       // valid when the same character got a new handle (died, changed squad...)
 };
 struct Unbind {
     uint32_t netId = 0;

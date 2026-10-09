@@ -221,7 +221,10 @@ def compare(h, c, label, pos_tol=3.0):
     report["extra_on_client"] = len(extra)
     report["pos_err_max"] = round(pos_err[-1][0], 2) if pos_err else 0
     report["pos_err_over_tol"] = sum(1 for e, _ in pos_err if e > pos_tol)
-    dead_mismatch = [k for k in common if h["char"][k].get("vflags") != c["char"][k].get("vflags")]
+    def life(v):   # 2 = dead (whatever else), 1 = knocked out, 0 = fine
+        f = int(v.get("vflags", "0") or 0)
+        return 2 if f & 2 else f & 1
+    dead_mismatch = [k for k in common if life(h["char"][k]) != life(c["char"][k])]
     report["vital_flag_mismatch"] = len(dead_mismatch)
     hcomb = {k: v.get("combat") for k, v in list(h["char"].items()) + list(h["squad"].items()) if v.get("combat")}
     ccomb = {k: v.get("combat") for k, v in list(c["char"].items()) + list(c["squad"].items()) if v.get("combat")}

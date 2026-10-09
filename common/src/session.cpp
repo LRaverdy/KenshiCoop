@@ -126,6 +126,7 @@ void Session::Leave() {
     pendingCommands_.clear();
     despawnQueue_.clear();
     owners_.clear();
+    byIdentity_.clear();
     exportFiles_.clear();
     exportFiles_.shrink_to_fit();
     exporting_ = exportReady_ = false;
@@ -386,9 +387,26 @@ void Session::UpdateInterest() {
             e.keep = true;
             return e;
         }
+        // The same character under a new handle (it died, or changed squad): it keeps its netId,
+        // and everyone is told which handle it replaces.
+        const uint64_t id = world_.Identity(h);
+        if (auto known = id ? byIdentity_.find(id) : byIdentity_.end(); known != byIdentity_.end() && entities_.count(known->second)) {
+            Entity& e = entities_[known->second];
+            const Handle previous = e.handle;
+            byHandle_.erase(previous);
+            e.handle = h;
+            byHandle_[h] = e.netId;
+            for (auto& o : owners_) if (o.first == previous) o.first = h;
+            e.keep = true;
+            for (auto& [pid, p] : players_) if (p.inGame) SendBind(e, p.peer, previous);
+            if (e.squad) controllableDirty_ = true;
+            return e;
+        }
         Entity e;
         e.netId = nextNetId_++;
         e.handle = h;
+        e.identity = id;
+        if (id) byIdentity_[id] = e.netId;
         e.squad = squad;
         e.owner = squad ? hostId_ : 0;
         e.hasSpawn = world_.ReadSpawnInfo(h, e.spawn);
@@ -435,6 +453,7 @@ void Session::UpdateInterest() {
         if (it->second.squad) controllableDirty_ = true;
         for (auto& [pid, s] : sync_) s.sent.erase(it->first);
         byHandle_.erase(it->second.handle);
+        if (auto bi = byIdentity_.find(it->second.identity); bi != byIdentity_.end() && bi->second == it->first) byIdentity_.erase(bi);
         it = entities_.erase(it);
     }
 }
@@ -494,10 +513,11 @@ void Session::SendVitals(double now) {
     }
 }
 
-void Session::SendBind(const Entity& e, PeerId to) {
+void Session::SendBind(const Entity& e, PeerId to, const Handle& previous) {
     Bind b;
     b.netId = e.netId;
     b.handle = e.handle;
+    b.previous = previous;
     b.owner = e.owner;
     b.squad = e.squad;
     b.hasSpawn = e.hasSpawn;
@@ -1007,7 +1027,12 @@ void Session::ClientPacket(Msg type, Reader& r) {
         Bind m;
         if (state_ != SessionState::Connected || !Decode(r, m)) break;
         Entity& e = entities_[m.netId];
-        if (e.netId != 0 && e.handle != m.handle) { byHandle_.erase(e.handle); e.checked = false; }
+        if (e.netId != 0 && e.handle != m.handle) {
+            // the host's character got a new handle: ours stays the same character
+            if (m.previous.valid() && m.previous == e.handle) world_.Rehandle(e.handle, m.handle);
+            byHandle_.erase(e.handle);
+            e.checked = false;
+        }
         e.netId = m.netId;
         e.handle = m.handle;
         e.owner = m.owner;
