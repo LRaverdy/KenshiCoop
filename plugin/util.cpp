@@ -145,6 +145,7 @@ Config LoadConfig(const std::wstring& ini) {
     c.interestRadius = float(num(L"sync", L"interest_radius", c.interestRadius));
     c.overlay = num(L"ui", L"overlay", 1) != 0;
     c.debugCommands = num(L"debug", L"commands", 0) != 0;
+    c.steamLoopback = num(L"debug", L"steam_loopback", 0) != 0;
     c.characterPerPlayer = num(L"coop", L"own_character", 1) != 0;
     return c;
 }

@@ -190,7 +190,7 @@ void DrawMultiplayer(const OverlayModel& m, float w, float h) {
     ImGui::Separator();
     if (!m.active) {
         ImGui::InputText("Ton nom", g_nameBuf, sizeof(g_nameBuf));
-        ImGui::InputText("Adresse de l'hôte", g_addrBuf, sizeof(g_addrBuf));
+        ImGui::InputText("Adresse ou code Steam", g_addrBuf, sizeof(g_addrBuf));
         ImGui::InputInt("Port", &g_portBuf, 0, 0);
         g_portBuf = std::clamp(g_portBuf, 1, 65535);
         auto action = [](OverlayAction::Kind k) {
@@ -210,8 +210,37 @@ void DrawMultiplayer(const OverlayModel& m, float w, float h) {
         if (ImGui::Button("Rejoindre")) action(OverlayAction::Kind::Join);
         ImGui::TextDisabled("Héberger : la partie chargée est partagée.");
         ImGui::TextDisabled("Rejoindre : marche aussi depuis le menu principal.");
-        ImGui::TextDisabled("L'hôte doit ouvrir le port UDP %d (ou utilisez un VPN de jeu).", g_portBuf);
+        if (!m.steamId.empty()) {
+            ImGui::Separator();
+            ImGui::TextUnformatted("Amis Steam qui hébergent :");
+            if (m.steamFriends.empty()) ImGui::TextDisabled("  personne pour l'instant");
+            for (const auto& [name, id] : m.steamFriends) {
+                ImGui::PushID(id.c_str());
+                if (ImGui::Button("Rejoindre")) {
+                    OverlayAction a;
+                    a.kind = OverlayAction::Kind::Join;
+                    a.name = g_nameBuf;
+                    a.address = "steam:" + id;
+                    a.port = uint16_t(g_portBuf);
+                    PushAction(std::move(a));
+                }
+                ImGui::SameLine();
+                ImGui::TextUnformatted(name.c_str());
+                ImGui::PopID();
+            }
+            ImGui::TextDisabled("Via Steam : aucun port à ouvrir. Sinon, une IP (port UDP %d).", g_portBuf);
+        } else {
+            ImGui::TextDisabled("L'hôte doit ouvrir le port UDP %d (ou utilisez un VPN de jeu).", g_portBuf);
+        }
     } else {
+        if (m.hosting && !m.steamId.empty()) {
+            ImGui::Text("Code Steam : %s", m.steamId.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Copier")) ImGui::SetClipboardText(m.steamId.c_str());
+            ImGui::TextDisabled("Tes amis Steam : clic droit sur ton nom > Rejoindre la partie,");
+            ImGui::TextDisabled("ou ce code dans leur fenêtre Multijoueur.");
+            ImGui::Separator();
+        }
         if (ImGui::BeginTable("players", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
             ImGui::TableSetupColumn("Joueur");
             ImGui::TableSetupColumn("Ping", ImGuiTableColumnFlags_WidthFixed, 70.0f);

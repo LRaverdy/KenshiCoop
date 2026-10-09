@@ -111,9 +111,9 @@ bool Session::Host(std::string* err) {
     return true;
 }
 
-bool Session::Join(const std::string& address, uint16_t port, std::string* err) {
+bool Session::Join(const std::string& address, uint16_t port, std::string* err, uint32_t mtu) {
     Leave();
-    if (!net_.Connect(address, port, err)) return false;
+    if (!net_.Connect(address, port, err, mtu)) return false;
     state_ = SessionState::Connecting;
     lastError_.clear();
     connectStarted_ = clock_();

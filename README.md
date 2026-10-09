@@ -22,16 +22,22 @@ Steam ; `Desinstaller.bat` pour enlever le mod).
 Chaque joueur doit avoir **le même Kenshi (1.0.68 Steam) et les mêmes mods**, dans le même ordre
 (le mod refuse la connexion sinon, avec un message clair).
 
-**Réseau** : l'hôte doit être joignable en UDP sur le port 27960. Soit il redirige ce port sur sa
-box vers son PC (et donne son IP publique), soit vous utilisez un VPN de jeu (Radmin VPN, ZeroTier,
-Tailscale...) et l'ami met l'IP du VPN de l'hôte dans `join_address`.
+**Réseau** : le plus simple, **via Steam** — rien à ouvrir, pas d'IP à donner. Dès que l'hôte
+héberge, ses amis Steam le voient dans leur fenêtre Multijoueur (Ctrl+Shift+M, bouton **Rejoindre**
+à côté de son nom), ou font clic droit sur son nom dans la liste d'amis Steam > **Rejoindre la
+partie**. L'hôte peut aussi donner son **code Steam** (affiché avec un bouton Copier dans sa fenêtre
+Multijoueur) : l'ami le colle dans « Adresse ou code Steam ». Il faut être amis sur Steam pour la
+liste ; le code marche dans tous les cas.
+
+Sans Steam, par IP : l'hôte doit être joignable en UDP sur le port 27960 (redirection de port sur
+sa box, ou VPN de jeu type Radmin VPN, ZeroTier, Tailscale) et l'ami met son IP.
 
 Réglages : `KenshiCoop.ini` dans le dossier de Kenshi (créé au premier lancement).
 
 | Section / clé | Rôle |
 |---|---|
 | `[player] name` | votre nom (par défaut celui de votre session Windows) ; c'est aussi le nom de votre personnage chez l'hôte. Si deux joueurs ont le même nom, le second devient « Nom 2 » |
-| `[network] join_address` | IP de l'hôte (pour rejoindre) |
+| `[network] join_address` | IP ou code Steam (`steam:7656...`) de l'hôte, pour rejoindre |
 | `[network] port` | port UDP (27960 par défaut, à ouvrir/rediriger chez l'hôte) |
 | `[coop] own_character` | 1 : chaque joueur qui rejoint reçoit son propre personnage (défaut) |
 | `[ui] overlay` | petit panneau d'état en haut à droite |
@@ -44,6 +50,7 @@ Raccourcis (Kenshi au premier plan) :
 | Touches | Action |
 |---|---|
 | Ctrl+Shift+H | héberger la partie chargée |
+| Ctrl+Shift+M | fenêtre Multijoueur : héberger, rejoindre un ami Steam, liste des joueurs |
 | Ctrl+Shift+J | rejoindre l'hôte (`join_address`) — depuis le menu principal ou une partie |
 | Ctrl+Shift+L | quitter la session |
 | Ctrl+Shift+G | (hôte) donner les personnages sélectionnés au joueur suivant |
@@ -51,7 +58,8 @@ Raccourcis (Kenshi au premier plan) :
 | Ctrl+Shift+D | écrire un diagnostic dans `KenshiCoop.log` |
 
 1. L'hôte charge sa partie et appuie sur **Ctrl+Shift+H**.
-2. L'ami met l'IP de l'hôte dans `join_address` et appuie sur **Ctrl+Shift+J** (même depuis le menu).
+2. L'ami clique **Rejoindre** à côté du nom de l'hôte dans sa fenêtre Multijoueur (ou colle son code
+   Steam, ou son IP) — même depuis le menu principal.
    Le jeu de l'hôte se met en pause le temps qu'il arrive ; le client télécharge le monde de l'hôte
    et le charge automatiquement.
 3. L'ami arrive avec **son propre personnage**, créé à son nom dans l'escouade de l'hôte (même race

@@ -34,6 +34,9 @@ struct OverlayModel {
     std::string name, address;          // current settings
     uint16_t port = 0;
     bool fullConsole = false;           // host: every console command; client: read-only ones
+    // Steam: our id (the code friends join with) and friends hosting a session right now
+    std::string steamId;
+    std::vector<std::pair<std::string, std::string>> steamFriends;   // name, id
     // conversation of one of our characters, held in the host's world
     bool dialogOpen = false;
     uint32_t dialogId = 0;

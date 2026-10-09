@@ -35,7 +35,8 @@ public:
     static void GlobalShutdown();
 
     bool Listen(uint16_t port, size_t maxPeers, std::string* err);
-    bool Connect(const std::string& host, uint16_t port, std::string* err);
+    // mtu: largest datagram the path carries (0 = ENet's default), e.g. a relay with a smaller limit
+    bool Connect(const std::string& host, uint16_t port, std::string* err, uint32_t mtu = 0);
     void Close();                 // graceful disconnect of all peers, then destroy the host
 
     void Poll(const Callbacks& cb);          // non-blocking; dispatches every pending event

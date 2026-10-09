@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "hooks.h"
+#include "steam_link.h"
 #include "kenshi.h"
 
 namespace kcp {
@@ -116,7 +117,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         std::string addr = "127.0.0.1";
         int port = kc::kDefaultPort;
         in >> addr >> port;
-        return s.Join(addr, uint16_t(port), &err) ? "ok" : "err " + err;
+        return steam::JoinAddress(s, addr, uint16_t(port), &err) ? "ok" : "err " + err;
     }
     if (cmd == "leave") { s.Leave(); return "ok"; }
 

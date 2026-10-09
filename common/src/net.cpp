@@ -40,7 +40,7 @@ bool Net::Listen(uint16_t port, size_t maxPeers, std::string* err) {
     return true;
 }
 
-bool Net::Connect(const std::string& hostName, uint16_t port, std::string* err) {
+bool Net::Connect(const std::string& hostName, uint16_t port, std::string* err, uint32_t mtu) {
     Close();
     ENetAddress addr{};
     if (enet_address_set_host(&addr, hostName.c_str()) != 0) {
@@ -54,6 +54,7 @@ bool Net::Connect(const std::string& hostName, uint16_t port, std::string* err) 
         return false;
     }
     host_->maximumPacketSize = kMaxPacketSize;
+    if (mtu) host_->mtu = mtu;   // the host agrees to the smaller of both sides' MTU
     ENetPeer* peer = enet_host_connect(host_, &addr, kChannelCount, 0);
     if (!peer) {
         if (err) *err = "cannot start connection";

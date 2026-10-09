@@ -24,6 +24,7 @@ struct Config {
     float interestRadius = 0.0f;    // host: NPCs this close to the squad are replicated (0 = every active one)
     bool overlay = true;
     bool debugCommands = false;     // [debug] commands=1: enable the scripted test channel (debug.h)
+    bool steamLoopback = false;     // [debug] steam_loopback=1: "Steam" links over local UDP (tests, two instances on one PC)
     bool characterPerPlayer = true; // host: [coop] own_character=1 gives every joining player a character
 };
 Config LoadConfig(const std::wstring& iniPath);   // creates the file with defaults if missing

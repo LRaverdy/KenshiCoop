@@ -304,7 +304,7 @@ def setup(save, name="Tester"):
     log("client pid", cli)
     wait_for(cli, lambda s: s.get("state") == "idle", 120, "client menu")
     time.sleep(3)
-    ok, t = cmd(cli, "join")
+    ok, t = cmd(cli, "join " + os.environ["KC_JOIN"]) if os.environ.get("KC_JOIN") else cmd(cli, "join")
     log("join", ok, t)
     wait_for(cli, lambda s: s.get("state") == "connected" and s.get("ready") == "1", 240, "client in host world")
     log("client connected")

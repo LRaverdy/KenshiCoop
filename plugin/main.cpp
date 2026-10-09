@@ -17,6 +17,7 @@
 #include "kc/session.h"
 #include "kenshi.h"
 #include "overlay.h"
+#include "steam_link.h"
 #include "util.h"
 #include "world.h"
 
@@ -145,7 +146,7 @@ void HandleHotkeys() {
     }
     if (Pressed(g_hkJoin, mods)) {
         if (g_session->isClient()) Toast("Already connected.");
-        else if (g_session->Join(g_cfg.joinAddress, g_cfg.port, &err)) Toast("Joining " + g_cfg.joinAddress + "...");
+        else if (steam::JoinAddress(*g_session, g_cfg.joinAddress, g_cfg.port, &err)) Toast("Joining " + g_cfg.joinAddress + "...");
         else Toast("Cannot join: " + err);
     }
     if (Pressed(g_hkLeave, mods)) {
@@ -197,6 +198,9 @@ std::string FrenchError(const std::string& e) {
         {"cannot resolve address", "adresse de l'hôte introuvable"},
         {"cannot create network socket", "réseau indisponible"},
         {"cannot start connection", "impossible de démarrer la connexion"},
+        {"Steam is not available", "Steam n'est pas disponible (lance le jeu depuis Steam)"},
+        {"this Steam id is your own", "c'est ton propre code Steam"},
+        {"cannot open a local port", "réseau indisponible"},
     };
     for (const auto& [en, fr] : table)
         if (e.find(en) != std::string::npos) return fr;
@@ -322,9 +326,9 @@ void HandleOverlayActions() {
             break;
         case OverlayAction::Kind::Join:
             if (g_session->isClient()) { Toast("Déjà connecté."); break; }
-            if (a.address.empty()) { Toast("Entre l'adresse de l'hôte."); break; }
+            if (a.address.empty()) { Toast("Entre l'adresse ou le code Steam de l'hôte."); break; }
             if (!ApplyConnection(a.name, a.address, a.port)) break;
-            if (g_session->Join(g_cfg.joinAddress, g_cfg.port, &err)) Toast("Connexion à " + g_cfg.joinAddress + "...");
+            if (steam::JoinAddress(*g_session, g_cfg.joinAddress, g_cfg.port, &err)) Toast("Connexion à " + g_cfg.joinAddress + "...");
             else Toast("Impossible de rejoindre : " + FrenchError(err));
             break;
         case OverlayAction::Kind::Leave:
@@ -393,6 +397,17 @@ void PublishOverlay() {
     m.address = g_cfg.joinAddress;
     m.port = g_cfg.port;
     m.fullConsole = !g_session->isClient();
+    if (steam::Available() && steam::MyId()) {
+        m.steamId = std::to_string(steam::MyId());
+        static double nextScan = 0;
+        static std::vector<std::pair<std::string, std::string>> friends;
+        if (const double now = NowSeconds(); now >= nextScan) {
+            nextScan = now + 2.0;
+            friends.clear();
+            for (const auto& f : steam::FriendsHosting()) friends.emplace_back(f.name, std::to_string(f.id));
+        }
+        m.steamFriends = friends;
+    }
     if (const auto& d = g_session->dialog(); d.open && g_session->isClient()) {
         m.dialogOpen = true;
         m.dialogId = d.id;
@@ -405,6 +420,28 @@ void PublishOverlay() {
     while (!g_toasts.empty() && g_toasts.front().second < now) g_toasts.pop_front();
     for (auto& t : g_toasts) m.toasts.push_back(t.first);
     OverlayPublish(std::move(m));
+}
+
+// Playing through Steam: a host is reachable by its Steam id as soon as it hosts; the link closes
+// with the session; "Rejoindre la partie" from Steam joins.
+bool g_steamHostTried = false;
+void SteamUpkeep() {
+    steam::Tick();
+    const auto st = g_session->state();
+    const bool idle = st == kc::SessionState::Idle || st == kc::SessionState::Failed;
+    if (idle && steam::Active()) steam::Stop();
+    if (!g_session->isHost()) g_steamHostTried = false;
+    else if (!g_steamHostTried && steam::Available() && !steam::Active()) {
+        g_steamHostTried = true;
+        std::string err;
+        if (!steam::StartHost(g_cfg.port, &err)) Log("steam: cannot host through Steam: %s", err.c_str());
+    }
+    if (auto id = steam::TakeJoinRequest()) {
+        std::string err;
+        if (g_session->isHost() || g_session->isClient()) Toast("Quitte la session en cours avant de rejoindre un ami.");
+        else if (steam::Join(*g_session, *id, &err)) Toast("Connexion à ton ami via Steam...");
+        else Toast("Impossible de rejoindre : " + FrenchError(err));
+    }
 }
 
 void Tick(bool live) {
@@ -428,6 +465,7 @@ void Tick(bool live) {
     }
     if (live) g_menuWindowShown = true;
     if (g_cfg.debugCommands) DebugPoll(*g_session, *g_world, live);
+    SteamUpkeep();
     g_session->Tick(live);
     if (live) g_world->EndFrame();
     PublishOverlay();
@@ -535,6 +573,7 @@ bool Start() {
 
     g_iniPath = dir + L"KenshiCoop.ini";
     g_cfg = LoadConfig(g_iniPath);
+    steam::Init(g_cfg.steamLoopback);
     g_startedAt = NowSeconds();
     g_overlayVisible = g_cfg.overlay;
     g_world = std::make_unique<KenshiWorld>(g_cfg);

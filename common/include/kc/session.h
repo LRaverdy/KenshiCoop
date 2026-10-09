@@ -201,7 +201,7 @@ public:
     // Name and port used by the next Host/Join (false while a session is running).
     bool Configure(const std::string& name, uint16_t port);
     bool Host(std::string* err);
-    bool Join(const std::string& address, uint16_t port, std::string* err);
+    bool Join(const std::string& address, uint16_t port, std::string* err, uint32_t mtu = 0);
     void Leave();
 
     // Call once per frame. `worldLive`: the game world is loaded and safe to touch this frame.
