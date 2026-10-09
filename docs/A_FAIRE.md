@@ -56,3 +56,5 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   bâtiments déjà présents dans la sauvegarde (et non posés pendant la partie) n'est sans doute pas envoyé
   aux clients, ou l'achat ne rejoue pas chez eux le passage en « à réparer ». Probablement lié aux villes
   vues en « bâtons rouges » chez un client (état de construction des bâtiments existants mal synchronisé).
+  Précision : l'hôte a terminé la réparation (il le voit construit), le client le voit toujours en
+  chantier. L'avancement et la fin des travaux sur un bâtiment existant n'arrivent donc pas chez le client.
