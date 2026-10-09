@@ -35,3 +35,9 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   « pas de place », renvoie l'état réel, et l'objet revient : d'où l'aspect dupliqué puis annulé.
   À faire : envoyer d'abord ce qui libère une place, et en cas de place prise, laisser l'hôte poser l'objet
   ailleurs dans l'inventaire. Il y a aussi des refus « refused an inventory move from player 3 » à éclaircir.
+- **Porter un corps (vu par un client)** : le corps porté par l'hôte apparaît debout sur sa tête au lieu
+  d'être sur l'épaule, et quand l'hôte le pose, il s'envole. Le correctif de la 0.2.0 (ne plus déplacer un
+  perso porté) ne suffit pas : chez le client, la mise sur l'épaule ne prend pas (le corps n'est pas en
+  ragdoll quand on l'attache), et à la pose le corps est relâché à une position fausse, ce qui le projette
+  (comme un ragdoll déplacé juste avant sa chute). À reprendre avec un test en jeu dédié (porter puis
+  poser, regardé chez le client).
