@@ -15,6 +15,7 @@
 #include "ranged.h"
 #include "steam_link.h"
 #include "kenshi.h"
+#include "host_console.h"
 
 namespace kcp {
 
@@ -1207,6 +1208,25 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             return "err apply failed";
         }
         return describe(best);
+    }
+    if (cmd == "console") {   // console <line>: a host console command, as typed in the window (output in the log)
+        std::string line;
+        std::getline(in, line);
+        while (!line.empty() && line.front() == ' ') line.erase(line.begin());
+        HostConsoleInject(line);
+        return "ok";
+    }
+    if (cmd == "vitals") {   // vitals <squadIndex>: blood and the lowest body part health
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        kc::EntityVitals v;
+        if (idx >= squad.size() || !w.ReadVitals(squad[idx], v)) return "err";
+        float low = 1e9f;
+        for (const auto& p : v.parts) low = std::min(low, p.flesh);
+        char b[96];
+        snprintf(b, sizeof(b), "ok blood=%.1f lowest=%.1f flags=%d", v.blood, low, int(v.flags));
+        return b;
     }
     if (cmd == "closewindows") return kenshi::CloseInventoryWindows() ? "ok" : "err";   // every inventory / trade window here
     // ---- lot E: buildings

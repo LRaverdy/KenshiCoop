@@ -1021,6 +1021,39 @@ def exp_prison(host, cli):
     summary()
 
 
+def exp_admin(host, cli):
+    """Host console admin commands: money, xp, heal, god (checked on the host and the client)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    m0 = cmd(host, "money")[1]
+    cmd(host, "console money 5000")
+    time.sleep(3)
+    m1h, m1c = cmd(host, "money")[1], cmd(cli, "money")[1]
+    check("admin : money ajoute 5000", int(m1h.split()[1]) == int(m0.split()[1]) + 5000 and m1h == m1c, f"{m0} -> hote {m1h} / client {m1c}")
+    s0 = cmd(host, f"stats {own}")[1]
+    cmd(host, "console xp 2 10")
+    time.sleep(3)
+    s1h, s1c = cmd(host, f"stats {own}")[1], cmd(cli, f"stats {own}")[1]
+    check("admin : xp monte les competences", s1h != s0 and s1h == s1c, f"{s0[:60]} -> {s1h[:60]} / client {s1c[:60]}")
+    cmd(host, f"kosquad {own}")
+    time.sleep(3)
+    v0 = cmd(host, f"vitals {own}")[1]
+    cmd(host, "console heal 2")
+    time.sleep(3)
+    v1h, v1c = cmd(host, f"vitals {own}")[1], cmd(cli, f"vitals {own}")[1]
+    check("admin : heal soigne", v1h != v0 and "flags=0" in v1h, f"{v0} -> hote {v1h} / client {v1c}")
+    cmd(host, "console god 2")
+    time.sleep(1)
+    cmd(host, f"kosquad {own}")
+    time.sleep(3)
+    v2 = cmd(host, f"vitals {own}")[1]
+    check("admin : god empeche le K.-O.", "flags=0" in v2, v2)
+    cmd(host, "console god 2 off")
+    summary()
+
+
 def exp_trade(host, cli, merchant="Marchand"):
     """Trading with a merchant: the host's game asks for a trade window for the client's character; it
     opens on the client with the shop's stock. A purchase and a sale, the game's own way (right click),
@@ -1958,6 +1991,9 @@ def main():
     bd = sub.add_parser("build", help="lot E: buildings placed, built, dismantled and bought by everyone")
     bd.add_argument("--save", default="kctest_base")
     bd.add_argument("--keep", action="store_true")
+    ad = sub.add_parser("admin")
+    ad.add_argument("--save", default="kctest_base")
+    ad.add_argument("--keep", action="store_true")
     td = sub.add_parser("trade", help="a client trades with a merchant: purchase, sale, stock everywhere")
     td.add_argument("--save", default="kctest_town")
     td.add_argument("--keep", action="store_true")
@@ -2088,6 +2124,8 @@ def main():
             exp_prison(host, cli)
         elif a.what == "build":
             exp_build(host, cli)
+        elif a.what == "admin":
+            exp_admin(host, cli)
         elif a.what == "trade":
             exp_trade(host, cli, a.merchant)
         elif a.what == "progress":

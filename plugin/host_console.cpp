@@ -242,6 +242,11 @@ void HostConsolePublish(ConsoleModel model) {
     g_modelDirty = true;
 }
 
+void HostConsoleInject(const std::string& line) {
+    std::lock_guard<std::mutex> lk(g_mutex);
+    if (g_commands.size() < 64) g_commands.push_back(line);
+}
+
 std::vector<std::string> HostConsoleTakeCommands() {
     std::lock_guard<std::mutex> lk(g_mutex);
     return std::exchange(g_commands, {});

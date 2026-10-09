@@ -26,6 +26,7 @@ struct ConsoleModel {
 void HostConsoleShow(bool show);        // the first show creates the window (its own thread)
 bool HostConsoleVisible();
 void HostConsolePublish(ConsoleModel model);          // game thread -> window
+void HostConsoleInject(const std::string& line);       // tests: as if typed in the window
 std::vector<std::string> HostConsoleTakeCommands();   // typed in the window, for the game thread
 void HostConsoleShutdown();
 
