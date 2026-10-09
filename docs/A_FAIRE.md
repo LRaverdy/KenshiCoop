@@ -10,3 +10,7 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   chez le client (au moins dans un des cas de dialogue ou de clic).
 - **Plantage après un resync** : après un resync, un client n'avait plus les cartes de ses personnages dans
   la barre d'escouade, puis son jeu a planté.
+- **Étage qui ne change pas tout seul** : chez un client, l'étage affiché ne suit pas automatiquement quand un
+  perso monte ou descend dans un bâtiment (comme le fait le jeu en solo). Piste : chez le client, les persos
+  sont placés à la position de l'hôte au lieu de prendre l'escalier eux-mêmes, et l'étage courant du
+  personnage (qui pilote l'affichage) n'est pas mis à jour.
