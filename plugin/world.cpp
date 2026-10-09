@@ -903,6 +903,28 @@ void KenshiWorld::ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& 
     }
 }
 
+bool KenshiWorld::ReadTool(const kc::Handle& h, std::string& sid) {
+    sid.clear();
+    void* tool = kenshi::JobTool(Find(h));
+    if (tool) kenshi::ObjectTemplate(tool, sid);
+    return true;
+}
+
+// The host's character holds a tool for its job (a pickaxe while mining): the same one in the same
+// hand here, taken away when the host's is.
+void KenshiWorld::ApplyTool(const kc::Handle& h, const std::string& sid) {
+    kenshi::Character* c = Find(h);
+    auto it = handTools_.find(h);
+    if (it != handTools_.end() && (it->second.who != c || !c)) { handTools_.erase(it); it = handTools_.end(); }   // another body now
+    const std::string have = it == handTools_.end() ? std::string{} : it->second.sid;
+    if (!c || have == sid) return;
+    HostCallScope scope;
+    void* now = kenshi::SetHandTool(c, it == handTools_.end() ? nullptr : it->second.item, sid);
+    if (sid.empty() || !now) handTools_.erase(h);
+    else handTools_[h] = {sid, now, c};
+    Log("tool: %s %s", KeyOf(h).c_str(), sid.empty() ? "puts its tool away" : ("holds " + TemplateName(sid) + (now ? "" : " (failed)")).c_str());
+}
+
 int KenshiWorld::TeleportCharacters(const std::vector<kc::Handle>& who, const kc::Vec3& to) {
     int n = 0;
     HostCallScope scope;

@@ -70,6 +70,8 @@ public:
     int TeleportCharacters(const std::vector<kc::Handle>& who, const kc::Vec3& to);
     void ApplyProgress(const kc::Handle& h, const std::vector<float>& stats, uint16_t modes, uint8_t style) override;
     bool ReadMoney(int32_t& money) override { return kenshi::ReadPlayerMoney(money); }
+    bool ReadTool(const kc::Handle& h, std::string& sid) override;
+    void ApplyTool(const kc::Handle& h, const std::string& sid) override;
     void ReadSquads(std::vector<WorldSquad>& out) override;
     bool FindContainer(const std::string& sid, const kc::Vec3& pos, kc::Handle& out) override;
     bool ContainerKind(const kc::Handle& container, std::string& sid) override;
@@ -270,7 +272,9 @@ private:
     struct FallPrep { double start, lastMove; };
     std::unordered_map<kc::Handle, FallPrep, HandleHash> fallPrep_;   // client: moving into place before a fall
     std::unordered_map<kc::Handle, double, HandleHash> fellAt_;      // client: when we made it fall
-    std::unordered_set<kc::Handle, HandleHash> carriedHere_;   // client: host characters someone carries here
+    std::unordered_set<kc::Handle, HandleHash> carriedHere_;
+    struct HandTool { std::string sid; void* item = nullptr; kenshi::Character* who = nullptr; };
+    std::unordered_map<kc::Handle, HandTool, HandleHash> handTools_;   // client: tools we put in hands   // client: host characters someone carries here
     std::unordered_set<const void*> applied_;                        // client: characters Apply drove this frame
     std::unordered_map<const void*, double> replicatedAt_;           // client: when Apply last drove each one
     bool ReadyToFall(const kc::Handle& h, kenshi::Character* c, const kc::EntityState& at, double now);

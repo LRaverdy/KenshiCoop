@@ -3378,4 +3378,53 @@ bool GodMode(const void* c) {
     return g_god.count(c) != 0;
 }
 
+// ---- tools in hands (mining...)
+namespace {
+constexpr uintptr_t CH_body = 0x648;          // CharBody*
+constexpr uintptr_t CB_currentAction = 0x68;  // Tasker* being run
+constexpr uintptr_t TK_tool = 0x88;           // Task_OperateMachine: the tool it put in the hands
+constexpr uintptr_t kVtOperateMachine = 0x16BE898;
+using FnHandSig = void (*)(void* body, const void* name, void* item);
+bool HandSeh(void* fn, void* obj, const void* name, void* item) {
+    __try { reinterpret_cast<FnHandSig>(fn)(obj, name, item); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+// what the job calls on: CharBody->vt[0x48]() (the character's attachments owner)
+void* HandOwner(Character* c) {
+    void* body = nullptr;
+    if (!IsCharacter(c) || !Rd(c, CH_body, body) || !body) return nullptr;
+    void* fn = VSlot(body, 0x48);
+    return fn ? CallNoArgPtrOn(fn, body) : nullptr;
+}
+} // namespace
+
+void* JobTool(Character* c) {
+    void* body = nullptr;
+    void* task = nullptr;
+    uintptr_t vt = 0;
+    void* tool = nullptr;
+    if (!IsCharacter(c) || !Rd(c, CH_body, body) || !body || !Rd(body, CB_currentAction, task) || !task || !Rd(task, 0, vt)) return nullptr;
+    if (vt != Addr(kVtOperateMachine)) return nullptr;
+    return Rd(task, TK_tool, tool) ? tool : nullptr;
+}
+
+void* SetHandTool(Character* c, void* current, const std::string& sid) {
+    void* owner = HandOwner(c);
+    if (!owner) return current;
+    alignas(8) uint8_t name[kGameStringSize];
+    GameStringView("hands", name);
+    if (current) {
+        if (void* fn = VSlot(owner, 0x1A0)) HandSeh(fn, owner, name, current);   // out of the hands
+        DestroyItem(current);
+        current = nullptr;
+    }
+    if (sid.empty()) return nullptr;
+    kc::ItemState s;
+    s.templateSid = sid;
+    void* item = CreateItemFromState(s);
+    if (!item) return nullptr;
+    if (void* fn = VSlot(owner, 0x198); fn && HandSeh(fn, owner, name, item)) return item;   // into the hands
+    DestroyItem(item);
+    return nullptr;
+}
+
 } // namespace kenshi

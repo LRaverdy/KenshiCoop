@@ -392,6 +392,11 @@ bool WritePlayerMoney(int32_t money);
 bool IsStatOfCharacter(const void* statField);
 bool GainExperience(Character* c, size_t statIndex, float amount);
 bool HealCompletely(Character* c);                 // every wound healed, blood back, awake
+// The tool its current job (Task_OperateMachine: mining, farming...) put in its hands, or null.
+void* JobTool(Character* c);
+// Put a new item of that template in its hands the way that job does ("hands" attachment), or take
+// it out and destroy it (sid empty). Returns the item now held (or null).
+void* SetHandTool(Character* c, void* current, const std::string& sid);
 // God mode (host): these characters take no damage and are never knocked out.
 void SetGodMode(Character* c, bool on);
 bool GodMode(const void* c);   // tests: increaseStat on that stat

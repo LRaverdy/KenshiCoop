@@ -10,6 +10,7 @@
 // the local player clicks is not run locally either: it goes to the host (DoorRequest), whose game
 // runs it, and the result comes back like any other door change. Orders on doors (open, close, pick
 // the lock, lock, unlock, bash) are player tasks and already go to the host (RouteOrder).
+#include <unordered_map>
 #include "world.h"
 
 #include <windows.h>
@@ -251,11 +252,20 @@ void* KenshiWorld::FindDoor(const std::string& sid, const kc::Vec3& pos) {
 
 bool KenshiWorld::ApplyDoor(const kc::DoorState& d) {
     void* o = FindDoor(d.sid, d.pos);
-    if (!o) return false;
+    if (!o) {
+        static std::unordered_map<std::string, int> missing;
+        if (++missing[d.sid] == 1) Log("door: %s not found here", TemplateName(d.sid).c_str());
+        return false;
+    }
     kc::DoorState local;
     if (kenshi::ReadDoor(o, local) && local.sameState(d)) return true;
     HostCallScope scope;   // lets our own call through the door hooks
     const bool ok = kenshi::ApplyDoorState(o, d);
+    kc::DoorState after;
+    if (kenshi::ReadDoor(o, after) && after.state != local.state)
+        Log("door: %s state %d -> %d (host %d)", TemplateName(d.sid).c_str(), int(local.state), int(after.state), int(d.state));
+    else if (local.state != d.state)
+        Log("door: %s stays %d (host %d)", TemplateName(d.sid).c_str(), int(local.state), int(d.state));
     if (ok && (local.flags ^ d.flags) & (kc::kDoorLocked | kc::kDoorBroken | kc::kDoorLockBroken))
         Log("door: %s now %s%s%s as on the host", TemplateName(d.sid).c_str(), (d.flags & kc::kDoorLocked) ? "locked" : "unlocked",
             (d.flags & kc::kDoorBroken) ? ", broken" : "", (d.flags & kc::kDoorLockBroken) ? ", lock broken" : "");

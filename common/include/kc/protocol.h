@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 30;
+constexpr uint16_t kProtocolVersion = 31;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -287,6 +287,7 @@ struct CharProgress {
     std::vector<float> stats;   // kStatCount values
     uint16_t modes = 0;         // ModeBits
     uint8_t style = 0;          // fight style: 0 attack, 1 defend, 2 evade (AGG/DEF/EVADE orders)
+    std::string tool;           // the tool its current job puts in its hands (a pickaxe...), empty: none
 };
 struct ProgressMsg {
     bool hasMoney = false;

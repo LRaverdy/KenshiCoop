@@ -1184,7 +1184,10 @@ void Session::SendProgress(double now) {
     for (auto& [id, e] : entities_) {
         CharProgress p;
         p.netId = id;
-        if (world_.ReadProgress(e.handle, p.stats, p.modes, p.style) && p.stats.size() == kStatCount) cur[id] = std::move(p);
+        if (world_.ReadProgress(e.handle, p.stats, p.modes, p.style) && p.stats.size() == kStatCount) {
+            world_.ReadTool(e.handle, p.tool);
+            cur[id] = std::move(p);
+        }
     }
     int32_t money = 0;
     const bool haveMoney = world_.ReadMoney(money);
@@ -1198,10 +1201,13 @@ void Session::SendProgress(double now) {
         m.money = money;
         for (const auto& [id, prog] : cur) {
             Sent& last = sent[id];
-            if (!StatsChanged(prog.stats, last.stats) && prog.modes == last.modes && prog.style == last.style && now - last.statsAt < 20.0) continue;
+            if (!StatsChanged(prog.stats, last.stats) && prog.modes == last.modes && prog.style == last.style && prog.tool == last.tool &&
+                now - last.statsAt < 20.0)
+                continue;
             last.stats = prog.stats;
             last.modes = prog.modes;
             last.style = prog.style;
+            last.tool = prog.tool;
             last.statsAt = now;
             m.chars.push_back(prog);
             if (m.chars.size() >= 64) {
@@ -1993,6 +1999,7 @@ void Session::ClientTick(double now, bool live) {
     for (auto& [id, e] : entities_) {
         if (!e.present || e.stats.empty() || !(restats || e.statsDirty)) continue;
         world_.ApplyProgress(e.handle, e.stats, e.modes, e.style);
+        world_.ApplyTool(e.handle, e.tool);
         e.statsDirty = false;
     }
     if (restats && haveMoney_) ApplyHostMoney(hostMoney_);
@@ -2384,6 +2391,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
             it->second.stats = std::move(c.stats);
             it->second.modes = c.modes;
             it->second.style = c.style;
+            it->second.tool = std::move(c.tool);
             it->second.statsDirty = true;
         }
         break;

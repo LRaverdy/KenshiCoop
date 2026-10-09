@@ -125,6 +125,9 @@ public:
         (void)h; (void)modes; (void)style; stats.clear(); return false;
     }
     virtual void ApplyProgress(const Handle& h, const std::vector<float>& stats, uint16_t modes, uint8_t style) { (void)h; (void)stats; (void)modes; (void)style; }
+    // The tool a character's current job puts in its hands (template; empty: none). Client: show it.
+    virtual bool ReadTool(const Handle& h, std::string& sid) { (void)h; sid.clear(); return false; }
+    virtual void ApplyTool(const Handle& h, const std::string& sid) { (void)h; (void)sid; }
     virtual bool ReadMoney(int32_t& money) { (void)money; return false; }
     virtual void ApplyMoney(int32_t money) { (void)money; }
     // Conversations. Host: lines said and conversation windows of other players' characters since the
@@ -432,6 +435,7 @@ private:
         std::vector<float> stats;            // client: the host's skill levels (empty = none yet)
         uint16_t modes = 0;
         uint8_t style = 0;
+        std::string tool;                    // client: the host's tool in its hands
         bool statsDirty = false;
         bool hasSpawn = false;               // host sent how to recreate it
         SpawnInfo spawn;
@@ -468,6 +472,7 @@ private:
         std::vector<float> stats;
         uint16_t modes = 0xFFFF;
         uint8_t style = 0xFF;
+        std::string tool;
         double statsAt = -1e9;
     };
     struct PlayerSync {

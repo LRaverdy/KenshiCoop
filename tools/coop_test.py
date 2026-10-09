@@ -1075,6 +1075,9 @@ def exp_mine(host, cli):
             break
     log("host node:", before, "->", now)
     check("mine : du minerai s'accumule chez l'hote", now != before, f"{before} -> {now}")
+    clog = open(os.path.join(KENSHI, f"KenshiCoop-{cli}.log"), encoding="utf-8", errors="replace").read()
+    held = [l for l in clog.splitlines() if "tool:" in l]
+    check("mine : la pioche est dans la main chez le client", any("holds" in l and "failed" not in l for l in held), held[-3:])
     r = cmd(cli, f"containerreq {own} Ressource_Fer")
     log("client opens the node:", r)
     opened = False

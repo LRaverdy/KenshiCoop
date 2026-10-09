@@ -337,12 +337,13 @@ void Encode(Writer& w, const ProgressMsg& m) {
         for (size_t i = 0; i < kStatCount; ++i) w.f32(i < c.stats.size() ? c.stats[i] : 0.0f);
         w.u16(c.modes);
         w.u8(c.style);
+        w.str(c.tool);
     }
 }
 bool Decode(Reader& r, ProgressMsg& m) {
     m.hasMoney = r.boolean();
     if (m.hasMoney) m.money = r.i32();
-    const uint32_t n = r.count(kMaxEntitiesPerMsg, 1 + 4 * kStatCount + 3);
+    const uint32_t n = r.count(kMaxEntitiesPerMsg, 1 + 4 * kStatCount + 4);
     m.chars.resize(n);
     for (auto& c : m.chars) {
         c.netId = GetU32Var(r);
@@ -353,6 +354,7 @@ bool Decode(Reader& r, ProgressMsg& m) {
         }
         c.modes = r.u16();
         c.style = r.u8();
+        c.tool = r.str(kMaxSidLen);
         if (!r.ok() || c.netId == 0) return false;
     }
     return Done(r);
