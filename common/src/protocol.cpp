@@ -206,6 +206,10 @@ void Encode(Writer& w, const Command& m) {
     PutVec(w, m.pos);
     w.boolean(m.run);
     if (m.kind == CommandKind::PickUp) w.str(m.itemSid);
+    if (m.kind == CommandKind::SquadMove) {
+        w.i32(m.task);
+        PutHandle(w, m.subject);
+    }
     if (m.kind == CommandKind::Task) {
         w.u8(uint8_t(m.via));
         w.i32(m.task);
@@ -219,11 +223,16 @@ bool Decode(Reader& r, Command& m) {
     m.seq = GetU32Var(r);
     m.netId = GetU32Var(r);
     const uint8_t k = r.u8();
-    if (k < 1 || k > 4) return false;
+    if (k < 1 || k > 5) return false;
     m.kind = CommandKind(k);
     m.pos = GetVec(r);
     m.run = r.boolean();
     if (m.kind == CommandKind::PickUp) m.itemSid = r.str(kMaxSidLen);
+    if (m.kind == CommandKind::SquadMove) {
+        m.task = r.i32();
+        m.subject = GetHandle(r);
+        if (m.task < 0 || m.task > 256) return false;
+    }
     if (m.kind == CommandKind::Task) {
         const uint8_t via = r.u8();
         if (via < uint8_t(TaskVia::AddOrder) || via > uint8_t(TaskVia::SetOrder)) return false;
@@ -378,12 +387,34 @@ bool Decode(Reader& r, DialogReply& m) {
     return Done(r) && m.index >= 0 && m.index < int32_t(kMaxDialogReplies);
 }
 
+void Encode(Writer& w, const SquadsMsg& m) {
+    w.u8(uint8_t(Msg::Squads));
+    w.varint(m.squads.size());
+    for (const auto& s : m.squads) {
+        w.str(s.name);
+        w.varint(s.members.size());
+        for (uint32_t id : s.members) w.varint(id);
+    }
+}
+bool Decode(Reader& r, SquadsMsg& m) {
+    const uint32_t n = r.count(256, 2);
+    m.squads.resize(n);
+    for (auto& s : m.squads) {
+        s.name = r.str(kMaxNameLen * 4);
+        const uint32_t k = r.count(kMaxEntitiesPerMsg, 1);
+        s.members.resize(k);
+        for (auto& id : s.members) id = GetU32Var(r);
+        if (!r.ok()) return false;
+    }
+    return Done(r);
+}
+
 void EncodePing(Writer& w, const Ping& m, bool pong) { w.u8(uint8_t(pong ? Msg::Pong : Msg::Ping)); w.f64(m.t); }
 bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::DialogReply)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Squads)) return std::nullopt;
     return Msg(t);
 }
 

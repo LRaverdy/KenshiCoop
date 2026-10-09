@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 18;
+constexpr uint16_t kProtocolVersion = 19;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -61,6 +61,7 @@ enum class Msg : uint8_t {
     Progress = 26,    // S->C  skill levels of characters, the player faction's money
     Dialog = 27,      // S->C  speech bubbles; conversations of the receiving player's characters
     DialogReply = 28, // C->S  the player picked an answer in a conversation
+    Squads = 29,      // S->C  how the player faction's characters are split into squads
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -192,6 +193,7 @@ enum class CommandKind : uint8_t {
     Stop = 2,
     PickUp = 3,  // take the item `itemSid` lying at `pos`
     Task = 4,    // a player order (first aid, eat, use a bed, open a door...) given through the game's UI
+    SquadMove = 5,   // move the character into the squad of `subject` (none: a new squad) at position `task`
 };
 // Which PlayerInterface function the client's UI called for a Task (the host calls the same one).
 enum class TaskVia : uint8_t {
@@ -278,6 +280,15 @@ struct DialogMsg {
 struct DialogReply {
     uint32_t dialogId = 0;
     int32_t index = 0;       // position in the last `replies`
+};
+
+// The player faction's squads, in the host's order: name and members (netIds, in squad order).
+struct SquadInfo {
+    std::string name;
+    std::vector<uint32_t> members;
+};
+struct SquadsMsg {
+    std::vector<SquadInfo> squads;
 };
 
 struct Ping {
@@ -502,6 +513,8 @@ void Encode(Writer& w, const GroundMsg& m);
 // Snapshots are split into packets that each fit `budget` bytes; every packet is self-contained.
 std::vector<std::vector<uint8_t>> EncodeSnapshot(const Snapshot& s, size_t budget = kSnapshotBudget);
 void Encode(Writer& w, const ProgressMsg& m);
+void Encode(Writer& w, const SquadsMsg& m);
+bool Decode(Reader& r, SquadsMsg& m);
 void Encode(Writer& w, const DialogMsg& m);
 bool Decode(Reader& r, DialogMsg& m);
 void Encode(Writer& w, const DialogReply& m);

@@ -433,6 +433,48 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         snprintf(b, sizeof(b), "ok %.3f,%.3f,%.3f %s", p.x, p.y, p.z, Key(h).c_str());
         return b;
     }
+    if (cmd == "squads") {   // squads: the player's squads as this machine has them: "name: member,member | ..."
+        std::vector<kc::IWorld::WorldSquad> ws;
+        w.ReadSquads(ws);
+        std::ostringstream o;
+        o << "ok";
+        for (const auto& sq : ws) {
+            o << " | " << sq.name << ":";
+            for (const auto& h : sq.members) {
+                std::string n;
+                kenshi::CharacterName(w.FindSquad(h), n);
+                o << " " << n;
+            }
+        }
+        return o.str();
+    }
+    if (cmd == "squadmove") {   // squadmove <name> <withName|new>: drop that portrait on the squad of another member (or a new squad), as the UI does ('_' for spaces)
+        std::string who, with;
+        in >> who >> with;
+        for (auto* str : {&who, &with}) std::replace(str->begin(), str->end(), '_', ' ');
+        std::vector<kenshi::Character*> all;
+        kenshi::PlayerCharacters(all);
+        auto byName = [&](const std::string& n) -> kenshi::Character* {
+            for (kenshi::Character* c : all) { std::string cn; if (kenshi::CharacterName(c, cn) && cn == n) return c; }
+            return nullptr;
+        };
+        kenshi::Character* c = byName(who);
+        if (!c) return "err no " + who;
+        void* target = nullptr;
+        if (with != "new") {
+            kenshi::Character* o = byName(with);
+            if (!o) return "err no " + with;
+            target = kenshi::SquadOf(o);
+        } else {
+            HostCallScope scope;   // the "new squad" button itself is not synchronized: only the move is
+            target = kenshi::NewSquad();
+        }
+        std::vector<kenshi::Character*> members;
+        kenshi::SquadMembers(target, members);
+        using FnAddAt = void (*)(void*, void*, int);
+        reinterpret_cast<FnAddAt>(kenshi::FnAddr(kenshi::FnSquadAddCharacterAt))(target, c, int(members.size()));
+        return "ok";
+    }
     if (cmd == "camto") {   // camto <squadIndex>: the camera goes to that squad member
         size_t idx = 0;
         in >> idx;

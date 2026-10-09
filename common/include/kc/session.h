@@ -134,6 +134,14 @@ public:
     virtual void TakeDialogEvents(std::vector<WorldDialog>& out) { out.clear(); }
     virtual void ApplySay(const Handle& speaker, const std::string& text, bool shout) { (void)speaker; (void)text; (void)shout; }
     virtual void DialogAnswer(uint32_t dialogId, int index) { (void)dialogId; (void)index; }   // host
+    // Squads of the player faction. Host: each squad's name and members (in squad order).
+    // Client: split the local characters the same way.
+    struct WorldSquad {
+        std::string name;
+        std::vector<Handle> members;
+    };
+    virtual void ReadSquads(std::vector<WorldSquad>& out) { out.clear(); }
+    virtual void ApplySquads(const std::vector<WorldSquad>& squads) { (void)squads; }
     // Client: items the local player dropped from a character (asked of the host, not done locally).
     virtual void TakeLocalDrops(std::vector<std::pair<Handle, ItemState>>& out) { out.clear(); }
 
@@ -322,6 +330,7 @@ private:
     void SendVitals(double now);
     void SendProgress(double now);
     void SendDialogs();
+    void SendSquads(double now);
     void SendBind(const Entity& e, PeerId to, const Handle& previous = Handle{});
     void SendInventories(double now, bool force, PeerId onlyTo);
     void ClientInventoryDiff(double now);
@@ -368,6 +377,9 @@ private:
     int32_t lastMoney_ = 0;
     double moneyAt_ = -1e9;
     DialogView dialog_;                    // client
+    SquadsMsg lastSquads_;                 // host: last sent / client: last received
+    bool haveSquads_ = false;
+    double squadsAt_ = -1e9, nextSquads_ = 0;
     std::unordered_map<uint32_t, uint8_t> dialogOwner_;   // host: conversation -> the player it was sent to
     std::vector<IWorld::WorldDialog> scratchDialogs_;
     std::vector<DialogReply> pendingAnswers_;   // host

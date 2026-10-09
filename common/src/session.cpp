@@ -147,6 +147,8 @@ void Session::Leave() {
     moneySent_ = false;
     dialog_ = DialogView{};
     dialogOwner_.clear();
+    lastSquads_ = SquadsMsg{};
+    haveSquads_ = false;
     pendingAnswers_.clear();
     missingSquad_ = 0;
     localId_ = 0;
@@ -228,6 +230,10 @@ void Session::HostTick(double now, bool live) {
     }
     // Weather: sent the tick any region's weather changes (before the effects that weather places),
     // and in full every 10 s.
+    if (anyInGame && now >= nextSquads_) {
+        nextSquads_ = now + 0.5;
+        SendSquads(now);
+    }
     if (anyInGame) SendDialogs();
     else { world_.TakeDialogEvents(scratchDialogs_); scratchDialogs_.clear(); }
     if (anyInGame && now >= nextProgress_) {
@@ -660,6 +666,38 @@ void Session::SendDialogs() {
             SendReliable(p.peer, w);
         }
     }
+}
+
+namespace {
+bool SameSquads(const SquadsMsg& a, const SquadsMsg& b) {
+    if (a.squads.size() != b.squads.size()) return false;
+    for (size_t i = 0; i < a.squads.size(); ++i)
+        if (a.squads[i].name != b.squads[i].name || a.squads[i].members != b.squads[i].members) return false;
+    return true;
+}
+} // namespace
+
+// Squads are sent when they change, and every 10 s (a player who just arrived gets them too).
+void Session::SendSquads(double now) {
+    std::vector<IWorld::WorldSquad> ws;
+    world_.ReadSquads(ws);
+    SquadsMsg m;
+    for (const auto& s : ws) {
+        SquadInfo info;
+        info.name = s.name.substr(0, kMaxNameLen * 4);
+        for (const auto& h : s.members)
+            if (auto it = byHandle_.find(h); it != byHandle_.end()) info.members.push_back(it->second);
+        if (!info.members.empty()) m.squads.push_back(std::move(info));
+    }
+    if (m.squads.empty()) return;
+    const bool changed = !haveSquads_ || !SameSquads(m, lastSquads_);
+    if (!changed && now - squadsAt_ < 10.0) return;
+    lastSquads_ = m;
+    haveSquads_ = true;
+    squadsAt_ = now;
+    Writer w;
+    Encode(w, m);
+    BroadcastReliable(w, true);
 }
 
 void Session::AnswerDialog(int index) {
@@ -1195,6 +1233,19 @@ void Session::ClientTick(double now, bool live) {
         e.statsDirty = false;
     }
     if (restats && haveMoney_) world_.ApplyMoney(hostMoney_);
+    // Squads: split our characters as the host does (again now and then: stand-ins, late arrivals).
+    if (haveSquads_ && now - squadsAt_ > 2.0) {
+        squadsAt_ = now;
+        std::vector<IWorld::WorldSquad> ws;
+        for (const auto& s : lastSquads_.squads) {
+            IWorld::WorldSquad w;
+            w.name = s.name;
+            for (uint32_t id : s.members)
+                if (auto it = entities_.find(id); it != entities_.end() && it->second.present) w.members.push_back(it->second.handle);
+            if (!w.members.empty()) ws.push_back(std::move(w));
+        }
+        world_.ApplySquads(ws);
+    }
 
     if (now >= nextPing_) {
         nextPing_ = now + kPingInterval;
@@ -1390,6 +1441,14 @@ void Session::ClientPacket(Msg type, Reader& r) {
                 break;
             }
         }
+        break;
+    }
+    case Msg::Squads: {
+        SquadsMsg m;
+        if (state_ != SessionState::Connected || !Decode(r, m)) break;
+        lastSquads_ = std::move(m);
+        haveSquads_ = true;
+        squadsAt_ = -1e9;   // apply now
         break;
     }
     case Msg::Progress: {

@@ -140,6 +140,8 @@ enum Fn : int {
     FnSetCrime,                 // bool BountyManager::setCrime(CrimeEnum, Faction*, const hand&)
     FnAssignBounty,             // void BountyManager::assignBountyForCrimes(Faction*)
     FnFocusCamera,              // void PlayerInterface::focusCameraSelectedCharacter()
+    FnSquadAddCharacterAt,      // void ActivePlatoon::addCharacterAt(RootObject*, int index)   (moves a character into a squad)
+    FnCreateSquad,              // ActivePlatoon* PlayerInterface::createSquad()
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -299,6 +301,14 @@ bool IsStatOfCharacter(const void* statField);
 bool GainExperience(Character* c, size_t statIndex, float amount);   // tests: increaseStat on that stat
 bool CallSay(Character* c, const std::string& text);
 bool FocusCamera(Character* c);   // tests: the camera goes to that character
+// Squads (ActivePlatoon) of the player faction.
+void* SquadOf(Character* c);                                   // Character::platoon
+int SquadMemberIndex(Character* c);                            // its place in its squad
+bool SquadName(void* squad, std::string& out);
+void SetSquadName(void* squad, const std::string& name);
+void SquadMembers(void* squad, std::vector<Character*>& out);   // the player characters in it
+bool MoveToSquad(void* squad, Character* c, int index);          // what dropping a portrait on a squad does
+void* NewSquad();                                              // what the "new squad" button does
 bool CallStartPlayerConversation(Character* npc, Character* pc);   // tests: npc talks to pc (its default conversation)                // tests: Dialogue::say through the hooks   // the float lies inside a live character's CharStats
 // Conversations (Dialogue, Character+0x280).
 void* CharacterDialogue(Character* c);

@@ -192,7 +192,21 @@ void KenshiWorld::NearbyCharacters(const std::vector<kc::Vec3>& centers, float r
 
 kenshi::Character* KenshiWorld::FindSquad(const kc::Handle& h) const {
     auto it = squad_.find(h);
+    if (it == squad_.end())   // client: the host's handle of a character that has another one here
+        if (auto a = alias_.find(h); a != alias_.end()) it = squad_.find(a->second);
     return it == squad_.end() ? nullptr : it->second;
+}
+
+// Client: a character of ours changed squads here, and with it its handle: the host's handle for it
+// now points to the new one.
+void KenshiWorld::LocalRehandled(const kc::Handle& before, const kc::Handle& after) {
+    if (before == after) return;
+    bool found = false;
+    for (auto& [host, local] : alias_)
+        if (local == before) { local = after; found = true; }
+    if (!found) alias_[before] = after;
+    resolved_.clear();
+    if (auto it = squad_.find(before); it != squad_.end()) { squad_[after] = it->second; squad_.erase(it); }
 }
 
 kenshi::Character* KenshiWorld::Find(const kc::Handle& h) {
@@ -512,6 +526,61 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     }
 }
 
+void KenshiWorld::ReadSquads(std::vector<WorldSquad>& out) {
+    out.clear();
+    std::vector<kenshi::Character*> all;
+    kenshi::PlayerCharacters(all);
+    std::vector<void*> order;   // squads in the order their first member appears in the player's list
+    for (kenshi::Character* c : all) {
+        void* sq = kenshi::SquadOf(c);
+        if (sq && std::find(order.begin(), order.end(), sq) == order.end()) order.push_back(sq);
+    }
+    for (void* sq : order) {
+        WorldSquad s;
+        kenshi::SquadName(sq, s.name);
+        std::vector<kenshi::Character*> members;
+        kenshi::SquadMembers(sq, members);
+        for (kenshi::Character* c : members) {
+            kc::Handle h;
+            if (kenshi::GetHandle(c, h)) s.members.push_back(HostHandleOf(h));
+        }
+        if (!s.members.empty()) out.push_back(std::move(s));
+    }
+}
+
+// Clients: each host squad takes the local squad that already holds most of its members (or a new
+// one), then every member goes there, in the host's order.
+void KenshiWorld::ApplySquads(const std::vector<WorldSquad>& squads) {
+    std::vector<void*> taken;
+    HostCallScope scope;
+    for (const auto& s : squads) {
+        std::vector<kenshi::Character*> members;
+        for (const auto& h : s.members)
+            if (kenshi::Character* c = FindSquad(h)) members.push_back(c);
+        if (members.empty()) continue;
+        std::unordered_map<void*, int> count;
+        for (kenshi::Character* c : members) if (void* sq = kenshi::SquadOf(c)) ++count[sq];
+        void* target = nullptr;
+        int best = 0;
+        for (auto& [sq, n] : count)
+            if (n > best && std::find(taken.begin(), taken.end(), sq) == taken.end()) { best = n; target = sq; }
+        if (!target) {
+            target = kenshi::NewSquad();
+            if (!target) continue;
+            Log("squads: a new squad for '%s'", s.name.c_str());
+        }
+        taken.push_back(target);
+        for (size_t i = 0; i < members.size(); ++i) {
+            if (kenshi::SquadOf(members[i]) == target && kenshi::SquadMemberIndex(members[i]) == int(i)) continue;
+            kc::Handle before, after;
+            kenshi::GetHandle(members[i], before);
+            kenshi::MoveToSquad(target, members[i], int(i));
+            if (kenshi::GetHandle(members[i], after)) LocalRehandled(before, after);
+        }
+        kenshi::SetSquadName(target, s.name);
+    }
+}
+
 bool KenshiWorld::ReadProgress(const kc::Handle& h, std::vector<float>& stats) {
     kenshi::Character* c = Find(h);
     return c && kenshi::ReadStats(c, stats);
@@ -577,6 +646,13 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
         if (!item) return false;
         pickups_[h] = {itemHandle, NowSeconds() + 30.0};
         return CallPlayerMoveOrder(c, cmd.pos);
+    }
+    case kc::CommandKind::SquadMove: {
+        kenshi::Character* other = cmd.subject.valid() ? kenshi::Resolve(cmd.subject) : nullptr;
+        void* target = other ? kenshi::SquadOf(other) : kenshi::NewSquad();
+        const bool ok = kenshi::MoveToSquad(target, c, cmd.task);
+        Log("client squad change run for a character: %s", ok ? "ok" : "failed");
+        return ok;
     }
     case kc::CommandKind::Task: {
         void* subject = kenshi::ResolveObject(cmd.subject);
@@ -781,7 +857,7 @@ void KenshiWorld::TakeLocalOrders(std::vector<std::pair<kc::Handle, kc::Command>
     orders_.clear();
     for (auto& [h, c] : out) {   // orders name our characters (and what they act on) as the host knows them
         h = HostHandleOf(h);
-        if (c.kind != kc::CommandKind::Task || !c.subject.valid()) continue;
+        if ((c.kind != kc::CommandKind::Task && c.kind != kc::CommandKind::SquadMove) || !c.subject.valid()) continue;
         c.subject = HostHandleOf(c.subject);
         for (const auto& [host, local] : groundAlias_)
             if (local == c.subject) { c.subject = host; break; }

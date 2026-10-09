@@ -66,6 +66,8 @@ public:
     bool ReadProgress(const kc::Handle& h, std::vector<float>& stats) override;
     void ApplyProgress(const kc::Handle& h, const std::vector<float>& stats) override;
     bool ReadMoney(int32_t& money) override { return kenshi::ReadPlayerMoney(money); }
+    void ReadSquads(std::vector<WorldSquad>& out) override;
+    void ApplySquads(const std::vector<WorldSquad>& squads) override;
     void ApplyMoney(int32_t money) override { kenshi::WritePlayerMoney(money); }
     bool Order(const kc::Handle& h, const kc::Command& c) override;
     void TakeLocalOrders(std::vector<std::pair<kc::Handle, kc::Command>>& out) override;
@@ -111,6 +113,7 @@ public:
     void SetGameBuild(uint64_t b) { build_ = b; }
     kenshi::Character* Find(const kc::Handle& h);   // squad first, then any live character
     kenshi::Character* FindSquad(const kc::Handle& h) const;
+    void LocalRehandled(const kc::Handle& before, const kc::Handle& after);
     // client: the host handle a local stand-in replaces (or `local` itself)
     kc::Handle HostHandleOf(const kc::Handle& local) const {
         for (const auto& [host, l] : alias_) if (l == local) return host;

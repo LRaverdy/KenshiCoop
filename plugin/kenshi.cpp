@@ -103,6 +103,8 @@ const FunctionSig kFunctions[FnCount] = {
     {"BountyManager::setCrime", 0x852C80, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
     {"BountyManager::assignBountyForCrimes", 0x853EC0, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xF9, 0xE8, 0x4B, 0xA9}},
     {"PlayerInterface::focusCameraSelectedCharacter", 0x7F37F0, {0x48, 0x89, 0x5C, 0x24, 0x20, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B}},
+    {"ActivePlatoon::addCharacterAt", 0x796620, {0x48, 0x85, 0xD2, 0x0F, 0x84, 0x1C, 0x04, 0x00, 0x00, 0x48, 0x8B, 0xC4}},
+    {"PlayerInterface::createSquad", 0x7F4910, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B, 0x05, 0x73, 0xFD, 0x93}},
 };
 
 namespace {
@@ -682,6 +684,64 @@ bool FocusCamera(Character* c) {
     if (!pi || !IsCharacter(c)) return false;
     WithSelection(c, [&] { reinterpret_cast<void (*)(void*)>(FnAddr(FnFocusCamera))(pi); });
     return true;
+}
+
+namespace {
+constexpr uintptr_t CH_platoon = 0x658, CH_squadMemberId = 0x418;   // ActivePlatoon*, int
+constexpr uintptr_t AP_platoon = 0x78;                               // ActivePlatoon -> Platoon (named RootObject)
+constexpr uintptr_t kFnSquadSetName = 0x4BE480;                       // ActivePlatoon::setName(const std::string&)
+using FnAddAt = void (*)(void*, void*, int);
+using FnNewSquad = void* (*)(void*);
+using FnSetName = void (*)(void*, const void*);
+bool AddAtSeh(void* fn, void* sq, void* c, int index) {
+    __try { reinterpret_cast<FnAddAt>(fn)(sq, c, index); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* NewSquadSeh(void* fn, void* pi) {
+    __try { return reinterpret_cast<FnNewSquad>(fn)(pi); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+bool SetNameSeh(void* fn, void* sq, const void* gs) {
+    __try { reinterpret_cast<FnSetName>(fn)(sq, gs); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+void* SquadOf(Character* c) {
+    void* sq = nullptr;
+    return IsCharacter(c) && Rd(c, CH_platoon, sq) ? sq : nullptr;
+}
+
+int SquadMemberIndex(Character* c) {
+    int i = 0;
+    return IsCharacter(c) && Rd(c, CH_squadMemberId, i) ? i : 0;
+}
+
+bool SquadName(void* squad, std::string& out) {
+    void* p = nullptr;
+    return squad && Rd(squad, AP_platoon, p) && p && ReadGameString(reinterpret_cast<uint8_t*>(p) + off::RO_name, out);
+}
+
+void SetSquadName(void* squad, const std::string& name) {
+    std::string cur;
+    if (!squad || (SquadName(squad, cur) && cur == name)) return;
+    alignas(8) uint8_t gs[0x28];
+    GameStringView(name, gs);
+    SetNameSeh(reinterpret_cast<void*>(Addr(kFnSquadSetName)), squad, gs);
+}
+
+void SquadMembers(void* squad, std::vector<Character*>& out) {
+    out.clear();
+    std::vector<Character*> all;
+    PlayerCharacters(all);
+    for (Character* c : all) if (SquadOf(c) == squad) out.push_back(c);
+    std::sort(out.begin(), out.end(), [](Character* a, Character* b) { return SquadMemberIndex(a) < SquadMemberIndex(b); });
+}
+
+bool MoveToSquad(void* squad, Character* c, int index) {
+    return squad && IsCharacter(c) && AddAtSeh(FnAddr(FnSquadAddCharacterAt), squad, c, index);
+}
+
+void* NewSquad() {
+    PlayerInterface* pi = Player();
+    return pi ? NewSquadSeh(FnAddr(FnCreateSquad), pi) : nullptr;
 }
 
 bool IsStatOfCharacter(const void* statField) {

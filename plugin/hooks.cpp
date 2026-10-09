@@ -437,6 +437,32 @@ using SetCrimeFn = bool (*)(void* b, int crime, void* against, const void* agnst
 SetCrimeFn o_setCrime = nullptr;
 bool hk_setCrime(void* b, int crime, void* against, const void* agnst) { return ClientRefuses() ? false : o_setCrime(b, crime, against, agnst); }
 
+// Squads: on a client, dropping one of our portraits on a squad asks the host (another member of
+// that squad tells it which one; none: a new squad); other players' characters stay where they
+// are. The host organises everyone's squads.
+using AddAtFn = void (*)(void* squad, void* c, int index);
+AddAtFn o_addAt = nullptr;
+void hk_addAt(void* squad, void* c, int index) {
+    auto v = KenshiWorld::View();
+    if (g_hostCall || !v->active || !kenshi::IsCharacter(c)) return o_addAt(squad, c, index);
+    kc::Handle h;
+    kenshi::GetHandle(static_cast<kenshi::Character*>(c), h);
+    const bool mine = v->controllable.count(h) != 0;
+    if (!v->client) return o_addAt(squad, c, index);   // the host organises everyone's squads
+    KenshiWorld* w = TheWorld();
+    if (!mine || !w) { if (w) ToastForeign(); return; }
+    kc::Command cmd;
+    cmd.kind = kc::CommandKind::SquadMove;
+    cmd.task = std::max(0, index);
+    std::vector<kenshi::Character*> members;
+    kenshi::SquadMembers(squad, members);
+    for (kenshi::Character* m : members)
+        if (m != c && kenshi::GetHandle(m, cmd.subject)) break;
+    if (members.empty() || (members.size() == 1 && members[0] == c)) cmd.subject = kc::Handle{};
+    Log("client squad change asked of the host");
+    w->QueueLocalOrder(h, cmd);
+}
+
 // Experience is the host's too: every gain (combat, training, walking, first aid...) ends in
 // increaseStat, refused on clients; the host's skill levels arrive in Progress messages.
 using IncreaseStatFn = void (*)(float* stat, float amount, float upperLimit);
@@ -923,6 +949,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnReassessCollapse, reinterpret_cast<void*>(&hk_collapse), reinterpret_cast<void**>(&o_collapse)},
         {kenshi::FnPickupItem, reinterpret_cast<void*>(&hk_pickup), reinterpret_cast<void**>(&o_pickup)},
         {kenshi::FnIncreaseStat, reinterpret_cast<void*>(&hk_increaseStat), reinterpret_cast<void**>(&o_increaseStat)},
+        {kenshi::FnSquadAddCharacterAt, reinterpret_cast<void*>(&hk_addAt), reinterpret_cast<void**>(&o_addAt)},
         {kenshi::FnDialogueSay, reinterpret_cast<void*>(&hk_say), reinterpret_cast<void**>(&o_say)},
         {kenshi::FnDialogueSetInDialog, reinterpret_cast<void*>(&hk_setInDialog), reinterpret_cast<void**>(&o_setInDialog)},
         {kenshi::FnDialogueSetResponses, reinterpret_cast<void*>(&hk_setResponses), reinterpret_cast<void**>(&o_setResponses)},

@@ -312,6 +312,7 @@ def setup(save, name="Tester"):
     log("join", ok, t)
     wait_for(cli, lambda s: s.get("state") == "connected" and s.get("ready") == "1", 240, "client in host world")
     log("client connected")
+    arrange(host, cli)   # side by side, every time
     return host, cli
 
 
@@ -893,6 +894,28 @@ def exp_far(host, cli):
     measure("about 5 km away", own)
 
 
+def exp_squads(host, cli):
+    """New squads and moves between squads, from the host and from the client: both see the same squads."""
+    time.sleep(6)
+    def show(label):
+        time.sleep(4)
+        h, c = cmd(host, "squads")[1], cmd(cli, "squads")[1]
+        log(label + ": " + ("SAME" if h == c else "DIFFERENT"))
+        log("    host  :", h)
+        log("    client:", c)
+    show("start")
+    log("host: Player 2 into a new squad", cmd(host, "squadmove Player_2 new"))
+    show("host made a squad with Player 2")
+    log("host: Ribs joins Player 2's squad", cmd(host, "squadmove Ribs Player_2"))
+    show("host moved Ribs")
+    log("client: Player 2 into a new squad", cmd(cli, "squadmove Player_2 new"))
+    show("client made a new squad for its own character")
+    log("client: Player 2 back with Truth", cmd(cli, "squadmove Player_2 Truth"))
+    show("client moved its character back")
+    log("client: tries to move the host's Jurgen", cmd(cli, "squadmove Jurgen Player_2"))
+    show("client tried to move a host character (must be refused)")
+
+
 def t_dist(a, b):
     return dist(a["pos"], b["pos"])
 
@@ -1183,6 +1206,9 @@ def main():
     tk = sub.add_parser("talk")
     tk.add_argument("--save", default="kctest_base")
     tk.add_argument("--keep", action="store_true")
+    sq = sub.add_parser("squads")
+    sq.add_argument("--save", default="kctest_base")
+    sq.add_argument("--keep", action="store_true")
     fr = sub.add_parser("far")
     fr.add_argument("--save", default="kctest_base")
     fr.add_argument("--keep", action="store_true")
@@ -1238,7 +1264,9 @@ def main():
         log("ready: host", host, "client", cli)
         return
     try:
-        if a.what == "far":
+        if a.what == "squads":
+            exp_squads(host, cli)
+        elif a.what == "far":
             exp_far(host, cli)
         elif a.what == "kosquad":
             exp_kosquad(host, cli)
