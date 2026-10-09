@@ -781,7 +781,8 @@ void Session::ClientInventoryDiff(double now) {
     for (auto& [id, e] : entities_) {
         if (!e.present || !e.haveInv || e.invDirty || now < e.invPendingUntil) continue;
         std::vector<ItemState> local;
-        if (!world_.ReadInventory(e.handle, local) || local == e.inv) continue;
+        if (!world_.ReadInventory(e.handle, local)) continue;
+        if (local == e.inv) { e.invUnmatchedSince = 0; continue; }
         // multiset difference (items keep their place unless moved)
         std::vector<bool> used(local.size(), false);
         for (const auto& h : e.inv) {
@@ -794,6 +795,28 @@ void Session::ClientInventoryDiff(double now) {
         involved.push_back(id);
     }
     if (gone.empty() && added.empty()) return;
+    // Only one's own characters' inventories (and bodies to loot) can be handled: anything touching
+    // another player's character goes straight back, with the reason.
+    std::string foreignOwner;
+    auto foreign = [&](uint32_t netId) {
+        auto it = entities_.find(netId);
+        if (it == entities_.end() || !it->second.squad || it->second.owner == localId_) return false;
+        auto pl = players_.find(it->second.owner);
+        foreignOwner = pl != players_.end() ? pl->second.name : (it->second.owner == 1 ? "l'hote" : "un autre joueur");
+        return true;
+    };
+    bool refused = false;
+    for (const auto& g : gone) refused = foreign(g.netId) || refused;
+    for (const auto& a : added) refused = foreign(a.netId) || refused;
+    if (refused) {
+        for (uint32_t id : involved)
+            if (auto it = entities_.find(id); it != entities_.end()) { it->second.invDirty = true; it->second.invUnmatchedSince = 0; }
+        if (now >= nextForeignNote_) {
+            nextForeignNote_ = now + 3.0;
+            AddChat("* Ce personnage appartient a " + foreignOwner + " : tu ne peux pas gerer son inventaire.");
+        }
+        return;
+    }
     // pair each disappeared stack with an appeared one of the same kind
     std::vector<bool> addUsed(added.size(), false);
     size_t sent = 0;
@@ -822,8 +845,18 @@ void Session::ClientInventoryDiff(double now) {
     for (uint32_t id : involved) {
         auto it = entities_.find(id);
         if (it == entities_.end()) continue;
-        if (sent) it->second.invPendingUntil = now + 3.0;   // wait for the host's answer
-        else it->second.invDirty = true;                     // nothing we can ask for: back to the host's state
+        if (sent) {
+            it->second.invPendingUntil = now + 3.0;   // wait for the host's answer
+            it->second.invUnmatchedSince = 0;
+            continue;
+        }
+        // An item that left without landing anywhere is usually on the mouse, being dragged: give the
+        // player time to put it down before going back to the host's state.
+        double& since = it->second.invUnmatchedSince;
+        if (since == 0) since = now;
+        if (now - since < 10.0) continue;
+        since = 0;
+        it->second.invDirty = true;                   // nothing we can ask for: back to the host's state
     }
 }
 

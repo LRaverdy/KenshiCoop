@@ -243,6 +243,7 @@ private:
         std::vector<ItemState> inv;          // client: the host's view; host: last broadcast
         uint64_t invHash = 0;                // host: hash of the last broadcast
         double invPendingUntil = 0;          // client: an InvOp is in flight, do not diff
+        double invUnmatchedSince = 0;        // client: an item left with nowhere to go (held by the mouse?) since
         int invFailures = 0;                 // client: local rebuild attempts that did not match
         int spawnAttempts = 0;
         double nextSpawnTry = 0;
@@ -335,6 +336,7 @@ private:
     double weatherForceAt_ = 0;
     double effectsFullAt_ = 0;
     double animStateAt_ = 0;
+    double nextForeignNote_ = 0;
     double nextAnimFrame_ = 0;
     std::vector<RegionWeather> lastWeather_;
     bool controllableDirty_ = true;
