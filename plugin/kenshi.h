@@ -300,6 +300,8 @@ bool GetPaused();
 // Game calls (game thread only). Return false if the call faulted or the object was invalid.
 bool Teleport(Character* c, const kc::Vec3& pos, const kc::Quat& rot);
 bool SetDestination(Character* c, const kc::Vec3& dest);
+bool ReadPace(const Character* c, uint8_t& gait, float& pace);         // speed order and desired speed
+bool WritePace(Character* c, uint8_t gait, float pace);
 bool SetPositionSimple(Character* c, const kc::Vec3& pos);
 bool IsMoving(const Character* c);
 bool Halt(Character* c);

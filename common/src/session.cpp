@@ -37,7 +37,7 @@ Quat Nlerp(Quat a, const Quat& b, float t) {
 
 bool StateChanged(const EntityState& a, const EntityState& b) {
     return Dist(a.pos, b.pos) > 0.02f || Dist(a.dest, b.dest) > 0.25f || a.flags != b.flags || QuatDot(a.rot, b.rot) < 0.99995f ||
-           a.combatTarget != b.combatTarget;
+           a.combatTarget != b.combatTarget || a.gait != b.gait || std::fabs(a.pace - b.pace) > 0.1f;
 }
 uint64_t InventoryHash(const std::vector<ItemState>& items) {
     uint64_t h = 0xcbf29ce484222325ull;

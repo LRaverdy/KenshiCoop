@@ -152,6 +152,7 @@ private:
         void* group;
         kc::EffectKind kind;
         bool sent;           // near a player: the clients have it
+        bool done;           // fading out (its time is up, or the game stopped it): over for the clients
         double movedAt;      // wandering: state last sent
         kc::Vec3 turnTo;     //            heading sent with it
     };

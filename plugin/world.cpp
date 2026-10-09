@@ -353,6 +353,8 @@ bool KenshiWorld::Read(const kc::Handle& h, kc::EntityState& out) {
     if (moving) out.flags |= kc::kFlagMoving;
     if (kenshi::IsDown(c) || kenshi::IsRagdoll(c)) out.flags |= kc::kFlagDown;
     if (kenshi::IsDead(c)) out.flags |= kc::kFlagDead;
+    if (!kenshi::ReadPace(c, out.gait, out.pace)) { out.gait = 0; out.pace = 0; }
+    if (out.pace > 6553.0f) out.pace = 6553.0f;
     return true;
 }
 
@@ -418,6 +420,8 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     }
     // The game's own locomotion animates the character (walking toward the host's destination)...
     const bool hostMoving = (latest.flags & kc::kFlagMoving) != 0;
+    // at the host's pace: a running character runs (animation included), a walking one walks
+    kenshi::WritePace(c, latest.gait, latest.pace >= 6553.0f ? 999.0f : latest.pace);
     auto it = lastDest_.find(h);
     if (hostMoving) {
         if (it == lastDest_.end() || Dist(it->second, latest.dest) > cfg_.destEpsilon) {
@@ -601,10 +605,16 @@ void KenshiWorld::HostEffectsTick(void* region, const std::string& regionSid) {
                 known.erase(it);
                 it = known.end();
             }
-            if (it == known.end()) it = known.emplace(h, HostFx{nextFxId_++, g.group, g.kind, false, 0.0, {}}).first;   // movedAt 0: never sent
+            if (it == known.end()) it = known.emplace(h, HostFx{nextFxId_++, g.group, g.kind, false, false, 0.0, {}}).first;   // movedAt 0: never sent
             HostFx& f = it->second;
+            if (f.done) continue;
             kc::WeatherEffect e;
             if (!kenshi::ReadEffect(h, g.kind, e)) continue;
+            if (!e.endless && e.life <= 0) {   // fading from now on: the clients' copies fade with it
+                drop(f);
+                f.done = true;
+                continue;
+            }
             if (!f.sent) {
                 if (!NearAny(e.pos, fxCenters_, kFxRadius)) continue;
                 if (f.movedAt != 0.0) f.id = nextFxId_++;   // it was sent before, then went away: new to the clients

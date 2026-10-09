@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 10;
+constexpr uint16_t kProtocolVersion = 11;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -169,6 +169,8 @@ struct EntityState {
     Vec3 dest;       // movement destination (lets the client animate locomotion naturally)
     uint8_t flags = 0;
     uint32_t combatTarget = 0;   // netId of the character it fights, 0 = not in melee combat
+    uint8_t gait = 0;            // movement speed order (Kenshi's MoveSpeed: walk, jog, run...)
+    float pace = 0;              // desired speed, units/s (the game's "flat out" is 999): picks walk or run animations
 };
 
 struct Snapshot {

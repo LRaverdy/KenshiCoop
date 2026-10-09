@@ -509,6 +509,27 @@ def exp_fxlive(host, cli, minutes=3):
     log("fx live worst:", worst)
 
 
+def exp_gait(host, cli, rounds=8):
+    """Every moving character moves at the host's pace on the client (run animation when it runs)."""
+    time.sleep(10)
+    bad_total = 0
+    for i in range(rounds):
+        time.sleep(4)
+        h, c = dump(host, "h_gait", 4000), dump(cli, "c_gait", 4000)
+        rows, bad = [], []
+        for k, hv in h["char"].items():
+            cv = c["char"].get(k)
+            if not cv or hv.get("flags") not in ("1",) or "pace" not in hv:
+                continue
+            hs, cs = float(hv.get("speed", 0)), float(cv.get("speed", 0))
+            rows.append((k, hv["gait"], cv.get("gait"), hv["pace"], cv.get("pace"), round(hs, 1), round(cs, 1)))
+            if hv["gait"] != cv.get("gait") or abs(float(hv["pace"]) - float(cv.get("pace", -1))) > 0.2 or abs(hs - cs) > max(3.0, 0.25 * hs):
+                bad.append(rows[-1])
+        bad_total += len(bad)
+        log(f"gait {i + 1}: moving {len(rows)} mismatched {len(bad)} {bad[:4]} sample {rows[:3]}")
+    log("gait mismatches total:", bad_total)
+
+
 def exp_bodies(host, cli):
     """Where does a knocked-out body lie on each side, over time, for each body mode?"""
     time.sleep(6)
@@ -742,6 +763,9 @@ def main():
     t.add_argument("--save", default="kctest_base")
     e = sub.add_parser("bodies")
     e.add_argument("--save", default="kctest_base")
+    ga = sub.add_parser("gait")
+    ga.add_argument("--save", default="kctest_base")
+    ga.add_argument("--keep", action="store_true")
     fl = sub.add_parser("fxlive")
     fl.add_argument("--save", default="kctest_base")
     fl.add_argument("--keep", action="store_true")
@@ -764,7 +788,9 @@ def main():
         log("ready: host", host, "client", cli)
         return
     try:
-        if a.what == "fxlive":
+        if a.what == "gait":
+            exp_gait(host, cli)
+        elif a.what == "fxlive":
             exp_fxlive(host, cli, a.minutes)
         elif a.what == "fx":
             exp_fx(host, cli)

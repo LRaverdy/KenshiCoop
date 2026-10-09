@@ -1449,6 +1449,28 @@ bool Teleport(Character* c, const kc::Vec3& pos, const kc::Quat& rot) {
     return fn && CallTeleport(fn, m, p, q);
 }
 
+namespace {
+constexpr uintptr_t CM_speedOrders = 0x20, CM_desiredSpeed = 0xBC;   // CharMovement: MoveSpeed, float
+constexpr int32_t kMoveSpeedCount = 4;
+} // namespace
+
+bool ReadPace(const Character* c, uint8_t& gait, float& pace) {
+    void* m = Movement(c);
+    int32_t order = 0;
+    if (!m || !Rd(m, CM_speedOrders, order) || !Rd(m, CM_desiredSpeed, pace) || !std::isfinite(pace)) return false;
+    gait = uint8_t(order >= 0 && order < kMoveSpeedCount ? order : 0);
+    return true;
+}
+
+bool WritePace(Character* c, uint8_t gait, float pace) {
+    void* m = Movement(c);
+    if (!m || gait >= kMoveSpeedCount || !std::isfinite(pace) || pace < 0) return false;
+    float cur = 0;
+    int32_t order = 0;
+    if (Rd(m, CM_desiredSpeed, cur) && Rd(m, CM_speedOrders, order) && cur == pace && order == gait) return true;
+    return Wr(m, CM_speedOrders, int32_t(gait)) && Wr(m, CM_desiredSpeed, pace);
+}
+
 bool SetDestination(Character* c, const kc::Vec3& dest) {
     void* m = Movement(c);
     if (!m || !Finite(dest)) return false;
