@@ -783,6 +783,74 @@ def exp_progress(host, cli):
         log("pos", i, "host", cmd(host, f"pos {i}")[1], "client", cmd(cli, f"pos {i}")[1])
 
 
+def exp_ranged(host, cli, shooter_key=None):
+    """Lot C, ranged combat: a crossbowman of the host's world fires at the squad; each shot is fired
+    again on the client (same weapon, same path); its aim follows; a turret near the squad turns the
+    same way on both sides; health and inventories stay identical."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(2)
+    def counters(pid):
+        t = cmd(pid, "shots")[1]
+        return dict(kv.split("=") for kv in t.split()[1:]) if t.startswith("ok") else {}
+    listing = cmd(host, "rangedlist 3000")[1]
+    log("characters with a ranged weapon (host):", listing[:400])
+    shooters = [e.split("|") for e in listing.split()[1:]]
+    key = shooter_key
+    if not key and shooters:
+        # an NPC first (squad members are listed by index elsewhere), the nearest
+        shooters.sort(key=lambda e: int(e[3]))
+        key = shooters[0][1]
+    check("tir : un tireur avec arme a distance pres de l'escouade", bool(key), listing[:120])
+    if key:
+        before_h, before_c = counters(host), counters(cli)
+        fired = []
+        for _ in range(3):
+            fired.append(cmd(host, f"shoot {key} 0"))
+            time.sleep(1.5)
+        time.sleep(2)
+        after_h, after_c = counters(host), counters(cli)
+        log("host shots:", before_h, "->", after_h)
+        log("client shots:", before_c, "->", after_c)
+        sent = int(after_h.get("sent", 0)) - int(before_h.get("sent", 0))
+        replayed = int(after_c.get("replayed", 0)) - int(before_c.get("replayed", 0))
+        oriented = int(after_c.get("oriented", 0)) - int(before_c.get("oriented", 0))
+        check("tir : l'hote tire (3 tirs envoyes)", all(f[0] for f in fired) and sent >= 3, f"{fired[0][1]} | sent {sent}")
+        check("tir : le client voit les memes tirs", replayed >= 3, f"replayed {replayed}, failed {int(after_c.get('failed', 0)) - int(before_c.get('failed', 0))}")
+        check("tir : les projectiles du client suivent la trajectoire de l'hote", oriented >= 3, f"oriented {oriented}")
+        aim_h, aim_c = cmd(host, f"rangedaim {key}")[1], cmd(cli, f"rangedaim {key}")[1]
+        log("aim host:", aim_h, "/ client:", aim_c)
+        if "combat=1" in aim_h:
+            def aim(t):
+                return tuple(map(float, t.split("aim=")[1].split()[0].split(",")))
+            time.sleep(1)
+            aim_h, aim_c = cmd(host, f"rangedaim {key}")[1], cmd(cli, f"rangedaim {key}")[1]
+            check("visee : le client vise le meme point que l'hote", "combat" in aim_c and dist(aim(aim_h), aim(aim_c)) < 5, f"{aim_h} / {aim_c}")
+    turrets_h = cmd(host, "turrets 3000")[1]
+    log("turrets (host):", turrets_h[:300])
+    if turrets_h.startswith("ok") and len(turrets_h.split()) > 1:
+        first = turrets_h.split()[1]
+        tx, tz = map(float, first.split("@")[1].split(">")[0].split(","))
+        target = (tx + 120.0, 40.0, tz + 60.0)
+        log("host turns turret 0:", cmd(host, f"turretaim 0 {target[0]} {target[1]} {target[2]}"))
+        time.sleep(2)
+        turrets_c = cmd(cli, "turrets 3000")[1]
+        def first_aim(t):
+            return tuple(map(float, t.split()[1].split(">")[1].replace("(nogun)", "").split(",")))
+        turrets_h = cmd(host, "turrets 3000")[1]
+        ok = turrets_c.startswith("ok") and len(turrets_c.split()) > 1
+        check("tourelle : le client la tourne vers le meme point", ok and dist(first_aim(turrets_h), first_aim(turrets_c)) < 2, turrets_c[:160])
+    else:
+        log("no turret near the squad in this save: the turret point is not checked")
+    cmd(host, "pause 1")
+    time.sleep(3)
+    rep = compare(dump(host, "h_ranged_end"), dump(cli, "c_ranged_end"), "ranged", pos_tol=0.1)
+    cmd(host, "pause 0")
+    check("tir : aucun etat vital different ensuite", rep["vital_flag_mismatch"] == 0, rep["vital_flag_mismatch"])
+    check("tir : aucun inventaire different ensuite", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    summary()
+
+
 def exp_talk(host, cli):
     """An NPC talks to the client's own character: the conversation runs in the host's world, its window opens on the client."""
     time.sleep(6)
@@ -1821,6 +1889,10 @@ def main():
     tk = sub.add_parser("talk")
     tk.add_argument("--save", default="kctest_base")
     tk.add_argument("--keep", action="store_true")
+    rg = sub.add_parser("ranged", help="lot C: a crossbowman shoots at the squad, turrets turn: same on the client")
+    rg.add_argument("--save", default="kctest_base")
+    rg.add_argument("--keep", action="store_true")
+    rg.add_argument("--shooter", default=None, help="handle key of the shooter (default: the nearest with a ranged weapon)")
     ji = sub.add_parser("jitter")
     ji.add_argument("--save", default="kctest_town")
     ji.add_argument("--keep", action="store_true")
@@ -1903,6 +1975,8 @@ def main():
     try:
         if a.what == "jitter":
             exp_jitter(host, cli)
+        elif a.what == "ranged":
+            exp_ranged(host, cli, a.shooter)
         elif a.what == "suite":
             exp_suite(host, cli)
         elif a.what == "squads":

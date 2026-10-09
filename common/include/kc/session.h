@@ -214,6 +214,30 @@ public:
     // keep a caged character where the cage holds it.
     virtual bool ReadCaptive(const Handle& h, CaptiveState& out) { (void)h; (void)out; return false; }
     virtual void ApplyCaptive(const Handle& h, const CaptiveState& s) { (void)h; (void)s; }
+    // ---- lot C: ranged combat. Host: the shots its game fired since the last call (fired on any
+    // thread; the world queues them); where a character in ranged combat aims (false: not in it);
+    // turrets near these points and where they aim. Client: fire the host's shot here (visual only:
+    // the projectile's damage is refused like every other), impose a character's aim (ranged = false:
+    // it left ranged combat), turn a turret.
+    struct WorldShot {
+        Handle shooter, target;      // target: invalid when none
+        uint8_t stat = 0;
+        Vec3 aimPos;
+        Quat dir;
+        std::string turretSid;       // a turret's shot (empty: the shooter's own weapon)
+        Vec3 turretPos;
+    };
+    virtual void TakeShots(std::vector<WorldShot>& out) { out.clear(); }
+    virtual bool ReplayShot(const WorldShot& s) { (void)s; return false; }
+    struct WorldAim {
+        uint8_t state = 0;
+        Vec3 aimPos;
+        Handle target;
+    };
+    virtual bool ReadRangedAim(const Handle& h, WorldAim& out) { (void)h; (void)out; return false; }
+    virtual void ApplyRangedAim(const Handle& h, bool ranged, const WorldAim& a) { (void)h; (void)ranged; (void)a; }
+    virtual void ReadTurrets(const std::vector<Vec3>& centers, float radius, std::vector<TurretAim>& out) { (void)centers; (void)radius; out.clear(); }
+    virtual void ApplyTurret(const TurretAim& t) { (void)t; }
 
     // Inventories. Host: read; execute a client's item movement (false = refused/impossible).
     virtual bool ReadInventory(const Handle& h, std::vector<ItemState>& out) = 0;
@@ -361,6 +385,11 @@ public:
     size_t doorsApplied() const { return doorsApplied_; }
     // ---- lot D: prisons (tests): captive characters this side knows of (host: sent; client: received)
     size_t captiveCount() const;
+    // ---- lot C: ranged combat (tests, overlay): shots the host sent, the client fired / could not fire.
+    struct RangedStats {
+        uint64_t shotsSent = 0, shotsReplayed = 0, shotsFailed = 0, aimsApplied = 0, turretsApplied = 0;
+    };
+    const RangedStats& rangedStats() const { return rangedStats_; }
 
 private:
     struct Sample { double t; EntityState s; };
@@ -575,6 +604,21 @@ private:
     void HostCaptives(double now);
     void ClientCaptives(double now);
     void OnCaptives(Reader& r);
+    // ---- lot C: ranged combat (session_ranged.cpp). Host: shots go out as they are fired, aims a few
+    // times a second when they change. Client: fired / imposed on the next live tick.
+    void HostRanged(double now);
+    void ClientRanged(double now);
+    void ClientRangedPacket(Msg type, Reader& r);
+    void ResetRanged();
+    std::vector<IWorld::WorldShot> scratchShots_;
+    std::unordered_map<uint32_t, RangedAim> rangedSent_;    // host: aim last sent per character
+    std::map<std::string, TurretAim> turretSent_;           // host: aim last sent per turret ("sid@x,z")
+    double nextRangedAim_ = 0, rangedRefreshAt_ = 0;
+    std::vector<ShotEvent> pendingShots_;                   // client: to fire on the next live tick
+    std::unordered_map<uint32_t, RangedAim> clientAims_;    // client: the host's aim per character, imposed every tick
+    std::vector<uint32_t> pendingStopped_;                  // client: left ranged combat
+    std::map<std::string, TurretAim> pendingTurrets_;       // client: to turn
+    RangedStats rangedStats_;
     std::vector<std::pair<uint8_t, AppearanceMsg>> pendingLooks_;   // host: from players, applied on the next live tick
     uint32_t editRequest_ = 0;             // client: the host asked us to make our new character
     bool editingSent_ = false;             // client: what we last told the host about our editor

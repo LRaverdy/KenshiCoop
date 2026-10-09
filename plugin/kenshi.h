@@ -181,6 +181,9 @@ enum Fn : int {
     FnSetPrisonMode,            // void Character::setPrisonMode(bool on, UseableStuff* cage)   (in / out of a cage or prison)
     FnSetChainedMode,           // void Character::setChainedMode(bool on, const hand& owner)   (shackles on / off; may create the shackles)
     FnSetSlaveState,            // void StateBroadcastData::setSlaveState(SlaveStateEnum)   (enslaved, escaping, ex-slave)
+    // ---- lot C: ranged
+    FnGunShoot,                 // void GunClass::shoot(Character* me, RootObject* target, StatsEnumerated stat, const Vector3& aimpos)   (fires one projectile)
+    FnProjectileGet,            // Projectile* <projectile pool>::get(const std::string& mesh, const std::string& material)   (shoot's projectile)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -605,5 +608,33 @@ bool CallSetSlaveState(Character* c, int state);         // StateBroadcastData::
 std::string FactionSidOf(void* faction);                 // a faction's game data id ("" none)
 void* FactionBySid(const std::string& sid);
 void* NearestCage(const kc::Vec3& at, float radius);     // furniture with function BF_CAGE (8) around a point
+// ---- lot C: ranged combat (plugin/ranged.cpp)
+namespace rva {
+inline constexpr uintptr_t VtTurretBuilding = 0x16d3f78;
+inline constexpr uintptr_t VtGunClassTurret = 0x16d5258;
+inline constexpr uintptr_t VtGunClassPersonal = 0x16d5138;
+} // namespace rva
+// A character's ranged combat (Character+0x2F0 RangedCombatClass): its weapon (null: none set up),
+// whether it is in ranged combat, its state, the point it aims at and its target.
+void* CharacterGun(Character* c);
+struct RangedView {
+    bool combat = false;
+    uint8_t state = 0;
+    kc::Vec3 aimPos;
+    kc::Handle target;
+};
+bool ReadRanged(Character* c, RangedView& out);
+bool WriteRanged(Character* c, const RangedView& v, bool writeTarget);   // clients: the host's aim
+// Turrets: what a gun belongs to (null: a personal weapon), a turret's gun, its aim point.
+bool IsTurret(const void* building);
+void* GunTurret(void* gun);
+void* TurretGun(void* turret);
+bool TurretAimPoint(void* turret, kc::Vec3& out);
+bool AimTurret(void* turret, const kc::Vec3& target);   // through its gun (GunClassTurret::aimAt)
+// A projectile's orientation (its flight path), through Ogre's Node.
+bool ProjectileOrientation(void* projectile, kc::Quat& out);
+bool SetProjectileOrientation(void* projectile, const kc::Quat& q);
+// Fires the gun as the game does (GunClass::shoot through its hook); the projectile it made, if any.
+bool FireGun(void* gun, Character* me, Character* target, int stat, const kc::Vec3& aimPos, void*& projectile);
 
 } // namespace kenshi

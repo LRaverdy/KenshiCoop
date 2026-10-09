@@ -86,6 +86,7 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `tpdown` | TP admin du perso du client mis K.-O. |
 | `talk` | un PNJ parle au personnage du client : la conversation tourne chez l'hôte, la fenêtre s'ouvre chez le client |
 | `factions` | lot B : mêmes relations au départ ; relation changée par l'hôte identique chez le client ; prime donnée puis levée par l'hôte visible chez le client ; une relation changée par le jeu du client revient à celle de l'hôte |
+| `ranged` (`--shooter <clé>`) | (lot C) 3 tirs d'un arbalétrier de l'hôte sur l'escouade sont refaits chez le client, sur la même trajectoire ; même point visé ; une tourelle proche tournée chez l'hôte tourne pareil chez le client ; santé et inventaires identiques ensuite |
 | `progress` | compétences, argent, bulles et ordres : l'hôte décide, le client suit |
 | `ground` / `clientpickup` | objets posés et ramassés ; ramassage demandé par un client |
 | `anim` / `animframe` / `gait` | animations de combat et d'action ; tout ce qui est à l'écran ; allure |
@@ -291,6 +292,17 @@ l'escouade triée par handle.
 | `doorbutton <qui> <quoi> open\|lock` | clic sur le bouton du panneau de la porte (chez un client : part à l'hôte) |
 | `doororder <qui> <tâche> <quoi>` | ordre comme un clic droit : 72 ouvrir, 73 fermer, 76 crocheter, 77 verrouiller, 78 déverrouiller, 81 défoncer |
 | `doorsknown` | portes envoyées (hôte) ou connues ici (client), et nombre d'applications réussies |
+
+**Combat à distance (lot C)**
+
+| Commande | Rôle |
+|---|---|
+| `rangedlist [rayon]` | personnages ayant une arme à distance prête près du membre 0 : `nom\|clé\|combat\|distance` |
+| `shoot <tireur> <cible>` | (hôte) le tireur (index d'escouade ou clé de handle) tire une fois sur la cible ; réponse : projectile créé et son orientation |
+| `shots` | compteurs : tirs envoyés (hôte), refaits / échoués (client), visées et tourelles imposées, `nogun` / `noturret` / `oriented` |
+| `turrets [rayon]` | tourelles près du membre 0, triées par endroit : `type@x,z>point visé` |
+| `turretaim <index> <x> <y> <z>` | (hôte) la tourelle n° index tourne vers ce point |
+| `rangedaim <personnage>` | état du combat à distance d'un personnage ici : mode, état, point visé, cible, arme |
 
 **Météo**
 

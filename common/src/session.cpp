@@ -165,6 +165,7 @@ void Session::Leave() {
     captiveSent_.clear(); captives_.clear(); captivesDirty_.clear();   // lot D: prisons
     haveMoneyBase_ = false;
     unsentSpend_ = 0;
+    ResetRanged();   // lot C
     dialogReplies_.clear();
     holdForEditor_ = false;
     pendingAnswers_.clear();
@@ -231,6 +232,7 @@ void Session::HostTick(double now, bool live) {
     HostTrades(now);
     HostDoors(now);   // lot A
     HostCaptives(now);   // lot D: prisons
+    HostRanged(now);   // lot C
     // A player's new looks: applied here, then shown to everyone else.
     for (auto& [from, m] : pendingLooks_) {
         auto it = entities_.find(m.netId);
@@ -2022,6 +2024,7 @@ void Session::ClientTick(double now, bool live) {
     ClientFactionsTick(now);   // lot B
     ClientDoors(now);   // lot A
     ClientCaptives(now);   // lot D: prisons
+    ClientRanged(now);   // lot C
     // Squads: split our characters as the host does (again now and then: stand-ins, late arrivals).
     if (haveSquads_ && now - squadsAt_ > 2.0) {
         squadsAt_ = now;
@@ -2417,6 +2420,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
         break;
     }
     case Msg::Doors: ClientDoorsPacket(r); break;   // lot A
+    case Msg::Shots: case Msg::Ranged: ClientRangedPacket(type, r); break;   // lot C
     case Msg::Pong: break;
     default: break;
     }

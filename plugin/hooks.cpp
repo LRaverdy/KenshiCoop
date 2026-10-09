@@ -11,6 +11,7 @@
 #include <mutex>
 #include <vector>
 
+#include "ranged.h"
 #include "util.h"
 #include "world.h"
 
@@ -962,6 +963,7 @@ std::string AnimHookStats() {
 }
 
 bool InHostCall() { return g_hostCall > 0; }
+
 HostCallScope::HostCallScope() { ++g_hostCall; }
 HostCallScope::~HostCallScope() { --g_hostCall; }
 AnimReplayScope::AnimReplayScope() { ++g_animReplay; ++g_hostCall; }
@@ -1161,6 +1163,9 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnDoorOpenButton, reinterpret_cast<void*>(&doorhooks::hk_openButton), reinterpret_cast<void**>(&doorhooks::o_openButton)},
         {kenshi::FnDoorLockButton, reinterpret_cast<void*>(&doorhooks::hk_lockButton), reinterpret_cast<void**>(&doorhooks::o_lockButton)},
         // ---- end lot A
+        // ---- lot C: ranged
+        {kenshi::FnGunShoot, reinterpret_cast<void*>(&ranged::hk_gunShoot), reinterpret_cast<void**>(&ranged::o_gunShoot)},
+        {kenshi::FnProjectileGet, reinterpret_cast<void*>(&ranged::hk_projectileGet), reinterpret_cast<void**>(&ranged::o_projectileGet)},
     };
     const MH_STATUS init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {

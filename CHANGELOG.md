@@ -31,6 +31,12 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
   le personnage en cage reste dans la cage chez le client ; le jeu du client ne peut plus changer
   ces états de lui-même. Commandes de test `cage`, `chain`, `enslave`, `captive`, expérience
   `prison`.
+- **Lot C, combat à distance** (implémenté, à vérifier en jeu) : chaque tir d'arbalète, d'arc, de
+  harpon ou de tourelle de l'hôte est refait chez les clients avec la même arme et **sur la même
+  trajectoire** (les dégâts restent ceux de l'hôte). Le point visé des tireurs et l'orientation des
+  tourelles suivent. Le jeu du client ne tire plus de lui-même. Nouveaux messages `Shots` et
+  `Ranged`, expérience `ranged`, commandes `rangedlist`, `shoot`, `shots`, `turrets`, `turretaim` et
+  `rangedaim`.
 
 ## 9 octobre 2026 (soir)
 

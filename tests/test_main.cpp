@@ -431,6 +431,29 @@ struct FakeWorld : IWorld {
     void SetRole(bool c, bool a) override { client = c; active = a; }
     void SetControllable(const std::vector<Handle>& h) override { controllable = h; }
 
+    // ---- lot C: ranged combat
+    std::vector<WorldShot> shotsOut;                   // host: what its game fired
+    std::vector<WorldShot> shotsFired;                 // client: the host's shots fired here
+    std::map<uint32_t, WorldAim> aims;                 // host: characters in ranged combat (by serial)
+    std::map<uint32_t, std::pair<bool, WorldAim>> aimsApplied;   // client: last imposed (ranged?, aim)
+    std::vector<TurretAim> turrets;                    // host: turrets near the players
+    std::vector<TurretAim> turretsApplied;             // client
+    void TakeShots(std::vector<WorldShot>& out) override { out.swap(shotsOut); shotsOut.clear(); }
+    bool ReplayShot(const WorldShot& s) override {
+        if (!chars.count(s.shooter.serial)) return false;
+        shotsFired.push_back(s);
+        return true;
+    }
+    bool ReadRangedAim(const Handle& h, WorldAim& out) override {
+        auto it = aims.find(h.serial);
+        if (it == aims.end()) return false;
+        out = it->second;
+        return true;
+    }
+    void ApplyRangedAim(const Handle& h, bool ranged, const WorldAim& a) override { aimsApplied[h.serial] = {ranged, a}; }
+    void ReadTurrets(const std::vector<Vec3>& centers, float, std::vector<TurretAim>& out) override { out = centers.empty() ? std::vector<TurretAim>{} : turrets; }
+    void ApplyTurret(const TurretAim& t) override { turretsApplied.push_back(t); }
+
     void Simulate(float dt) {
         if (importCountdown > 0 && --importCountdown == 0) {
             Deserialize(pendingImport);
@@ -726,6 +749,36 @@ static void TestWire() {
         Reader cr2(cw2.data(), cw2.size()); PeekType(cr2);
         CaptivesMsg cm3; CHECK(!Decode(cr2, cm3));
     }
+    {   // lot C: shots (full-precision path, turret identity) and aims
+        ShotsMsg sm;
+        ShotEvent a; a.shooterNetId = 4; a.targetNetId = 9; a.stat = 17; a.aimPos = {1, 2, 3}; a.dir = {0.70710678f, 0, 0.70710678f, 0};
+        ShotEvent t; t.shooterNetId = 5; t.turretSid = "1234-turret.mod"; t.turretPos = {-500.5f, 10, 77}; t.dir = {1, 0, 0, 0};
+        sm.shots = {a, t};
+        Writer sw; Encode(sw, sm);
+        Reader sr(sw.data(), sw.size()); CHECK(PeekType(sr) == Msg::Shots);
+        ShotsMsg sm2; CHECK(Decode(sr, sm2));
+        CHECK(sm2.shots.size() == 2 && sm2.shots[0].shooterNetId == 4 && sm2.shots[0].targetNetId == 9 && sm2.shots[0].stat == 17 &&
+              sm2.shots[0].dir.w == a.dir.w && sm2.shots[0].dir.y == a.dir.y && sm2.shots[0].aimPos.z == 3 && sm2.shots[0].turretSid.empty());
+        CHECK(sm2.shots[1].turretSid == "1234-turret.mod" && sm2.shots[1].turretPos.x == -500.5f && sm2.shots[1].dir.w == 1);
+        ShotsMsg bad; ShotEvent z; z.shooterNetId = 1; z.dir = {0, 0, 0, 0}; bad.shots = {z};   // not an orientation
+        Writer bw; Encode(bw, bad);
+        Reader br(bw.data(), bw.size()); PeekType(br);
+        ShotsMsg bad2; CHECK(!Decode(br, bad2));
+        RangedMsg rm;
+        RangedAim ra; ra.netId = 7; ra.state = 2; ra.aimPos = {5, 6, 7}; ra.targetNetId = 8;
+        rm.aims = {ra};
+        rm.turrets = {TurretAim{"t-1", {1, 1, 1}, {9, 9, 9}}};
+        rm.stopped = {3, 11};
+        Writer rw; Encode(rw, rm);
+        Reader rr(rw.data(), rw.size()); CHECK(PeekType(rr) == Msg::Ranged);
+        RangedMsg rm2; CHECK(Decode(rr, rm2));
+        CHECK(rm2.aims.size() == 1 && rm2.aims[0].netId == 7 && rm2.aims[0].state == 2 && rm2.aims[0].aimPos.y == 6 && rm2.aims[0].targetNetId == 8);
+        CHECK(rm2.turrets.size() == 1 && rm2.turrets[0].sid == "t-1" && rm2.turrets[0].target.z == 9 && rm2.stopped == std::vector<uint32_t>({3, 11}));
+        rm.aims[0].state = 9;   // no such ranged state
+        Writer rw2; Encode(rw2, rm);
+        Reader rr2(rw2.data(), rw2.size()); PeekType(rr2);
+        RangedMsg rm3; CHECK(!Decode(rr2, rm3));
+    }
     {   // hunger travels with the vitals
         VitalsMsg vm; vm.entities.resize(1); vm.entities[0].netId = 2; vm.entities[0].hunger = 250.5f;
         auto pk = EncodeVitals(vm)[0];
@@ -791,6 +844,8 @@ static void TestFuzz() {
     { DialogMsg dm; DialogEvent e; e.netId = 1; e.text = "hi"; e.replies = {"a", "b"}; dm.events = {e}; add([&](Writer& w) { Encode(w, dm); }); }
     { ProgressMsg pm; pm.hasMoney = true; CharProgress cp; cp.netId = 1; cp.stats.assign(kStatCount, 1.0f); pm.chars = {cp}; add([&](Writer& w) { Encode(w, pm); }); }
     { VitalsMsg v; v.entities.resize(2); for (auto& e : v.entities) { e.netId = 4; e.parts.resize(3); } seeds.push_back(EncodeVitals(v)[0]); }
+    add([](Writer& w) { ShotsMsg m; ShotEvent e; e.shooterNetId = 2; e.turretSid = "t"; m.shots = {e, e}; Encode(w, m); });   // lot C
+    add([](Writer& w) { RangedMsg m; m.aims.resize(2); m.aims[0].netId = 1; m.aims[1].netId = 2; m.turrets = {TurretAim{"t", {}, {}}}; m.stopped = {4}; Encode(w, m); });
     add([](Writer& w) { ContainerOpen m; m.looterNetId = 2; m.sid = "chest"; Encode(w, m); });
     add([](Writer& w) {
         CaptivesMsg m; CaptiveState c; c.netId = 3; c.caged = true; c.cageSid = "cage"; c.chained = true; c.slaveOf = "f"; c.sentence = 2;
@@ -851,6 +906,8 @@ static void TestFuzz() {
         case Msg::ContainerOpened: { ContainerOpened m; Decode(r, m); break; }
         case Msg::ContainerClose: { ContainerClose m; Decode(r, m); break; }
         case Msg::TradeOpen: { TradeOpen m; Decode(r, m); break; }
+        case Msg::Shots: { ShotsMsg m; Decode(r, m); break; }      // lot C
+        case Msg::Ranged: { RangedMsg m; Decode(r, m); break; }
         case Msg::Captives: { CaptivesMsg m; Decode(r, m); break; }
         case Msg::Factions: { FactionsMsg m; Decode(r, m); break; }
         case Msg::Bounties: { BountiesMsg m; Decode(r, m); break; }
@@ -1566,6 +1623,53 @@ static void TestCaptives() {
     CHECK(cw.captiveApplies == applies);
 }
 
+static void TestRanged() {   // lot C
+    std::printf("session: ranged combat: the host's shots are fired again on clients, aims and turrets follow\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    FakeChar archer; archer.squad = false; archer.pos = {150, 0, 0}; archer.dest = archer.pos;
+    hw.chars[30] = archer;
+    AtMenu(cw);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 4));
+    Run({{&host, &hw}, {&cli, &cw}}, 1.0);
+    // the archer shoots at squad member 1; someone far away (not followed) shoots too
+    IWorld::WorldShot s;
+    s.shooter = FakeWorld::H(30); s.target = FakeWorld::H(1); s.stat = 17; s.aimPos = {100, 15, 0}; s.dir = {0.5f, 0.5f, 0.5f, 0.5f};
+    IWorld::WorldShot far = s; far.shooter = FakeWorld::H(999);
+    IWorld::WorldShot turret = s; turret.target = Handle{}; turret.turretSid = "turret-sid"; turret.turretPos = {140, 5, 3};
+    hw.shotsOut = {s, far, turret};
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return cw.shotsFired.size() >= 2; });
+    CHECK(cw.shotsFired.size() == 2 && host.rangedStats().shotsSent == 2);
+    if (cw.shotsFired.size() == 2) {
+        const auto& a = cw.shotsFired[0];
+        CHECK(a.shooter.serial == 30 && a.target.serial == 1 && a.stat == 17 && a.aimPos.x == 100 && a.dir.y == 0.5f && a.turretSid.empty());
+        const auto& b = cw.shotsFired[1];
+        CHECK(b.turretSid == "turret-sid" && b.turretPos.x == 140 && !b.target.valid());
+    }
+    CHECK(cli.rangedStats().shotsReplayed == 2);
+    // the archer aims at member 2: the client imposes it, every tick
+    IWorld::WorldAim aim; aim.state = 0; aim.aimPos = {200, 15, 0}; aim.target = FakeWorld::H(2);
+    hw.aims[30] = aim;
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return cw.aimsApplied.count(30) != 0; });
+    CHECK(cw.aimsApplied.count(30) && cw.aimsApplied[30].first && cw.aimsApplied[30].second.aimPos.x == 200 && cw.aimsApplied[30].second.target.serial == 2);
+    // it stops: the client is told
+    hw.aims.clear();
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return cw.aimsApplied.count(30) && !cw.aimsApplied[30].first; });
+    CHECK(cw.aimsApplied.count(30) && !cw.aimsApplied[30].first);
+    // a turret near the players turns: the client turns it; unchanged, it is not sent again at once
+    hw.turrets = {TurretAim{"turret-sid", {140, 5, 3}, {300, 10, 40}}};
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return !cw.turretsApplied.empty(); });
+    CHECK(!cw.turretsApplied.empty() && cw.turretsApplied.back().sid == "turret-sid" && cw.turretsApplied.back().target.z == 40);
+    const size_t n = cw.turretsApplied.size();
+    Run({{&host, &hw}, {&cli, &cw}}, 0.6);
+    CHECK(cw.turretsApplied.size() <= n + 1);   // at most the 2 s refresh, not one every 0.2 s
+}
+
 static void TestManyPlayers() {
     std::printf("session: 1 host + 4 clients joining at once, 120 characters\n");
     FakeWorld hw;
@@ -1627,6 +1731,7 @@ int main() {
     TestSpawnReplication();
     TestInventories();
     TestTrade();
+    TestRanged();   // lot C
     TestCaptives();
     TestFactions();
     TestDoors();   // lot A

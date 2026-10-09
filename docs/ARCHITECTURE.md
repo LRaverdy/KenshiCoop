@@ -296,6 +296,8 @@ format, et une version différente est refusée à la connexion.
 | 40 | Doors | H→C | portes et serrures près des joueurs : ouverte/fermée, verrouillée, niveau de serrure, cassée (lot A) |
 | 41 | DoorRequest | C→H | le joueur a cliqué un bouton du panneau d'une porte (ouvrir, verrouiller) (lot A) |
 | 49 | Captives | H→C | lot D : personnages en cage, enchaînés, esclaves, évadés, enlevés, en peine de prison (et ceux libérés, une fois) |
+| 46 | Shots | H→C | (lot C) projectiles tirés par les personnages et tourelles de l'hôte : tireur, cible, point visé, orientation de départ, tourelle |
+| 47 | Ranged | H→C | (lot C) point visé des personnages en combat à distance, tourelles proches des joueurs, fins de combat à distance |
 
 ## Les flux, système par système
 
@@ -440,6 +442,23 @@ format, et une version différente est refusée à la connexion.
    cage ; `ApplyVitals` le met inconscient sans le faire tomber.
 5. Les évasions, crochetages et libérations sont des ordres : chemin habituel (`RouteOrder` →
    hôte).
+### Combat à distance (`session_ranged.cpp`, `plugin/ranged.cpp`, lot C)
+1. Chez l'hôte, le hook de `GunClass::shoot` note chaque tir après coup (sur le fil qui tire) :
+   - le tireur et sa cible ;
+   - le point visé ;
+   - l'orientation du projectile, attrapé par le hook de la réserve de projectiles ;
+   - la tourelle, par type et endroit.
+2. `HostRanged` envoie les tirs dont le tireur est une entité suivie (`Shots`, fiable). Toutes les
+   0,2 s, il envoie aussi ce qui a changé (tout, toutes les 2 s) :
+   - le point visé des personnages en combat à distance ;
+   - les fins de combat à distance ;
+   - les tourelles à moins de 400 unités d'un joueur.
+3. Chez le client, `ClientRanged` traite les tirs à l'image suivante. `ReplayShot` prend l'arme du
+   personnage, ou celle de la tourelle locale retrouvée par type et endroit, et appelle `shoot`
+   dans une `HostCallScope`. Il remet ensuite le nouveau projectile sur l'orientation de l'hôte.
+4. Les points visés sont réimposés à chaque image, et les tourelles tournées avec `aimAt`.
+5. Le hook de `shoot` refuse chez les clients tout tir qui ne vient pas de KenshiCoop. Les
+   dégâts des projectiles du client sont refusés comme tous les autres (`applyDamage`).
 
 ### Objets au sol (`Ground`, `PickUp`)
 - L'hôte rapporte chaque objet posé (type, endroit) et ramassé.
