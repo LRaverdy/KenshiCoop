@@ -139,6 +139,7 @@ enum Fn : int {
     FnSetRelation,              // void FactionRelations::setRelation(Faction*, float)
     FnSetCrime,                 // bool BountyManager::setCrime(CrimeEnum, Faction*, const hand&)
     FnAssignBounty,             // void BountyManager::assignBountyForCrimes(Faction*)
+    FnFocusCamera,              // void PlayerInterface::focusCameraSelectedCharacter()
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -297,6 +298,7 @@ bool WritePlayerMoney(int32_t money);
 bool IsStatOfCharacter(const void* statField);
 bool GainExperience(Character* c, size_t statIndex, float amount);   // tests: increaseStat on that stat
 bool CallSay(Character* c, const std::string& text);
+bool FocusCamera(Character* c);   // tests: the camera goes to that character
 bool CallStartPlayerConversation(Character* npc, Character* pc);   // tests: npc talks to pc (its default conversation)                // tests: Dialogue::say through the hooks   // the float lies inside a live character's CharStats
 // Conversations (Dialogue, Character+0x280).
 void* CharacterDialogue(Character* c);

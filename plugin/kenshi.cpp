@@ -102,6 +102,7 @@ const FunctionSig kFunctions[FnCount] = {
     {"FactionRelations::setRelation", 0x6B4D80, {0x48, 0x89, 0x54, 0x24, 0x10, 0x48, 0x83, 0xEC, 0x38, 0x48, 0x8D, 0x54}},
     {"BountyManager::setCrime", 0x852C80, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
     {"BountyManager::assignBountyForCrimes", 0x853EC0, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xF9, 0xE8, 0x4B, 0xA9}},
+    {"PlayerInterface::focusCameraSelectedCharacter", 0x7F37F0, {0x48, 0x89, 0x5C, 0x24, 0x20, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B}},
 };
 
 namespace {
@@ -674,6 +675,13 @@ bool CallStartPlayerConversation(Character* npc, Character* pc) {
     void* d = CharacterDialogue(npc);
     bool result = false;
     return d && IsCharacter(pc) && StartConvSeh(FnAddr(FnDialogueSendEvent), d, pc, result) && result;
+}
+
+bool FocusCamera(Character* c) {
+    PlayerInterface* pi = Player();
+    if (!pi || !IsCharacter(c)) return false;
+    WithSelection(c, [&] { reinterpret_cast<void (*)(void*)>(FnAddr(FnFocusCamera))(pi); });
+    return true;
 }
 
 bool IsStatOfCharacter(const void* statField) {
@@ -1386,7 +1394,9 @@ bool CallSectionValidPos(void* sec, void* item, int& x, int& y) {
     __try { return reinterpret_cast<FnValidPos>(FnAddr(FnSectionValidPosition))(sec, item, &x, &y); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 
-bool PlaceItem(void* inv, void* item, const std::string& section, int x, int y, int qty) {
+// gameAddFallback: when the section has no free cell, let the game's Inventory::addItem find a place.
+// Never for an item that must survive a failure: addItem may destroy what it cannot store.
+bool PlaceItem(void* inv, void* item, const std::string& section, int x, int y, int qty, bool gameAddFallback = true) {
     if (void* sec = FindSection(inv, section)) {
         int w = 0, h = 0, iw = 1, ih = 1;
         uint8_t enabled = 1;
@@ -1407,7 +1417,7 @@ bool PlaceItem(void* inv, void* item, const std::string& section, int x, int y, 
             for (int px = 0; px + iw <= w && px < 64; ++px)
                 if (CallSectionCanGo(sec, item, px, py) && tryAt(px, py)) return true;
     }
-    return CallAddItem(VSlot(inv, INVV_addItem), inv, item, qty);
+    return gameAddFallback && CallAddItem(VSlot(inv, INVV_addItem), inv, item, qty);
 }
 
 constexpr int kItemTypeWeapon = 2;   // itemType::WEAPON
@@ -1511,8 +1521,11 @@ bool MoveInventoryItem(Character* from, Character* to, const kc::InvOp& op, std:
     const int qty = std::min(op.item.quantity, bestQty);
     void* moving = CallRemoveReturns(VSlot(src, INVV_removeDontDestroy), src, best, qty);
     if (!moving) { if (err) *err = "cannot take the item"; return false; }
-    if (PlaceItem(dst, moving, op.toSection, op.toX, op.toY, qty)) return true;
-    PlaceItem(src, moving, op.item.section, op.item.x, op.item.y, qty);   // never lose it: put it back
+    // Only cells we checked are free: the game's addItem could destroy the item when it finds no
+    // room, and putting a destroyed item back would leave a dangling pointer in the inventory.
+    if (PlaceItem(dst, moving, op.toSection, op.toX, op.toY, qty, false)) return true;
+    // never lose it: back where it was (that cell was just freed)
+    if (!PlaceItem(src, moving, op.item.section, op.item.x, op.item.y, qty, false)) PlaceItem(src, moving, op.item.section, op.item.x, op.item.y, qty);
     if (err) *err = "no room";
     return false;
 }

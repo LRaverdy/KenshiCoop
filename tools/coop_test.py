@@ -828,6 +828,67 @@ def exp_kosquad(host, cli):
             log(f"  +{s_ + 1}s idx {idx}: flags host {hv['flags']} client {cv['flags']} | vflags {hv['vflags']} {cv['vflags']} | ko {hv['ko']} {cv['ko']} | action {hv.get('action')} {cv.get('action')}")
 
 
+def exp_far(host, cli):
+    """The client's own character far away from the host's squad (about 5 km): does the host still
+    simulate it and the NPCs there finely, and does the client see the same? Compared with the same
+    fight next to the host's squad."""
+    import statistics
+    time.sleep(6)
+    own = 5   # the joining player's character: the last one of the squad
+
+    def vec(text):
+        return tuple(map(float, text.split()[1].split(",")))
+
+    def measure(label, idx):
+        log("spawn", cmd(host, f"spawnnpc 15 10 {idx}"))
+        time.sleep(3)
+        npc = cmd(host, "where npc")[1].split()[-1]
+        log("fight", cmd(host, f"fight {idx}"))
+        time.sleep(3)
+        # how often does the host's game really move them? (distinct positions per second)
+        changes = {"me": 0, "npc": 0}
+        last = {}
+        t0 = time.time()
+        while time.time() - t0 < 4.0:
+            for who, q in (("me", str(idx)), ("npc", npc)):
+                ok, tx = cmd(host, f"where {q}")
+                if ok:
+                    p = vec(tx)
+                    if who in last and dist(p, last[who]) > 0.01:
+                        changes[who] += 1
+                    last[who] = p
+        rate = {k: round(v / 4.0, 1) for k, v in changes.items()}
+        # what the client sees, sampled live (host and client queried back to back)
+        errs = []
+        for _ in range(20):
+            for q in (str(idx), npc):
+                a, b = cmd(host, f"where {q}"), cmd(cli, f"where {q}")
+                if a[0] and b[0]:
+                    errs.append(dist(vec(a[1]), vec(b[1])))
+            time.sleep(0.2)
+        cmd(host, "pause 1")
+        time.sleep(2.5)
+        fz = []
+        for q in (str(idx), npc):
+            a, b = cmd(host, f"where {q}"), cmd(cli, f"where {q}")
+            if a[0] and b[0]:
+                fz.append(round(dist(vec(a[1]), vec(b[1])), 2))
+        cmd(host, "pause 0")
+        log(f"FAR [{label}] host updates/s {rate} | live client error mean {statistics.mean(errs) if errs else -1:.2f} max {max(errs) if errs else -1:.2f} | frozen error {fz}")
+        log("  npc on client:", cmd(cli, f"where {npc}"))
+
+    log("client camera on its character", cmd(cli, f"camto {own}"))
+    measure("next to the host's squad", own)
+    x, y, z = vec(cmd(host, f"where {own}")[1])
+    log("teleport the client's character far away", cmd(host, f"teleport {own} {x + 40000} {y + 300} {z + 30000}"))
+    time.sleep(5)
+    log("client camera on its character", cmd(cli, f"camto {own}"))
+    time.sleep(35)
+    h0, c0 = cmd(host, f"where {own}"), cmd(cli, f"where {own}")
+    log("after the teleport: host", h0, "client", c0)
+    measure("about 5 km away", own)
+
+
 def t_dist(a, b):
     return dist(a["pos"], b["pos"])
 
@@ -1118,6 +1179,9 @@ def main():
     tk = sub.add_parser("talk")
     tk.add_argument("--save", default="kctest_base")
     tk.add_argument("--keep", action="store_true")
+    fr = sub.add_parser("far")
+    fr.add_argument("--save", default="kctest_base")
+    fr.add_argument("--keep", action="store_true")
     ks = sub.add_parser("kosquad")
     ks.add_argument("--save", default="kctest_base")
     ks.add_argument("--keep", action="store_true")
@@ -1170,7 +1234,9 @@ def main():
         log("ready: host", host, "client", cli)
         return
     try:
-        if a.what == "kosquad":
+        if a.what == "far":
+            exp_far(host, cli)
+        elif a.what == "kosquad":
             exp_kosquad(host, cli)
         elif a.what == "facing":
             exp_facing(host, cli)

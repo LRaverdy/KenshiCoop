@@ -193,12 +193,14 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         o << "ok " << p.x << ',' << p.y << ',' << p.z;
         return o.str();
     }
-    if (cmd == "spawnnpc") {   // spawnnpc <dx> <dz>: host creates an NPC (copy of a nearby one) next to squad[0]
+    if (cmd == "spawnnpc") {   // spawnnpc <dx> <dz> [squadIndex]: host creates an NPC (copy of a nearby one) next to squad[0] (or that one)
         float dx = 0, dz = 0;
+        size_t near0 = 0;
         in >> dx >> dz;
+        if (!(in >> near0)) near0 = 0;
         auto squad = SortedSquad(w);
         kc::Vec3 base;
-        if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), base)) return "err no squad";
+        if (near0 >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[near0]), base)) return "err no squad";
         std::vector<kenshi::Character*> all;
         kenshi::ActiveCharacters(all);
         kc::SpawnInfo info;
@@ -416,6 +418,26 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         bool ok = false;
         kenshi::WithSelection(me, [&] { ok = kenshi::CallAddTaskNearest(12, best); });   // PLAYER_TALK_TO
         return ok ? "ok " + name + " at " + std::to_string(int(std::sqrt(bestD))) : "err call failed";
+    }
+    if (cmd == "where") {   // where <key|npc|squadIndex>: position of a character (the host's handle) as this machine has it
+        std::string k;
+        in >> k;
+        kc::Handle h;
+        if (k == "npc") h = lastSpawned_;
+        else if (k.find(':') == std::string::npos) { auto squad = SortedSquad(w); size_t i = std::stoul(k); if (i >= squad.size()) return "err"; h = squad[i]; }
+        else sscanf(k.c_str(), "%u:%u:%u:%u:%u", &h.type, &h.container, &h.containerSerial, &h.index, &h.serial);
+        kenshi::Character* c = w.Find(h);
+        kc::Vec3 p;
+        if (!c || !kenshi::GetPosition(c, p)) return "err not here";
+        char b[120];
+        snprintf(b, sizeof(b), "ok %.3f,%.3f,%.3f %s", p.x, p.y, p.z, Key(h).c_str());
+        return b;
+    }
+    if (cmd == "camto") {   // camto <squadIndex>: the camera goes to that squad member
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        return idx < squad.size() && kenshi::FocusCamera(w.FindSquad(squad[idx])) ? "ok" : "err";
     }
     if (cmd == "kosquad") {   // kosquad <squadIndex>: (host) that squad member is knocked out
         size_t idx = 0;

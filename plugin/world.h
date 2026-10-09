@@ -247,6 +247,7 @@ private:   // first few lifecycle events (tests)
     std::vector<kc::GroundEvent> groundOut_;                                // host: not sent yet
     std::unordered_map<kc::Handle, kc::Handle, kc::HandleHash> groundAlias_;   // client: host item -> our copy
     std::vector<std::pair<kenshi::Character*, kc::ItemState>> localDrops_;   // client, under groundMutex_
+    double pauseSeenAt_ = -1;   // client: when the host's pause arrived (we pause a little later)
     std::mutex dialogMutex_;
     std::vector<WorldDialog> dialogEvents_;                 // host, under dialogMutex_
     std::unordered_map<void*, uint32_t> remoteDialogs_;    // host: Dialogue* shown to another player -> id

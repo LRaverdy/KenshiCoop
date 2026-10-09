@@ -484,7 +484,9 @@ struct FrameEvent {
 class CoopFrameListener {
 public:
     virtual bool frameStarted(const FrameEvent&) {
-        if (NowSeconds() - LastLiveTick() > 0.2) RunTick(false);
+        // The game's main loop stops while the game is paused: a loaded, paused world still ticks
+        // as live here (clients keep imposing the host's state, the host keeps sending it).
+        if (NowSeconds() - LastLiveTick() > 0.2) RunTick(g_wasReady && kenshi::GetPaused() && kenshi::Player() != nullptr);
         return true;
     }
     virtual bool frameRenderingQueued(const FrameEvent&) { return true; }

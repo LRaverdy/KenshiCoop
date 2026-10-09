@@ -73,11 +73,25 @@ void KenshiWorld::EndFrame() {
     // Clients run the host's clock: speed and pause are imposed every frame, so local keys
     // (space, F2/F3/F4) have no lasting effect.
     if (active_ && client_ && haveHostTime_) {
-        // Same calls as the space bar / speed keys, so the game's own speed UI follows too. The pause
-        // is immediate: running on a little to settle positions would put our clock ahead of the
-        // host's (the game recomputes its clock from its own counter, it cannot be set back).
-        if (kenshi::GetPaused() != hostTime_.paused) kenshi::CallUserPause(hostTime_.paused);
-        if (!hostTime_.paused && std::fabs(kenshi::GetFrameSpeed() - hostTime_.speed) > 1e-3f) kenshi::CallSetFrameSpeed(hostTime_.speed);
+        // Same calls as the space bar / speed keys, so the game's own speed UI follows too.
+        // Paused, the game commits no position written to a character: before pausing, a client
+        // runs a few frames at a crawl (its clock barely moves: the game recomputes it from its own
+        // counter and it cannot be set back) while Apply puts every character exactly where the
+        // host's stopped.
+        constexpr double kSettleBeforePause = 0.3;
+        constexpr float kCrawl = 0.01f;
+        const double now = NowSeconds();
+        if (hostTime_.paused && !kenshi::GetPaused()) {
+            if (pauseSeenAt_ < 0) {
+                pauseSeenAt_ = now;
+                kenshi::CallSetFrameSpeed(kCrawl);
+            }
+            if (now - pauseSeenAt_ >= kSettleBeforePause) kenshi::CallUserPause(true);
+        } else if (!hostTime_.paused) {
+            pauseSeenAt_ = -1;
+            if (kenshi::GetPaused()) kenshi::CallUserPause(false);
+            if (std::fabs(kenshi::GetFrameSpeed() - hostTime_.speed) > 1e-3f) kenshi::CallSetFrameSpeed(hostTime_.speed);
+        }
     }
     // While players join, the host's world stays frozen even if someone presses unpause.
     if (holding_ && !kenshi::GetPaused()) {
@@ -474,7 +488,15 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         const kc::Vec3 want = kenshi::ForwardOf(target.rot);
         if (kenshi::GetFacing(c, mine) && mine.x * want.x + mine.z * want.z < 0.999f) kenshi::FaceDirection(c, want);
     }
-    // ...while its position is continuously pulled onto the host's: no drift, even when paused.
+    // The host paused: its characters stopped mid-stride. Put them exactly there while the game still
+    // runs (at a crawl, see EndFrame): paused, it would not commit the position.
+    if (haveHostTime_ && hostTime_.paused) {
+        if (kenshi::IsMoving(c)) kenshi::Halt(c);
+        if (err > 0.02f) kenshi::Teleport(c, target.pos, target.rot);
+        lastDest_.erase(h);
+        return;
+    }
+    // ...while its position is continuously pulled onto the host's: no drift.
     if (err > 0.01f) {
         const float k = err > 2.0f ? 0.5f : 0.25f;
         const kc::Vec3 p{local.x + (target.pos.x - local.x) * k, local.y + (target.pos.y - local.y) * k,
@@ -1606,6 +1628,7 @@ void KenshiWorld::SetRole(bool client, bool active) {
     client_ = client;
     active_ = active;
     haveHostTime_ = false;
+    pauseSeenAt_ = -1;
     lastDest_.clear();
     postureSince_.clear();
     postureFixed_.clear();
