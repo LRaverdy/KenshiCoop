@@ -1507,6 +1507,14 @@ void Session::HostTradeOp(uint8_t from, const InvOp& op) {
     auto own = [&](const Entity& e) { return e.squad && e.owner == from; };
     const bool buying = counter(op.fromNetId) && own(dst->second);
     const bool selling = own(src->second) && counter(op.toNetId);
+    // A purchase the player could not pay puts the item back in the first counter with room, maybe
+    // another one: the shop's stock moves between its counters, nothing is paid.
+    if (counter(op.fromNetId) && counter(op.toNetId) && op.price == 0) {
+        if (!world_.ExecuteInvOp(src->second.handle, dst->second.handle, op)) return refuse("the shop's stock could not move", {});
+        src->second.invHash = 0;
+        dst->second.invHash = 0;
+        return;
+    }
     if (!buying && !selling) return refuse("the item does not go between the shop and their character", {});
     if (buying ? op.price <= 0 : op.price > 0)
         return refuse("price " + std::to_string(op.price) + " does not fit a " + (buying ? "purchase" : "sale"), "Le prix n'a pas pu être compté : rien n'a changé.");

@@ -998,7 +998,8 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
     }
     if (cmd == "tradebuy" || cmd == "tradesell") {
         // tradebuy [index]: right click on the merchant's item #index (one unit is bought, the game's way)
-        // tradesell [index]: right click on our item #index (one unit is sold); skips worn gear
+        // tradesell [index]: right click on our item #index (one unit is sold); worn gear only when
+        // nothing else is carried (bought gear is often put on at once)
         size_t idx = 0;
         in >> idx;
         const bool buy = cmd == "tradebuy";
@@ -1007,6 +1008,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         std::vector<kenshi::WindowItem> pick;
         for (const auto& it : items)
             if (buy || !it.state.equipped) pick.push_back(it);
+        if (!buy && pick.empty()) pick = items;
         if (idx >= pick.size()) return "err only " + std::to_string(pick.size()) + " items";
         int32_t before = 0, after = 0;
         kenshi::ReadPlayerMoney(before);
