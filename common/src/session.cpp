@@ -267,6 +267,16 @@ void Session::HostJoinFlow(double now, bool live) {
     for (uint8_t id : joining) needWorld |= !sync_[id].worldSent;
     if (needWorld && !exportReady_) {
         if (!exporting_ && live && holding_) {
+            // Each newcomer's own character goes into the world before it is saved for them.
+            if (cfg_.characterPerPlayer) {
+                for (uint8_t id : joining) {
+                    PlayerSync& s = sync_[id];
+                    if (s.ownChecked || s.worldSent) continue;
+                    s.ownChecked = true;
+                    if (world_.EnsurePlayerCharacter(players_[id].name, s.own)) Assign(s.own, id);
+                    else log_("no character of their own for " + players_[id].name);
+                }
+            }
             std::string err;
             if (world_.BeginWorldExport(&err)) {
                 exporting_ = true;
@@ -536,6 +546,11 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         uint8_t id = 0;
         for (uint8_t i = 2; i <= kMaxPlayers; ++i) if (!players_.count(i)) { id = i; break; }
         if (!id) return reject(RejectReason::Full);
+        // Names identify each player's own character, so they are unique in a session: a second
+        // "Player" becomes "Player 2".
+        bool taken = h.name == cfg_.name;
+        for (auto& [pid, p] : players_) taken |= p.name == h.name;
+        if (taken) h.name = h.name.substr(0, kMaxNameLen - 4) + " " + std::to_string(id);
         pendingPeers_.erase(peer);
 
         Welcome wm;
@@ -795,8 +810,10 @@ void Session::ClientTick(double now, bool live) {
         else if (e.missingSince < 0) e.missingSince = now;
         if (e.squad && !e.present) ++missing;
     }
+    // Our own characters are never recreated (a missing one means a different save); another
+    // player's can be: it may have been made for a player who joined after we did.
     auto spawnable = [&](const Entity& e) {
-        return !e.present && !e.squad && e.hasSpawn && !e.buf.empty() && now - e.missingSince >= kSpawnGrace;
+        return !e.present && (!e.squad || e.owner != localId_) && e.hasSpawn && !e.buf.empty() && now - e.missingSince >= kSpawnGrace;
     };
     // Characters the local game made on its own have no place in the host's world: they stand in
     // for missing host characters of the same kind, or go away.
@@ -818,8 +835,7 @@ void Session::ClientTick(double now, bool live) {
             }
     }
     // Still not in our world (the host spawned it after the save): create a stand-in where the
-    // host has it. Squad members are never recreated: a missing one means a different save.
-    // Only right after Reconcile, which may have found a local character to stand in instead.
+    // host has it. Only right after Reconcile, which may have found a local character instead.
     for (auto& [id, e] : entities_) {
         if (!fullCheck || !spawnable(e) || now < e.nextSpawnTry) continue;
         ++e.spawnAttempts;

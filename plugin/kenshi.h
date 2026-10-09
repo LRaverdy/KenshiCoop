@@ -72,6 +72,9 @@ enum Fn : int {
     FnCreateItem,               // Item* RootObjectFactory::createItem(GameData*, const hand&, GameData* company, GameData* material, int level, Faction*)
     FnShowTradeWindow,          // void ForgottenGUI::showTradeWindow(const hand& a, const hand& b, TradeWindowType)   (deferred)
     FnIsRagdoll,                // bool Character::isRagdoll() const   (lying in ragdoll, or carried)
+    FnRecruit,                  // bool PlayerInterface::recruit(Character*, bool editor)
+    FnAddTaskNearest,           // void PlayerInterface::addTaskNearestSelectedCharacter(Building*, TaskType, RootObject*, bool shift, const Vector3&, bool noAnimals)
+    FnAddJobSelected,           // void PlayerInterface::addJobSelectedCharacters(TaskType, RootObject*, bool shift, bool add, const Vector3&)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -203,6 +206,12 @@ Character* Resolve(const kc::Handle& h);               // game handle -> live ch
 bool HandleFromHand(const void* hand, kc::Handle& out); // reads a game `hand` object
 // Opens the game's loot window between two characters (what reaching a body with a loot order does).
 bool OpenLootWindow(Character* looter, Character* target);
+// tests: the order a right-click on `subject` gives to the nearest selected character
+bool CallAddTaskNearest(int task, Character* subject);
+// A new member of the player's squad, of the same kind as `model`, named `name` (15 chars max).
+Character* CreateRecruit(Character* model, const std::string& name, const kc::Vec3& pos, std::string* err);
+bool CharacterName(const Character* c, std::string& out);
+std::string ClassRvas(const Character* c);   // tests: "<character vtable>/<movement vtable>" as RVAs
 void SelectedHandles(std::vector<kc::Handle>& out);
 bool GetHandle(const Character* c, kc::Handle& out);
 bool GetPosition(Character* c, kc::Vec3& out);

@@ -316,6 +316,7 @@ bool Start() {
     sc.port = g_cfg.port;
     sc.snapDistance = g_cfg.snapDistance;
     sc.interestRadius = g_cfg.interestRadius;
+    sc.characterPerPlayer = g_cfg.characterPerPlayer;
     g_session = std::make_unique<kc::Session>(*g_world, sc, NowSeconds, [](const std::string& s) { Log("%s", s.c_str()); });
 
     if (!InstallHooks(&TickEntry, &err)) { Log("disabled: %s", err.c_str()); g_session.reset(); g_world.reset(); return false; }

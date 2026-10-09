@@ -150,7 +150,7 @@ struct FakeWorld : IWorld {
     }
     bool ReadSpawnInfo(const Handle& h, SpawnInfo& out) override {
         auto it = chars.find(h.serial);
-        if (it == chars.end() || it->second.squad) return false;
+        if (it == chars.end()) return false;
         out.templateSid = "tmpl-" + std::to_string(h.serial);
         out.factionSid = "bandits";
         out.name = "Npc";
@@ -169,6 +169,22 @@ struct FakeWorld : IWorld {
     }
     void Despawn(const Handle& h) override {
         if (chars.erase(h.serial)) ++despawns;
+    }
+    std::map<std::string, uint32_t> named;   // player characters by name
+    bool EnsurePlayerCharacter(const std::string& name, Handle& out) override {
+        auto it = named.find(name);
+        if (it == named.end()) {
+            const uint32_t s = 5000 + uint32_t(named.size());
+            FakeChar c;
+            c.squad = true;
+            c.pos = {10.0f * float(named.size()), 0, -20};
+            c.dest = c.pos;
+            chars[s] = c;
+            it = named.emplace(name, s).first;
+            fp ^= s * 0x9E3779B97F4A7C15ull;   // the world changed: so does its fingerprint
+        }
+        out = H(it->second);
+        return true;
     }
     // client: characters the local game created by itself (key = local serial)
     std::map<uint32_t, double> strangerSince;
@@ -473,7 +489,7 @@ static void TestJoinFromMenu() {
     SetupHost(hw);
     hw.chars[2].pos = {222, 0, 9}; hw.chars[2].dest = hw.chars[2].pos;   // the host played since its last save
     AtMenu(cw);
-    SessionConfig hc; hc.name = "Host"; hc.port = ++g_port;
+    SessionConfig hc; hc.characterPerPlayer = false; hc.name = "Host"; hc.port = ++g_port;
     SessionConfig cc; cc.name = "Client"; cc.port = hc.port;
     Session host(hw, hc, Now, Quiet("host"));
     Session cli(cw, cc, Now, Quiet("cli"));
@@ -499,12 +515,61 @@ static void TestJoinFromMenu() {
     CHECK(host.joiningPlayers() == 0);
 }
 
+static void TestOwnCharacter() {
+    std::printf("session: a joining player gets a character of their own, kept across rejoins\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    AtMenu(cw);
+    SessionConfig hc; hc.name = "Host"; hc.port = ++g_port;   // characterPerPlayer: the default
+    SessionConfig cc; cc.name = "Client"; cc.port = hc.port;
+    Session host(hw, hc, Now, Quiet("host"));
+    std::string err;
+    CHECK(host.Host(&err));
+    for (int round = 0; round < 2; ++round) {
+        Session cli(cw, cc, Now, Quiet("cli"));
+        CHECK(cli.Join("127.0.0.1", hc.port, &err));
+        Run({{&host, &hw}, {&cli, &cw}}, 10.0, [&] {
+            return cli.state() == SessionState::Connected && cli.entityCount() == 4 && cw.controllable.size() == 1;
+        });
+        CHECK(cli.state() == SessionState::Connected);
+        CHECK(hw.named.size() == 1);                    // created once, found again on the rejoin
+        const uint32_t mine = hw.named.count("Client") ? hw.named["Client"] : 0;
+        CHECK(cw.chars.count(mine) == 1);               // it was in the world the client received
+        CHECK(cw.controllable.size() == 1 && !cw.controllable.empty() && cw.controllable[0].serial == mine);
+        CHECK(hw.controllable.size() == 3);             // the host keeps its own three
+        cli.Leave();
+        Run({{&host, &hw}, {&cli, &cw}}, 1.0);
+        AtMenu(cw);
+    }
+    // A second player joins while the first plays: the first has no copy of the newcomer's new
+    // character in its world, so it gets a stand-in; each controls only their own.
+    FakeWorld bw;
+    AtMenu(bw);
+    Session cliA(cw, cc, Now, Quiet("cliA"));
+    SessionConfig bc; bc.name = "Second"; bc.port = hc.port;
+    Session cliB(bw, bc, Now, Quiet("cliB"));
+    CHECK(cliA.Join("127.0.0.1", hc.port, &err));
+    Run({{&host, &hw}, {&cliA, &cw}, {&cliB, &bw}}, 10.0, [&] { return cliA.state() == SessionState::Connected && cw.controllable.size() == 1; });
+    CHECK(cliB.Join("127.0.0.1", hc.port, &err));
+    Run({{&host, &hw}, {&cliA, &cw}, {&cliB, &bw}}, 15.0, [&] {
+        return cliB.state() == SessionState::Connected && bw.controllable.size() == 1 && hw.named.count("Second") &&
+               cw.chars.count(hw.named["Second"]) == 1;
+    });
+    CHECK(cliB.state() == SessionState::Connected);
+    CHECK(hw.named.size() == 2);
+    const uint32_t second = hw.named.count("Second") ? hw.named["Second"] : 0;
+    CHECK(cw.chars.count(second) == 1);                 // stand-in on the first player's side
+    CHECK(bw.chars.count(hw.named["Client"]) == 1);     // the first player's character came with the save
+    CHECK(bw.controllable.size() == 1 && !bw.controllable.empty() && bw.controllable[0].serial == second);
+    CHECK(cw.controllable.size() == 1 && !cw.controllable.empty() && cw.controllable[0].serial == hw.named["Client"]);
+}
+
 static void TestSessionReplication() {
     std::printf("session: ownership, commands, convergence, chat, leave\n");
     FakeWorld hw, cw;
     SetupHost(hw);
     AtMenu(cw);
-    SessionConfig hc; hc.name = "Host"; hc.port = ++g_port;
+    SessionConfig hc; hc.characterPerPlayer = false; hc.name = "Host"; hc.port = ++g_port;
     SessionConfig cc; cc.name = "Client"; cc.port = hc.port;
     Session host(hw, hc, Now, Quiet("host"));
     Session cli(cw, cc, Now, Quiet("cli"));
@@ -558,7 +623,7 @@ static void TestDivergenceIsCorrected() {
     FakeWorld hw, cw;
     SetupHost(hw);
     AtMenu(cw);
-    SessionConfig hc; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
     Session host(hw, hc, Now, Quiet("host"));
     Session cli(cw, cc, Now, Quiet("cli"));
     std::string err;
@@ -582,7 +647,7 @@ static void TestRejections() {
         SetupHost(hw);
         AtMenu(cw);
         tc.mutate(cw);
-        SessionConfig hc; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C"; cc.loadTimeout = 4.0;
+        SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C"; cc.loadTimeout = 4.0;
         Session host(hw, hc, Now, Quiet("host"));
         Session cli(cw, cc, Now, Quiet("cli"));
         std::string err;
@@ -598,17 +663,28 @@ static void TestRejections() {
     }
     {
         FakeWorld hw, cw; SetupHost(hw); AtMenu(cw);
-        SessionConfig hc; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = " bad";
+        SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = " bad";
         Session host(hw, hc, Now, Quiet("host")); Session cli(cw, cc, Now, Quiet("cli"));
         std::string err; host.Host(&err); cli.Join("127.0.0.1", hc.port, &err);
         Run({{&host, &hw}, {&cli, &cw}}, 5.0, [&] { return cli.state() == SessionState::Failed; });
         CHECK(cli.lastError().find(ToString(RejectReason::BadName)) != std::string::npos);
     }
     {
+        // names identify each player's own character: a player with the host's name is renamed
+        FakeWorld hw, cw; SetupHost(hw); AtMenu(cw);
+        SessionConfig hc; hc.name = "Same"; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "Same";
+        Session host(hw, hc, Now, Quiet("host")); Session cli(cw, cc, Now, Quiet("cli"));
+        std::string err; host.Host(&err); cli.Join("127.0.0.1", hc.port, &err);
+        Run({{&host, &hw}, {&cli, &cw}}, 10.0, [&] { return cli.state() == SessionState::Connected && cw.controllable.size() == 1; });
+        CHECK(cli.state() == SessionState::Connected);
+        CHECK(hw.named.size() == 1 && hw.named.count("Same 2") == 1);
+        CHECK(host.players().size() == 1 && host.players().begin()->second.name == "Same 2");
+    }
+    {
         // the host's save fails: the joiner is told, the host is released
         FakeWorld hw, cw; SetupHost(hw); AtMenu(cw);
         hw.exportFrames = -1000;  // PollWorldExport -> Failed
-        SessionConfig hc; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+        SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
         Session host(hw, hc, Now, Quiet("host")); Session cli(cw, cc, Now, Quiet("cli"));
         std::string err; host.Host(&err); cli.Join("127.0.0.1", hc.port, &err);
         Run({{&host, &hw}, {&cli, &cw}}, 6.0, [&] { return cli.state() == SessionState::Failed && !hw.holding; });
@@ -637,7 +713,7 @@ static void TestWorldAuthority() {
     FakeChar far; far.squad = false; far.pos = {90000, 0, 0}; far.dest = far.pos;
     hw.chars[10] = near;
     hw.chars[11] = far;
-    SessionConfig hc; hc.port = ++g_port; hc.interestRadius = 1000; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; hc.interestRadius = 1000; SessionConfig cc; cc.port = hc.port; cc.name = "C";
     Session host(hw, hc, Now, Quiet("host"));
     Session cli(cw, cc, Now, Quiet("cli"));
     std::string err;
@@ -688,7 +764,7 @@ static void TestSpawnReplication() {
     FakeWorld hw, cw;
     SetupHost(hw);
     AtMenu(cw);
-    SessionConfig hc; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
     Session host(hw, hc, Now, Quiet("host"));
     Session cli(cw, cc, Now, Quiet("cli"));
     std::string err;
@@ -755,7 +831,7 @@ static void TestInventories() {
     hw.chars[21] = guard;
     hw.chars[20] = corpse;
     AtMenu(cw);
-    SessionConfig hc; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
     Session host(hw, hc, Now, Quiet("host"));
     Session cli(cw, cc, Now, Quiet("cli"));
     std::string err;
@@ -812,7 +888,7 @@ static void TestManyPlayers() {
     std::printf("session: 1 host + 4 clients joining at once, 120 characters\n");
     FakeWorld hw;
     for (uint32_t i = 1; i <= 120; ++i) { FakeChar c; c.pos = {float(i), 0, 0}; c.dest = c.pos; hw.chars[i] = c; }
-    SessionConfig hc; hc.port = ++g_port;
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port;
     Session host(hw, hc, Now, Quiet("host"));
     std::string err;
     CHECK(host.Host(&err));
@@ -865,6 +941,7 @@ int main() {
     TestDivergenceIsCorrected();
     TestRejections();
     TestWorldAuthority();
+    TestOwnCharacter();
     TestSpawnReplication();
     TestInventories();
     TestManyPlayers();

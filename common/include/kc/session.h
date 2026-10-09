@@ -106,6 +106,9 @@ public:
 
     // Host: freeze the world while players join (true), release it afterwards (false).
     virtual void HoldForJoin(bool hold) = 0;
+    // Host, while holding for a join: the joining player's own character (found by name, else
+    // created and recruited into the squad). It is then in the save the player receives.
+    virtual bool EnsurePlayerCharacter(const std::string& playerName, Handle& out) = 0;
     // Host: save the current world for transfer; poll until Done (files filled) or Failed.
     virtual bool BeginWorldExport(std::string* err) = 0;
     virtual ExportStatus PollWorldExport(std::vector<WorldFile>& files, std::string* err) = 0;
@@ -132,6 +135,7 @@ struct SessionConfig {
     double worldLostTimeout = 5.0;     // seconds without a live world before the session ends
     float snapDistance = 50.0f;        // samples further apart than this are not interpolated
     float interestRadius = 0.0f;       // NPCs within this distance of the squad are replicated (0 = all active)
+    bool characterPerPlayer = true;    // host: every joining player gets a character of their own
 };
 
 enum class SessionState { Idle, Hosting, Connecting, Handshake, Downloading, Loading, Connected, Failed };
@@ -232,6 +236,8 @@ private:
         uint64_t readyHash = 0;              // pending Ready to verify on the next live tick
         bool readyPending = false;
         bool kicked = false;
+        Handle own;                          // the player's own character (characterPerPlayer)
+        bool ownChecked = false;
     };
 
     void HostTick(double now, bool live);

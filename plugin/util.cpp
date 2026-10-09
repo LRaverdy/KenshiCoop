@@ -69,12 +69,21 @@ void Log(const char* fmt, ...) {
 Config LoadConfig(const std::wstring& ini) {
     Config c;
     if (GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        const char* text =
+        // A first name that differs between friends' PCs: the Windows account name when it fits.
+        std::string user = "Player";
+        wchar_t wuser[64];
+        DWORD n = 64;
+        if (GetUserNameW(wuser, &n)) {
+            const std::string u = Narrow(wuser);
+            if (kc::ValidName(u) && u.size() <= 15) user = u;
+        }
+        const std::string text = std::string() +
             "; KenshiCoop configuration\r\n"
             "; Hotkeys (in game): Ctrl+Shift+H host | Ctrl+Shift+J join | Ctrl+Shift+L leave\r\n"
             ";                    Ctrl+Shift+G give selected characters to the next player | Ctrl+Shift+O overlay\r\n"
             "[player]\r\n"
-            "name=Player\r\n"
+            "; your name in the session, and the name of your own character in the host's world\r\n"
+            "name=" + user + "\r\n"
             "\r\n"
             "[network]\r\n"
             "; address of the host to join (IP or hostname)\r\n"
@@ -89,9 +98,13 @@ Config LoadConfig(const std::wstring& ini) {
             "; NPCs within this distance of the squad are replicated to clients (0 = every active one)\r\n"
             "interest_radius=0\r\n"
             "\r\n"
+            "[coop]\r\n"
+            "; host: every player who joins gets a new character of their own in the squad (1), or none (0)\r\n"
+            "own_character=1\r\n"
+            "\r\n"
             "[ui]\r\n"
             "overlay=1\r\n";
-        if (FILE* f = _wfopen(ini.c_str(), L"wb")) { fputs(text, f); fclose(f); }
+        if (FILE* f = _wfopen(ini.c_str(), L"wb")) { fputs(text.c_str(), f); fclose(f); }
     }
     wchar_t buf[256];
     auto str = [&](const wchar_t* sec, const wchar_t* key, const std::string& def) {
@@ -115,6 +128,7 @@ Config LoadConfig(const std::wstring& ini) {
     c.interestRadius = float(num(L"sync", L"interest_radius", c.interestRadius));
     c.overlay = num(L"ui", L"overlay", 1) != 0;
     c.debugCommands = num(L"debug", L"commands", 0) != 0;
+    c.characterPerPlayer = num(L"coop", L"own_character", 1) != 0;
     return c;
 }
 

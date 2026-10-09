@@ -58,6 +58,7 @@ void DumpCharacter(std::ostream& o, const char* tag, KenshiWorld& w, const kc::H
     const bool vok = w.ReadVitals(h, v);
     const kc::Handle hostHandle = w.HostHandleOf(h);   // stand-ins are reported under the host's handle
     o << tag << ' ' << Key(hostHandle) << " read=" << ok << " standin=" << (hostHandle != h);
+    if (kenshi::Character* ch = w.Find(h)) o << " class=" << std::hex << kenshi::ClassRvas(ch) << std::dec;
     if (ok) {
         o << " pos=" << st.pos.x << ',' << st.pos.y << ',' << st.pos.z << " dest=" << st.dest.x << ',' << st.dest.y << ',' << st.dest.z
           << " flags=" << unsigned(st.flags);
@@ -242,6 +243,15 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         if (!t || idx >= squad.size()) return "err bad target or looter";
         w.RequestLoot(squad[idx], t);
         return "ok";
+    }
+    if (cmd == "lootorder") {   // lootorder <target>: the right-click "loot" path, with the current selection
+        std::string k;
+        in >> k;
+        kc::Handle h;
+        sscanf(k.c_str(), "%u:%u:%u:%u:%u", &h.type, &h.container, &h.containerSerial, &h.index, &h.serial);
+        kenshi::Character* t = w.Find(h);
+        if (!t) return "err no such character";
+        return kenshi::CallAddTaskNearest(26, t) ? "ok" : "err call failed";
     }
     if (cmd == "tradegui") {   // the trade window request the game has not consumed yet (type 0 = none)
         int type = -1;

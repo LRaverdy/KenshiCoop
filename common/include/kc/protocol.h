@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 7;
+constexpr uint16_t kProtocolVersion = 8;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;

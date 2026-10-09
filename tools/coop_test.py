@@ -207,7 +207,11 @@ def compare(h, c, label, pos_tol=3.0):
     report["squad"] = sq_diff
     # characters near the squad: what the host has vs what the client has
     hk, ck = set(h["char"]), set(c["char"])
-    missing = sorted(hk - ck)
+    # bodies far from every player are not replicated on purpose (they are once someone comes close)
+    bound = {e["key"] for e in h["entity"].values()}
+    far_corpses = {k for k in hk - ck if k not in bound and int(h["char"][k].get("flags", "0")) & 8}
+    report["far_corpses_unreplicated"] = len(far_corpses)
+    missing = sorted(hk - ck - far_corpses)
     extra = sorted(ck - hk)
     common = hk & ck
     pos_err = sorted((dist(h["char"][k]["pos"], c["char"][k]["pos"]), k) for k in common if "pos" in h["char"][k] and "pos" in c["char"][k])
@@ -310,6 +314,10 @@ def scenario(host, cli, quick=False):
     reports = []
     time.sleep(8)
     reports.append(frozen_check(host, cli, "after join"))
+    # the joining player arrived with a character of their own
+    h = dump(host, "h_own", 3000)
+    own = [e["key"] for e in h["entity"].values() if e.get("squad") == "1" and e.get("owner") == "2"]
+    log("client's own characters:", own, "squad size", len(h["squad"]))
     log("give", cmd(host, "give 2 0"))
     time.sleep(2)
     log("client move", cmd(cli, "moverel 0 40 25"))
@@ -417,6 +425,86 @@ def exp_bodies(host, cli):
                 log(f"  t={i * 0.75:.1f} err={dist(hv['pos'], cv['pos']):.2f} host {hv['pos']} f{hv.get('flags')} ko={hv.get('ko')} | cli {cv['pos']} f{cv.get('flags')} ko={cv.get('ko')} latest {cv.get('latest')}")
         log("wake", cmd(host, "wake"))
         time.sleep(8)
+
+
+def ui(*args):
+    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", UI_PS1] + [str(a) for a in args],
+                       capture_output=True, timeout=60, text=True)
+    return r.stdout.strip()
+
+
+def exp_lootorder(host, cli):
+    """The right-click loot path (addTaskNearestSelectedCharacter) with the client's own character selected."""
+    time.sleep(6)
+    ok, text = cmd(host, "spawnnpc 20 10")
+    key = text.split()[1]
+    time.sleep(4)
+    log("ko", cmd(host, "ko"))
+    time.sleep(4)
+    log("select own character", ui("click", cli, 652, 657))
+    time.sleep(1)
+    log("lootorder", cmd(cli, f"lootorder {key}"))
+    for i in range(12):
+        time.sleep(1)
+    shot(cli, os.path.abspath(os.path.join(OUT_DIR, "lootorder.png")))
+
+
+def exp_lootclick(host, cli):
+    """Prepare a knocked-out NPC next to the client's character and leave both games running, so the
+    real right-click "loot" can be driven by hand (ui.ps1 click ... right) and checked."""
+    time.sleep(6)
+    log("give", cmd(host, "give 2 0"))
+    ok, text = cmd(host, "spawnnpc 6 4")
+    log("spawn", text)
+    time.sleep(5)
+    log("ko", cmd(host, "ko"))
+    time.sleep(4)
+    log("host pid", host, "client pid", cli, "npc", text.split()[1] if ok else "?")
+
+
+def exp_soak(host, cli, minutes=15):
+    """Long run at x3 speed: periodic whole-world comparisons, crash detection."""
+    time.sleep(8)
+    log("give", cmd(host, "give 2 0"))
+    log("speed", cmd(host, "speed 3"))
+    worst = {}
+    for i in range(minutes):
+        time.sleep(60)
+        if i % 3 == 2:   # keep the squad on the move: the world streams in and out around it
+            log("host move", cmd(host, f"moverel 1 {200 if i % 2 else -200} {150 if i % 4 < 2 else -150}"))
+            log("client move", cmd(cli, f"moverel 0 {150 if i % 2 else -150} {-100 if i % 4 < 2 else 100}"))
+        r = frozen_check(host, cli, f"soak {i + 1}", radius=10000000)
+        cmd(host, "speed 3")
+        summary = {k: r.get(k) for k in ("host_chars", "client_chars", "missing_on_client", "extra_on_client", "vital_flag_mismatch",
+                                         "combat_mismatch", "inventory_mismatch", "weather_mismatch", "hours_diff", "paused", "speed")}
+        log(f"soak {i + 1}:", summary)
+        for k, v in summary.items():
+            if isinstance(v, (int, float)) and k not in ("host_chars", "client_chars"):
+                worst[k] = max(worst.get(k, 0), v)
+    log("soak worst:", worst)
+
+
+def exp_walk(host, cli):
+    """Trace a walking NPC on the client (position corrections frame by frame)."""
+    time.sleep(10)
+    moving = []
+    for attempt in range(40):
+        c = dump(cli, "c_walk_pick", 3000)
+        moving = [k for k, v in c["char"].items() if v.get("flags") == "1" and k not in c["squad"]]
+        if moving:
+            break
+        time.sleep(2)
+    key = moving[0]
+    log("tracing", key, cmd(cli, f"trace {key} 3000"))
+    time.sleep(3)
+    log("pause", cmd(host, "pause 1"))
+    time.sleep(3)
+    log("unpause", cmd(host, "pause 0"))
+    time.sleep(3)
+    h, c = dump(host, "h_walk", 3000), dump(cli, "c_walk", 3000)
+    hv, cv = h["char"].get(key, {}), c["char"].get(key, {})
+    if "pos" in hv and "pos" in cv:
+        log("live err", round(dist(hv["pos"], cv["pos"]), 2), "flags", hv.get("flags"), cv.get("flags"))
 
 
 def exp_trace(host, cli):
@@ -535,6 +623,17 @@ def main():
     lu = sub.add_parser("lootui")
     lu.add_argument("--save", default="kctest_base")
     lu.add_argument("--keep", action="store_true")
+    lo = sub.add_parser("lootorder")
+    lo.add_argument("--save", default="kctest_base")
+    lo.add_argument("--keep", action="store_true")
+    lc = sub.add_parser("lootclick")
+    lc.add_argument("--save", default="kctest_base")
+    lc.add_argument("--keep", action="store_true")
+    sk = sub.add_parser("soak")
+    sk.add_argument("--save", default="kctest_base")
+    sk.add_argument("--minutes", type=int, default=15)
+    wk = sub.add_parser("walk")
+    wk.add_argument("--save", default="kctest_base")
     t = sub.add_parser("trace")
     t.add_argument("--save", default="kctest_base")
     e = sub.add_parser("bodies")
@@ -552,6 +651,14 @@ def main():
             exp_bodies(host, cli)
         elif a.what == "trace":
             exp_trace(host, cli)
+        elif a.what == "walk":
+            exp_walk(host, cli)
+        elif a.what == "soak":
+            exp_soak(host, cli, a.minutes)
+        elif a.what == "lootclick":
+            exp_lootclick(host, cli)
+        elif a.what == "lootorder":
+            exp_lootorder(host, cli)
         elif a.what == "lootui":
             exp_lootui(host, cli)
         elif a.what == "items":

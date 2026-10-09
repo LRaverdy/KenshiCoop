@@ -23,6 +23,7 @@ struct HookView {
     bool client = false;   // we are a client: the host simulates everything
     std::unordered_set<const void*> squadForeign;  // squad members this machine may not command
     std::unordered_set<kc::Handle, HandleHash> controllable;  // handles this machine may command
+    std::unordered_set<const void*> replicated;    // client: characters driven by the host's state
 };
 
 class KenshiWorld final : public kc::IWorld {
@@ -65,6 +66,7 @@ public:
     size_t ExpireAllWeather();   // tests: every known region rolls a new weather
     void SetTime(const kc::TimeState& t) override;
     void HoldForJoin(bool hold) override;
+    bool EnsurePlayerCharacter(const std::string& playerName, kc::Handle& out) override;
     bool BeginWorldExport(std::string* err) override;
     kc::ExportStatus PollWorldExport(std::vector<kc::WorldFile>& files, std::string* err) override;
     bool BeginWorldImport(const std::vector<kc::WorldFile>& files, std::string* err) override;
@@ -111,6 +113,7 @@ private:
     struct FallPrep { double start, lastMove; };
     std::unordered_map<kc::Handle, FallPrep, HandleHash> fallPrep_;   // client: moving into place before a fall
     std::unordered_map<kc::Handle, double, HandleHash> fellAt_;      // client: when we made it fall
+    std::unordered_set<const void*> applied_;                        // client: characters Apply drove this frame
     bool ReadyToFall(const kc::Handle& h, kenshi::Character* c, const kc::EntityState& at, double now);
     std::mutex ordersMutex_;
     std::vector<std::pair<kc::Handle, kc::Command>> orders_;
@@ -130,6 +133,7 @@ private:
     double exportStableSince_ = 0;
     bool haveHostTime_ = false;
     kc::TimeState hostTime_;
+    double hostPausedAt_ = 0;   // client: when the host's pause arrived (we settle a moment first)
     std::mutex weatherMutex_;   // weather is advanced by a game background thread
     std::unordered_map<void*, kc::RegionWeather> seenRegions_;          // host: last state of each region
     std::unordered_map<std::string, kc::RegionWeather> hostWeather_;    // client: what the host has

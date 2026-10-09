@@ -41,6 +41,9 @@ const FunctionSig kFunctions[FnCount] = {
     {"RootObjectFactory::createItem", 0x580750, {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41}},
     {"ForgottenGUI::showTradeWindow", 0x791830, {0x44, 0x89, 0x49, 0x58, 0x8B, 0x42, 0x08, 0x89, 0x41, 0x68, 0x8B, 0x42}},
     {"Character::isRagdoll", 0x7D1440, {0x48, 0x83, 0xEC, 0x28, 0x80, 0xB9, 0xD4, 0x03, 0x00, 0x00, 0x00, 0x74}},
+    {"PlayerInterface::recruit", 0x692820, {0x4C, 0x8B, 0xDC, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
+    {"PlayerInterface::addTaskNearestSelectedCharacter", 0x7FAE70, {0x40, 0x53, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xEC, 0xC8}},
+    {"PlayerInterface::addJobSelectedCharacters", 0x7F5A90, {0x40, 0x53, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x48, 0x8B}},
 };
 
 namespace {
@@ -717,6 +720,62 @@ Character* CreateCharacter(const kc::SpawnInfo& info, const kc::Vec3& pos, std::
     if (!info.name.empty() && MakeGameString(info.name, gs))
         if (void* fn = VSlot(obj, slot::RO_setName)) CallStr(fn, obj, gs.raw);
     return static_cast<Character*>(obj);
+}
+
+namespace {
+using FnRecruitSig = bool (*)(void* pi, void* c, bool editor);
+bool CallRecruit(void* fn, void* pi, void* c) {
+    __try {
+        reinterpret_cast<FnRecruitSig>(fn)(pi, c, false);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+std::string ClassRvas(const Character* c) {
+    void* m = nullptr;
+    Rd(c, off::CH_movement, m);
+    char buf[64];
+    snprintf(buf, sizeof buf, "%llx/%llx", static_cast<unsigned long long>(Vtable(c) - g_base),
+             static_cast<unsigned long long>(m ? Vtable(m) - g_base : 0));
+    return buf;
+}
+
+namespace {
+using FnAddTaskNearestSig = void (*)(void* pi, void* building, int task, void* subject, bool shift, const float* loc, bool noAnimals);
+bool CallAddTaskNearestRaw(void* fn, void* pi, int task, void* subject, const float* loc) {
+    __try {
+        reinterpret_cast<FnAddTaskNearestSig>(fn)(pi, nullptr, task, subject, false, loc, false);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool CallAddTaskNearest(int task, Character* subject) {
+    kc::Vec3 p;
+    PlayerInterface* pi = Player();
+    if (!pi || !GetPosition(subject, p)) return false;
+    const float loc[3] = {p.x, p.y, p.z};
+    return CallAddTaskNearestRaw(FnAddr(FnAddTaskNearest), pi, task, subject, loc);
+}
+
+bool CharacterName(const Character* c, std::string& out) {
+    return IsCharacter(c) && ReadGameString(reinterpret_cast<const uint8_t*>(c) + off::RO_name, out);
+}
+
+Character* CreateRecruit(Character* model, const std::string& name, const kc::Vec3& pos, std::string* err) {
+    kc::SpawnInfo info;
+    if (!ReadSpawnSource(model, info)) { if (err) *err = "cannot read the squad's character template"; return nullptr; }
+    info.name = name.substr(0, 15);
+    Character* c = CreateCharacter(info, pos, err);
+    if (!c) return nullptr;
+    PlayerInterface* pi = Player();
+    if (!pi || !CallRecruit(FnAddr(FnRecruit), pi, c)) { if (err) *err = "recruit() failed"; return nullptr; }
+    return c;
 }
 
 namespace {

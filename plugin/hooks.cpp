@@ -28,6 +28,8 @@ using MainLoopFn = void (*)(void* gw, float t);
 using PlayerMoveFn = void (*)(void* pi, const float* pos, void* building);
 using AddOrderFn = void (*)(void* pi, void* building, int task, void* subject, bool shift, bool addDontClear, const float* loc);
 using NewTaskFn = void (*)(void* pi, int task, const void* targetHand, void* building, const float* clickPos, bool addDontClear);
+using AddTaskNearestFn = void (*)(void* pi, void* building, int task, void* subject, bool shift, const float* loc, bool noAnimals);
+using AddJobFn = void (*)(void* pi, int task, void* subject, bool shift, bool add, const float* loc);
 using SetOrderFn = void (*)(void* pi, int order);
 using StopMoveFn = void (*)(void* pi);
 using MoveOrderFn = void (*)(void* chr, void* building, void* subject, const float* loc);
@@ -40,6 +42,8 @@ using VoidFn = void (*)(void* self);
 MainLoopFn o_mainLoop = nullptr;
 PlayerMoveFn o_playerMove = nullptr;
 AddOrderFn o_addOrder = nullptr;
+AddTaskNearestFn o_addTaskNearest = nullptr;
+AddJobFn o_addJob = nullptr;
 NewTaskFn o_newTask = nullptr;
 SetOrderFn o_setOrder = nullptr;
 StopMoveFn o_stopMove = nullptr;
@@ -51,6 +55,8 @@ MedKnockoutFn o_medKnockout = nullptr;
 DeclareDeadFn o_declareDead = nullptr;
 using RagdollModeFn = void (*)(void*, bool, int);
 RagdollModeFn o_ragdollMode = nullptr;
+using CreateCharFn = void* (*)(void* factory, void* faction, const float* pos, void* owner, void* data, void* home, float age);
+CreateCharFn o_createChar = nullptr;
 VoidFn o_regionUpdateBT = nullptr;
 VoidFn o_seasonGetNewWeather = nullptr;
 
@@ -143,7 +149,7 @@ constexpr int kTaskLootTarget = 26;   // TaskType::LOOT_TARGET
 bool ClientLoot(int task, kenshi::Character* target) {
     auto v = KenshiWorld::View();
     if (g_hostCall || !v->active || !v->client || task != kTaskLootTarget || !target) return false;
-    if (!kenshi::IsDown(target) && !kenshi::IsDead(target)) return false;
+    if (!kenshi::IsDown(target) && !kenshi::IsDead(target) && !kenshi::IsRagdoll(target)) return false;
     KenshiWorld* w = TheWorld();
     if (!w) return false;
     const SelectionInfo s = ClassifySelection(*v);
@@ -151,7 +157,16 @@ bool ClientLoot(int task, kenshi::Character* target) {
         if (s.foreign) ToastForeign();
         return true;
     }
-    w->RequestLoot(s.mine.front(), target);
+    kc::Handle looter = s.mine.front();
+    kc::Vec3 tp, p;
+    float best = -1;
+    if (kenshi::GetPosition(target, tp))
+        for (const auto& h : s.mine)
+            if (kenshi::Character* c = w->FindSquad(h); c && kenshi::GetPosition(c, p)) {
+                const float d = (p.x - tp.x) * (p.x - tp.x) + (p.z - tp.z) * (p.z - tp.z);
+                if (best < 0 || d < best) { best = d; looter = h; }
+            }
+    w->RequestLoot(looter, target);
     return true;
 }
 
@@ -163,6 +178,14 @@ void hk_newTask(void* pi, int task, const void* targetHand, void* building, cons
     kc::Handle th;
     if (ClientLoot(task, kenshi::HandleFromHand(targetHand, th) ? kenshi::Resolve(th) : nullptr)) return;
     if (AllowUnsyncedOrder(task)) o_newTask(pi, task, targetHand, building, clickPos, addDontClear);
+}
+// The right-click "loot" on a body goes through this one (the nearest selected character acts).
+void hk_addTaskNearest(void* pi, void* building, int task, void* subject, bool shift, const float* loc, bool noAnimals) {
+    if (ClientLoot(task, kenshi::IsCharacter(subject) ? static_cast<kenshi::Character*>(subject) : nullptr)) return;
+    if (AllowUnsyncedOrder(task)) o_addTaskNearest(pi, building, task, subject, shift, loc, noAnimals);
+}
+void hk_addJob(void* pi, int task, void* subject, bool shift, bool add, const float* loc) {
+    if (AllowUnsyncedOrder(task)) o_addJob(pi, task, subject, shift, add, loc);
 }
 void hk_setOrder(void* pi, int order) {
     if (AllowUnsyncedOrder(-order)) o_setOrder(pi, order);
@@ -217,10 +240,19 @@ void hk_declareDead(void* chr) {
     if (KenshiWorld::ClientActive() && !g_hostCall) return;
     o_declareDead(chr);
 }
-// Nor do they fall over on their own (local knockout from the host's health values, a hit that
-// would knock down locally...): a client character goes down when, and where, the host's does.
+// Nor do the characters the host drives fall over on their own (local knockout from the host's
+// health values, a hit that would knock down locally...): they go down when, and where, the
+// host's do. Others (bodies of a zone that just streamed in, far from everyone) lie down as usual.
+// Clients never populate the world by themselves (wandering squads, bar patrons...): every
+// character comes from the host's world. Every caller of the factory copes with a null result
+// (it is how the game refuses a second copy of a unique character).
+void* hk_createRandomCharacter(void* factory, void* faction, const float* pos, void* owner, void* data, void* home, float age) {
+    if (KenshiWorld::ClientActive() && !g_hostCall) return nullptr;
+    return o_createChar(factory, faction, pos, owner, data, home, age);
+}
+
 void hk_ragdollMode(void* chr, bool on, int part) {
-    if (on && KenshiWorld::ClientActive() && !g_hostCall) return;
+    if (on && KenshiWorld::ClientActive() && !g_hostCall && KenshiWorld::View()->replicated.count(chr)) return;
     o_ragdollMode(chr, on, part);
 }
 
@@ -284,6 +316,8 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnMainLoop, reinterpret_cast<void*>(&hk_mainLoop), reinterpret_cast<void**>(&o_mainLoop)},
         {kenshi::FnPlayerMove, reinterpret_cast<void*>(&hk_playerMove), reinterpret_cast<void**>(&o_playerMove)},
         {kenshi::FnAddOrderSelected, reinterpret_cast<void*>(&hk_addOrder), reinterpret_cast<void**>(&o_addOrder)},
+        {kenshi::FnAddTaskNearest, reinterpret_cast<void*>(&hk_addTaskNearest), reinterpret_cast<void**>(&o_addTaskNearest)},
+        {kenshi::FnAddJobSelected, reinterpret_cast<void*>(&hk_addJob), reinterpret_cast<void**>(&o_addJob)},
         {kenshi::FnNewPlayerTaskSelected, reinterpret_cast<void*>(&hk_newTask), reinterpret_cast<void**>(&o_newTask)},
         {kenshi::FnSetOrderSelected, reinterpret_cast<void*>(&hk_setOrder), reinterpret_cast<void**>(&o_setOrder)},
         {kenshi::FnStopCharactersMovement, reinterpret_cast<void*>(&hk_stopMove), reinterpret_cast<void**>(&o_stopMove)},
@@ -294,6 +328,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnMedKnockout, reinterpret_cast<void*>(&hk_medKnockout), reinterpret_cast<void**>(&o_medKnockout)},
         {kenshi::FnDeclareDead, reinterpret_cast<void*>(&hk_declareDead), reinterpret_cast<void**>(&o_declareDead)},
         {kenshi::FnRagdollMode, reinterpret_cast<void*>(&hk_ragdollMode), reinterpret_cast<void**>(&o_ragdollMode)},
+        {kenshi::FnCreateRandomCharacter, reinterpret_cast<void*>(&hk_createRandomCharacter), reinterpret_cast<void**>(&o_createChar)},
         {kenshi::FnRegionUpdateBT, reinterpret_cast<void*>(&hk_regionUpdateBT), reinterpret_cast<void**>(&o_regionUpdateBT)},
         {kenshi::FnSeasonGetNewWeather, reinterpret_cast<void*>(&hk_seasonGetNewWeather), reinterpret_cast<void**>(&o_seasonGetNewWeather)},
     };

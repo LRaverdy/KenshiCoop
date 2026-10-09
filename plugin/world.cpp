@@ -75,7 +75,14 @@ void KenshiWorld::EndFrame() {
     // (space, F2/F3/F4) have no lasting effect.
     if (active_ && client_ && haveHostTime_) {
         // Same calls as the space bar / speed keys, so the game's own speed UI follows too.
-        if (kenshi::GetPaused() != hostTime_.paused) kenshi::CallUserPause(hostTime_.paused);
+        // Positions cannot be corrected once paused: when the host pauses, everyone first walks the
+        // last bit to where the host froze them (Apply halts them there), then the game pauses.
+        constexpr double kSettleBeforePause = 0.4;
+        const double now = NowSeconds();
+        if (!hostTime_.paused) hostPausedAt_ = 0;
+        else if (hostPausedAt_ == 0) hostPausedAt_ = now;
+        const bool pause = hostTime_.paused && now - hostPausedAt_ >= kSettleBeforePause;
+        if (kenshi::GetPaused() != pause) kenshi::CallUserPause(pause);
         if (!hostTime_.paused && std::fabs(kenshi::GetFrameSpeed() - hostTime_.speed) > 1e-3f) kenshi::CallSetFrameSpeed(hostTime_.speed);
     }
     // While players join, the host's world stays frozen even if someone presses unpause.
@@ -87,6 +94,8 @@ void KenshiWorld::EndFrame() {
     auto v = std::make_shared<HookView>();
     v->active = active_;
     v->client = client_;
+    v->replicated.swap(applied_);
+    applied_.clear();
     if (active_) {
         v->controllable = controllable_;
         for (auto& [h, c] : squad_) if (!controllable_.count(h)) v->squadForeign.insert(c);
@@ -262,10 +271,11 @@ void KenshiWorld::Reconcile(const std::vector<kc::Handle>& known, const std::vec
     // A stranger of the same kind as a missing host character becomes its stand-in: this is how a
     // unique character the local game made on its own (and so cannot be created twice) still
     // matches the host's.
+    constexpr float kAdoptRange = 300.0f;   // never drag a character across the map (into unloaded land)
     for (const kc::MissingChar& m : missing) {
         if (alias_.count(m.handle)) continue;
         Stranger* best = nullptr;
-        float bestDist = 0;
+        float bestDist = kAdoptRange;
         for (Stranger& s : strangers) {
             kc::SpawnInfo info;
             kc::Vec3 p;
@@ -273,7 +283,7 @@ void KenshiWorld::Reconcile(const std::vector<kc::Handle>& known, const std::vec
                 info.factionSid != m.spawn.factionSid || !kenshi::GetPosition(s.c, p))
                 continue;
             const float d = Dist(p, m.pos);
-            if (!best || d < bestDist) { best = &s; bestDist = d; }
+            if (d <= bestDist) { best = &s; bestDist = d; }
         }
         if (!best) continue;
         best->used = true;
@@ -286,9 +296,23 @@ void KenshiWorld::Reconcile(const std::vector<kc::Handle>& known, const std::vec
         adopted.push_back(m.handle);
         Log("a local %s stands in for the host's (%.0f units away)", m.spawn.templateSid.c_str(), bestDist);
     }
+    // Only where the host's world is loaded too: a character of a zone that only we loaded (it
+    // streams in a little earlier here) comes from the same save, and the host will have it soon.
+    constexpr float kHostArea = 300.0f;
+    std::vector<kc::Vec3> hostArea;
+    for (const kc::Handle& k : known) {
+        kc::Vec3 p;
+        if (kenshi::Character* c = Find(k); c && kenshi::GetPosition(c, p)) hostArea.push_back(p);
+    }
+    auto inHostArea = [&](kenshi::Character* c) {
+        kc::Vec3 p;
+        if (!kenshi::GetPosition(c, p)) return false;
+        for (const kc::Vec3& q : hostArea) if (Dist(p, q) <= kHostArea) return true;
+        return false;
+    };
     int removed = 0;
     for (Stranger& s : strangers) {
-        if (s.used || now - s.since < kLinger) continue;
+        if (s.used || now - s.since < kLinger || !inHostArea(s.c)) continue;
         HostCallScope scope;
         if (kenshi::DestroyObject(s.c)) ++removed;
         strangerSince_.erase(s.h);
@@ -332,6 +356,7 @@ bool KenshiWorld::ReadVitals(const kc::Handle& h, kc::EntityVitals& out) {
 void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, const kc::EntityState& latest) {
     kenshi::Character* c = Find(h);
     if (!c) return;
+    applied_.insert(c);
     kc::EntityState& last = lastTarget_[h];
     last = target;
     last.flags = latest.flags;
@@ -377,14 +402,17 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
 
     const float err = Dist(local, target.pos);
     HostCallScope scope;
-    // Far off (late join, lag spike, teleport on the host): snap straight to the host state.
-    if (err > cfg_.snapDistance) {
+    // Far off (late join, lag spike, teleport on the host): snap straight to the host state. And
+    // when the host pauses: distant NPCs, which the game moves only a few times a second along
+    // their path (ignoring the gentle correction below), are put exactly where the host froze them.
+    const bool settlingForPause = haveHostTime_ && hostTime_.paused;
+    if (err > cfg_.snapDistance || (settlingForPause && err > 0.3f && !squad_.count(h))) {
         kenshi::Teleport(c, target.pos, target.rot);
         lastDest_.erase(h);
         return;
     }
     // The game's own locomotion animates the character (walking toward the host's destination)...
-    const bool hostMoving = (latest.flags & kc::kFlagMoving) != 0;
+    const bool hostMoving = (latest.flags & kc::kFlagMoving) != 0 && !(haveHostTime_ && hostTime_.paused);
     auto it = lastDest_.find(h);
     if (hostMoving) {
         if (it == lastDest_.end() || Dist(it->second, latest.dest) > cfg_.destEpsilon) {
@@ -401,7 +429,7 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
                          local.z + (target.pos.z - local.z) * k};
         kenshi::SetPositionSimple(c, err < 0.05f ? target.pos : p);
     }
-    if (traceFrames > 0 && h == traceHandle && (--traceFrames % 15 == 0 || err > 1.0f)) {
+    if (traceFrames > 0 && h == traceHandle && (--traceFrames % 15 == 0 || err > 1.0f || (haveHostTime_ && hostTime_.paused))) {
         kc::Vec3 after;
         kenshi::GetPosition(c, after);
         Log("trace t=%.3f local=(%.2f,%.2f) target=(%.2f,%.2f) latest=(%.2f,%.2f) err=%.2f after=(%.2f,%.2f) moving=%d/%d combat=%d", now,
@@ -449,7 +477,7 @@ void KenshiWorld::QueueLocalOrder(const kc::Handle& h, const kc::Command& c) {
 }
 
 namespace {
-constexpr float kLootRange = 6.0f;   // bodies lie within a few units of the host's copy
+constexpr float kLootRange = 12.0f;   // the looter stops next to the body; bodies lie within a few units of the host's copy
 }
 
 void KenshiWorld::RequestLoot(const kc::Handle& looter, kenshi::Character* target) {
@@ -459,6 +487,7 @@ void KenshiWorld::RequestLoot(const kc::Handle& looter, kenshi::Character* targe
     if (!me || !kenshi::GetHandle(target, t) || !kenshi::GetPosition(target, tp) || !kenshi::GetPosition(me, lp)) return;
     pendingLoot_.erase(std::remove_if(pendingLoot_.begin(), pendingLoot_.end(), [&](const PendingLoot& p) { return p.looter == looter; }),
                        pendingLoot_.end());
+    Log("loot order: %.0f units to go", Dist(lp, tp));
     if (Dist(lp, tp) <= kLootRange) {
         kenshi::OpenLootWindow(me, target);
         return;
@@ -476,7 +505,7 @@ void KenshiWorld::UpdatePendingLoot() {
         kenshi::Character* me = FindSquad(it->looter);
         kenshi::Character* target = kenshi::Resolve(it->target);
         kc::Vec3 lp, tp;
-        const bool valid = me && target && (kenshi::IsDown(target) || kenshi::IsDead(target)) && now < it->until;
+        const bool valid = me && target && (kenshi::IsDown(target) || kenshi::IsDead(target) || kenshi::IsRagdoll(target)) && now < it->until;
         if (valid && kenshi::GetPosition(me, lp) && kenshi::GetPosition(target, tp) && Dist(lp, tp) <= kLootRange) {
             kenshi::OpenLootWindow(me, target);
             it = pendingLoot_.erase(it);
@@ -658,6 +687,31 @@ bool KenshiWorld::BeginWorldImport(const std::vector<kc::WorldFile>& files, std:
         if (!out) { if (err) *err = "cannot write " + ToUtf8(target); return false; }
     }
     if (!kenshi::RequestLoad(kImportSlot)) { if (err) *err = "the game refused to load the save"; return false; }
+    return true;
+}
+
+bool KenshiWorld::EnsurePlayerCharacter(const std::string& playerName, kc::Handle& out) {
+    const std::string name = playerName.substr(0, 15);   // what fits a character name here
+    std::vector<kenshi::Character*> squad;
+    kenshi::PlayerCharacters(squad);
+    if (squad.empty()) return false;
+    for (kenshi::Character* c : squad) {   // back again: same character as last time
+        std::string n;
+        if (kenshi::CharacterName(c, n) && n == name && kenshi::GetHandle(c, out)) return true;
+    }
+    kc::Vec3 p;
+    if (!kenshi::GetPosition(squad.front(), p)) return false;
+    p.x += 4.0f;
+    p.z += 4.0f;
+    std::string err;
+    HostCallScope scope;
+    kenshi::Character* c = kenshi::CreateRecruit(squad.front(), name, p, &err);
+    if (!c || !kenshi::GetHandle(c, out)) {
+        Log("cannot create %s's character: %s", name.c_str(), err.c_str());
+        return false;
+    }
+    Log("created %s's own character", name.c_str());
+    Toast(name + " joins with a character of their own.");
     return true;
 }
 
