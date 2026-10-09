@@ -40,7 +40,7 @@ public:
     uint64_t ModsHash() override;
     void PlayerCharacters(std::vector<kc::Handle>& out) override;
     void NearbyCharacters(const std::vector<kc::Vec3>& centers, float radius, std::vector<kc::Handle>& out) override;
-    bool Exists(const kc::Handle& h) override { return Find(h) != nullptr; }
+    bool Exists(const kc::Handle& h) override;
     bool Read(const kc::Handle& h, kc::EntityState& out) override;
     bool ReadVitals(const kc::Handle& h, kc::EntityVitals& out) override;
     bool ReadSpawnInfo(const kc::Handle& h, kc::SpawnInfo& out) override;
@@ -48,10 +48,15 @@ public:
     void ApplyCombat(const kc::Handle& h, bool fight, const kc::Handle& target) override;
     bool Spawn(const kc::Handle& h, const kc::SpawnInfo& info, const kc::EntityState& at) override;
     void Despawn(const kc::Handle& h) override;
+    void Reconcile(const std::vector<kc::Handle>& known, const std::vector<kc::MissingChar>& missing, double now,
+                   std::vector<kc::Handle>& adopted) override;
     void Apply(const kc::Handle& h, const kc::EntityState& target, const kc::EntityState& latest) override;
     void ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) override;
     bool Order(const kc::Handle& h, const kc::Command& c) override;
     void TakeLocalOrders(std::vector<std::pair<kc::Handle, kc::Command>>& out) override;
+    bool ReadInventory(const kc::Handle& h, std::vector<kc::ItemState>& out) override;
+    bool ExecuteInvOp(const kc::Handle& from, const kc::Handle& to, const kc::InvOp& op) override;
+    bool ApplyInventory(const kc::Handle& h, const std::vector<kc::ItemState>& items) override;
     void ReadWeather(std::vector<kc::RegionWeather>& out) override;
     void ApplyWeather(const std::vector<kc::RegionWeather>& regions) override;
     kc::TimeState GetTime() override;
@@ -75,9 +80,14 @@ public:
         return local;
     }
     size_t CharacterCount() const { return squad_.size(); }
+    kc::Handle traceHandle;   // tests: log what Apply does to this character for traceFrames frames
+    int traceFrames = 0;
 
     // Called from hooks (game thread).
     void QueueLocalOrder(const kc::Handle& h, const kc::Command& c);
+    // Client: the local player wants `looter` (one of its characters) to loot `target`, a knocked-out
+    // or dead character. It walks there through the host; the loot window opens once it is close.
+    void RequestLoot(const kc::Handle& looter, kenshi::Character* target);
     void Toast(const std::string& msg);
     std::vector<std::string> TakeToasts();
 
@@ -93,11 +103,20 @@ private:
     std::unordered_set<kc::Handle, HandleHash> controllable_;
     // client: host handle -> handle of the local stand-in we created for it
     std::unordered_map<kc::Handle, kc::Handle, HandleHash> alias_;
+    std::unordered_map<kc::Handle, double, HandleHash> strangerSince_;   // client: local-only NPCs, first seen
     std::unordered_map<kc::Handle, kc::Vec3, HandleHash> lastDest_;   // client: destination last issued
     std::unordered_map<kc::Handle, double, HandleHash> postureSince_; // client: when host/local posture started to differ
     std::unordered_map<kc::Handle, double, HandleHash> postureFixed_; // client: last forced posture change
+    std::unordered_map<kc::Handle, kc::EntityState, HandleHash> lastTarget_;   // client: where the host has it
+    struct FallPrep { double start, lastMove; };
+    std::unordered_map<kc::Handle, FallPrep, HandleHash> fallPrep_;   // client: moving into place before a fall
+    std::unordered_map<kc::Handle, double, HandleHash> fellAt_;      // client: when we made it fall
+    bool ReadyToFall(const kc::Handle& h, kenshi::Character* c, const kc::EntityState& at, double now);
     std::mutex ordersMutex_;
     std::vector<std::pair<kc::Handle, kc::Command>> orders_;
+    struct PendingLoot { kc::Handle looter, target; double until; };
+    std::vector<PendingLoot> pendingLoot_;   // client, game thread only
+    void UpdatePendingLoot();
     std::vector<kenshi::Character*> scratch_;
     bool active_ = false, client_ = false;
     bool live_ = false;

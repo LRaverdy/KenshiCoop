@@ -8,6 +8,7 @@
 #include <cstring>
 #include <functional>
 #include <map>
+#include <set>
 #include <memory>
 #include <random>
 #include <string>
@@ -43,6 +44,7 @@ struct FakeChar {
     bool squad = true;
     EntityVitals vit;   // netId unused
     uint32_t fights = 0;   // serial of the character it fights
+    std::vector<ItemState> items;
 };
 
 struct FakeWorld : IWorld {
@@ -168,6 +170,38 @@ struct FakeWorld : IWorld {
     void Despawn(const Handle& h) override {
         if (chars.erase(h.serial)) ++despawns;
     }
+    // client: characters the local game created by itself (key = local serial)
+    std::map<uint32_t, double> strangerSince;
+    std::map<uint32_t, std::string> templateOf;   // strangers' template, when not "tmpl-<serial>"
+    int adoptions = 0, culled = 0;
+    void Reconcile(const std::vector<Handle>& known, const std::vector<MissingChar>& missing, double now,
+                   std::vector<Handle>& adopted) override {
+        std::set<uint32_t> k;
+        for (auto& h : known) k.insert(h.serial);
+        std::vector<uint32_t> strangers;
+        for (auto& [s, c] : chars) if (!c.squad && !k.count(s)) strangers.push_back(s);
+        for (auto it = strangerSince.begin(); it != strangerSince.end();)
+            it = std::find(strangers.begin(), strangers.end(), it->first) == strangers.end() ? strangerSince.erase(it) : std::next(it);
+        for (uint32_t s : strangers) strangerSince.emplace(s, now);
+        for (const auto& m : missing) {
+            for (uint32_t s : strangers) {
+                if (!chars.count(s) || chars.count(m.handle.serial)) continue;
+                auto t = templateOf.find(s);
+                if (t == templateOf.end() || t->second != m.spawn.templateSid) continue;
+                // the fake world has no handle indirection: the stranger takes the host's serial
+                chars[m.handle.serial] = chars[s];
+                chars.erase(s);
+                strangerSince.erase(s);
+                adopted.push_back(m.handle);
+                ++adoptions;
+                break;
+            }
+        }
+        for (auto it = strangerSince.begin(); it != strangerSince.end();) {
+            if (chars.count(it->first) && now - it->second >= 5.0) { chars.erase(it->first); ++culled; it = strangerSince.erase(it); }
+            else ++it;
+        }
+    }
     void ApplyVitals(const Handle& h, const EntityVitals& v) override {
         auto it = chars.find(h.serial);
         if (it != chars.end()) { it->second.vit = v; it->second.vit.netId = 0; }
@@ -180,6 +214,34 @@ struct FakeWorld : IWorld {
         return true;
     }
     void TakeLocalOrders(std::vector<std::pair<Handle, Command>>& out) override { out.swap(localOrders); localOrders.clear(); }
+    bool ReadInventory(const Handle& h, std::vector<ItemState>& out) override {
+        auto it = chars.find(h.serial);
+        if (it == chars.end()) return false;
+        out = it->second.items;
+        return true;
+    }
+    bool ApplyInventory(const Handle& h, const std::vector<ItemState>& items) override {
+        auto it = chars.find(h.serial);
+        if (it == chars.end()) return false;
+        it->second.items = items;
+        return true;
+    }
+    bool ExecuteInvOp(const Handle& from, const Handle& to, const InvOp& op) override {
+        auto a = chars.find(from.serial), b = chars.find(to.serial);
+        if (a == chars.end() || b == chars.end()) return false;
+        for (size_t i = 0; i < a->second.items.size(); ++i) {
+            ItemState& it = a->second.items[i];
+            if (!it.sameKind(op.item) || it.quantity < op.item.quantity) continue;
+            ItemState moved = it;
+            moved.quantity = op.item.quantity;
+            moved.section = op.toSection; moved.x = op.toX; moved.y = op.toY;
+            it.quantity -= op.item.quantity;
+            if (it.quantity == 0) a->second.items.erase(a->second.items.begin() + ptrdiff_t(i));
+            if (op.kind == InvOpKind::Move) b->second.items.push_back(moved);
+            return true;
+        }
+        return false;
+    }
     std::vector<RegionWeather> weather;
     void ReadWeather(std::vector<RegionWeather>& out) override { out = weather; }
     void ApplyWeather(const std::vector<RegionWeather>& r) override { weather = r; }
@@ -351,6 +413,8 @@ static void TestFuzz() {
     add([](Writer& w) { Encode(w, WorldEnd{7}); });
     add([](Writer& w) { Encode(w, ReadyMsg{7}); });
     add([](Writer& w) { WeatherMsg m; m.regions.resize(2); m.regions[0].regionSid = "a"; m.regions[1].weatherSid = "b"; Encode(w, m); });
+    add([](Writer& w) { InventoryMsg m; m.netId = 3; m.items.resize(2); for (auto& i : m.items) i.templateSid = "x"; Encode(w, m); });
+    add([](Writer& w) { InvOp m; m.fromNetId = 1; m.toNetId = 2; m.item.templateSid = "x"; m.toSection = "main"; Encode(w, m); });
     { VitalsMsg v; v.entities.resize(2); for (auto& e : v.entities) { e.netId = 4; e.parts.resize(3); } seeds.push_back(EncodeVitals(v)[0]); }
     { Snapshot s; s.entities.resize(3); for (auto& e : s.entities) e.netId = 7; seeds.push_back(EncodeSnapshot(s)[0]); }
 
@@ -377,6 +441,8 @@ static void TestFuzz() {
         case Msg::WorldEnd: { WorldEnd m; Decode(r, m); break; }
         case Msg::Ready: { ReadyMsg m; Decode(r, m); break; }
         case Msg::Weather: { WeatherMsg m; Decode(r, m); break; }
+        case Msg::Inventory: { InventoryMsg m; Decode(r, m); break; }
+        case Msg::InvOp: { InvOp m; Decode(r, m); break; }
         }
     };
     for (int i = 0; i < 300000; ++i) {
@@ -384,7 +450,7 @@ static void TestFuzz() {
         if (i % 2) {
             p.resize(rng() % 64);
             for (auto& b : p) b = uint8_t(rng());
-            if (!p.empty()) p[0] = uint8_t(1 + rng() % 19);
+            if (!p.empty()) p[0] = uint8_t(1 + rng() % 21);
         } else {
             p = seeds[rng() % seeds.size()];
             const int muts = 1 + rng() % 4;
@@ -652,6 +718,94 @@ static void TestSpawnReplication() {
     CHECK(!cw.chars.count(50));
     CHECK(cw.despawns >= 1);
     CHECK(cw.chars.count(52) == 1);
+
+    std::printf("session: NPCs the client's game makes by itself are adopted or removed\n");
+    // the client's game spawns two characters of its own: one of the same kind as a character the
+    // host is about to spawn (it must become its stand-in), one that the host never has (removed)
+    FakeChar mine; mine.squad = false; mine.pos = {300, 0, 0}; mine.dest = mine.pos;
+    cw.chars[900] = mine; cw.templateOf[900] = "tmpl-60";
+    cw.chars[901] = mine; cw.templateOf[901] = "tmpl-unknown";
+    const int spawnsBefore = cw.spawns;
+    FakeChar unique; unique.squad = false; unique.pos = {140, 0, 60}; unique.dest = unique.pos;
+    hw.chars[60] = unique;
+    Run({{&host, &hw}, {&cli, &cw}}, 9.0, [&] {
+        return cw.chars.count(60) && !cw.chars.count(900) && !cw.chars.count(901) && Dist(cw.chars[60].pos, hw.chars[60].pos) < 1e-3f;
+    });
+    CHECK(cw.adoptions == 1);
+    CHECK(cw.spawns == spawnsBefore);   // adopted, not created
+    CHECK(cw.chars.count(60) == 1 && !cw.chars.count(900));
+    if (cw.chars.count(60)) CHECK(Dist(cw.chars[60].pos, hw.chars[60].pos) < 1e-3f);
+    CHECK(!cw.chars.count(901) && cw.culled == 1);
+    CHECK(cli.missingNpcs() == 0);
+}
+
+static void TestInventories() {
+    std::printf("session: inventories mirror the host; client loot is replayed by the host\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    auto item = [](const char* sid, int q, const char* sec, int x, int y) {
+        ItemState i; i.templateSid = sid; i.quantity = q; i.section = sec; i.x = int16_t(x); i.y = int16_t(y); return i;
+    };
+    hw.chars[1].items = {item("bread", 3, "main", 0, 0)};
+    FakeChar corpse; corpse.squad = false; corpse.pos = {130, 0, 0}; corpse.dest = corpse.pos;
+    corpse.items = {item("katana", 1, "weapon", 0, 0), item("coins", 50, "main", 2, 0)};
+    corpse.vit.flags = kVitDead;
+    FakeChar guard; guard.squad = false; guard.pos = {140, 0, 0}; guard.dest = guard.pos;   // conscious NPC
+    guard.items = {item("spear", 1, "weapon", 0, 0)};
+    hw.chars[21] = guard;
+    hw.chars[20] = corpse;
+    AtMenu(cw);
+    SessionConfig hc; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 5));
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return cw.chars[20].items.size() == 2; });
+    CHECK(cw.chars[1].items == hw.chars[1].items);
+    CHECK(cw.chars[20].items == hw.chars[20].items);
+    // the host's character eats a bread: the client sees it
+    hw.chars[1].items[0].quantity = 2;
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cw.chars[1].items == hw.chars[1].items; });
+    CHECK(cw.chars[1].items == hw.chars[1].items);
+    // the client player owns squad member 2 and loots the katana off the corpse (UI drag)
+    host.Assign(FakeWorld::H(2), 2);
+    Run({{&host, &hw}, {&cli, &cw}}, 1.5);
+    auto& c20 = cw.chars[20].items;
+    ItemState katana = c20[0].templateSid == "katana" ? c20[0] : c20[1];
+    c20.erase(std::remove_if(c20.begin(), c20.end(), [](const ItemState& i) { return i.templateSid == "katana"; }), c20.end());
+    katana.section = "main"; katana.x = 4; katana.y = 1;
+    cw.chars[2].items.push_back(katana);
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] {
+        return hw.chars[2].items.size() == 1 && hw.chars[20].items.size() == 1 && cw.chars[2].items == hw.chars[2].items;
+    });
+    CHECK(hw.chars[2].items.size() == 1 && hw.chars[2].items[0].templateSid == "katana" && hw.chars[2].items[0].x == 4);
+    CHECK(hw.chars[20].items.size() == 1 && hw.chars[20].items[0].templateSid == "coins");
+    CHECK(cw.chars[2].items == hw.chars[2].items && cw.chars[20].items == hw.chars[20].items);
+    // stealing from a character owned by the host is refused and undone on the client
+    auto bread = cw.chars[1].items[0];
+    cw.chars[1].items.clear();
+    cw.chars[2].items.push_back(bread);
+    Run({{&host, &hw}, {&cli, &cw}}, 5.0, [&] { return cw.chars[1].items == hw.chars[1].items && cw.chars[2].items == hw.chars[2].items; });
+    CHECK(hw.chars[1].items.size() == 1 && hw.chars[1].items[0].templateSid == "bread");
+    CHECK(cw.chars[1].items == hw.chars[1].items && cw.chars[2].items == hw.chars[2].items);
+    // so is disarming a conscious NPC: only knocked-out or dead ones can be looted
+    Run({{&host, &hw}, {&cli, &cw}}, 1.0, [&] { return cw.chars[21].items == hw.chars[21].items; });
+    auto spear = cw.chars[21].items.at(0);
+    cw.chars[21].items.clear();
+    spear.x = 6;
+    cw.chars[2].items.push_back(spear);
+    Run({{&host, &hw}, {&cli, &cw}}, 5.0, [&] { return cw.chars[21].items == hw.chars[21].items && cw.chars[2].items == hw.chars[2].items; });
+    CHECK(hw.chars[21].items.size() == 1 && hw.chars[21].items[0].templateSid == "spear");
+    CHECK(cw.chars[21].items == hw.chars[21].items && cw.chars[2].items == hw.chars[2].items);
+    // once knocked out, it can
+    hw.chars[21].vit.flags = kVitUnconscious;
+    Run({{&host, &hw}, {&cli, &cw}}, 1.0);
+    cw.chars[21].items.clear();
+    cw.chars[2].items.push_back(spear);
+    Run({{&host, &hw}, {&cli, &cw}}, 5.0, [&] { return hw.chars[21].items.empty() && cw.chars[2].items == hw.chars[2].items; });
+    CHECK(hw.chars[21].items.empty());
+    CHECK(hw.chars[2].items.size() == 2 && cw.chars[2].items == hw.chars[2].items);
 }
 
 static void TestManyPlayers() {
@@ -712,6 +866,7 @@ int main() {
     TestRejections();
     TestWorldAuthority();
     TestSpawnReplication();
+    TestInventories();
     TestManyPlayers();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

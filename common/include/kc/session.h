@@ -37,6 +37,13 @@ enum class ExportStatus { Pending, Done, Failed };
 
 // What the session needs from the game. Implemented by the Kenshi layer and by tests.
 // Methods that touch the game world are only called on ticks where the world is live.
+// Client: a host character absent from the local world, and how to recreate it.
+struct MissingChar {
+    Handle handle;
+    SpawnInfo spawn;
+    Vec3 pos;
+};
+
 class IWorld {
 public:
     virtual ~IWorld() = default;
@@ -65,6 +72,12 @@ public:
     // under the host's handle), and remove it again.
     virtual bool Spawn(const Handle& h, const SpawnInfo& info, const EntityState& at) = 0;
     virtual void Despawn(const Handle& h) = 0;
+    // Client: line the local NPC population up with the host's. `known` holds every character the
+    // host simulates; a local one outside it was made by the local game on its own. Such a
+    // stranger becomes the stand-in of a `missing` host character of the same kind (its handle is
+    // returned in `adopted`), or is removed once it has lingered.
+    virtual void Reconcile(const std::vector<Handle>& known, const std::vector<MissingChar>& missing, double now,
+                           std::vector<Handle>& adopted) = 0;
 
     // Client side: drive a replicated character toward the host state.
     // `target` is the interpolated state for "now - delay", `latest` the newest received one.
@@ -81,6 +94,12 @@ public:
     // weather update, which may run on another thread, so ApplyWeather only stores it).
     virtual void ReadWeather(std::vector<RegionWeather>& out) = 0;
     virtual void ApplyWeather(const std::vector<RegionWeather>& regions) = 0;
+
+    // Inventories. Host: read; execute a client's item movement (false = refused/impossible).
+    virtual bool ReadInventory(const Handle& h, std::vector<ItemState>& out) = 0;
+    virtual bool ExecuteInvOp(const Handle& from, const Handle& to, const InvOp& op) = 0;
+    // Client: make the local copy hold exactly these items (false = could not, retry later).
+    virtual bool ApplyInventory(const Handle& h, const std::vector<ItemState>& items) = 0;
 
     virtual TimeState GetTime() = 0;
     virtual void SetTime(const TimeState& t) = 0;
@@ -186,8 +205,17 @@ private:
         bool spawned = false;                // client created a stand-in for it
         uint32_t combatApplied = 0;          // client: combat target last imposed (netId)
         double combatReapply = 0;
+        // inventories
+        bool haveInv = false;                // client: host inventory received
+        bool invDirty = false;               // client: must be (re)applied locally
+        double invRetry = 0;
+        std::vector<ItemState> inv;          // client: the host's view; host: last broadcast
+        uint64_t invHash = 0;                // host: hash of the last broadcast
+        double invPendingUntil = 0;          // client: an InvOp is in flight, do not diff
+        int invFailures = 0;                 // client: local rebuild attempts that did not match
         int spawnAttempts = 0;
         double nextSpawnTry = 0;
+        double missingSince = -1;            // client: when it was last found missing locally
         // host
         bool keep = false;                   // scratch flag for interest updates
     };
@@ -220,6 +248,9 @@ private:
     void SendSnapshots(double now);
     void SendVitals(double now);
     void SendBind(const Entity& e, PeerId to);
+    void SendInventories(double now, bool force, PeerId onlyTo);
+    void ClientInventoryDiff(double now);
+    void HostInvOp(uint8_t from, const InvOp& op);
     void SendReliable(PeerId to, const Writer& w);
     void BroadcastReliable(const Writer& w, bool inGameOnly, PeerId except = kNoPeer);
     void PushControllable();
@@ -262,6 +293,9 @@ private:
     double lastLive_ = 0;
     TimeState lastTime_;
     double nextWeather_ = 0;
+    double nextInventory_ = 0;
+    double nextInvDiff_ = 0;
+    std::vector<std::pair<uint8_t, InvOp>> pendingInvOps_;   // host: run on the next live tick
     double weatherForceAt_ = 0;
     std::vector<RegionWeather> lastWeather_;
     bool controllableDirty_ = true;

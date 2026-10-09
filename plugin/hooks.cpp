@@ -49,6 +49,8 @@ AIUpdateFn o_aiPeriodic = nullptr;
 MedDamageFn o_medDamage = nullptr;
 MedKnockoutFn o_medKnockout = nullptr;
 DeclareDeadFn o_declareDead = nullptr;
+using RagdollModeFn = void (*)(void*, bool, int);
+RagdollModeFn o_ragdollMode = nullptr;
 VoidFn o_regionUpdateBT = nullptr;
 VoidFn o_seasonGetNewWeather = nullptr;
 
@@ -122,25 +124,48 @@ void hk_playerMove(void* pi, const float* pos, void* building) {
 // Orders that are not synchronized yet. On a client they are refused (executing them locally
 // would make the client's world diverge); on the host they are refused only when the selection
 // contains another player's character.
-bool AllowUnsyncedOrder() {
+bool AllowUnsyncedOrder(int task) {
     auto v = KenshiWorld::View();
     if (g_hostCall || !v->active) return true;
     if (v->client) {
-        if (KenshiWorld* w = TheWorld()) w->Toast("Only movement orders are synchronized in this version.");
+        Log("client order refused (task %d)", task);
+        if (KenshiWorld* w = TheWorld()) w->Toast("Only movement and loot orders are synchronized in this version.");
         return false;
     }
     if (ClassifySelection(*v).foreign) { ToastForeign(); return false; }
     return true;
 }
 
+// Looting a knocked-out or dead character from a client: the looter walks there through the host
+// and the game's loot window opens locally once it is close. Items moved in that window are
+// replayed by the host (Session::ClientInventoryDiff).
+constexpr int kTaskLootTarget = 26;   // TaskType::LOOT_TARGET
+bool ClientLoot(int task, kenshi::Character* target) {
+    auto v = KenshiWorld::View();
+    if (g_hostCall || !v->active || !v->client || task != kTaskLootTarget || !target) return false;
+    if (!kenshi::IsDown(target) && !kenshi::IsDead(target)) return false;
+    KenshiWorld* w = TheWorld();
+    if (!w) return false;
+    const SelectionInfo s = ClassifySelection(*v);
+    if (s.mine.empty()) {
+        if (s.foreign) ToastForeign();
+        return true;
+    }
+    w->RequestLoot(s.mine.front(), target);
+    return true;
+}
+
 void hk_addOrder(void* pi, void* building, int task, void* subject, bool shift, bool addDontClear, const float* loc) {
-    if (AllowUnsyncedOrder()) o_addOrder(pi, building, task, subject, shift, addDontClear, loc);
+    if (ClientLoot(task, kenshi::IsCharacter(subject) ? static_cast<kenshi::Character*>(subject) : nullptr)) return;
+    if (AllowUnsyncedOrder(task)) o_addOrder(pi, building, task, subject, shift, addDontClear, loc);
 }
 void hk_newTask(void* pi, int task, const void* targetHand, void* building, const float* clickPos, bool addDontClear) {
-    if (AllowUnsyncedOrder()) o_newTask(pi, task, targetHand, building, clickPos, addDontClear);
+    kc::Handle th;
+    if (ClientLoot(task, kenshi::HandleFromHand(targetHand, th) ? kenshi::Resolve(th) : nullptr)) return;
+    if (AllowUnsyncedOrder(task)) o_newTask(pi, task, targetHand, building, clickPos, addDontClear);
 }
 void hk_setOrder(void* pi, int order) {
-    if (AllowUnsyncedOrder()) o_setOrder(pi, order);
+    if (AllowUnsyncedOrder(-order)) o_setOrder(pi, order);
 }
 void hk_stopMove(void* pi) {
     auto v = KenshiWorld::View();
@@ -191,6 +216,12 @@ void hk_medKnockout(void* med, float skill01) {
 void hk_declareDead(void* chr) {
     if (KenshiWorld::ClientActive() && !g_hostCall) return;
     o_declareDead(chr);
+}
+// Nor do they fall over on their own (local knockout from the host's health values, a hit that
+// would knock down locally...): a client character goes down when, and where, the host's does.
+void hk_ragdollMode(void* chr, bool on, int part) {
+    if (on && KenshiWorld::ClientActive() && !g_hostCall) return;
+    o_ragdollMode(chr, on, part);
 }
 
 // Weather: the host reports each region after the game advances it; clients impose the host's
@@ -262,6 +293,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnMedApplyDamage, reinterpret_cast<void*>(&hk_medDamage), reinterpret_cast<void**>(&o_medDamage)},
         {kenshi::FnMedKnockout, reinterpret_cast<void*>(&hk_medKnockout), reinterpret_cast<void**>(&o_medKnockout)},
         {kenshi::FnDeclareDead, reinterpret_cast<void*>(&hk_declareDead), reinterpret_cast<void**>(&o_declareDead)},
+        {kenshi::FnRagdollMode, reinterpret_cast<void*>(&hk_ragdollMode), reinterpret_cast<void**>(&o_ragdollMode)},
         {kenshi::FnRegionUpdateBT, reinterpret_cast<void*>(&hk_regionUpdateBT), reinterpret_cast<void**>(&o_regionUpdateBT)},
         {kenshi::FnSeasonGetNewWeather, reinterpret_cast<void*>(&hk_seasonGetNewWeather), reinterpret_cast<void**>(&o_seasonGetNewWeather)},
     };

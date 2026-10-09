@@ -2,9 +2,11 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 
 namespace kenshi {
@@ -36,6 +38,9 @@ const FunctionSig kFunctions[FnCount] = {
     {"WeatherRegion::updateBT", 0x9DDE50, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x83, 0x79, 0x38, 0x00, 0x48}},
     {"Season::getNewWeather", 0x9DD980, {0x48, 0x8B, 0xC4, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41}},
     {"WeatherInstance::setupWeather", 0x9DCF60, {0x4C, 0x8B, 0xDC, 0x57, 0x48, 0x81, 0xEC, 0x90, 0x00, 0x00, 0x00, 0x48}},
+    {"RootObjectFactory::createItem", 0x580750, {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41}},
+    {"ForgottenGUI::showTradeWindow", 0x791830, {0x44, 0x89, 0x49, 0x58, 0x8B, 0x42, 0x08, 0x89, 0x41, 0x68, 0x8B, 0x42}},
+    {"Character::isRagdoll", 0x7D1440, {0x48, 0x83, 0xEC, 0x28, 0x80, 0xB9, 0xD4, 0x03, 0x00, 0x00, 0x00, 0x74}},
 };
 
 namespace {
@@ -229,6 +234,16 @@ bool CallStr(void* fn, void* self, const void* str) {
     }
 }
 
+using FnPtrArg2 = void (*)(void* self, void* arg);
+bool CallPtrArg2(void* fn, void* self, void* arg) {
+    __try {
+        reinterpret_cast<FnPtrArg2>(fn)(self, arg);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 void* VSlot(const void* obj, uintptr_t slotOffset) {
     const uintptr_t vt = Vtable(obj);
     if (!vt) return nullptr;
@@ -337,6 +352,31 @@ void ActiveCharacters(std::vector<Character*>& out) {
     std::vector<void*> raw;
     ReadPointerSet(reinterpret_cast<const uint8_t*>(w) + off::GW_charUpdateList, raw, 65536);
     for (void* p : raw) if (IsCharacter(p)) out.push_back(static_cast<Character*>(p));
+}
+
+bool HandleFromHand(const void* hand, kc::Handle& out) {
+    return hand && ReadHandle(hand, out) && out.valid();
+}
+
+namespace {
+constexpr int kTradeLooting = 2;   // TradeWindowType::TW_LOOTING
+using FnShowTrade = void (*)(void* gui, const void* a, const void* b, int type);
+bool CallShowTrade(void* fn, void* gui, const void* a, const void* b, int type) {
+    __try {
+        reinterpret_cast<FnShowTrade>(fn)(gui, a, b, type);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool OpenLootWindow(Character* looter, Character* target) {
+    if (!IsCharacter(looter) || !IsCharacter(target)) return false;
+    // The game stores the request; its GUI opens the window on its next update.
+    const auto* a = reinterpret_cast<const uint8_t*>(looter) + off::RO_handle;
+    const auto* b = reinterpret_cast<const uint8_t*>(target) + off::RO_handle;
+    return CallShowTrade(FnAddr(FnShowTradeWindow), reinterpret_cast<void*>(Addr(rva::TradeGui)), a, b, kTradeLooting);
 }
 
 Character* Resolve(const kc::Handle& h) {
@@ -464,6 +504,11 @@ bool IsUnconscious(Character* c) {
     bool v = false;
     void* m = Medical(c);
     return m && Rd(m, off::MS_unconscious, v) && v;
+}
+
+bool IsRagdoll(Character* c) {
+    bool v = false;
+    return IsCharacter(c) && CallBool(FnAddr(FnIsRagdoll), c, v) && v;
 }
 
 bool CallDeclareDead(Character* c) {
@@ -636,7 +681,19 @@ Character* CreateCharacter(const kc::SpawnInfo& info, const kc::Vec3& pos, std::
     if (!faction) { if (err) *err = "unknown faction " + info.factionSid; return nullptr; }
     const float p[3] = {pos.x, pos.y, pos.z};
     void* obj = CallCreateChar(FnAddr(FnCreateRandomCharacter), factory, faction, p, gd, info.age);
-    if (!IsCharacter(obj)) { if (err) *err = "factory did not return a character"; return nullptr; }
+    if (!IsCharacter(obj)) {
+        if (err) {
+            int type = -1;
+            Rd(gd, off::GD_type, type);
+            std::string name;
+            ReadGameString(reinterpret_cast<const uint8_t*>(gd) + off::GD_name, name);
+            char buf[160];
+            snprintf(buf, sizeof buf, "factory did not return a character (template type %d '%.60s', got %p vt+%llx)", type, name.c_str(), obj,
+                     obj ? static_cast<unsigned long long>(Vtable(obj) - Addr(0)) : 0ull);
+            *err = buf;
+        }
+        return nullptr;
+    }
     // Same name as on the host when it fits an inline string (the game never frees it).
     GameString gs;
     if (!info.name.empty() && MakeGameString(info.name, gs))
@@ -812,6 +869,268 @@ bool WriteRegionWeather(void* region, const kc::RegionWeather& w) {
     Wr(inst, WI_buSpeedStart, w.windBuildUpSpeedStart); Wr(inst, WI_buSpeedEnd, w.windBuildUpSpeedEnd);
     Wr(inst, WI_buAngleStart, w.windBuildUpAngleStart); Wr(inst, WI_buAngleEnd, w.windBuildUpAngleEnd);
     Wr(inst, WI_start, w.startMinutes); Wr(inst, WI_end, w.endMinutes); Wr(inst, WI_updWind, w.updateWindMinutes); Wr(inst, WI_time, w.time);
+    return true;
+}
+
+namespace {
+constexpr uintptr_t CH_inventory = 0x2E8;           // Inventory*
+constexpr uintptr_t INV_allItems = 0x10;            // lektor<Item*>
+constexpr uintptr_t IT_manufacturer = 0xC0, IT_material = 0xC8, IT_pos = 0xDC, IT_section = 0xE8, IT_charges = 0x118,
+                    IT_quality = 0x11C, IT_equipped = 0x129, IT_quantity = 0x12C;
+void* InventoryOf(const Character* c) {
+    void* inv = nullptr;
+    return IsCharacter(c) && Rd(c, CH_inventory, inv) ? inv : nullptr;
+}
+} // namespace
+
+namespace {
+constexpr uintptr_t INV_sections = 0x28;            // boost::unordered_map<std::string, InventorySection*>
+constexpr uintptr_t SEC_width = 0x30, SEC_height = 0x34, SEC_enabled = 0xD0;
+constexpr uintptr_t IT_inInventory = 0xD8, IT_width = 0x130, IT_height = 0x134;
+constexpr uintptr_t ITEM_getLevel = 0x2B8;           // InventoryItemBase vtable: int getLevel() const
+constexpr uintptr_t INVV_addItem = 0x10, INVV_removeDontDestroy = 0x28, INVV_removeAutoDestroy = 0x30, INVV_drop = 0x38;
+constexpr uintptr_t SECV_addAt = 0x18;               // InventorySection: void _addItem(Item*, int x, int y)
+
+using FnAddItem = bool (*)(void* inv, void* item, int qty, bool dropOnFail, bool destroyOnFail);
+using FnRemoveReturns = void* (*)(void* inv, void* item, int qty, bool returnCopyIfSomeLeft);
+using FnRemoveDestroy = bool (*)(void* inv, void* item, int qty);
+using FnItemInt = int (*)(void* item);
+using FnSecAddAt = void (*)(void* sec, void* item, int x, int y);
+using FnCreateItemSig = void* (*)(void* factory, void* gd, const void* hand, void* company, void* material, int level, void* uniform);
+
+bool CallAddItem(void* fn, void* inv, void* item, int qty) {
+    __try { return reinterpret_cast<FnAddItem>(fn)(inv, item, qty, false, true); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* CallRemoveReturns(void* fn, void* inv, void* item, int qty) {
+    __try { return reinterpret_cast<FnRemoveReturns>(fn)(inv, item, qty, true); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+bool CallRemoveDestroy(void* fn, void* inv, void* item, int qty) {
+    __try { return reinterpret_cast<FnRemoveDestroy>(fn)(inv, item, qty); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool CallItemInt(void* fn, void* item, int& out) {
+    __try { out = reinterpret_cast<FnItemInt>(fn)(item); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool CallSecAddAt(void* fn, void* sec, void* item, int x, int y) {
+    __try { reinterpret_cast<FnSecAddAt>(fn)(sec, item, x, y); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* CallCreateItem(void* fn, void* factory, void* gd, const void* hand, void* company, void* material, int level) {
+    __try { return reinterpret_cast<FnCreateItemSig>(fn)(factory, gd, hand, company, material, level, nullptr); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+
+constexpr uintptr_t INV_sectionList = 0x68;         // lektor<InventorySection*> sectionsInSearchOrder
+constexpr uintptr_t SEC_items = 0x40;               // std::vector<SectionItem>: first, last, end
+constexpr size_t kSectionItemSize = 0x10;           // SectionItem { Item*; u16 x, y, w, h; }
+
+void ReadPointerLektor(const uint8_t* lk, std::vector<void*>& out, uint32_t max) {
+    uint32_t count = 0;
+    void** data = nullptr;
+    if (!Rd(lk, off::LK_count, count) || count > max || !count || !Rd(lk, off::LK_data, data) || !data) return;
+    for (uint32_t i = 0; i < count; ++i) {
+        void* p = nullptr;
+        if (Rd(data, i * sizeof(void*), p) && p) out.push_back(p);
+    }
+}
+
+// Every item a character carries: the free inventory list does not hold what is worn or wielded,
+// that only lives in its equipment section.
+std::vector<void*> InventoryItems(void* inv) {
+    std::vector<void*> out;
+    ReadPointerLektor(reinterpret_cast<const uint8_t*>(inv) + INV_allItems, out, kc::kMaxItemsPerInventory);
+    std::vector<void*> sections;
+    ReadPointerLektor(reinterpret_cast<const uint8_t*>(inv) + INV_sectionList, sections, 64);
+    for (void* sec : sections) {
+        uintptr_t first = 0, last = 0;
+        if (!Rd(sec, SEC_items, first) || !Rd(sec, SEC_items + 8, last) || last < first || (last - first) % kSectionItemSize ||
+            (last - first) / kSectionItemSize > kc::kMaxItemsPerInventory)
+            continue;
+        for (uintptr_t p = first; p < last; p += kSectionItemSize) {
+            void* it = nullptr;
+            if (Rd(reinterpret_cast<const void*>(p), 0, it) && it && std::find(out.begin(), out.end(), it) == out.end()) out.push_back(it);
+        }
+        if (out.size() > kc::kMaxItemsPerInventory) break;
+    }
+    return out;
+}
+
+bool ReadItemState(void* it, kc::ItemState& s) {
+    void* gd = nullptr;
+    if (!Rd(it, off::RO_data, gd) || !GameDataSid(gd, s.templateSid)) return false;
+    void* mat = nullptr;
+    void* man = nullptr;
+    if (Rd(it, IT_material, mat) && mat) GameDataSid(mat, s.materialSid);
+    if (Rd(it, IT_manufacturer, man) && man) GameDataSid(man, s.manufacturerSid);
+    ReadGameString(reinterpret_cast<uint8_t*>(it) + IT_section, s.section);
+    int32_t pos[2] = {0, 0};
+    uint8_t eq = 0;
+    Rd(it, IT_pos, pos);
+    Rd(it, IT_equipped, eq);
+    Rd(it, IT_quantity, s.quantity);
+    Rd(it, IT_quality, s.quality);
+    Rd(it, IT_charges, s.charges);
+    s.x = int16_t(pos[0]);
+    s.y = int16_t(pos[1]);
+    s.equipped = eq != 0;
+    if (void* fn = VSlot(it, ITEM_getLevel)) CallItemInt(fn, it, s.level);
+    if (!std::isfinite(s.quality)) s.quality = 0;
+    if (!std::isfinite(s.charges)) s.charges = 0;
+    return s.templateSid.size() <= kc::kMaxSidLen;
+}
+
+void* FindSection(void* inv, const std::string& name) {
+    const auto* map = reinterpret_cast<const uint8_t*>(inv) + INV_sections;
+    uint64_t size = 0, bucketCount = 0;
+    void** buckets = nullptr;
+    if (!Rd(map, off::US_size, size) || size == 0 || size > 256) return nullptr;
+    if (!Rd(map, off::US_bucketCount, bucketCount) || !Rd(map, off::US_buckets, buckets) || !buckets) return nullptr;
+    void* node = nullptr;
+    if (!Rd(buckets, bucketCount * sizeof(void*), node)) return nullptr;
+    std::string key;
+    for (uint64_t i = 0; node && i < size; ++i) {
+        void* sec = nullptr;
+        if (ReadGameString(reinterpret_cast<uint8_t*>(node) + off::MapNode_key, key) && key == name && Rd(node, off::MapNode_mapped, sec)) return sec;
+        if (!Rd(node, off::USNode_next, node)) break;
+    }
+    return nullptr;
+}
+
+// Put an item where a save load would: the named section at (x, y) when it fits, else anywhere.
+bool PlaceItem(void* inv, void* item, const std::string& section, int x, int y, int qty) {
+    if (void* sec = FindSection(inv, section)) {
+        int w = 0, h = 0, iw = 1, ih = 1;
+        uint8_t enabled = 1;
+        Rd(sec, SEC_width, w); Rd(sec, SEC_height, h); Rd(item, IT_width, iw); Rd(item, IT_height, ih); Rd(sec, SEC_enabled, enabled);
+        if (x >= 0 && y >= 0 && x + iw <= w && y + ih <= h) {
+            const uint8_t one = 1;
+            if (!enabled) Wr(sec, SEC_enabled, one);
+            CallSecAddAt(VSlot(sec, SECV_addAt), sec, item, x, y);
+            if (!enabled) Wr(sec, SEC_enabled, enabled);
+            uint8_t inside = 0;
+            if (Rd(item, IT_inInventory, inside) && inside) return true;
+        }
+    }
+    return CallAddItem(VSlot(inv, INVV_addItem), inv, item, qty);
+}
+
+constexpr int kItemTypeWeapon = 2;   // itemType::WEAPON
+
+void* CreateItemFromState(const kc::ItemState& s, std::string* why = nullptr) {
+    GameWorld* w = World();
+    void* factory = nullptr;
+    void* gd = FindGameData(s.templateSid);
+    if (!gd) { if (why) *why = "unknown item " + s.templateSid; return nullptr; }
+    if (!w || !Rd(w, off::GW_factory, factory) || !factory) { if (why) *why = "no factory"; return nullptr; }
+    void* company = s.manufacturerSid.empty() ? nullptr : FindGameData(s.manufacturerSid);
+    void* material = s.materialSid.empty() ? nullptr : FindGameData(s.materialSid);
+    alignas(8) uint8_t nullHand[off::HandSize] = {};
+    const uintptr_t vt = Addr(rva::VtHand);
+    const uint32_t nullType = 0xB;   // what the game itself passes for "no handle yet"
+    std::memcpy(nullHand, &vt, 8);
+    std::memcpy(nullHand + off::H_type, &nullType, 4);
+    // Weapons are made from their manufacturer: createItem(company, hand, weapon type, material, ...),
+    // exactly how Character::generateWeapon calls it (their level follows from the material).
+    int type = -1;
+    Rd(gd, off::GD_type, type);
+    void* item = nullptr;
+    if (type == kItemTypeWeapon) {
+        if (!company) { if (why) *why = "weapon " + s.templateSid + " without its manufacturer"; return nullptr; }
+        item = CallCreateItem(FnAddr(FnCreateItem), factory, company, nullHand, gd, material, s.level);
+    } else {
+        item = CallCreateItem(FnAddr(FnCreateItem), factory, gd, nullHand, company, material, s.level);
+    }
+    if (item) Wr(item, IT_quantity, s.quantity);
+    else if (why) {
+        *why = "factory refused " + s.templateSid + " (type " + std::to_string(type) + ", company '" + s.manufacturerSid + "' " +
+               (company ? "found" : "missing") + ", material '" + s.materialSid + "' " + (material ? "found" : "missing") + ")";
+    }
+    return item;
+}
+} // namespace
+
+bool RebuildInventory(Character* c, const std::vector<kc::ItemState>& items, std::string* err) {
+    void* inv = InventoryOf(c);
+    if (!inv) { if (err) *err = "no inventory"; return false; }
+    // Keep every local item that already is exactly what the host has; only the rest changes.
+    std::vector<kc::ItemState> missing = items;
+    std::vector<void*> extra;
+    bool extraEquipped = false;
+    for (void* it : InventoryItems(inv)) {
+        kc::ItemState s;
+        if (!ReadItemState(it, s)) continue;
+        auto m = std::find(missing.begin(), missing.end(), s);
+        if (m != missing.end()) { missing.erase(m); continue; }
+        extra.push_back(it);
+        extraEquipped |= s.equipped;
+    }
+    if (extraEquipped) EndCombat(c);   // it may be holding the weapon that goes away
+    for (void* it : extra) {
+        int q = 1;
+        Rd(it, IT_quantity, q);
+        CallRemoveDestroy(VSlot(inv, INVV_removeAutoDestroy), inv, it, q);
+    }
+    bool ok = true;
+    for (const auto& s : missing) {
+        std::string why;
+        void* item = CreateItemFromState(s, &why);
+        if (!item) { ok = false; if (err) *err = why; continue; }
+        if (!PlaceItem(inv, item, s.section, s.x, s.y, s.quantity)) { ok = false; if (err) *err = "cannot place " + s.templateSid; }
+    }
+    return ok;
+}
+
+bool MoveInventoryItem(Character* from, Character* to, const kc::InvOp& op, std::string* err) {
+    void* src = InventoryOf(from);
+    void* dst = InventoryOf(to);
+    if (!src || !dst) { if (err) *err = "no inventory"; return false; }
+    // the stack the client moved: same kind, preferably at the same place
+    void* best = nullptr;
+    int bestQty = 0;
+    std::vector<kc::ItemState> states;
+    for (void* it : InventoryItems(src)) {
+        kc::ItemState s;
+        void* gd = nullptr;
+        if (!Rd(it, off::RO_data, gd) || !GameDataSid(gd, s.templateSid)) continue;
+        void* mat = nullptr;
+        void* man = nullptr;
+        if (Rd(it, IT_material, mat) && mat) GameDataSid(mat, s.materialSid);
+        if (Rd(it, IT_manufacturer, man) && man) GameDataSid(man, s.manufacturerSid);
+        if (void* fn = VSlot(it, ITEM_getLevel)) CallItemInt(fn, it, s.level);
+        if (!s.sameKind(op.item)) continue;
+        int q = 0;
+        int32_t pos[2] = {0, 0};
+        std::string sec;
+        Rd(it, IT_quantity, q);
+        Rd(it, IT_pos, pos);
+        ReadGameString(reinterpret_cast<uint8_t*>(it) + IT_section, sec);
+        const bool samePlace = sec == op.item.section && pos[0] == op.item.x && pos[1] == op.item.y;
+        if (q >= op.item.quantity && (!best || samePlace)) { best = it; bestQty = q; if (samePlace) break; }
+    }
+    if (!best) { if (err) *err = "item not found"; return false; }
+    if (op.kind == kc::InvOpKind::Drop) {
+        void* fn = VSlot(src, INVV_drop);
+        return fn && CallPtrArg2(fn, src, best);
+    }
+    const int qty = std::min(op.item.quantity, bestQty);
+    void* moving = CallRemoveReturns(VSlot(src, INVV_removeDontDestroy), src, best, qty);
+    if (!moving) { if (err) *err = "cannot take the item"; return false; }
+    if (PlaceItem(dst, moving, op.toSection, op.toX, op.toY, qty)) return true;
+    PlaceItem(src, moving, op.item.section, op.item.x, op.item.y, qty);   // never lose it: put it back
+    if (err) *err = "no room";
+    return false;
+}
+
+bool ReadInventory(Character* c, std::vector<kc::ItemState>& out) {
+    out.clear();
+    void* inv = InventoryOf(c);
+    if (!inv) return false;
+    for (void* it : InventoryItems(inv)) {
+        kc::ItemState s;
+        if (ReadItemState(it, s)) out.push_back(std::move(s));
+    }
+    if (out.size() > kc::kMaxItemsPerInventory) out.resize(kc::kMaxItemsPerInventory);
+    std::sort(out.begin(), out.end(), [](const kc::ItemState& a, const kc::ItemState& b) {
+        return std::tie(a.section, a.y, a.x, a.templateSid, a.quantity) < std::tie(b.section, b.y, b.x, b.templateSid, b.quantity);
+    });
     return true;
 }
 

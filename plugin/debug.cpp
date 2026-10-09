@@ -68,6 +68,15 @@ void DumpCharacter(std::ostream& o, const char* tag, KenshiWorld& w, const kc::H
     if (g_dumpSession && !g_dumpSession->isHost() && g_dumpSession->TargetOf(hostHandle, latest, rendered))
         o << " latest=" << latest.pos.x << ',' << latest.pos.y << ',' << latest.pos.z << " lflags=" << unsigned(latest.flags)
           << " rendered=" << rendered.pos.x << ',' << rendered.pos.y << ',' << rendered.pos.z;
+    if (kenshi::Character* ch = w.Find(h)) {
+        std::vector<kc::ItemState> items;
+        if (kenshi::ReadInventory(ch, items)) {
+            o << " items=" << items.size() << " inv=";
+            for (size_t i = 0; i < items.size(); ++i)
+                o << (i ? ";" : "") << items[i].templateSid << 'x' << items[i].quantity << '@' << items[i].section << ':' << items[i].x << ','
+                  << items[i].y << (items[i].equipped ? "E" : "");
+        }
+    }
     if (vok) {
         o << " blood=" << v.blood << " ko=" << v.koTimer << " vflags=" << unsigned(v.flags) << " parts=";
         for (size_t i = 0; i < v.parts.size(); ++i) o << (i ? ";" : "") << v.parts[i].flesh << '/' << v.parts[i].stun;
@@ -180,20 +189,17 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         std::vector<kenshi::Character*> all;
         kenshi::ActiveCharacters(all);
         kc::SpawnInfo info;
-        bool found = false;
-        for (kenshi::Character* c : all) {
-            kc::Handle h;
-            if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c)) continue;
-            if (kenshi::ReadSpawnSource(c, info)) { found = true; break; }
-        }
-        if (!found) return "err no NPC to copy";
-        std::string e;
+        std::string e = "no NPC to copy";
         HostCallScope scope;
-        kenshi::Character* c = kenshi::CreateCharacter(info, {base.x + dx, base.y, base.z + dz}, &e);
-        kc::Handle h;
-        if (!c || !kenshi::GetHandle(c, h)) return "err " + e;
-        lastSpawned_ = h;
-        return "ok " + Key(h) + " " + info.templateSid;
+        for (kenshi::Character* src : all) {
+            kc::Handle h;
+            if (!kenshi::GetHandle(src, h) || w.FindSquad(h) || kenshi::IsDead(src) || !kenshi::ReadSpawnSource(src, info)) continue;
+            kenshi::Character* c = kenshi::CreateCharacter(info, {base.x + dx, base.y, base.z + dz}, &e);
+            if (!c || !kenshi::GetHandle(c, h)) { Log("spawnnpc: %s: %s", info.templateSid.c_str(), e.c_str()); continue; }
+            lastSpawned_ = h;
+            return "ok " + Key(h) + " " + info.templateSid;
+        }
+        return "err " + e;
     }
     if (cmd == "fight") {   // fight <index>: squad member engages the NPC created by the last spawnnpc
         size_t idx = 0;
@@ -225,6 +231,65 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         return ok ? "ok " + Key(lastSpawned_) : "err call failed";
     }
     if (cmd == "rollweather") return "ok " + std::to_string(w.ExpireAllWeather());
+    if (cmd == "loot") {   // loot <target> [squadIndex]: what a loot order on a body does on a client
+        std::string k;
+        size_t idx = 0;
+        in >> k >> idx;
+        kc::Handle h;
+        sscanf(k.c_str(), "%u:%u:%u:%u:%u", &h.type, &h.container, &h.containerSerial, &h.index, &h.serial);
+        auto squad = SortedSquad(w);
+        kenshi::Character* t = w.Find(h);
+        if (!t || idx >= squad.size()) return "err bad target or looter";
+        w.RequestLoot(squad[idx], t);
+        return "ok";
+    }
+    if (cmd == "tradegui") {   // the trade window request the game has not consumed yet (type 0 = none)
+        int type = -1;
+        std::memcpy(&type, reinterpret_cast<const void*>(kenshi::Addr(kenshi::rva::TradeGui) + 0x58), 4);
+        return "ok " + std::to_string(type);
+    }
+    if (cmd == "trace") {   // trace <handle> <frames>: log the client's position corrections of a character
+        std::string k;
+        in >> k >> w.traceFrames;
+        sscanf(k.c_str(), "%u:%u:%u:%u:%u", &w.traceHandle.type, &w.traceHandle.container, &w.traceHandle.containerSerial,
+               &w.traceHandle.index, &w.traceHandle.serial);
+        return "ok";
+    }
+    if (cmd == "invmove") {   // invmove <from> <to> <itemIndex|main|worn> [qty]: what an inventory drag & drop does
+        std::string fromS, toS, which;
+        size_t idx = 0;
+        int qty = 0;
+        in >> fromS >> toS >> which >> qty;
+        auto squad = SortedSquad(w);
+        auto pick = [&](const std::string& s) -> kc::Handle {
+            if (s == "spawned") return lastSpawned_;
+            if (s.rfind("squad", 0) == 0) { size_t i = std::stoul(s.substr(5)); return i < squad.size() ? squad[i] : kc::Handle{}; }
+            kc::Handle h;
+            sscanf(s.c_str(), "%u:%u:%u:%u:%u", &h.type, &h.container, &h.containerSerial, &h.index, &h.serial);
+            return h;
+        };
+        kenshi::Character* a = w.Find(pick(fromS));
+        kenshi::Character* b = w.Find(pick(toS));
+        std::vector<kc::ItemState> items;
+        if (!a || !b || !kenshi::ReadInventory(a, items)) return "err bad characters";
+        if (which == "main" || which == "worn") {   // first loose item / first equipped item
+            idx = items.size();
+            for (size_t i = 0; i < items.size() && idx == items.size(); ++i)
+                if ((which == "main") == (items[i].section == "main")) idx = i;
+        } else {
+            idx = std::strtoul(which.c_str(), nullptr, 10);
+        }
+        if (idx >= items.size()) return "err no such item";
+        kc::InvOp op;
+        op.item = items[idx];
+        if (qty > 0) op.item.quantity = std::min(qty, op.item.quantity);
+        op.toSection = "main";
+        op.toX = -1;   // anywhere it fits
+        op.toY = -1;
+        std::string e;
+        HostCallScope scope;
+        return kenshi::MoveInventoryItem(a, b, op, &e) ? "ok " + op.item.templateSid : "err " + e;
+    }
     if (cmd == "pause") { int on = 1; in >> on; return kenshi::CallUserPause(on != 0) ? "ok" : "err"; }
     if (cmd == "speed") { float v = 1; in >> v; return kenshi::CallSetFrameSpeed(v) ? "ok" : "err"; }
     if (cmd == "state") {   // state <file> [radius]

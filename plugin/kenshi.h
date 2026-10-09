@@ -21,6 +21,7 @@ inline constexpr uintptr_t GameWorldInstance = 0x2134110;   // global `GameWorld
 inline constexpr uintptr_t HandleTable = 0x2133f90;         // first arg of the hand resolver
 inline constexpr uintptr_t GameClockOwner = 0x21303d0;      // pointer; +0xA0 = in-game hours (double)
 inline constexpr uintptr_t SaveUsesUserPath = 0x2133573;    // bool: SaveManager uses userSavePath, else localSavePath
+inline constexpr uintptr_t TradeGui = 0x21337B0;            // the GUI object showTradeWindow() is called on
 
 inline constexpr uintptr_t VtCharacter = 0x16f9eb8;
 inline constexpr uintptr_t VtCharacterHuman = 0x16f2848;
@@ -68,6 +69,9 @@ enum Fn : int {
     FnRegionUpdateBT,           // void WeatherRegion::updateBT()          (background thread: advances weather)
     FnSeasonGetNewWeather,      // void Season::getNewWeather()            (random pick of the next weather)
     FnInstanceSetupWeather,     // void WeatherInstance::setupWeather(Weather*)
+    FnCreateItem,               // Item* RootObjectFactory::createItem(GameData*, const hand&, GameData* company, GameData* material, int level, Faction*)
+    FnShowTradeWindow,          // void ForgottenGUI::showTradeWindow(const hand& a, const hand& b, TradeWindowType)   (deferred)
+    FnIsRagdoll,                // bool Character::isRagdoll() const   (lying in ragdoll, or carried)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -84,6 +88,8 @@ inline constexpr uintptr_t GW_factory = 0x4A0;         // RootObjectFactory*
 inline constexpr uintptr_t GW_factionMgr = 0x4A8;      // FactionManager*: +0 lektor<Faction*> participants
 inline constexpr uintptr_t MapNode_key = 0x10;         // boost unordered_map<std::string, T*> node: key string
 inline constexpr uintptr_t MapNode_mapped = 0x38;      //                                          mapped pointer
+inline constexpr uintptr_t GD_name = 0x28;             // GameData: std::string
+inline constexpr uintptr_t GD_type = 0x50;             // GameData: itemType
 inline constexpr uintptr_t GD_stringID = 0x58;         // GameData: std::string
 inline constexpr uintptr_t FAC_data = 0x240;           // Faction: GameData*
 inline constexpr uintptr_t Clock_hours = 0xA0;         // double, in the object at rva::GameClockOwner
@@ -191,6 +197,9 @@ bool IsCharacter(const void* obj);
 void PlayerCharacters(std::vector<Character*>& out);
 void ActiveCharacters(std::vector<Character*>& out);   // every character the game is updating
 Character* Resolve(const kc::Handle& h);               // game handle -> live character (or null)
+bool HandleFromHand(const void* hand, kc::Handle& out); // reads a game `hand` object
+// Opens the game's loot window between two characters (what reaching a body with a loot order does).
+bool OpenLootWindow(Character* looter, Character* target);
 void SelectedHandles(std::vector<kc::Handle>& out);
 bool GetHandle(const Character* c, kc::Handle& out);
 bool GetPosition(Character* c, kc::Vec3& out);
@@ -202,6 +211,7 @@ Character* MedicalCharacter(const void* medical);
 bool ReadVitals(Character* c, kc::EntityVitals& out);
 bool IsDead(Character* c);
 bool IsUnconscious(Character* c);
+bool IsRagdoll(Character* c);   // the body is physically on the ground (or carried)
 
 bool GetGameHours(double& out);
 // Save management (deferred operations, executed by the game a frame later).
@@ -215,6 +225,13 @@ bool ReadSpawnSource(Character* c, kc::SpawnInfo& out);    // template + faction
 void ResetLookupCaches();                                  // call when a new world loads
 Character* CreateCharacter(const kc::SpawnInfo& info, const kc::Vec3& pos, std::string* err);
 bool DestroyObject(void* obj);
+
+// Inventories (read side).
+bool ReadInventory(Character* c, std::vector<kc::ItemState>& out);   // canonical order
+// Replace the whole content with these items, laid out like a save load does.
+bool RebuildInventory(Character* c, const std::vector<kc::ItemState>& items, std::string* err);
+// Host: replay a client's item movement (from -> to, or a drop to the ground).
+bool MoveInventoryItem(Character* from, Character* to, const kc::InvOp& op, std::string* err);
 
 // Melee combat.
 bool ReadCombat(Character* c, kc::Handle& target);          // true when in combat mode with a target

@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 6;
+constexpr uint16_t kProtocolVersion = 7;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -52,6 +52,8 @@ enum class Msg : uint8_t {
     WorldEnd = 17,    // S->C  all files sent
     Ready = 18,       // C->S  the client loaded the host's world
     Weather = 19,     // S->C  weather of every region
+    Inventory = 20,   // S->C  full inventory of one character
+    InvOp = 21,       // C->S  the client moved items (loot, equip, rearrange, drop)
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -214,6 +216,41 @@ struct Ping {
     double t = 0;  // sender clock, echoed back in Pong
 };
 
+// ---- inventories ----
+struct ItemState {
+    std::string templateSid;
+    std::string materialSid;      // may be empty
+    std::string manufacturerSid;  // may be empty
+    std::string section;          // inventory section name ("main", equipment slots...)
+    int32_t quantity = 1;
+    int16_t x = 0, y = 0;
+    bool equipped = false;
+    int32_t level = 0;
+    float quality = 0;
+    float charges = 0;
+    bool sameKind(const ItemState& o) const {   // same sort of item, wherever it is
+        return templateSid == o.templateSid && materialSid == o.materialSid && manufacturerSid == o.manufacturerSid && level == o.level;
+    }
+    bool operator==(const ItemState& o) const {
+        return sameKind(o) && section == o.section && quantity == o.quantity && x == o.x && y == o.y && equipped == o.equipped;
+    }
+};
+struct InventoryMsg {
+    uint32_t netId = 0;
+    std::vector<ItemState> items;
+};
+// One item movement made by a client player in its inventory UI, replayed by the host.
+enum class InvOpKind : uint8_t { Move = 1, Drop = 2 };
+struct InvOp {
+    InvOpKind kind = InvOpKind::Move;
+    uint32_t fromNetId = 0;
+    uint32_t toNetId = 0;          // Move only (may equal fromNetId: rearranging / equipping)
+    ItemState item;                // identity + where it was (section/x/y) + quantity moved
+    std::string toSection;
+    int16_t toX = 0, toY = 0;
+};
+constexpr uint32_t kMaxItemsPerInventory = 2000;
+
 // ---- weather ----
 // One weather region (Kenshi's WeatherRegion, one per biome group), identified by game data ids.
 // The instance block mirrors Kenshi's WeatherInstance so the client can reproduce it exactly.
@@ -285,6 +322,8 @@ void Encode(Writer& w, const WorldChunk& m);
 void Encode(Writer& w, const WorldEnd& m);
 void Encode(Writer& w, const ReadyMsg& m);
 void Encode(Writer& w, const WeatherMsg& m);
+void Encode(Writer& w, const InventoryMsg& m);
+void Encode(Writer& w, const InvOp& m);
 
 // Snapshots are split into packets that each fit `budget` bytes; every packet is self-contained.
 std::vector<std::vector<uint8_t>> EncodeSnapshot(const Snapshot& s, size_t budget = kSnapshotBudget);
@@ -308,6 +347,8 @@ bool Decode(Reader& r, WorldChunk& m);
 bool Decode(Reader& r, WorldEnd& m);
 bool Decode(Reader& r, ReadyMsg& m);
 bool Decode(Reader& r, WeatherMsg& m);
+bool Decode(Reader& r, InventoryMsg& m);
+bool Decode(Reader& r, InvOp& m);
 bool Decode(Reader& r, Ping& m);
 
 // Name rules: 1..kMaxNameLen printable ASCII, no leading/trailing spaces.

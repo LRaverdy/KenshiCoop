@@ -59,6 +59,11 @@ void KenshiWorld::BeginFrame(bool live) {
     if (ready && (!wasReady_ || player != lastPlayer_)) {
         ++generation_;
         alias_.clear();                  // stand-ins belonged to the previous world
+        pendingLoot_.clear();
+        strangerSince_.clear();
+        lastTarget_.clear();
+        fallPrep_.clear();
+        fellAt_.clear();
         kenshi::ResetLookupCaches();
     }
     wasReady_ = ready;
@@ -78,6 +83,7 @@ void KenshiWorld::EndFrame() {
         kenshi::CallUserPause(true);
         pausedByHold_ = true;
     }
+    if (active_ && client_ && live_ && !pendingLoot_.empty()) UpdatePendingLoot();
     auto v = std::make_shared<HookView>();
     v->active = active_;
     v->client = client_;
@@ -183,6 +189,108 @@ bool KenshiWorld::Spawn(const kc::Handle& h, const kc::SpawnInfo& info, const kc
     return true;
 }
 
+// A character must fall where the host's fell, so it is moved there first. The ragdoll takes its
+// velocity from the last poses of the skeleton: falling right after a teleport would throw the
+// body far away, so the pose gets a moment to settle at the new place. False while it is being
+// prepared (under a second: a body still sliding on the host is not chased forever).
+bool KenshiWorld::ReadyToFall(const kc::Handle& h, kenshi::Character* c, const kc::EntityState& at, double now) {
+    constexpr double kSettle = 0.25, kChase = 0.6;
+    kc::Vec3 local;
+    const bool inPlace = !kenshi::GetPosition(c, local) || Dist(local, at.pos) <= 0.5f;
+    auto it = fallPrep_.find(h);
+    const bool settled = it == fallPrep_.end() || now - it->second.lastMove >= kSettle;
+    if (inPlace || (it != fallPrep_.end() && now - it->second.start >= kChase)) {
+        if (!settled) return false;
+        fallPrep_.erase(h);
+        return true;
+    }
+    if (it == fallPrep_.end()) it = fallPrep_.emplace(h, FallPrep{now, now}).first;
+    HostCallScope scope;
+    kenshi::Halt(c);
+    kenshi::Teleport(c, at.pos, at.rot);
+    lastDest_.erase(h);
+    it->second.lastMove = now;
+    return false;
+}
+
+bool KenshiWorld::Exists(const kc::Handle& h) {
+    auto a = alias_.find(h);
+    if (a != alias_.end()) {
+        // The real character streamed in after all (its zone loaded later here than on the
+        // host): it replaces the stand-in, otherwise there would be two of them.
+        kenshi::Character* real = kenshi::Resolve(h);
+        if (real && kenshi::IsCharacter(real)) {
+            if (kenshi::Character* standIn = kenshi::Resolve(a->second); standIn && standIn != real) {
+                HostCallScope scope;
+                kenshi::DestroyObject(standIn);
+            }
+            alias_.erase(a);
+            resolved_[h] = real;
+            return true;
+        }
+    }
+    return Find(h) != nullptr;
+}
+
+void KenshiWorld::Reconcile(const std::vector<kc::Handle>& known, const std::vector<kc::MissingChar>& missing, double now,
+                            std::vector<kc::Handle>& adopted) {
+    constexpr double kLinger = 5.0;
+    if (!client_ || !live_) return;
+    std::unordered_set<kc::Handle, HandleHash> taken(known.begin(), known.end());
+    for (const auto& [host, local] : alias_) taken.insert(local);
+    struct Stranger { kenshi::Character* c; kc::Handle h; double since; bool used; };
+    std::vector<Stranger> strangers;
+    std::unordered_map<kc::Handle, double, HandleHash> seen;
+    kenshi::ActiveCharacters(scratch_);
+    for (kenshi::Character* c : scratch_) {
+        kc::Handle h;
+        if (!kenshi::GetHandle(c, h) || !h.valid() || squad_.count(h) || taken.count(h) || kenshi::IsDead(c)) continue;
+        auto it = strangerSince_.find(h);
+        const double since = it == strangerSince_.end() ? now : it->second;
+        seen[h] = since;
+        strangers.push_back({c, h, since, false});
+    }
+    strangerSince_ = std::move(seen);
+    // A stranger of the same kind as a missing host character becomes its stand-in: this is how a
+    // unique character the local game made on its own (and so cannot be created twice) still
+    // matches the host's.
+    for (const kc::MissingChar& m : missing) {
+        if (alias_.count(m.handle)) continue;
+        Stranger* best = nullptr;
+        float bestDist = 0;
+        for (Stranger& s : strangers) {
+            kc::SpawnInfo info;
+            kc::Vec3 p;
+            if (s.used || !kenshi::ReadSpawnSource(s.c, info) || info.templateSid != m.spawn.templateSid ||
+                info.factionSid != m.spawn.factionSid || !kenshi::GetPosition(s.c, p))
+                continue;
+            const float d = Dist(p, m.pos);
+            if (!best || d < bestDist) { best = &s; bestDist = d; }
+        }
+        if (!best) continue;
+        best->used = true;
+        alias_[m.handle] = best->h;
+        resolved_.erase(m.handle);
+        strangerSince_.erase(best->h);
+        kc::Quat rot;
+        kenshi::GetRotation(best->c, rot);
+        kenshi::Teleport(best->c, m.pos, rot);
+        adopted.push_back(m.handle);
+        Log("a local %s stands in for the host's (%.0f units away)", m.spawn.templateSid.c_str(), bestDist);
+    }
+    int removed = 0;
+    for (Stranger& s : strangers) {
+        if (s.used || now - s.since < kLinger) continue;
+        HostCallScope scope;
+        if (kenshi::DestroyObject(s.c)) ++removed;
+        strangerSince_.erase(s.h);
+    }
+    if (removed) {
+        resolved_.clear();
+        Log("removed %d local character(s) the host does not have", removed);
+    }
+}
+
 void KenshiWorld::Despawn(const kc::Handle& h) {
     auto a = alias_.find(h);
     if (a == alias_.end()) return;
@@ -203,7 +311,7 @@ bool KenshiWorld::Read(const kc::Handle& h, kc::EntityState& out) {
     if (!kenshi::GetMovement(c, out.dest, moving, speed)) { out.dest = out.pos; moving = false; }
     out.flags = 0;
     if (moving) out.flags |= kc::kFlagMoving;
-    if (kenshi::IsDown(c)) out.flags |= kc::kFlagDown;
+    if (kenshi::IsDown(c) || kenshi::IsRagdoll(c)) out.flags |= kc::kFlagDown;
     if (kenshi::IsDead(c)) out.flags |= kc::kFlagDead;
     return true;
 }
@@ -216,37 +324,46 @@ bool KenshiWorld::ReadVitals(const kc::Handle& h, kc::EntityVitals& out) {
 void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, const kc::EntityState& latest) {
     kenshi::Character* c = Find(h);
     if (!c) return;
+    kc::EntityState& last = lastTarget_[h];
+    last = target;
+    last.flags = latest.flags;
+    const double now = NowSeconds();
+    // A ragdoll that is being set up must not be touched: moving the character then throws the
+    // body across the map. Leave it alone while it falls.
+    if (auto fell = fellAt_.find(h); fell != fellAt_.end()) {
+        if (now - fell->second < 2.0) { lastDest_.erase(h); return; }
+        fellAt_.erase(fell);
+    }
     // Posture: lying on the ground (knocked out, knocked down) or standing must match the host.
     // Deaths come through vitals; getting up is normally decided by the AI, which clients do not run.
     const bool hostDead = (latest.flags & kc::kFlagDead) != 0;
     const bool hostDown = (latest.flags & kc::kFlagDown) != 0;
-    const bool localDown = kenshi::IsDown(c);
-    const double now = NowSeconds();
+    const bool localDown = kenshi::IsRagdoll(c) || kenshi::IsDead(c);
     if (hostDown != localDown && !hostDead) {
         double& since = postureSince_[h];
         if (since == 0) since = now;
         double& fixed = postureFixed_[h];
         if (now - since > 0.3 && now - fixed > 1.0) {   // not a one-frame flicker, and not every frame
-            HostCallScope scope;
-            if (hostDown) kenshi::SetRagdoll(c, true);
-            else kenshi::StandUp(c);
-            fixed = now;
+            if (!hostDown) {
+                HostCallScope scope;
+                kenshi::StandUp(c);
+                fixed = now;
+            } else if (ReadyToFall(h, c, target, now)) {
+                HostCallScope scope;
+                kenshi::SetRagdoll(c, true);
+                fixed = now;
+                fellAt_[h] = now;
+            }
         }
     } else {
         postureSince_.erase(h);
     }
     kc::Vec3 local;
     if (!kenshi::GetPosition(c, local)) return;
-    // Bodies on the ground are moved by ragdoll physics, not by their legs: once both lie down,
-    // put the body where the host's lies (at most once a second, it is a teleport).
+    // A body on the ground belongs to ragdoll physics (teleports do not move it); it fell where the
+    // host's did (see ReadyToFall).
     if (hostDown || hostDead || localDown) {
         lastDest_.erase(h);
-        double& fixed = postureFixed_[h];
-        if (hostDown == localDown && Dist(local, target.pos) > 2.0f && now - fixed > 1.0) {
-            HostCallScope scope;
-            kenshi::Teleport(c, target.pos, target.rot);
-            fixed = now;
-        }
         return;
     }
 
@@ -276,17 +393,32 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
                          local.z + (target.pos.z - local.z) * k};
         kenshi::SetPositionSimple(c, err < 0.05f ? target.pos : p);
     }
+    if (traceFrames > 0 && h == traceHandle && (--traceFrames % 15 == 0 || err > 1.0f)) {
+        kc::Vec3 after;
+        kenshi::GetPosition(c, after);
+        Log("trace t=%.3f local=(%.2f,%.2f) target=(%.2f,%.2f) latest=(%.2f,%.2f) err=%.2f after=(%.2f,%.2f) moving=%d/%d combat=%d", now,
+            local.x, local.z, target.pos.x, target.pos.z, latest.pos.x, latest.pos.z, err, after.x, after.z, hostMoving ? 1 : 0,
+            kenshi::IsMoving(c) ? 1 : 0, latest.combatTarget ? 1 : 0);
+    }
 }
 
 void KenshiWorld::ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) {
     kenshi::Character* c = Find(h);
     if (!c) return;
-    kenshi::WriteVitals(c, v);
-    // Death and knockout are transitions, not values: replay them exactly when the host has them.
+    kenshi::WriteVitals(c, v);   // values only: clients never fall over on their own (see hk_ragdollMode)
+    // Death and knockout are transitions, not values: replay them exactly when the host has them,
+    // where the host's character collapsed.
+    const bool dies = (v.flags & kc::kVitDead) && !kenshi::IsDead(c);
+    const bool faints = !dies && (v.flags & kc::kVitUnconscious) && !kenshi::IsUnconscious(c) && !kenshi::IsDead(c);
+    if (!dies && !faints) return;
+    auto at = lastTarget_.find(h);
+    const double now = NowSeconds();
+    if (!kenshi::IsRagdoll(c) && at != lastTarget_.end() && !ReadyToFall(h, c, at->second, now)) return;
     HostCallScope scope;
-    if ((v.flags & kc::kVitDead) && !kenshi::IsDead(c)) {
+    if (!kenshi::IsRagdoll(c)) fellAt_[h] = now;
+    if (dies) {
         kenshi::CallDeclareDead(c);
-    } else if ((v.flags & kc::kVitUnconscious) && !kenshi::IsUnconscious(c) && !kenshi::IsDead(c)) {
+    } else {
         kenshi::CallKnockout(c);
         kenshi::WriteVitals(c, v);   // knockout() picks its own timer; the host's wins
     }
@@ -306,6 +438,46 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
 void KenshiWorld::QueueLocalOrder(const kc::Handle& h, const kc::Command& c) {
     std::lock_guard<std::mutex> lk(ordersMutex_);
     if (orders_.size() < 256) orders_.emplace_back(h, c);
+}
+
+namespace {
+constexpr float kLootRange = 6.0f;   // bodies lie within a few units of the host's copy
+}
+
+void KenshiWorld::RequestLoot(const kc::Handle& looter, kenshi::Character* target) {
+    kc::Handle t;
+    kc::Vec3 tp, lp;
+    kenshi::Character* me = FindSquad(looter);
+    if (!me || !kenshi::GetHandle(target, t) || !kenshi::GetPosition(target, tp) || !kenshi::GetPosition(me, lp)) return;
+    pendingLoot_.erase(std::remove_if(pendingLoot_.begin(), pendingLoot_.end(), [&](const PendingLoot& p) { return p.looter == looter; }),
+                       pendingLoot_.end());
+    if (Dist(lp, tp) <= kLootRange) {
+        kenshi::OpenLootWindow(me, target);
+        return;
+    }
+    kc::Command c;
+    c.kind = kc::CommandKind::MoveTo;
+    c.pos = tp;
+    QueueLocalOrder(looter, c);
+    pendingLoot_.push_back({looter, t, NowSeconds() + 30.0});
+}
+
+void KenshiWorld::UpdatePendingLoot() {
+    const double now = NowSeconds();
+    for (auto it = pendingLoot_.begin(); it != pendingLoot_.end();) {
+        kenshi::Character* me = FindSquad(it->looter);
+        kenshi::Character* target = kenshi::Resolve(it->target);
+        kc::Vec3 lp, tp;
+        const bool valid = me && target && (kenshi::IsDown(target) || kenshi::IsDead(target)) && now < it->until;
+        if (valid && kenshi::GetPosition(me, lp) && kenshi::GetPosition(target, tp) && Dist(lp, tp) <= kLootRange) {
+            kenshi::OpenLootWindow(me, target);
+            it = pendingLoot_.erase(it);
+        } else if (!valid) {
+            it = pendingLoot_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 void KenshiWorld::TakeLocalOrders(std::vector<std::pair<kc::Handle, kc::Command>>& out) {
@@ -330,6 +502,34 @@ void KenshiWorld::WeatherRegionTick(void* region, bool afterUpdate) {
         HostCallScope scope;
         kenshi::WriteRegionWeather(region, it->second);
     }
+}
+
+bool KenshiWorld::ReadInventory(const kc::Handle& h, std::vector<kc::ItemState>& out) {
+    kenshi::Character* c = Find(h);
+    return c && kenshi::ReadInventory(c, out);
+}
+
+bool KenshiWorld::ExecuteInvOp(const kc::Handle& from, const kc::Handle& to, const kc::InvOp& op) {
+    kenshi::Character* a = Find(from);
+    kenshi::Character* b = Find(to);
+    if (!a || !b) return false;
+    std::string err;
+    HostCallScope scope;
+    if (kenshi::MoveInventoryItem(a, b, op, &err)) return true;
+    Log("client item move refused: %s (%s x%d)", err.c_str(), op.item.templateSid.c_str(), op.item.quantity);
+    return false;
+}
+
+bool KenshiWorld::ApplyInventory(const kc::Handle& h, const std::vector<kc::ItemState>& items) {
+    kenshi::Character* c = Find(h);
+    if (!c) return false;
+    std::vector<kc::ItemState> local;
+    if (kenshi::ReadInventory(c, local) && local == items) return true;
+    std::string err;
+    HostCallScope scope;
+    if (!kenshi::RebuildInventory(c, items, &err)) Log("inventory rebuild incomplete: %s", err.c_str());
+    // success means: the game now shows exactly the host's layout
+    return kenshi::ReadInventory(c, local) && local == items;
 }
 
 size_t KenshiWorld::ExpireAllWeather() {

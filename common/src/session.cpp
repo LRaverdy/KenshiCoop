@@ -13,6 +13,7 @@ constexpr double kInterestInterval = 0.5;
 constexpr double kPingInterval = 1.0;
 constexpr double kConnectTimeout = 10.0;
 constexpr double kPresenceInterval = 1.0;
+constexpr double kSpawnGrace = 1.5;   // zones stream in at slightly different times on each side
 constexpr double kVitalsRefresh = 2.0;
 constexpr double kVitalsReapply = 0.25;      // client re-imposes host vitals this often
 constexpr float kInterestHysteresis = 1.25f; // NPCs are dropped only beyond radius * this
@@ -38,6 +39,19 @@ bool StateChanged(const EntityState& a, const EntityState& b) {
     return Dist(a.pos, b.pos) > 0.02f || Dist(a.dest, b.dest) > 0.25f || a.flags != b.flags || QuatDot(a.rot, b.rot) < 0.99995f ||
            a.combatTarget != b.combatTarget;
 }
+uint64_t InventoryHash(const std::vector<ItemState>& items) {
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (const auto& i : items) {
+        h = Fnv1a64(i.templateSid.data(), i.templateSid.size(), h);
+        h = Fnv1a64(i.materialSid.data(), i.materialSid.size(), h);
+        h = Fnv1a64(i.manufacturerSid.data(), i.manufacturerSid.size(), h);
+        h = Fnv1a64(i.section.data(), i.section.size(), h);
+        const int32_t v[5] = {i.quantity, i.x, i.y, i.equipped ? 1 : 0, i.level};
+        h = Fnv1a64(v, sizeof(v), h);
+    }
+    return h;
+}
+
 bool VitalsChanged(const EntityVitals& a, const EntityVitals& b) {
     return std::fabs(a.blood - b.blood) > 0.05f || std::fabs(a.koTimer - b.koTimer) > 0.5f || a.flags != b.flags || a.parts != b.parts;
 }
@@ -173,6 +187,9 @@ void Session::HostTick(double now, bool live) {
 
     for (auto& [from, c] : pendingCommands_) ApplyCommand(from, c);
     pendingCommands_.clear();
+    for (auto& [from, op] : pendingInvOps_) HostInvOp(from, op);
+    if (!pendingInvOps_.empty()) nextInventory_ = 0;   // show the result right away
+    pendingInvOps_.clear();
     // The host's own orders execute natively in its world; nothing to intercept.
     scratchOrders_.clear();
     world_.TakeLocalOrders(scratchOrders_);
@@ -188,6 +205,10 @@ void Session::HostTick(double now, bool live) {
 
     bool anyInGame = false;
     for (auto& [pid, p] : players_) anyInGame |= p.inGame;
+    if (anyInGame && now >= nextInventory_) {
+        nextInventory_ = now + 0.5;
+        SendInventories(now, false, kNoPeer);
+    }
     // Weather: sent when any region's weather changes, and in full every 10 s.
     if (anyInGame && now >= nextWeather_) {
         nextWeather_ = now + 2.0;
@@ -328,6 +349,7 @@ void Session::FinishJoin(RemotePlayer& p) {
     Writer t;
     Encode(t, world_.GetTime());
     SendReliable(p.peer, t);
+    SendInventories(clock_(), true, p.peer);
     weatherForceAt_ = 0;   // the newcomer gets the full weather on the next weather tick
     nextWeather_ = 0;
     AddChat("* " + p.name + " is in the world");
@@ -557,6 +579,11 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         if (pl->inGame && Decode(r, c) && pendingCommands_.size() < 1024) pendingCommands_.emplace_back(pl->id, c);
         break;
     }
+    case Msg::InvOp: {
+        InvOp op;
+        if (pl->inGame && Decode(r, op) && pendingInvOps_.size() < 256) pendingInvOps_.emplace_back(pl->id, op);
+        break;
+    }
     case Msg::Chat: {
         Chat c;
         if (!Decode(r, c)) break;
@@ -578,6 +605,111 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         break;
     }
     default: break;  // host ignores host-bound-only messages from clients
+    }
+}
+
+void Session::SendInventories(double now, bool force, PeerId onlyTo) {
+    (void)now;
+    for (auto& [id, e] : entities_) {
+        std::vector<ItemState> items;
+        if (!world_.ReadInventory(e.handle, items)) continue;
+        const uint64_t h = InventoryHash(items);
+        if (!force && h == e.invHash) continue;
+        InventoryMsg m;
+        m.netId = id;
+        m.items = std::move(items);
+        Writer w(1024);
+        Encode(w, m);
+        if (onlyTo != kNoPeer) {
+            SendReliable(onlyTo, w);
+        } else {
+            e.invHash = h;
+            BroadcastReliable(w, true);
+        }
+    }
+}
+
+// A client player may move items out of its own characters and, like the game allows, out of
+// NPCs that are knocked out or dead, into its own characters. Never out of a conscious NPC (it
+// still uses its gear) nor out of another player's characters.
+void Session::HostInvOp(uint8_t from, const InvOp& op) {
+    auto src = entities_.find(op.fromNetId);
+    if (src == entities_.end()) return;
+    EntityState st;
+    EntityVitals v;
+    const bool srcDown = (world_.Read(src->second.handle, st) && (st.flags & (kFlagDown | kFlagDead)) != 0) ||
+                         (world_.ReadVitals(src->second.handle, v) && (v.flags & (kVitUnconscious | kVitDead)) != 0);
+    const bool srcOk = (src->second.squad && src->second.owner == from) || (!src->second.squad && srcDown);
+    if (op.kind == InvOpKind::Drop) {
+        if (src->second.owner == from) world_.ExecuteInvOp(src->second.handle, src->second.handle, op);
+        src->second.invHash = 0;
+        return;
+    }
+    auto dst = entities_.find(op.toNetId);
+    if (dst == entities_.end() || !srcOk || !dst->second.squad || dst->second.owner != from) {
+        log_("refused an inventory move from player " + std::to_string(from));
+        src->second.invHash = 0;   // resend the true state so the client's prediction is undone
+        if (dst != entities_.end()) dst->second.invHash = 0;
+        return;
+    }
+    world_.ExecuteInvOp(src->second.handle, dst->second.handle, op);
+    // Whatever happened, everyone (the requester first) gets the real state of both inventories.
+    src->second.invHash = 0;
+    dst->second.invHash = 0;
+}
+
+// Client: compare what our characters hold with what the host last told us; a difference is
+// the local player moving things in the inventory UI. Turn it into item movements for the host.
+void Session::ClientInventoryDiff(double now) {
+    if (now < nextInvDiff_) return;
+    nextInvDiff_ = now + 0.2;
+    struct Delta { uint32_t netId; ItemState item; };
+    std::vector<Delta> gone, added;
+    std::vector<uint32_t> involved;
+    for (auto& [id, e] : entities_) {
+        if (!e.present || !e.haveInv || e.invDirty || now < e.invPendingUntil) continue;
+        std::vector<ItemState> local;
+        if (!world_.ReadInventory(e.handle, local) || local == e.inv) continue;
+        // multiset difference (items keep their place unless moved)
+        std::vector<bool> used(local.size(), false);
+        for (const auto& h : e.inv) {
+            bool found = false;
+            for (size_t i = 0; i < local.size() && !found; ++i)
+                if (!used[i] && local[i] == h) { used[i] = true; found = true; }
+            if (!found) gone.push_back({id, h});
+        }
+        for (size_t i = 0; i < local.size(); ++i) if (!used[i]) added.push_back({id, local[i]});
+        involved.push_back(id);
+    }
+    if (gone.empty() && added.empty()) return;
+    // pair each disappeared stack with an appeared one of the same kind
+    std::vector<bool> addUsed(added.size(), false);
+    size_t sent = 0;
+    for (const auto& g : gone) {
+        for (size_t i = 0; i < added.size(); ++i) {
+            if (addUsed[i] || !added[i].item.sameKind(g.item)) continue;
+            addUsed[i] = true;
+            InvOp op;
+            op.kind = InvOpKind::Move;
+            op.fromNetId = g.netId;
+            op.toNetId = added[i].netId;
+            op.item = g.item;
+            op.item.quantity = std::min(g.item.quantity, added[i].item.quantity);
+            op.toSection = added[i].item.section;
+            op.toX = added[i].item.x;
+            op.toY = added[i].item.y;
+            Writer w;
+            Encode(w, op);
+            SendReliable(net_.serverPeer(), w);
+            ++sent;
+            break;
+        }
+    }
+    for (uint32_t id : involved) {
+        auto it = entities_.find(id);
+        if (it == entities_.end()) continue;
+        if (sent) it->second.invPendingUntil = now + 3.0;   // wait for the host's answer
+        else it->second.invDirty = true;                     // nothing we can ask for: back to the host's state
     }
 }
 
@@ -659,17 +791,44 @@ void Session::ClientTick(double now, bool live) {
             e.present = world_.Exists(e.handle);
             e.checked = true;
         }
-        // Not in our world (the host spawned it after the save): create a stand-in where the host
-        // has it. Squad members are never recreated: a missing one means a different save.
-        if (!e.present && !e.squad && e.hasSpawn && !e.buf.empty() && e.spawnAttempts < 3 && now >= e.nextSpawnTry) {
-            ++e.spawnAttempts;
-            e.nextSpawnTry = now + 2.0;
-            if (world_.Spawn(e.handle, e.spawn, e.buf.back().s)) {
-                e.spawned = true;
-                e.present = world_.Exists(e.handle);
-            }
-        }
+        if (e.present) e.missingSince = -1;
+        else if (e.missingSince < 0) e.missingSince = now;
         if (e.squad && !e.present) ++missing;
+    }
+    auto spawnable = [&](const Entity& e) {
+        return !e.present && !e.squad && e.hasSpawn && !e.buf.empty() && now - e.missingSince >= kSpawnGrace;
+    };
+    // Characters the local game made on its own have no place in the host's world: they stand in
+    // for missing host characters of the same kind, or go away.
+    if (fullCheck && cfg_.interestRadius <= 0) {   // with a radius we do not know everything the host has
+        std::vector<Handle> known;
+        std::vector<MissingChar> lacking;
+        known.reserve(entities_.size());
+        for (auto& [id, e] : entities_) {
+            known.push_back(e.handle);
+            if (spawnable(e)) lacking.push_back({e.handle, e.spawn, e.buf.back().s.pos});
+        }
+        std::vector<Handle> adopted;
+        world_.Reconcile(known, lacking, now, adopted);
+        for (const Handle& h : adopted)
+            if (Entity* e = entityByHandle(h)) {
+                e->spawned = true;
+                e->present = world_.Exists(h);
+                if (e->present) e->missingSince = -1;
+            }
+    }
+    // Still not in our world (the host spawned it after the save): create a stand-in where the
+    // host has it. Squad members are never recreated: a missing one means a different save.
+    // Only right after Reconcile, which may have found a local character to stand in instead.
+    for (auto& [id, e] : entities_) {
+        if (!fullCheck || !spawnable(e) || now < e.nextSpawnTry) continue;
+        ++e.spawnAttempts;
+        e.nextSpawnTry = now + (e.spawnAttempts < 3 ? 2.0 : 15.0);   // keep trying, slowly: things change
+        if (world_.Spawn(e.handle, e.spawn, e.buf.back().s)) {
+            e.spawned = true;
+            e.present = world_.Exists(e.handle);
+            if (e.present) e.missingSince = -1;
+        }
     }
     if (missing != missingSquad_ && missing > missingSquad_)
         log_(std::to_string(missing) + " host squad members are missing in the local world");
@@ -706,6 +865,15 @@ void Session::ClientTick(double now, bool live) {
                 e.combatReapply = now + 2.0;
             }
         }
+    }
+    ClientInventoryDiff(now);
+    for (auto& [id, e] : entities_) {
+        if (!e.present || !e.invDirty || now < e.invRetry) continue;
+        if (world_.ApplyInventory(e.handle, e.inv)) { e.invDirty = false; e.invFailures = 0; continue; }
+        // The game would not lay it out exactly like the host: retry a few times, then stop
+        // (and never mistake that difference for a player action: see ClientInventoryDiff).
+        e.invRetry = now + 2.0;
+        if (++e.invFailures >= 3) { e.invDirty = false; e.haveInv = false; }
     }
     // Local simulation (bleeding, healing...) keeps nudging health: re-impose the host's values.
     const bool reapply = now >= nextVitalsApply_;
@@ -887,6 +1055,19 @@ void Session::ClientPacket(Msg type, Reader& r) {
     case Msg::Weather: {
         WeatherMsg m;
         if (state_ == SessionState::Connected && Decode(r, m)) world_.ApplyWeather(m.regions);
+        break;
+    }
+    case Msg::Inventory: {
+        InventoryMsg m;
+        if (state_ != SessionState::Connected || !Decode(r, m)) break;
+        auto it = entities_.find(m.netId);
+        if (it == entities_.end()) break;
+        it->second.inv = std::move(m.items);
+        it->second.haveInv = true;
+        it->second.invDirty = true;
+        it->second.invRetry = 0;
+        it->second.invPendingUntil = 0;   // the host answered: our prediction is settled either way
+        it->second.invFailures = 0;
         break;
     }
     case Msg::Pong: break;

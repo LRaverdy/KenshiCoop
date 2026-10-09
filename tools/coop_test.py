@@ -230,6 +230,22 @@ def compare(h, c, label, pos_tol=3.0):
         report["speed"] = (ht.get("speed"), ct.get("speed"))
     except (KeyError, ValueError):
         pass
+    inv_bad = []
+    for k in set(h["char"]) & set(c["char"]):
+        if h["char"][k].get("inv", "") != c["char"][k].get("inv", ""):
+            inv_bad.append(k)
+    for k in set(h["squad"]) & set(c["squad"]):
+        if h["squad"][k].get("inv", "") != c["squad"][k].get("inv", ""):
+            inv_bad.append("squad " + k)
+    down_err = []
+    for k in set(h["char"]) & set(c["char"]):
+        hv, cv = h["char"][k], c["char"][k]
+        if "pos" in hv and "pos" in cv and hv.get("flags") in ("4", "8", "12") and cv.get("flags") in ("4", "8", "12"):
+            down_err.append((round(dist(hv["pos"], cv["pos"]), 2), k))
+    down_err.sort(reverse=True)
+    report["down_bodies_worst"] = down_err[:3]
+    report["inventory_mismatch"] = len(inv_bad)
+    report["inventory_mismatch_sample"] = inv_bad[:3]
     hw, cw = h.get("weather", {}), c.get("weather", {})
     report["weather_regions"] = (len(hw), len(cw))
     report["weather_mismatch"] = [k for k in hw if k not in cw or cw[k].get("type") != hw[k].get("type") or cw[k].get("season") != hw[k].get("season")][:5]
@@ -276,11 +292,11 @@ def setup(save, name="Tester"):
     return host, cli
 
 
-def frozen_check(host, cli, label):
+def frozen_check(host, cli, label, radius=3000):
     """Pause the host (real pause: game speed 0), let the client settle, compare: must be exact."""
     cmd(host, "pause 1")
     time.sleep(2.5)
-    r = compare(dump(host, "h_" + label.replace(" ", "_")), dump(cli, "c_" + label.replace(" ", "_")), "FROZEN " + label, pos_tol=0.1)
+    r = compare(dump(host, "h_" + label.replace(" ", "_"), radius), dump(cli, "c_" + label.replace(" ", "_"), radius), "FROZEN " + label, pos_tol=0.1)
     cmd(host, "pause 0")
     return r
 
@@ -313,11 +329,26 @@ def scenario(host, cli, quick=False):
     reports.append(frozen_check(host, cli, "host-only NPC appears"))
 
     def npc_flags(state_h, state_c, key):
-        hv, cv = state_h["char"].get(key, {}), state_c["char"].get(key, {})
-        return (hv.get("flags"), hv.get("vflags")), (cv.get("flags"), cv.get("vflags"))
+        # posture (down 4 / dead 8) and medical flags; the "moving" bit of a body on the ground is noise
+        def posture(v):
+            f = v.get("flags")
+            return (str(int(f) & 12) if f is not None else None), v.get("vflags")
+        return posture(state_h["char"].get(key, {})), posture(state_c["char"].get(key, {}))
 
     key = text.split()[1] if ok else ""
-    for step, wait in (("ko", 5), ("wake", 6), ("kill", 5)):
+    # loot. 1) the host hands an item to the NPC (host-side change -> mirrored on the client's stand-in)
+    def squad_key(st, i):
+        return sorted(st["squad"], key=lambda k: (int(k.split(":")[3]), int(k.split(":")[4])))[i]
+
+    def inv_report(title, hs, cs):
+        r = compare(hs, cs, title)
+        r["npc_inv h/c"] = (hs["char"].get(key, {}).get("inv"), cs["char"].get(key, {}).get("inv"))
+        r["squad0_inv h/c"] = (hs["squad"][squad_key(hs, 0)].get("inv"), cs["squad"][squad_key(cs, 0)].get("inv"))
+        r["squad1_inv h/c"] = (hs["squad"][squad_key(hs, 1)].get("inv"), cs["squad"][squad_key(cs, 1)].get("inv"))
+        reports.append(r)
+        return r
+
+    def npc_step(step, wait):
         log(step, cmd(host, step))
         time.sleep(wait)
         hs, cs = dump(host, "h_" + step), dump(cli, "c_" + step)
@@ -327,6 +358,27 @@ def scenario(host, cli, quick=False):
         r["npc_client_flags/vflags"] = cf
         r["npc_match"] = hf == cf
         reports.append(r)
+
+    time.sleep(1)
+    log("host gives the NPC an item", cmd(host, "invmove squad1 spawned main"))
+    time.sleep(3)
+    inv_report("host gave the NPC an item (live)", dump(host, "h_inv_give"), dump(cli, "c_inv_give"))
+    # 2) a conscious NPC cannot be looted (it still uses its gear): refused and undone
+    log("client tries to loot the conscious NPC", cmd(cli, f"invmove {key} squad0 worn"))
+    time.sleep(4)
+    inv_report("loot of a conscious NPC refused (live)", dump(host, "h_inv_awake"), dump(cli, "c_inv_awake"))
+    # 3) knocked out, it can: the client player loots it (client UI change -> InvOp -> host)
+    npc_step("ko", 5)
+    for i, which in enumerate(("main", "worn")):   # a loose item, then worn gear (weapon / clothes)
+        log("client loots the knocked-out NPC", which, cmd(cli, f"invmove {key} squad0 {which}"))
+        time.sleep(4)
+        inv_report(f"client looted the knocked-out NPC #{i + 1} (live)", dump(host, f"h_inv_loot{i}"), dump(cli, f"c_inv_loot{i}"))
+    # 4) the client tries to take from a character the host player owns: refused and undone
+    log("client tries to steal", cmd(cli, "invmove squad1 squad0 main"))
+    time.sleep(4)
+    inv_report("client steal attempt refused (live)", dump(host, "h_inv_steal"), dump(cli, "c_inv_steal"))
+    npc_step("wake", 6)
+    npc_step("kill", 5)
     if not quick:
         h = dump(host, "h_pre_tp")
         x, y, z = squad_pos(h, 2)
@@ -338,9 +390,106 @@ def scenario(host, cli, quick=False):
         log("speed", cmd(host, "speed 1"))
         time.sleep(3)
         reports.append(frozen_check(host, cli, "after x3 run"))
+    # every character of both worlds, not only around the squad
+    reports.append(frozen_check(host, cli, "whole world", radius=10000000))
     for r in reports:
         print_report(r)
     return reports
+
+
+def exp_bodies(host, cli):
+    """Where does a knocked-out body lie on each side, over time, for each body mode?"""
+    time.sleep(6)
+    ok, text = cmd(host, "spawnnpc 12 8")
+    log("spawn", ok, text)
+    key = text.split()[1]
+    time.sleep(6)
+    for mode in (0, 1):
+        # the NPC fights the squad (it moves), then is knocked out
+        log("fight", cmd(host, "fight 1"))
+        time.sleep(4)
+        log("ko", cmd(host, "ko"))
+        for i in range(16):
+            time.sleep(0.75)
+            h, c = dump(host, "hb", 200), dump(cli, "cb", 200)
+            hv, cv = h["char"].get(key, {}), c["char"].get(key, {})
+            if "pos" in hv and "pos" in cv:
+                log(f"  t={i * 0.75:.1f} err={dist(hv['pos'], cv['pos']):.2f} host {hv['pos']} f{hv.get('flags')} ko={hv.get('ko')} | cli {cv['pos']} f{cv.get('flags')} ko={cv.get('ko')} latest {cv.get('latest')}")
+        log("wake", cmd(host, "wake"))
+        time.sleep(8)
+
+
+def exp_trace(host, cli):
+    time.sleep(6)
+    ok, text = cmd(host, "spawnnpc 12 8")
+    key = text.split()[1]
+    time.sleep(6)
+    log("trace", cmd(cli, f"trace {key} 6000"))
+    log("fight", cmd(host, "fight 1"))
+    time.sleep(6)
+    log("host moves squad1 away", cmd(host, "moverel 1 60 40"))
+    time.sleep(10)
+
+
+UI_PS1 = os.path.join(os.environ.get("KC_SCRATCH", ""), "tools", "ui.ps1")
+
+
+def shot(pid, path):
+    if os.path.exists(UI_PS1):
+        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", UI_PS1, "shot", str(pid), path, "1024"],
+                       capture_output=True, timeout=30)
+
+
+def exp_lootui(host, cli):
+    time.sleep(6)
+    log("give", cmd(host, "give 2 0"))
+    ok, text = cmd(host, "spawnnpc 25 15")
+    key = text.split()[1]
+    log("spawn", text)
+    time.sleep(5)
+    log("ko", cmd(host, "ko"))
+    time.sleep(4)
+    log("tradegui before", cmd(cli, "tradegui"))
+    log("loot", cmd(cli, f"loot {key} 0"))
+    for i in range(20):
+        time.sleep(1)
+        c = dump(cli, "c_lootui", 300)
+        sq = sorted(c["squad"], key=lambda k: (int(k.split(":")[3]), int(k.split(":")[4])))[0]
+        d = dist(c["squad"][sq]["pos"], c["char"][key]["pos"]) if key in c["char"] else -1
+        log(f"  t={i} looter-body {d:.1f} tradegui {cmd(cli, 'tradegui')[1]}")
+    shot(cli, os.path.abspath(os.path.join(OUT_DIR, "lootui_client.png")))
+
+    def invs(tag):
+        h, c = dump(host, "h_" + tag, 300), dump(cli, "c_" + tag, 300)
+        sq = sorted(h["squad"], key=lambda k: (int(k.split(":")[3]), int(k.split(":")[4])))[0]
+        log(f"  [{tag}] npc host: {h['char'].get(key, {}).get('inv')}")
+        log(f"  [{tag}] npc cli : {c['char'].get(key, {}).get('inv')}")
+        log(f"  [{tag}] me  host: {h['squad'][sq].get('inv')}")
+        log(f"  [{tag}] me  cli : {c['squad'][sq].get('inv')}")
+        return h, c
+
+    invs("before_drag")
+    # drag the body's weapon (first weapon slot of the right-hand window) into the looter's bag
+    if os.path.exists(UI_PS1):
+        r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", UI_PS1, "drag", str(cli), "372", "180", "245", "330"],
+                           capture_output=True, timeout=30, text=True)
+        log("drag:", r.stdout.strip(), r.stderr.strip()[:200])
+    time.sleep(4)
+    h, c = invs("after_drag")
+    r = compare(h, c, "after a real drag in the client's loot window")
+    log("inventory_mismatch", r["inventory_mismatch"], r["inventory_mismatch_sample"])
+    shot(cli, os.path.abspath(os.path.join(OUT_DIR, "lootui_client_after.png")))
+
+
+def exp_items(host, cli):
+    time.sleep(4)
+    for args in ("917-gamedata.base 475-gamedata.base 918-gamedata.base 0", "917-gamedata.base 475-gamedata.base 918-gamedata.base 3",
+                 "917-gamedata.base 52297-rebirth.mod 925-gamedata.base 0", "917-gamedata.base 478-gamedata.base 926-gamedata.base 2",
+                 "475-gamedata.base 917-gamedata.base 918-gamedata.base 0", "475-gamedata.base 917-gamedata.base 918-gamedata.base 1",
+                 "475-gamedata.base - - 0", "475-gamedata.base 917-gamedata.base - 0", "475-gamedata.base - 918-gamedata.base 0",
+                 "475-gamedata.base 918-gamedata.base 917-gamedata.base 0", "475-gamedata.base 918-gamedata.base - 0",
+                 "52297-rebirth.mod 917-gamedata.base 925-gamedata.base 0", "550-gamedata.base - - 0", "209-gamedata.base - - 0"):
+        log(args, "->", cmd(host, "mkitem " + args))
 
 
 def main():
@@ -350,6 +499,15 @@ def main():
     r.add_argument("--save", default="kctest_base")
     r.add_argument("--keep", action="store_true", help="leave the instances running")
     r.add_argument("--quick", action="store_true")
+    it = sub.add_parser("items")
+    it.add_argument("--save", default="kctest_base")
+    lu = sub.add_parser("lootui")
+    lu.add_argument("--save", default="kctest_base")
+    lu.add_argument("--keep", action="store_true")
+    t = sub.add_parser("trace")
+    t.add_argument("--save", default="kctest_base")
+    e = sub.add_parser("bodies")
+    e.add_argument("--save", default="kctest_base")
     c = sub.add_parser("cmd")
     c.add_argument("pid", type=int)
     c.add_argument("command", nargs="+")
@@ -359,9 +517,18 @@ def main():
         return
     host, cli = setup(a.save)
     try:
-        scenario(host, cli, a.quick)
+        if a.what == "bodies":
+            exp_bodies(host, cli)
+        elif a.what == "trace":
+            exp_trace(host, cli)
+        elif a.what == "lootui":
+            exp_lootui(host, cli)
+        elif a.what == "items":
+            exp_items(host, cli)
+        else:
+            scenario(host, cli, a.quick)
     finally:
-        if not a.keep:
+        if not getattr(a, "keep", False):
             kill_all()
 
 

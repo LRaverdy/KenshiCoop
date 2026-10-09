@@ -281,7 +281,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Weather)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::InvOp)) return std::nullopt;
     return Msg(t);
 }
 
@@ -344,6 +344,59 @@ bool Decode(Reader& r, WeatherMsg& m) {
         if (!r.ok()) return false;
     }
     return Done(r);
+}
+
+namespace {
+constexpr size_t kMaxSectionLen = 64;
+void PutItem(Writer& w, const ItemState& i) {
+    w.str(i.templateSid); w.str(i.materialSid); w.str(i.manufacturerSid); w.str(i.section);
+    w.i32(i.quantity); w.u16(uint16_t(i.x)); w.u16(uint16_t(i.y)); w.boolean(i.equipped); w.i32(i.level);
+    w.f32(i.quality); w.f32(i.charges);
+}
+bool GetItem(Reader& r, ItemState& i) {
+    i.templateSid = r.str(kMaxSidLen); i.materialSid = r.str(kMaxSidLen); i.manufacturerSid = r.str(kMaxSidLen);
+    i.section = r.str(kMaxSectionLen);
+    i.quantity = r.i32(); i.x = int16_t(r.u16()); i.y = int16_t(r.u16()); i.equipped = r.boolean(); i.level = r.i32();
+    i.quality = r.f32(); i.charges = r.f32();
+    return r.ok() && !i.templateSid.empty() && i.quantity > 0 && i.quantity < 1000000;
+}
+} // namespace
+
+void Encode(Writer& w, const InventoryMsg& m) {
+    w.u8(uint8_t(Msg::Inventory));
+    w.varint(m.netId);
+    w.varint(m.items.size());
+    for (const auto& i : m.items) PutItem(w, i);
+}
+bool Decode(Reader& r, InventoryMsg& m) {
+    m.netId = GetU32Var(r);
+    const uint32_t n = r.count(kMaxItemsPerInventory, 20);
+    m.items.resize(n);
+    for (auto& i : m.items) if (!GetItem(r, i)) return false;
+    return Done(r) && m.netId != 0;
+}
+
+void Encode(Writer& w, const InvOp& m) {
+    w.u8(uint8_t(Msg::InvOp));
+    w.u8(uint8_t(m.kind));
+    w.varint(m.fromNetId);
+    w.varint(m.toNetId);
+    PutItem(w, m.item);
+    w.str(m.toSection);
+    w.u16(uint16_t(m.toX));
+    w.u16(uint16_t(m.toY));
+}
+bool Decode(Reader& r, InvOp& m) {
+    const uint8_t k = r.u8();
+    if (k < 1 || k > 2) return false;
+    m.kind = InvOpKind(k);
+    m.fromNetId = GetU32Var(r);
+    m.toNetId = GetU32Var(r);
+    if (!GetItem(r, m.item)) return false;
+    m.toSection = r.str(kMaxSectionLen);
+    m.toX = int16_t(r.u16());
+    m.toY = int16_t(r.u16());
+    return Done(r) && m.fromNetId != 0;
 }
 
 bool ValidWorldPath(const std::string& p) {
