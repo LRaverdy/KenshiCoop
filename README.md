@@ -82,8 +82,9 @@ sont refusés avec un message pour l'instant.
 
 - Les corps au sol peuvent reposer à quelques dizaines de centimètres (rarement plus d'un mètre) de
   leur position chez l'hôte : la chute du ragdoll est simulée par chaque PC.
-- Les PNJ en marche peuvent avoir un léger décalage visuel (30 à 90 cm) : le jeu ne met à jour leurs
-  positions que toutes les 4 images.
+- Autour des joueurs, les positions sont exactes. Les PNJ éloignés (au-delà d'une trentaine de
+  mètres) qui marchent peuvent être décalés de quelques dizaines de centimètres à 1-2 m : le jeu ne
+  met à jour leur position que quelques fois par seconde.
 - Pas encore synchronisés : combat à distance (arbalètes), objets au sol et coffres, commerce,
   construction, artisanat, recrutement par dialogue.
 - Quelques PNJ uniques ne peuvent pas être recréés chez le client s'il ne les a pas déjà (indiqué

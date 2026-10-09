@@ -500,6 +500,14 @@ bool WriteVitals(Character* c, const kc::EntityVitals& v) {
     if (!m) return false;
     Wr(m, off::MS_blood, v.blood);
     Wr(m, off::MS_koTimer, v.koTimer);
+    // The local medical update may decide on its own that the character died or fainted (it sets
+    // these before asking for the death, which clients refuse): the host's state wins. Falling and
+    // dying themselves are replayed separately, so only the "it did not happen" side is written.
+    const bool no = false;
+    bool flag = false;
+    if (!(v.flags & kc::kVitDead) && Rd(m, off::MS_dead, flag) && flag) Wr(m, off::MS_dead, no);
+    if (!(v.flags & (kc::kVitDead | kc::kVitUnconscious)) && v.koTimer <= 0 && Rd(m, off::MS_unconscious, flag) && flag)
+        Wr(m, off::MS_unconscious, no);
     const auto* lk = reinterpret_cast<const uint8_t*>(m) + off::MS_anatomy;
     uint32_t count = 0;
     void** data = nullptr;
