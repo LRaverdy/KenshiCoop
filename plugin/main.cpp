@@ -258,6 +258,7 @@ void ConsoleCommand(const std::string& line) {
             out("heal <id|all>        soigne complètement les persos du joueur <id> (all : toute l'escouade)");
             out("xp <id|all> <n>      +n niveaux dans toutes les compétences (ex. xp 2 10)");
             out("god <id|all> [off]   mode dieu : plus aucun dégât ni K.-O. (off pour l'enlever)");
+            out("money <n>            ajoute n cats à l'argent commun (négatif pour en retirer)");
         }
         return;
     }
@@ -313,6 +314,18 @@ void ConsoleCommand(const std::string& line) {
         if (!host) { out("pas de partie hébergée"); return; }
         const size_t n = g_session->RequestResync(uint8_t(std::clamp(id, 0, 255)));
         out(n ? std::to_string(n) + " joueur(s) rechargent ton monde" : "aucun joueur en jeu");
+        return;
+    }
+    if (cmd == "money" || cmd == "argent") {   // admin: cats for the player faction (everyone shares them)
+        long long n = 0;
+        in >> n;
+        if (!host) { out("seul l'hôte peut faire ça"); return; }
+        int32_t cur = 0;
+        if (n == 0 || !kenshi::ReadPlayerMoney(cur)) { out("usage : money <n>  (ex. money 5000)"); return; }
+        const long long next = std::max(0LL, std::min(2000000000LL, (long long)cur + n));
+        kenshi::WritePlayerMoney(int32_t(next));
+        out("argent : " + std::to_string(cur) + " -> " + std::to_string(next) + " cats");
+        Log("admin: money %lld -> %lld", (long long)cur, next);
         return;
     }
     if (cmd == "heal" || cmd == "xp" || cmd == "god") {   // admin: heal / xp / god mode on a player's characters
