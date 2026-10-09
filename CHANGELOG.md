@@ -26,6 +26,11 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
   d'un client ne change plus une porte de lui-même ; les boutons du panneau d'une porte cliqués par
   un client sont exécutés par l'hôte ; un coffre verrouillé ne s'ouvre pas pour un client (il faut
   crocheter). Messages `Doors` (40) et `DoorRequest` (41) ; expérience `doors`.
+- **Lot D, prisons** (à vérifier en jeu) : cages, menottes, esclavage, évasion et peine de prison
+  de l'hôte imposés à tous les clients (message `Captives`), pour les joueurs comme pour les PNJ ;
+  le personnage en cage reste dans la cage chez le client ; le jeu du client ne peut plus changer
+  ces états de lui-même. Commandes de test `cage`, `chain`, `enslave`, `captive`, expérience
+  `prison`.
 
 ## 9 octobre 2026 (soir)
 

@@ -209,6 +209,11 @@ public:
     virtual bool ApplyDoor(const DoorState& d) { (void)d; return false; }
     virtual void TakeDoorRequests(std::vector<DoorRequest>& out) { out.clear(); }
     // ---- end lot A
+    // ---- lot D: prisons. Host: what holds a character captive (cage, shackles, slavery,
+    // sentence); its netId is left 0. Client: impose it (the same local cage, the same flags), and
+    // keep a caged character where the cage holds it.
+    virtual bool ReadCaptive(const Handle& h, CaptiveState& out) { (void)h; (void)out; return false; }
+    virtual void ApplyCaptive(const Handle& h, const CaptiveState& s) { (void)h; (void)s; }
 
     // Inventories. Host: read; execute a client's item movement (false = refused/impossible).
     virtual bool ReadInventory(const Handle& h, std::vector<ItemState>& out) = 0;
@@ -354,6 +359,8 @@ public:
     // ---- lot A: doors (tests): doors sent (host) / known and applied here (client)
     size_t doorsKnown() const { return isHost() ? doorsSent_.size() : clientDoors_.size(); }
     size_t doorsApplied() const { return doorsApplied_; }
+    // ---- lot D: prisons (tests): captive characters this side knows of (host: sent; client: received)
+    size_t captiveCount() const;
 
 private:
     struct Sample { double t; EntityState s; };
@@ -559,6 +566,15 @@ private:
     void ClientDoorsPacket(Reader& r);
     void ResetDoors();
     // ---- end lot A
+    // ---- lot D: prisons (session_prisons.cpp)
+    std::unordered_map<uint32_t, CaptiveState> captiveSent_;   // host: last state sent per character
+    double nextCaptives_ = 0, captivesFullAt_ = 0;
+    std::unordered_map<uint32_t, CaptiveState> captives_;      // client: the host's state per character
+    std::unordered_set<uint32_t> captivesDirty_;               // client: to impose now
+    double captivesReapplyAt_ = 0;
+    void HostCaptives(double now);
+    void ClientCaptives(double now);
+    void OnCaptives(Reader& r);
     std::vector<std::pair<uint8_t, AppearanceMsg>> pendingLooks_;   // host: from players, applied on the next live tick
     uint32_t editRequest_ = 0;             // client: the host asked us to make our new character
     bool editingSent_ = false;             // client: what we last told the host about our editor

@@ -410,14 +410,38 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   (le temps du message) ; un personnage du client ne passe jamais une porte que l'hôte a laissée
   fermée.
 
-### Prisons, cages, chaînes, esclavage, peines ❌
-- Rien de spécifique pour l'instant. Le mod lit l'état « dans une cage » (`inSomething` = 2) pour
-  les tests, mais ne le synchronise pas.
+### Prisons, cages, chaînes, esclavage, peines 🟡 (implémenté, à vérifier en jeu)
+- **Le joueur** voit chaque personnage enfermé, enchaîné ou réduit en esclavage comme chez
+  l'hôte : dans la même cage, dans la pose de la cage, avec les menottes, le statut d'esclave (et
+  sa faction maître), l'état « prisonnier évadé » ou « enlevé », et la peine de prison en cours.
+  À la libération, tout revient à la normale partout. Cela vaut pour les joueurs comme pour les
+  PNJ (prisonniers des camps d'esclavagistes, des prisons des villes).
+- **Fonctionnement** :
+  - l'hôte relit deux fois par seconde la captivité de chaque personnage suivi et envoie ce qui
+    change (`Captives`), plus tous les captifs toutes les 5 s (joueur arrivé en retard, perte) ;
+  - le client retrouve la cage chez lui « par type et endroit » et y met son personnage avec la
+    fonction du jeu (`setPrisonMode`) : position, pose, occupation de la cage ;
+  - les autres états (menottes, propriétaire, esclavage, faction, évadé, enlevé, peine) sont
+    écrits directement : l'objet « menottes » arrive, lui, avec l'inventaire ;
+  - le jeu du client ne peut plus mettre ni sortir de cage, enchaîner ou changer le statut
+    d'esclave de lui-même (hooks) ; un personnage que l'hôte tient en cage n'est plus corrigé en
+    position (pas de bagarre de position), et un K.-O. en cage ne le fait pas tomber hors de la
+    cage.
+- **Évasions et libérations** : crocheter la cage ou les menottes, s'évader, ouvrir la cage d'un
+  autre, le porter dehors : ce sont des ordres, qui partent déjà à l'hôte et y sont exécutés par
+  son jeu ; le changement d'état revient ensuite chez tout le monde. (L'état des serrures
+  elles-mêmes relève du lot « portes et serrures ».)
+- **Limites / à vérifier en jeu** : l'animation exacte en cage (celle du meuble) ; le cas d'une
+  cage introuvable chez le client (journalisé une fois) ; les champs de la peine de prison
+  (`BountyManager` +0x98 / +0xA0) sont déduits de la disposition voisine vérifiée, pas lus en jeu.
 
-### IA hostile qui porte et emprisonne les joueurs 🟡 / ❌
-- **Porter** : synchronisé pour tous les personnages, PNJ compris. Le cas d'un PNJ hostile qui
-  porte un joueur devrait donc suivre, mais il n'est pas vérifié.
-- **Emprisonner** : ❌ (voir prisons).
+### IA hostile qui porte et emprisonne les joueurs 🟡 (implémenté, à vérifier en jeu)
+- **Porter** : synchronisé pour tous les personnages, PNJ compris (vérifié dans le code : la
+  cible portée part dans les instantanés pour chaque entité, et le client la porte pareil).
+- **Emprisonner, enchaîner, réduire en esclavage** : c'est le jeu de l'hôte qui le fait ; l'état
+  arrive chez les clients comme ci-dessus. Le personnage du joueur reste là où l'hôte le garde ;
+  les ordres de son joueur partent à l'hôte, dont le jeu décide (il refuse de sortir d'une cage
+  fermée).
 
 ### Dégâts à distance : arcs, arbalètes, tourelles ❌
 - Les dégâts eux-mêmes viennent de l'hôte (santé synchronisée) et les animations sont reproduites.

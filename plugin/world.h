@@ -103,6 +103,10 @@ public:
     void QueueDoorRequest(void* door, kc::DoorAction action);   // hooks (client): a door button the player clicked
     void* FindDoor(const std::string& sid, const kc::Vec3& pos);   // the same door here (kind and place)
     // ---- end lot A
+    // ---- lot D: prisons (plugin/prisons.cpp)
+    bool ReadCaptive(const kc::Handle& h, kc::CaptiveState& out) override;
+    void ApplyCaptive(const kc::Handle& h, const kc::CaptiveState& s) override;
+    bool CaptiveHold(const kc::Handle& h, kenshi::Character* c);   // client: the host keeps it in a cage here
     // Hooks (host): the game asked for a trade window for another player's character (any thread);
     // the host's own trade window (to show it again when another player changed the stock).
     void QueueTradeRequest(const kc::Handle& looter, const kc::Handle& trader);
@@ -305,6 +309,9 @@ private:   // first few lifecycle events (tests)
     std::vector<kc::DoorRequest> doorReqs_;                          // client, under doorMutex_
     std::unordered_map<std::string, kc::Handle> doorCache_;         // kind and place -> our handle of it
     // ---- end lot A
+    // ---- lot D: prisons
+    std::unordered_set<kc::Handle, kc::HandleHash> captiveHold_;      // client: caged on the host (no position corrections)
+    std::unordered_set<kc::Handle, kc::HandleHash> captiveMissing_;   // client: cage not found here (logged once)
     std::mutex tradeMutex_;
     std::vector<TradeRequest> tradeReqs_;            // host, under tradeMutex_
     kc::Handle hostTradeLooter_, hostTradeTrader_;   // host: our own last trade window (under tradeMutex_)

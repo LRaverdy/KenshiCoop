@@ -177,6 +177,10 @@ enum Fn : int {
     FnDoorOpenButton,           // void DoorStuff::openButton(DataPanelLine*)   (the door panel's open/close button)
     FnDoorLockButton,           // void DoorStuff::lockButton(DataPanelLine*)   (the door panel's lock toggle)
     // ---- end lot A
+    // ---- lot D: prisons
+    FnSetPrisonMode,            // void Character::setPrisonMode(bool on, UseableStuff* cage)   (in / out of a cage or prison)
+    FnSetChainedMode,           // void Character::setChainedMode(bool on, const hand& owner)   (shackles on / off; may create the shackles)
+    FnSetSlaveState,            // void StateBroadcastData::setSlaveState(SlaveStateEnum)   (enslaved, escaping, ex-slave)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -575,5 +579,31 @@ bool WriteVitals(Character* c, const kc::EntityVitals& v);
 // The irreversible transitions; callers must hold a HostCallScope on clients.
 bool CallDeclareDead(Character* c);
 bool CallKnockout(Character* c);
+
+// ---- lot D: prisons
+// What holds a character captive. Character: +0x2F8 inSomething (2 = IN_PRISON), +0x300 inWhat
+// (hand of the cage), +0x320 isChained, +0x328 slaveOwner (hand); StateBroadcastData (*+0x1A0):
+// +0 slave state, +0xE0 isSlaveOf (Faction*), +0xE8 isEscapedPrisoner, +0xE9 isKidnapped;
+// BountyManager (+0xF0): +0x98 prison sentence began (TimeOfDay, 8 bytes), +0xA0 hours to serve.
+struct Captivity {
+    int inSomething = 0;        // 0 nothing, 1 bed, 2 cage / prison
+    void* cage = nullptr;       // the furniture it is in, when any
+    bool chained = false;
+    kc::Handle slaveOwner;      // invalid: none
+    int slaveState = 0;         // SlaveStateEnum
+    void* slaveOf = nullptr;    // Faction*
+    bool escaped = false, kidnapped = false;
+    uint64_t sentenceBegan = 0;
+    float sentence = 0;
+};
+bool ReadCaptivity(Character* c, Captivity& out);
+// Clients: the flags, owner, faction and sentence (never the cage itself: SetPrisonMode does that).
+bool WriteCaptivity(Character* c, const Captivity& s);
+bool SetPrisonMode(Character* c, bool on, void* cage);   // Character::setPrisonMode (puts it in the cage / takes it out)
+bool CallSetChainedMode(Character* c, bool on);          // the game's own shackling (tests, host)
+bool CallSetSlaveState(Character* c, int state);         // StateBroadcastData::setSlaveState (tests, host)
+std::string FactionSidOf(void* faction);                 // a faction's game data id ("" none)
+void* FactionBySid(const std::string& sid);
+void* NearestCage(const kc::Vec3& at, float radius);     // furniture with function BF_CAGE (8) around a point
 
 } // namespace kenshi

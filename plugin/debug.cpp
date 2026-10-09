@@ -1208,6 +1208,53 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         return describe(best);
     }
     if (cmd == "closewindows") return kenshi::CloseInventoryWindows() ? "ok" : "err";   // every inventory / trade window here
+    // ---- lot D: prisons
+    if (cmd == "cage" || cmd == "chain" || cmd == "enslave" || cmd == "captive") {
+        // cage <squadIndex> [off]: (host) into the nearest cage (BF_CAGE) within 300 m, or out of it
+        // chain <squadIndex> [off]: (host) the game's own shackling (equips shackles) / unshackling
+        // enslave <squadIndex> <0-3>: (host) slave state (0 not, 1 slave, 2 escaping, 3 ex-slave)
+        // captive <squadIndex>: what holds it captive here (in=2: in a cage) and where it is
+        size_t idx = 0;
+        std::string arg;
+        in >> idx >> arg;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        kenshi::Character* c = w.FindSquad(squad[idx]);
+        if (!c) return "err not here";
+        if (cmd == "captive") {
+            kenshi::Captivity k;
+            if (!kenshi::ReadCaptivity(c, k)) return "err";
+            std::string cage = "-", sid;
+            if (k.cage && kenshi::ObjectTemplate(k.cage, sid)) cage = sid;
+            const std::string fac = kenshi::FactionSidOf(k.slaveOf);
+            kc::Vec3 p;
+            kenshi::GetPosition(c, p);
+            char b[400];
+            snprintf(b, sizeof(b), "ok in=%d cage=%s chained=%d slave=%d slaveof=%s escaped=%d kidnapped=%d sentence=%.1f pos=%.2f,%.2f,%.2f captives=%zu",
+                     k.inSomething, cage.c_str(), k.chained ? 1 : 0, k.slaveState, fac.empty() ? "-" : fac.c_str(), k.escaped ? 1 : 0,
+                     k.kidnapped ? 1 : 0, double(k.sentence), p.x, p.y, p.z, s.captiveCount());
+            return b;
+        }
+        HostCallScope scope;
+        if (cmd == "cage") {
+            if (arg == "off") return kenshi::SetPrisonMode(c, false, nullptr) ? "ok out" : "err call failed";
+            kc::Vec3 p;
+            if (!kenshi::GetPosition(c, p)) return "err";
+            void* cage = kenshi::NearestCage(p, 3000.0f);
+            if (!cage) return "err no cage around";
+            std::string sid, name;
+            kenshi::ObjectTemplate(cage, sid);
+            kenshi::TemplateDisplayName(sid, name);
+            const bool ok = kenshi::SetPrisonMode(c, true, cage);
+            int now = 0;
+            kenshi::ReadInSomething(c, now);
+            return (ok ? "ok " : "err ") + name + " in=" + std::to_string(now);
+        }
+        if (cmd == "chain") return kenshi::CallSetChainedMode(c, arg != "off") ? "ok" : "err call failed";
+        int state = 1;
+        try { state = std::stoi(arg); } catch (...) { return "err state 0-3"; }
+        return kenshi::CallSetSlaveState(c, state) ? "ok" : "err call failed";
+    }
     if (cmd == "tradegui") {   // the trade window request the game has not consumed yet (type 0 = none)
         int type = -1;
         std::memcpy(&type, reinterpret_cast<const void*>(kenshi::Addr(kenshi::rva::TradeGui) + 0x58), 4);

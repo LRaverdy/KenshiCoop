@@ -536,6 +536,27 @@ void hk_showTrade(void* gui, const void* a, const void* b, int type) {
     o_showTrade(gui, a, b, type);
 }
 
+// ---- lot D: prisons. Being put in a cage or taken out, shackled or freed, enslaved: the host's
+// game decides for every character; on clients only the host's state is imposed (ApplyCaptive).
+using PrisonModeFn = void (*)(void* c, bool on, void* cage);
+PrisonModeFn o_prisonMode = nullptr;
+void hk_prisonMode(void* c, bool on, void* cage) {
+    if (KenshiWorld::ClientActive() && !g_hostCall && KenshiWorld::View()->replicated.count(c)) return;
+    o_prisonMode(c, on, cage);
+}
+using ChainedModeFn = void (*)(void* c, bool on, const void* owner);
+ChainedModeFn o_chainedMode = nullptr;
+void hk_chainedMode(void* c, bool on, const void* owner) {
+    if (KenshiWorld::ClientActive() && !g_hostCall && KenshiWorld::View()->replicated.count(c)) return;
+    o_chainedMode(c, on, owner);
+}
+using SlaveStateFn = void (*)(void* sbd, int state);
+SlaveStateFn o_slaveState = nullptr;
+void hk_slaveState(void* sbd, int state) {
+    if (KenshiWorld::ClientActive() && !g_hostCall) return;
+    o_slaveState(sbd, state);
+}
+
 // Picking a body up on a client happens only when the host's character does (see ApplyCarry).
 using PickFn = void (*)(void* c, void* who);
 PickFn o_pickChar = nullptr;
@@ -1077,6 +1098,10 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnSetStandingOrder, reinterpret_cast<void*>(&hk_standing), reinterpret_cast<void**>(&o_standing)},
         {kenshi::FnPickupCharacter, reinterpret_cast<void*>(&hk_pickChar), reinterpret_cast<void**>(&o_pickChar)},
         {kenshi::FnShowTradeWindow, reinterpret_cast<void*>(&hk_showTrade), reinterpret_cast<void**>(&o_showTrade)},
+        // ---- lot D: prisons
+        {kenshi::FnSetPrisonMode, reinterpret_cast<void*>(&hk_prisonMode), reinterpret_cast<void**>(&o_prisonMode)},
+        {kenshi::FnSetChainedMode, reinterpret_cast<void*>(&hk_chainedMode), reinterpret_cast<void**>(&o_chainedMode)},
+        {kenshi::FnSetSlaveState, reinterpret_cast<void*>(&hk_slaveState), reinterpret_cast<void**>(&o_slaveState)},
         {kenshi::FnDialogueSay, reinterpret_cast<void*>(&hk_say), reinterpret_cast<void**>(&o_say)},
         {kenshi::FnDialogueSetInDialog, reinterpret_cast<void*>(&hk_setInDialog), reinterpret_cast<void**>(&o_setInDialog)},
         {kenshi::FnDialogueSetResponses, reinterpret_cast<void*>(&hk_setResponses), reinterpret_cast<void**>(&o_setResponses)},

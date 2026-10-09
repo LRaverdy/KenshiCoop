@@ -731,7 +731,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Bounties)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Captives)) return std::nullopt;
     return Msg(t);
 }
 
@@ -1106,6 +1106,57 @@ bool Decode(Reader& r, AnimFrameMsg& m) {
             e.weight = r.u8() / 255.0f; e.desired = r.u8() / 255.0f;
         }
         if (!r.ok() || f.netId == 0) return false;
+    }
+    return Done(r);
+}
+
+// ---- lot D: prisons
+void Encode(Writer& w, const CaptivesMsg& m) {
+    w.u8(uint8_t(Msg::Captives));
+    const size_t n = std::min<size_t>(m.chars.size(), kMaxCaptivesPerMsg);
+    w.varint(n);
+    for (size_t i = 0; i < n; ++i) {
+        const CaptiveState& c = m.chars[i];
+        w.varint(c.netId);
+        uint8_t f = 0;
+        if (c.caged) f |= 1;
+        if (c.chained) f |= 2;
+        if (c.escaped) f |= 4;
+        if (c.kidnapped) f |= 8;
+        w.u8(f);
+        if (c.caged) {
+            w.str(c.cageSid);
+            PutVec(w, c.cagePos);
+        }
+        PutHandle(w, c.slaveOwner);
+        w.u8(c.slaveState);
+        w.str(c.slaveOf);
+        w.u64(c.sentenceBegan);
+        w.f32(c.sentence);
+    }
+}
+bool Decode(Reader& r, CaptivesMsg& m) {
+    const uint32_t n = r.count(kMaxCaptivesPerMsg, 4);
+    m.chars.resize(n);
+    for (auto& c : m.chars) {
+        c.netId = GetU32Var(r);
+        const uint8_t f = r.u8();
+        if (f & ~0x0F) return false;
+        c.caged = (f & 1) != 0;
+        c.chained = (f & 2) != 0;
+        c.escaped = (f & 4) != 0;
+        c.kidnapped = (f & 8) != 0;
+        if (c.caged) {
+            c.cageSid = r.str(kMaxSidLen);
+            c.cagePos = GetVec(r);
+            if (c.cageSid.empty()) return false;
+        }
+        c.slaveOwner = GetHandle(r);
+        c.slaveState = r.u8();
+        c.slaveOf = r.str(kMaxSidLen);
+        c.sentenceBegan = r.u64();
+        c.sentence = r.f32();
+        if (!c.netId || c.slaveState > 3) return false;
     }
     return Done(r);
 }

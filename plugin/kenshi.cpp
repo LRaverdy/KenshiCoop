@@ -139,6 +139,10 @@ const FunctionSig kFunctions[FnCount] = {
     {"DoorStuff::openButton", 0x546FB0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x33, 0xC0, 0x48, 0x8B, 0xD9, 0x48}},
     {"DoorStuff::lockButton", 0x547060, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x40, 0x80, 0xB9}},
     // ---- end lot A
+    // ---- lot D: prisons
+    {"Character::setPrisonMode", 0x330600, {0x48, 0x8B, 0xC4, 0x55, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48}},
+    {"Character::setChainedMode", 0x32E590, {0x40, 0x55, 0x56, 0x57, 0x48, 0x81, 0xEC, 0xB0, 0x00, 0x00, 0x00, 0x48}},
+    {"StateBroadcastData::setSlaveState", 0x5A4940, {0x48, 0x8B, 0xC4, 0x57, 0x48, 0x81, 0xEC, 0xA0, 0x02, 0x00, 0x00, 0x48}},
 };
 
 namespace {
@@ -3177,6 +3181,121 @@ bool CallTogglePause(bool paused) {
 bool CallUserPause(bool paused) {
     GameWorld* w = World();
     return w && CallBoolArg(FnAddr(FnUserPause), w, paused);
+}
+
+// ---------------------------------------------------------------- lot D: prisons
+namespace {
+constexpr uintptr_t CH_inSomething = 0x2F8, CH_inWhat = 0x300, CH_isChained = 0x320, CH_slaveOwner = 0x328, CH_stateBroadcast = 0x1A0;
+constexpr uintptr_t CH_sentenceBegan = 0xF0 + 0x98, CH_sentence = 0xF0 + 0xA0;   // BountyManager crimes (+0xF0)
+constexpr uintptr_t SBD_slaveState = 0x0, SBD_isSlaveOf = 0xE0, SBD_escaped = 0xE8, SBD_kidnapped = 0xE9;
+constexpr int kUseInPrison = 2;
+constexpr int kBuildingFunctionCage = 8;   // BF_CAGE
+using FnPrisonSig = void (*)(void* c, bool on, void* cage);
+using FnChainedSig = void (*)(void* c, bool on, const void* ownerHand);
+using FnSlaveStateSig = void (*)(void* sbd, int state);
+bool PrisonSeh(void* c, bool on, void* cage) {
+    __try { reinterpret_cast<FnPrisonSig>(FnAddr(FnSetPrisonMode))(c, on, cage); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool ChainedSeh(void* c, bool on, const void* hand) {
+    __try { reinterpret_cast<FnChainedSig>(FnAddr(FnSetChainedMode))(c, on, hand); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool SlaveStateSeh(void* sbd, int state) {
+    __try { reinterpret_cast<FnSlaveStateSig>(FnAddr(FnSetSlaveState))(sbd, state); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* StateBroadcastOf(Character* c) {
+    void* sbd = nullptr;
+    return IsCharacter(c) && Rd(c, CH_stateBroadcast, sbd) ? sbd : nullptr;
+}
+} // namespace
+
+bool ReadCaptivity(Character* c, Captivity& out) {
+    out = Captivity{};
+    if (!IsCharacter(c) || !Rd(c, CH_inSomething, out.inSomething)) return false;
+    if (out.inSomething == kUseInPrison) {
+        kc::Handle cage;
+        if (ReadHandle(reinterpret_cast<uint8_t*>(c) + CH_inWhat, cage) && cage.valid()) out.cage = ResolveObject(cage);
+    }
+    uint8_t chained = 0;
+    Rd(c, CH_isChained, chained);
+    out.chained = chained != 0;
+    kc::Handle owner;
+    if (ReadHandle(reinterpret_cast<uint8_t*>(c) + CH_slaveOwner, owner) && owner.valid()) out.slaveOwner = owner;
+    if (void* sbd = StateBroadcastOf(c)) {
+        uint8_t esc = 0, kid = 0;
+        Rd(sbd, SBD_slaveState, out.slaveState);
+        Rd(sbd, SBD_isSlaveOf, out.slaveOf);
+        Rd(sbd, SBD_escaped, esc);
+        Rd(sbd, SBD_kidnapped, kid);
+        out.escaped = esc != 0;
+        out.kidnapped = kid != 0;
+    }
+    Rd(c, CH_sentenceBegan, out.sentenceBegan);
+    Rd(c, CH_sentence, out.sentence);
+    if (!std::isfinite(out.sentence) || out.sentence < 0 || out.sentence > 1e6f) out.sentence = 0;
+    if (out.slaveState < 0 || out.slaveState > 3) out.slaveState = 0;
+    return true;
+}
+
+bool WriteCaptivity(Character* c, const Captivity& s) {
+    if (!IsCharacter(c)) return false;
+    const uint8_t chained = s.chained ? 1 : 0;
+    Wr(c, CH_isChained, chained);
+    alignas(8) uint8_t hand[off::HandSize];
+    kc::Handle owner = s.slaveOwner;
+    if (!owner.valid()) owner = kc::Handle{0xB, 0, 0, 0, 0};   // what the game keeps for "nobody"
+    MakeHand(owner, hand);
+    // only the identity fields: the hand's own vtable stays
+    SafeCopy(reinterpret_cast<uint8_t*>(c) + CH_slaveOwner + 8, hand + 8, off::HandSize - 8);
+    if (void* sbd = StateBroadcastOf(c)) {
+        const uint8_t esc = s.escaped ? 1 : 0, kid = s.kidnapped ? 1 : 0;
+        Wr(sbd, SBD_slaveState, s.slaveState);
+        Wr(sbd, SBD_isSlaveOf, s.slaveOf);
+        Wr(sbd, SBD_escaped, esc);
+        Wr(sbd, SBD_kidnapped, kid);
+    }
+    Wr(c, CH_sentenceBegan, s.sentenceBegan);
+    Wr(c, CH_sentence, s.sentence);
+    return true;
+}
+
+bool SetPrisonMode(Character* c, bool on, void* cage) {
+    if (!IsCharacter(c) || (on && !cage)) return false;
+    return PrisonSeh(c, on, cage);
+}
+
+bool CallSetChainedMode(Character* c, bool on) {
+    if (!IsCharacter(c)) return false;
+    alignas(8) uint8_t hand[off::HandSize];
+    MakeHand(kc::Handle{0xB, 0, 0, 0, 0}, hand);   // no owner
+    return ChainedSeh(c, on, hand);
+}
+
+bool CallSetSlaveState(Character* c, int state) {
+    void* sbd = StateBroadcastOf(c);
+    return sbd && state >= 0 && state <= 3 && SlaveStateSeh(sbd, state);
+}
+
+std::string FactionSidOf(void* faction) {
+    void* gd = nullptr;
+    std::string sid;
+    if (faction && Rd(faction, off::FAC_data, gd) && gd) GameDataSid(gd, sid);
+    return sid;
+}
+
+void* FactionBySid(const std::string& sid) { return sid.empty() ? nullptr : FindFaction(sid); }
+
+void* NearestCage(const kc::Vec3& at, float radius) {
+    std::vector<void*> around;
+    ObjectsNear(at, radius, around);
+    void* best = nullptr;
+    float bestD = radius * radius;
+    for (void* o : around) {
+        kc::Vec3 p;
+        if (BuildingFunctionOf(o) != kBuildingFunctionCage || !ObjectPosition(o, p)) continue;
+        const float d = (p.x - at.x) * (p.x - at.x) + (p.y - at.y) * (p.y - at.y) + (p.z - at.z) * (p.z - at.z);
+        if (d < bestD) { bestD = d; best = o; }
+    }
+    return best;
 }
 
 } // namespace kenshi

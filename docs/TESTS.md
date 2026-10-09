@@ -95,6 +95,7 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `walk` / `trace` | trace image par image des corrections de position d'un PNJ qui marche |
 | `menu` | un hôte qui héberge et un second jeu laissé **au menu principal**, pour rejoindre à la main |
 | `up` | un hôte et un client connectés, laissés ouverts pour un test manuel |
+| `prison` (lot D) | l'hôte met le personnage du client dans la cage la plus proche, l'enchaîne, le réduit en esclavage puis le libère : même état chez le client, gardé dans la cage, tout effacé à la fin. Il faut une cage à moins de 300 m de l'escouade (`--save` d'une sauvegarde près d'une prison ou d'un camp d'esclavagistes) |
 | `cmd <pid> <commande…>` | envoie une commande de debug à une instance |
 
 ### La suite (`suite`) : 32 points
@@ -272,6 +273,10 @@ l'escouade triée par handle.
 | `bedreq <i>` | ce membre seul reçoit l'ordre de dormir dans le lit libre le plus proche (tâche 258) |
 | `minereq <i>` | ce membre seul reçoit l'ordre d'exploiter la mine la plus proche (tâche 87) |
 | `tradegui` | type de fenêtre de commerce en attente dans l'interface (0 = aucune) |
+| `cage <i> [off]` | (hôte, lot D) met le membre `i` dans la cage la plus proche (300 m), ou l'en sort |
+| `chain <i> [off]` | (hôte, lot D) l'enchaîne à la manière du jeu (menottes créées) / le libère |
+| `enslave <i> <0-3>` | (hôte, lot D) état d'esclave : 0 non, 1 esclave, 2 en fuite, 3 ancien |
+| `captive <i>` | (lot D) `in=` (2 = en cage), cage, `chained`, `slave`, `slaveof`, évadé, enlevé, peine, position, nombre de captifs suivis |
 
 **Portes et serrures (lot A)** — `<qui>` : index dans l'escouade (autour de qui chercher) ; `<quoi>` :
 `door` (la porte la plus proche), `lock` (le meuble à serrure le plus proche) ou une partie du nom
