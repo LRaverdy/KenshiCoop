@@ -399,6 +399,10 @@ void KenshiWorld::Reconcile(const std::vector<kc::Handle>& known, const std::vec
     for (Stranger& s : strangers) {
         if (s.used || now - s.since < kLinger || !inHostArea(s.c)) continue;
         HostCallScope scope;
+        if (kenshi::InventoryWindowShows(s.c)) {
+            kenshi::CloseInventoryWindows();
+            Log("closed the inventory windows: the character they show is being removed");
+        }
         if (kenshi::DestroyObject(s.c)) ++removed;
         strangerSince_.erase(s.h);
     }
@@ -424,6 +428,10 @@ void KenshiWorld::Despawn(const kc::Handle& h) {
     if (a == alias_.end()) return;
     if (kenshi::Character* c = kenshi::Resolve(a->second)) {
         HostCallScope scope;
+        if (kenshi::InventoryWindowShows(c)) {
+            kenshi::CloseInventoryWindows();
+            Log("closed the inventory windows: the character they show is being removed");
+        }
         kenshi::DestroyObject(c);
     }
     alias_.erase(a);

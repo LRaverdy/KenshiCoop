@@ -67,6 +67,42 @@ constexpr int kFriendFlagImmediate = 4;   // k_EFriendFlagImmediate
 constexpr int kSendUnreliable = 0;        // k_EP2PSendUnreliable (ENet does the reliability)
 constexpr uint16_t kLoopbackHostPort = 28100;
 
+// Every Steam API call, from the relay thread or the game thread, holds this lock: the relay polls
+// Steam's P2P all the time while the game thread runs callbacks and rich presence (the host crashed
+// in IsP2PPacketAvailable once, while the game thread was busy with Steam). Recursive: callbacks
+// run under RunCallbacks and call the API themselves.
+std::recursive_mutex g_apiMutex;
+// A fault inside the Steam API (an unloaded or restarted Steam client...) must not take the game
+// down: the relay stops using Steam, sessions joined by IP go on.
+std::atomic<bool> g_apiBroken{false};
+std::atomic<uint32_t> g_apiFault{0};
+
+bool SehAvail(uint32_t* size) {
+    __try { return g_api.avail(g_api.net, size, 0); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { g_apiFault = GetExceptionCode(); g_apiBroken = true; return false; }
+}
+bool SehRead(void* buf, uint32_t cap, uint32_t* got, uint64_t* from) {
+    __try { return g_api.read(g_api.net, buf, cap, got, from, 0); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { g_apiFault = GetExceptionCode(); g_apiBroken = true; return false; }
+}
+bool SehSend(uint64_t to, const void* data, uint32_t size, int sendType) {
+    __try { return g_api.send(g_api.net, to, data, size, sendType, 0); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { g_apiFault = GetExceptionCode(); g_apiBroken = true; return false; }
+}
+bool SehPeer(FnPeer fn, uint64_t id) {
+    __try { return fn && fn(g_api.net, id); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { g_apiFault = GetExceptionCode(); g_apiBroken = true; return false; }
+}
+void SehRunCallbacks() {
+    __try { g_api.runCallbacks(); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { g_apiFault = GetExceptionCode(); g_apiBroken = true; }
+}
+void LogApiFault() {
+    static std::atomic<bool> logged{false};
+    if (g_apiBroken && !logged.exchange(true))
+        Log("steam: the Steam API faulted (code %08X): relaying through Steam stops, sessions joined by IP go on", unsigned(g_apiFault.load()));
+}
+
 template <typename T>
 bool Get(HMODULE m, const char* name, T& out) {
     out = reinterpret_cast<T>(GetProcAddress(m, name));
@@ -94,7 +130,10 @@ public:
     void Run(void* param) override {
         uint64_t from = 0;
         std::memcpy(&from, param, 8);
-        if (g_api.accept) g_api.accept(g_api.net, from);
+        {
+            std::lock_guard<std::recursive_mutex> lk(g_apiMutex);
+            SehPeer(g_api.accept, from);
+        }
         Log("steam: P2P session from %llu accepted", static_cast<unsigned long long>(from));
     }
     void Run(void* param, bool, uint64_t) override { Run(param); }
@@ -128,7 +167,9 @@ bool TransportSend(uint64_t to, const void* data, uint32_t size) {
         a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         return sendto(g_loopSock, static_cast<const char*>(data), int(size), 0, reinterpret_cast<sockaddr*>(&a), sizeof(a)) == int(size);
     }
-    return g_api.send(g_api.net, to, data, size, kSendUnreliable, 0);
+    if (g_apiBroken) return false;
+    std::lock_guard<std::recursive_mutex> lk(g_apiMutex);
+    return SehSend(to, data, size, kSendUnreliable);
 }
 
 // One packet, or 0 when none is waiting.
@@ -141,10 +182,12 @@ uint32_t TransportRecv(uint64_t& from, uint8_t* buf, uint32_t cap) {
         from = ntohs(a.sin_port);
         return uint32_t(n);
     }
+    if (g_apiBroken) return 0;
+    std::lock_guard<std::recursive_mutex> lk(g_apiMutex);
     uint32_t size = 0;
-    if (!g_api.avail(g_api.net, &size, 0) || size == 0) return 0;
+    if (!SehAvail(&size) || size == 0) return 0;
     uint32_t got = 0;
-    if (!g_api.read(g_api.net, buf, cap, &got, &from, 0)) return 0;
+    if (!SehRead(buf, cap, &got, &from)) return 0;
     return got;
 }
 
@@ -252,7 +295,10 @@ void Pump(Link& l) {
             for (auto it = l.peers.begin(); it != l.peers.end();) {
                 if (now - it->second.last > 60.0) {
                     closesocket(it->second.s);
-                    if (!g_loopback) g_api.close(g_api.net, it->first);
+                    if (!g_loopback && !g_apiBroken) {
+                        std::lock_guard<std::recursive_mutex> lk(g_apiMutex);
+                        SehPeer(g_api.close, it->first);
+                    }
                     it = l.peers.erase(it);
                 } else {
                     ++it;
@@ -345,7 +391,8 @@ void Init(bool loopbackTest) {
 bool Available() { return g_steam; }
 uint64_t MyId() { return g_myId; }
 std::string MyName() {
-    if (g_loopback || !g_steam) return {};
+    if (g_loopback || !g_steam || g_apiBroken) return {};
+    std::lock_guard<std::recursive_mutex> lk(g_apiMutex);
     const char* n = g_api.personaName(g_api.friends);
     return n ? n : "";
 }
@@ -372,7 +419,8 @@ bool StartHost(uint16_t gamePort, std::string* err) {
     l->host = true;
     l->gamePort = gamePort;
     if (!StartLink(l, err)) { delete l; return false; }
-    if (!g_loopback) {
+    if (!g_loopback && !g_apiBroken) {
+        std::lock_guard<std::recursive_mutex> lk(g_apiMutex);
         const std::string me = IdText(g_myId);
         g_api.richSet(g_api.friends, "kc_host", me.c_str());
         g_api.richSet(g_api.friends, "connect", ("+kc_join " + me).c_str());
@@ -403,8 +451,9 @@ bool Join(kc::Session& s, uint64_t hostId, std::string* err) {
         return false;
     }
     if (!StartLink(l, err)) { closesocket(l->local); delete l; return false; }
-    if (!g_loopback) {
-        g_api.accept(g_api.net, hostId);   // the host's answers are welcome
+    if (!g_loopback && !g_apiBroken) {
+        std::lock_guard<std::recursive_mutex> lk(g_apiMutex);
+        SehPeer(g_api.accept, hostId);   // the host's answers are welcome
         g_api.richSet(g_api.friends, "kc_join", IdText(hostId).c_str());
     }
     Log("steam: joining %llu through Steam (local port %u)", static_cast<unsigned long long>(hostId), localPort);
@@ -436,13 +485,17 @@ void Stop() {
     if (!l) return;
     l->run = false;
     if (l->thread.joinable()) l->thread.join();
-    for (auto& [id, p] : l->peers) {
-        closesocket(p.s);
-        if (!g_loopback) g_api.close(g_api.net, id);
+    {
+        std::lock_guard<std::recursive_mutex> lk(g_apiMutex);
+        const bool api = !g_loopback && !g_apiBroken;
+        for (auto& [id, p] : l->peers) {
+            closesocket(p.s);
+            if (api) SehPeer(g_api.close, id);
+        }
+        if (l->local != INVALID_SOCKET) closesocket(l->local);
+        if (!l->host && api) SehPeer(g_api.close, l->hostId);
+        if (api && g_steam) g_api.richClear(g_api.friends);
     }
-    if (l->local != INVALID_SOCKET) closesocket(l->local);
-    if (!l->host && !g_loopback) g_api.close(g_api.net, l->hostId);
-    if (!g_loopback && g_steam) g_api.richClear(g_api.friends);
     Log("steam: link closed (%llu packets in, %llu out)", static_cast<unsigned long long>(l->packetsIn.load()),
         static_cast<unsigned long long>(l->packetsOut.load()));
     delete l;
@@ -455,7 +508,8 @@ bool Active() {
 
 std::vector<Friend> FriendsHosting() {
     std::vector<Friend> out;
-    if (!g_steam || g_loopback) return out;
+    if (!g_steam || g_loopback || g_apiBroken) return out;
+    std::lock_guard<std::recursive_mutex> lk(g_apiMutex);
     const int n = g_api.friendCount(g_api.friends, kFriendFlagImmediate);
     for (int i = 0; i < n && i < 2000; ++i) {
         const uint64_t id = g_api.friendByIndex(g_api.friends, i, kFriendFlagImmediate);
@@ -475,15 +529,17 @@ std::optional<uint64_t> TakeJoinRequest() {
 }
 
 void Tick() {
-    if (!g_steam || g_loopback) return;
-    g_api.runCallbacks();
-    // A joining friend also says so in its rich presence (in case Steam's session request callback
-    // never reached us): accept them.
+    LogApiFault();
+    if (!g_steam || g_loopback || g_apiBroken) return;
     bool hosting = false;
     {
-        std::lock_guard<std::mutex> lk(g_linkMutex);
+        std::lock_guard<std::mutex> linkLock(g_linkMutex);
         hosting = g_link && g_link->host;
     }
+    std::lock_guard<std::recursive_mutex> lk(g_apiMutex);
+    SehRunCallbacks();
+    // A joining friend also says so in its rich presence (in case Steam's session request callback
+    // never reached us): accept them.
     const double now = NowSeconds();
     if (!hosting || now < g_nextFriendScan) return;
     g_nextFriendScan = now + 1.0;
@@ -492,7 +548,7 @@ void Tick() {
     for (int i = 0; i < n && i < 2000; ++i) {
         const uint64_t id = g_api.friendByIndex(g_api.friends, i, kFriendFlagImmediate);
         const char* j = g_api.richGet(g_api.friends, id, "kc_join");
-        if (j && me == j) g_api.accept(g_api.net, id);
+        if (j && me == j) SehPeer(g_api.accept, id);
     }
 }
 

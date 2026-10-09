@@ -2210,6 +2210,36 @@ bool MouseHoldsItem() {
     return Rd(reinterpret_cast<void*>(Addr(rva::MouseInventory)), 0, mouse) && mouse && Rd(mouse, 0x30, item) && item;
 }
 
+bool InventoryWindowShows(const void* obj) {
+    if (!obj) return false;
+    void* head = nullptr;
+    uint64_t size = 0;
+    if (!Rd(reinterpret_cast<void*>(Addr(rva::TradePartnersHead)), 0, head) || !head ||
+        !Rd(reinterpret_cast<void*>(Addr(rva::TradePartnersSize)), 0, size) || size == 0 || size > 16)
+        return false;
+    if (NpcTrader() == obj) return true;
+    void* root = nullptr;
+    if (!Rd(head, 0x8, root) || !root) return false;
+    std::vector<void*> todo{root};
+    for (int guard = 0; !todo.empty() && guard < 64; ++guard) {
+        void* n = todo.back();
+        todo.pop_back();
+        uint8_t nil = 1;
+        if (!n || !Rd(n, TP_isNil, nil) || nil) continue;
+        void* window = nullptr;
+        if (Rd(n, TP_key, window) && window) {
+            // InventoryGUI vtable: +0x78 getCallbackCharacter, +0x80 getCallbackObject
+            for (uintptr_t slot : {uintptr_t(0x78), uintptr_t(0x80)})
+                if (void* fn = VSlot(window, slot); fn && CallNoArgPtrOn(fn, window) == obj) return true;
+        }
+        void* l = nullptr;
+        void* r = nullptr;
+        if (Rd(n, TP_left, l)) todo.push_back(l);
+        if (Rd(n, TP_right, r)) todo.push_back(r);
+    }
+    return false;
+}
+
 bool TradeWindowItems(bool merchantSide, std::vector<WindowItem>& out) {
     out.clear();
     void* merchant = nullptr;

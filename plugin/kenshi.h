@@ -318,6 +318,9 @@ bool OpenTradeWindow(Character* looter, Character* trader);   // the game's trad
 Character* NpcTrader();                              // the merchant of the trade window open here, or null
 bool MouseHoldsItem();                               // an item is being dragged in an inventory window
 int BuildingFunctionOf(void* building);              // BuildingFunction (9 BF_SHOP...), -1 unknown
+// An open inventory window (trade, loot) is about `obj` (its character or object): it must close
+// before `obj` goes away (the window keeps a raw pointer to it).
+bool InventoryWindowShows(const void* obj);
 // tests: the items of the open trade window's merchant side (or the player side), and a right click
 // on one of them (one unit goes to the other side, bought or sold the game's own way)
 struct WindowItem { std::string section; int x = 0, y = 0; kc::ItemState state; };

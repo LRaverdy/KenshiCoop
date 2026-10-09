@@ -978,8 +978,13 @@ void Session::HostTrades(double now) {
         Writer w;
         Encode(w, m);
         SendReliable(pl->second.peer, w);
-        log_("[" + who + "] trades with " + merchant + " (" + std::to_string(t.counters.size()) + " shop counters, the merchant has " +
-             std::to_string(m.traderMoney) + " cats)");
+        size_t stacks = 0;
+        for (uint32_t id : t.counters) {
+            std::vector<ItemState> items;
+            if (world_.ReadInventory(entities_[id].handle, items)) stacks += items.size();
+        }
+        log_("[" + who + "] trades with " + merchant + " (" + std::to_string(t.counters.size()) + " shop counters holding " +
+             std::to_string(stacks) + " stacks, the merchant has " + std::to_string(m.traderMoney) + " cats)");
     }
     scratchTradeReqs_.clear();
     for (auto it = trades_.begin(); it != trades_.end();) {
@@ -1065,25 +1070,25 @@ void Session::ClientContainers(double now) {
                 trade_.open = true;
                 CaptureLocalSpend();
                 unsentSpend_ = 0;
-                log_("trade window open: " + std::to_string(trade_.counters.size()) + " shop counters");
+                size_t stacks = 0;
+                for (uint32_t id : trade_.counters)
+                    if (auto it = entities_.find(id); it != entities_.end()) stacks += it->second.inv.size();
+                log_("trade window open: " + std::to_string(trade_.counters.size()) + " shop counters holding " + std::to_string(stacks) + " stacks");
             } else {
                 log_("trade window could not open here");
                 EndClientTrade();
             }
         }
     }
-    // the stock changed under our window: show it again (not while an item is on the mouse)
+    // the stock changed under our window (not while an item is on the mouse): the window closes, the
+    // counters take the host's stock, and it opens again (the pending path above)
     if (trade_.open && trade_.refresh && !world_.TradeWindowBusy()) {
-        bool ready = true;
-        for (uint32_t id : trade_.counters)
-            if (auto it = entities_.find(id); it == entities_.end() || it->second.invDirty) ready = false;
-        auto trader = entities_.find(trade_.trader);
-        auto looter = entities_.find(trade_.looter);
-        if (ready && trader != entities_.end() && looter != entities_.end()) {
-            trade_.refresh = false;
-            if (world_.OpenTradeWindow(looter->second.handle, trader->second.handle)) windowOpenedAt_ = now;
-            log_("trade window shown again: the merchant's stock changed");
-        }
+        trade_.refresh = false;
+        trade_.open = false;
+        trade_.pending = true;
+        windowOpenedAt_ = -1;   // not the player closing it
+        world_.CloseContainerWindows();
+        log_("trade window closed for a moment: the merchant's stock changed");
     }
     // the player closed it: the host forgets it for us
     if (windowOpenedAt_ > 0 && now - windowOpenedAt_ > 1.5 && !world_.ContainerWindowOpen()) {
@@ -1911,10 +1916,18 @@ void Session::ClientTick(double now, bool live) {
         // counter going back to the host's state undoes a purchase the host never got: its cats too.
         if (trade_.open && (IsTradeCounter(id) || id == trade_.looter)) {
             std::vector<ItemState> local;
-            if (!(world_.ReadInventory(e.handle, local) && local == e.inv)) {
-                if (IsTradeCounter(id)) trade_.refresh = true;
+            const bool differs = !(world_.ReadInventory(e.handle, local) && local == e.inv);
+            if (differs) {
                 if (haveMoney_) ApplyHostMoney(hostMoney_);
                 unsentSpend_ = 0;
+            }
+            // The game's trade window shows the counters' own items (not copies): rebuilding a counter
+            // under it would leave the window holding destroyed items. The window closes first, the
+            // counters take the host's stock, then it opens again (ClientContainers).
+            if (IsTradeCounter(id)) {
+                if (differs) trade_.refresh = true;
+                else { e.invDirty = false; e.invFailures = 0; }
+                continue;
             }
         }
         if (world_.ApplyInventory(e.handle, e.inv)) { e.invDirty = false; e.invFailures = 0; continue; }
