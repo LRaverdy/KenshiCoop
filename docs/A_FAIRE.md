@@ -28,3 +28,10 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
 - **Relations corrigées en boucle** : chez rob, 3 valeurs de relations ou de primes reprennent sans arrêt
   la valeur du jeu local et le mod les remet chaque seconde (journal « factions: 3 relation/bounty values
   set to the host's »). Trouver qui les change chez le client et le bloquer.
+- **Fouille d'un cadavre : l'objet se duplique puis s'annule** (Geoffrey, 10/10 vers 00:35). Le journal de
+  l'hôte montre des déplacements d'équipement refusés : « boots -> boots 0,0 : no room ». Quand le joueur
+  glisse des bottes du corps sur son perso qui en porte déjà, son jeu fait un échange (les anciennes sortent,
+  les nouvelles entrent) ; le mod envoie les deux déplacements dans le mauvais ordre, l'hôte refuse d'abord
+  « pas de place », renvoie l'état réel, et l'objet revient : d'où l'aspect dupliqué puis annulé.
+  À faire : envoyer d'abord ce qui libère une place, et en cas de place prise, laisser l'hôte poser l'objet
+  ailleurs dans l'inventaire. Il y a aussi des refus « refused an inventory move from player 3 » à éclaircir.
