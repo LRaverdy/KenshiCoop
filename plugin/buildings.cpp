@@ -321,7 +321,11 @@ void KenshiWorld::ApplyBuildState(const kc::Handle& h, float progress, uint8_t f
         if (void* fn = Slot(b, BV_setConstructionProgress)) FloatArgSeh(fn, b, progress);   // completes it when it reaches the total
     }
     Rd(st, CS_complete, complete);
-    if ((flags & kc::kSiteComplete) && !complete) {
+    if (!(flags & kc::kSiteComplete) && complete) {
+        // finished here, a site to work on at the host (a bought building to repair): the same here
+        const uint8_t no = 0;
+        Wr(st, CS_complete, no);
+    } else if ((flags & kc::kSiteComplete) && !complete) {
         if (void* fn = Slot(b, BV_notifyConstructionComplete)) VoidSeh(fn, b);
     }
     const uint8_t paused = (flags & kc::kSitePaused) ? 1 : 0, dismantled = (flags & kc::kSiteDismantling) ? 1 : 0;
@@ -337,12 +341,18 @@ void KenshiWorld::ConstructionSitesNear(const std::vector<kc::Vec3>& centers, fl
         for (void* o : around) {
             void* st = BuildState(o);
             uint8_t complete = 1, dismantled = 0;
-            if (!st || !Rd(st, CS_complete, complete) || !Rd(st, CS_dismantled, dismantled) || (complete && !dismantled) || !IsOurs(o)) continue;
+            if (!st || !Rd(st, CS_complete, complete) || !Rd(st, CS_dismantled, dismantled) || (complete && !dismantled)) continue;   // any faction: bought, towns, NPC sites
             kc::Handle h;
             if (kenshi::ObjectHandle(o, h) && std::find(out.begin(), out.end(), h) == out.end()) out.push_back(h);
         }
         if (out.size() > 512) break;
     }
+}
+
+// The client's own game may build only what no player owns (a town it loads alone, NPC sites):
+// the players' buildings are built, repaired and finished by the host.
+bool KenshiWorld::IsPlayerBuilding(void* b) {
+    return IsBuilding(b) && IsOurs(b);
 }
 
 // ---------------------------------------------------------------- removal

@@ -12,6 +12,8 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
 
 - **Ville lointaine en « bâtons rouges »** : un client parti seul dans une autre ville voit ses bâtiments
   comme des chantiers (bâtons rouges), alors que l'hôte la voit normalement.
+  → Corrigé (à tester en jeu) : le client bloquait toute avancée de construction ; il ne bloque plus que
+  celle des bâtiments des joueurs.
 - **Fenêtre du marchand chez l'hôte** : en 0.2.x, la fenêtre de commerce s'ouvre encore chez l'hôte et pas
   chez le client (au moins dans un des cas de dialogue ou de clic).
 - **Plantage après un resync** : après un resync, un client n'avait plus les cartes de ses personnages dans
@@ -64,6 +66,8 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   vues en « bâtons rouges » chez un client (état de construction des bâtiments existants mal synchronisé).
   Précision : l'hôte a terminé la réparation (il le voit construit), le client le voit toujours en
   chantier. L'avancement et la fin des travaux sur un bâtiment existant n'arrivent donc pas chez le client.
+  → Corrigé (à tester avec `coop_test.py buildstate`) : l'hôte suit tous les chantiers près des joueurs,
+  et un bâtiment fini chez le client repasse en chantier si l'hôte l'a à réparer.
 - **Ramasser (voler) un objet par terre ne marche pas chez le client 4** (nass4, 10/10). À croiser avec le
   journal : l'ordre « ramasser » part bien à l'hôte, qui doit retrouver le même objet par type et endroit
   (à 15 unités près). Pistes : l'objet de la sauvegarde a un autre handle chez lui et n'est pas retrouvé,

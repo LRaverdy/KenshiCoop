@@ -6,6 +6,12 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+- **État de construction des bâtiments existants** : une ville chargée par un client seul ne reste plus
+  en « bâtons rouges » (le client refusait toute avancée de construction, y compris celle que le jeu
+  fait en montant les bâtiments d'une ville) ; seuls les bâtiments des joueurs attendent l'hôte. L'hôte
+  suit maintenant tous les chantiers près des joueurs (bâtiments achetés à réparer, villes, PNJ), pas
+  seulement ceux de sa faction, et un bâtiment fini chez le client mais à réparer chez l'hôte repasse
+  en chantier. Test : `coop_test.py buildstate` (sauvegarde kctest_mine).
 - **Robustesse (lot F)** : un PNJ bloqué chez un client (mur, porte, étage) est replacé où l'hôte
   l'a après 1 s sans progrès ; les PNJ lointains sont replacés sur la position de l'hôte ; la TP
   admin déplace aussi un personnage à terre ou porté ; un perso dans un lit ou une cage n'est plus
