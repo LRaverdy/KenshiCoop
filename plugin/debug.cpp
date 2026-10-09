@@ -417,6 +417,14 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         kenshi::WithSelection(me, [&] { ok = kenshi::CallAddTaskNearest(12, best); });   // PLAYER_TALK_TO
         return ok ? "ok " + name + " at " + std::to_string(int(std::sqrt(bestD))) : "err call failed";
     }
+    if (cmd == "kosquad") {   // kosquad <squadIndex>: (host) that squad member is knocked out
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        HostCallScope scope;
+        return kenshi::CallKnockout(w.FindSquad(squad[idx])) ? "ok" : "err";
+    }
     if (cmd == "convo") {   // convo <squadIndex> <k>: (host) the k-th nearest NPC starts a conversation with that squad member
         size_t sel = 0, k = 0;
         in >> sel >> k;

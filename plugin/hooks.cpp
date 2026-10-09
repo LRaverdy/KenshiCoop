@@ -352,8 +352,10 @@ void hk_medKnockout(void* med, float skill01) {
 }
 // ---- conversations and the AI's decisions
 // The host's world decides everything an NPC does: on clients every decision point of the AI is
-// refused (tasks, squad AI, crimes and bounties, faction relations, raids, conversations), and the
-// host's speech bubbles and conversation windows are replayed.
+// refused (squad AI, crimes and bounties, faction relations, raids, conversations), and the host's
+// speech bubbles and conversation windows are replayed. The task system itself keeps running: it
+// is what walks a character to the destination the host's state gives it (refusing it leaves
+// characters sliding, facing nowhere); what a task could decide is refused one hook at a time.
 bool IsLiveThread() { return GetCurrentThreadId() == g_liveThread.load(); }
 bool ClientRefuses() { return KenshiWorld::ClientActive() && !g_hostCall; }
 
@@ -412,9 +414,6 @@ PtrFn o_doActions = nullptr, o_assessCrimes = nullptr, o_assignBounty = nullptr;
 void hk_doActions(void* d, void* line) { if (!ClientRefuses()) o_doActions(d, line); }
 void hk_assessCrimes(void* s, void* c) { if (!ClientRefuses()) o_assessCrimes(s, c); }
 void hk_assignBounty(void* b, void* f) { if (!ClientRefuses()) o_assignBounty(b, f); }
-using TaskUpdateFn = void (*)(void* ts, const float* pos, float time);
-TaskUpdateFn o_taskUpdate = nullptr;
-void hk_taskUpdate(void* ts, const float* pos, float time) { if (!ClientRefuses()) o_taskUpdate(ts, pos, time); }
 using FloatBoolFn = void (*)(void* self, float t, bool b);
 FloatBoolFn o_dialogAssessment = nullptr;
 void hk_dialogAssessment(void* s, float t, bool b) { if (!ClientRefuses()) o_dialogAssessment(s, t, b); }
@@ -933,7 +932,6 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnDialogueStartConversation, reinterpret_cast<void*>(&hk_startConv), reinterpret_cast<void**>(&o_startConv)},
         {kenshi::FnDialogueStartPlayerConversation, reinterpret_cast<void*>(&hk_startPlayerConv), reinterpret_cast<void**>(&o_startPlayerConv)},
         {kenshi::FnDialogueDoActions, reinterpret_cast<void*>(&hk_doActions), reinterpret_cast<void**>(&o_doActions)},
-        {kenshi::FnTaskSystemUpdate, reinterpret_cast<void*>(&hk_taskUpdate), reinterpret_cast<void**>(&o_taskUpdate)},
         {kenshi::FnSensoryDialogAssessment, reinterpret_cast<void*>(&hk_dialogAssessment), reinterpret_cast<void**>(&o_dialogAssessment)},
         {kenshi::FnSensoryAssessCrimes, reinterpret_cast<void*>(&hk_assessCrimes), reinterpret_cast<void**>(&o_assessCrimes)},
         {kenshi::FnBlackboardUpdate, reinterpret_cast<void*>(&hk_bbUpdate), reinterpret_cast<void**>(&o_bbUpdate)},

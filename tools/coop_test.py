@@ -790,6 +790,48 @@ def exp_talk(host, cli):
             return
 
 
+def exp_facing(host, cli):
+    """A host character runs in several directions: on the client it must really run (speed), facing the same way."""
+    import math
+    def yaw(f):
+        x, _, z = map(float, f.split(","))
+        return math.degrees(math.atan2(x, z))
+    time.sleep(6)
+    worst, still = 0.0, 0
+    for r in range(6):
+        idx = 1 + r % 4
+        cmd(host, f"moverel {idx} {500 * (1 if r % 2 == 0 else -1)} {400 * (1 if r in (0, 1, 4) else -1)}")
+        for sample in range(3):
+            time.sleep(1.0)
+            h, c = dump(host, "hf"), dump(cli, "cf")
+            k = sorted(h["squad"])[idx]
+            hv, cv = h["char"][k], c["char"][k]
+            if not (int(hv["flags"]) & 1) or int(hv["flags"]) & 4:
+                continue
+            d = abs((yaw(hv["face"]) - yaw(cv["face"]) + 540) % 360 - 180)
+            worst = max(worst, d)
+            still += float(cv.get("speed", 0)) < 1.0
+            log(f"run {r} #{sample} idx {idx}: yaw host {yaw(hv['face']):.0f} client {yaw(cv['face']):.0f} diff {d:.0f} | speed host {hv.get('speed')} client {cv.get('speed')} | pos err {t_dist(hv, cv):.1f}")
+    log("FACING worst diff while running:", round(worst), "deg | client samples not really moving:", still)
+
+
+def exp_kosquad(host, cli):
+    """Squad members knocked out on the host fall and stay down on the client, then get up together."""
+    time.sleep(6)
+    for idx in (4, 1):
+        log("host kosquad", idx, cmd(host, f"kosquad {idx}"))
+        for s_ in range(12):
+            time.sleep(1.0)
+            h, c = dump(host, "hk"), dump(cli, "ck")
+            k = sorted(h["squad"])[idx]
+            hv, cv = h["char"][k], c["char"][k]
+            log(f"  +{s_ + 1}s idx {idx}: flags host {hv['flags']} client {cv['flags']} | vflags {hv['vflags']} {cv['vflags']} | ko {hv['ko']} {cv['ko']} | action {hv.get('action')} {cv.get('action')}")
+
+
+def t_dist(a, b):
+    return dist(a["pos"], b["pos"])
+
+
 def exp_ground(host, cli):
     """An item the host drops lies at the same spot on the client; once picked up, it is gone there too."""
     time.sleep(8)
@@ -1076,6 +1118,12 @@ def main():
     tk = sub.add_parser("talk")
     tk.add_argument("--save", default="kctest_base")
     tk.add_argument("--keep", action="store_true")
+    ks = sub.add_parser("kosquad")
+    ks.add_argument("--save", default="kctest_base")
+    ks.add_argument("--keep", action="store_true")
+    fa = sub.add_parser("facing")
+    fa.add_argument("--save", default="kctest_base")
+    fa.add_argument("--keep", action="store_true")
     fo = sub.add_parser("four", help="1 host + 3 clients")
     fo.add_argument("--save", default="kctest_base")
     fo.add_argument("--clients", type=int, default=3)
@@ -1122,7 +1170,11 @@ def main():
         log("ready: host", host, "client", cli)
         return
     try:
-        if a.what == "talk":
+        if a.what == "kosquad":
+            exp_kosquad(host, cli)
+        elif a.what == "facing":
+            exp_facing(host, cli)
+        elif a.what == "talk":
             exp_talk(host, cli)
         elif a.what == "progress":
             exp_progress(host, cli)

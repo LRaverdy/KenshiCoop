@@ -234,6 +234,14 @@ bool KenshiWorld::Spawn(const kc::Handle& h, const kc::SpawnInfo& info, const kc
 // velocity from the last poses of the skeleton: falling right after a teleport would throw the
 // body far away, so the pose gets a moment to settle at the new place. False while it is being
 // prepared (under a second: a body still sliding on the host is not chased forever).
+namespace {
+std::string KeyOf(const kc::Handle& h) {
+    char b[80];
+    snprintf(b, sizeof(b), "%u:%u:%u:%u:%u", h.type, h.container, h.containerSerial, h.index, h.serial);
+    return b;
+}
+} // namespace
+
 bool KenshiWorld::ReadyToFall(const kc::Handle& h, kenshi::Character* c, const kc::EntityState& at, double now) {
     constexpr double kSettle = 0.25, kChase = 0.6;
     kc::Vec3 local;
@@ -420,9 +428,10 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
                 fixed = now;
             } else if (ReadyToFall(h, c, target, now)) {
                 HostCallScope scope;
-                kenshi::SetRagdoll(c, true);
+                const bool ok = kenshi::SetRagdoll(c, true);
                 fixed = now;
                 fellAt_[h] = now;
+                Log("posture: %s falls as on the host (%s, ragdoll now %d)", KeyOf(h).c_str(), ok ? "ok" : "call failed", int(kenshi::IsRagdoll(c)));
             }
         }
     } else {
@@ -517,6 +526,8 @@ void KenshiWorld::ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) {
         kenshi::CallKnockout(c);
         kenshi::WriteVitals(c, v);   // knockout() picks its own timer; the host's wins
     }
+    Log("vitals: %s %s as on the host (now down=%d unconscious=%d dead=%d)", KeyOf(h).c_str(), dies ? "dies" : "faints",
+        int(kenshi::IsRagdoll(c)), int(kenshi::IsUnconscious(c)), int(kenshi::IsDead(c)));
 }
 
 bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
