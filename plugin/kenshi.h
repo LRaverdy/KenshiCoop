@@ -65,6 +65,9 @@ enum Fn : int {
     FnWorldDestroy,             // bool GameWorld::destroy(RootObject*, bool justUnloaded, const char* debugInfo)
     FnEndCombatMode,            // void Character::endCombatMode()
     FnRagdollMode,              // void Character::ragdollMode(bool on, RagdollPart::Enum part)
+    FnRegionUpdateBT,           // void WeatherRegion::updateBT()          (background thread: advances weather)
+    FnSeasonGetNewWeather,      // void Season::getNewWeather()            (random pick of the next weather)
+    FnInstanceSetupWeather,     // void WeatherInstance::setupWeather(Weather*)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -220,6 +223,11 @@ bool EndCombat(Character* c);
 
 // Getting knocked down / getting up (the AI normally drives the getting up).
 bool SetRagdoll(Character* c, bool on);
+
+// Weather (WeatherRegion objects are reached through the hooked WeatherRegion::updateBT).
+bool ReadRegionWeather(void* region, kc::RegionWeather& out);
+bool WriteRegionWeather(void* region, const kc::RegionWeather& w);   // returns false if ids are unknown here
+bool ExpireRegionWeather(void* region);   // the game rolls a new weather on its next update (tests)
 bool StandUp(Character* c);   // clears the unconscious flag, leaves ragdoll, normal posture
 bool SetGameHours(double hours);
 

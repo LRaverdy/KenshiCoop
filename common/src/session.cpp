@@ -188,6 +188,23 @@ void Session::HostTick(double now, bool live) {
 
     bool anyInGame = false;
     for (auto& [pid, p] : players_) anyInGame |= p.inGame;
+    // Weather: sent when any region's weather changes, and in full every 10 s.
+    if (anyInGame && now >= nextWeather_) {
+        nextWeather_ = now + 2.0;
+        std::vector<RegionWeather> w;
+        world_.ReadWeather(w);
+        bool changed = w.size() != lastWeather_.size() || now >= weatherForceAt_;
+        for (size_t i = 0; !changed && i < w.size(); ++i) changed = !w[i].sameKind(lastWeather_[i]);
+        if (changed && !w.empty()) {
+            weatherForceAt_ = now + 10.0;
+            lastWeather_ = w;
+            WeatherMsg m;
+            m.regions = std::move(w);
+            Writer out(4096);
+            Encode(out, m);
+            BroadcastReliable(out, true);
+        }
+    }
     if (anyInGame) {
         if (now >= nextSnapshot_) {
             nextSnapshot_ = std::max(nextSnapshot_ + 1.0 / cfg_.snapshotRate, now - 0.5 / cfg_.snapshotRate);
@@ -311,6 +328,8 @@ void Session::FinishJoin(RemotePlayer& p) {
     Writer t;
     Encode(t, world_.GetTime());
     SendReliable(p.peer, t);
+    weatherForceAt_ = 0;   // the newcomer gets the full weather on the next weather tick
+    nextWeather_ = 0;
     AddChat("* " + p.name + " is in the world");
 }
 
@@ -863,6 +882,11 @@ void Session::ClientPacket(Msg type, Reader& r) {
     case Msg::TimeState: {
         TimeState t;
         if (Decode(r, t)) { hostTime_ = t; haveTime_ = true; }
+        break;
+    }
+    case Msg::Weather: {
+        WeatherMsg m;
+        if (state_ == SessionState::Connected && Decode(r, m)) world_.ApplyWeather(m.regions);
         break;
     }
     case Msg::Pong: break;

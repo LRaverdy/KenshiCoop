@@ -224,6 +224,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         const bool ok = cmd == "ko" ? kenshi::CallKnockout(c) : kenshi::CallDeclareDead(c);
         return ok ? "ok " + Key(lastSpawned_) : "err call failed";
     }
+    if (cmd == "rollweather") return "ok " + std::to_string(w.ExpireAllWeather());
     if (cmd == "pause") { int on = 1; in >> on; return kenshi::CallUserPause(on != 0) ? "ok" : "err"; }
     if (cmd == "speed") { float v = 1; in >> v; return kenshi::CallSetFrameSpeed(v) ? "ok" : "err"; }
     if (cmd == "state") {   // state <file> [radius]
@@ -238,6 +239,11 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         const kc::TimeState t = w.GetTime();
         o << "session " << StateStr(s.state()) << " id=" << int(s.localId()) << '\n';
         o << "time speed=" << t.speed << " paused=" << t.paused << " hours=" << t.gameHours << '\n';
+        std::vector<kc::RegionWeather> wr;
+        w.ReadWeather(wr);
+        for (const auto& r : wr)
+            o << "weather " << r.regionSid << " season=" << r.seasonSid << " type=" << r.weatherSid << " str=" << r.strength
+              << " end=" << r.endMinutes << '\n';
         std::vector<kc::Vec3> centers;
         for (const auto& h : SortedSquad(w)) {
             DumpCharacter(o, "squad", w, h);

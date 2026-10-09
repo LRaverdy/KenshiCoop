@@ -33,6 +33,9 @@ const FunctionSig kFunctions[FnCount] = {
     {"GameWorld::destroy(RootObject*)", 0x799AF0, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
     {"Character::endCombatMode", 0x5C91C0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8D, 0x05, 0x03, 0xC1, 0x0B}},
     {"Character::ragdollMode", 0x5CBD60, {0x45, 0x85, 0xC0, 0x0F, 0x84, 0x13, 0x02, 0x00, 0x00, 0x44, 0x89, 0x44}},
+    {"WeatherRegion::updateBT", 0x9DDE50, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x83, 0x79, 0x38, 0x00, 0x48}},
+    {"Season::getNewWeather", 0x9DD980, {0x48, 0x8B, 0xC4, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41}},
+    {"WeatherInstance::setupWeather", 0x9DCF60, {0x4C, 0x8B, 0xDC, 0x57, 0x48, 0x81, 0xEC, 0x90, 0x00, 0x00, 0x00, 0x48}},
 };
 
 namespace {
@@ -708,6 +711,115 @@ bool CallInt(void* fn, void* self, int i) {
 constexpr int kRagdollWhole = 1;
 constexpr int kProneNormal = 0;
 } // namespace
+
+namespace {
+// WeatherRegion
+constexpr uintptr_t WR_biomeGroup = 0x0, WR_seasonsBegin = 0x8, WR_seasonsEnd = 0x10, WR_instance = 0x30, WR_season = 0x38,
+                    WR_seasonIndex = 0x40, WR_seasonEnd = 0x44, WR_effectsDirty = 0x69, WR_newWeather = 0xB1;
+constexpr uintptr_t ABG_data = 0x10;                                   // AreaBiomeGroup: GameData*
+constexpr uintptr_t SEASON_data = 0x40, SEASON_weatherCount = 0x10, SEASON_weathers = 0x18;
+constexpr uintptr_t WEATHER_data = 0x8;
+// WeatherInstance
+constexpr uintptr_t WI_weather = 0x8, WI_effectStrength = 0x10, WI_strength = 0x14, WI_windSpeed = 0x18, WI_windDir = 0x1C,
+                    WI_buEnded = 0x28, WI_buStart = 0x2C, WI_buEnd = 0x30, WI_buSpeedStart = 0x34, WI_buSpeedEnd = 0x38,
+                    WI_buAngleStart = 0x3C, WI_buAngleEnd = 0x40, WI_start = 0x44, WI_end = 0x48, WI_updWind = 0x4C, WI_time = 0x50;
+
+bool SidAt(const void* obj, uintptr_t gdOffset, std::string& out) {
+    void* gd = nullptr;
+    return obj && Rd(obj, gdOffset, gd) && GameDataSid(gd, out);
+}
+
+using FnPtrArg = void (*)(void* self, void* arg);
+bool CallPtrArg(void* fn, void* self, void* arg) {
+    __try {
+        reinterpret_cast<FnPtrArg>(fn)(self, arg);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool ReadRegionWeather(void* region, kc::RegionWeather& w) {
+    void* biome = nullptr;
+    void* season = nullptr;
+    void* inst = nullptr;
+    void* weather = nullptr;
+    if (!region || !Rd(region, WR_biomeGroup, biome) || !SidAt(biome, ABG_data, w.regionSid)) return false;
+    if (!Rd(region, WR_season, season) || !SidAt(season, SEASON_data, w.seasonSid)) return false;
+    if (!Rd(region, WR_instance, inst) || !inst || !Rd(inst, WI_weather, weather) || !SidAt(weather, WEATHER_data, w.weatherSid)) return false;
+    float dir[3];
+    uint8_t ended = 0;
+    bool ok = Rd(region, WR_seasonEnd, w.seasonEnd) && Rd(inst, WI_effectStrength, w.effectStrength) && Rd(inst, WI_strength, w.strength) &&
+              Rd(inst, WI_windSpeed, w.windSpeed) && Rd(inst, WI_windDir, dir) && Rd(inst, WI_buEnded, ended) &&
+              Rd(inst, WI_buStart, w.windBuildUpStart) && Rd(inst, WI_buEnd, w.windBuildUpEnd) && Rd(inst, WI_buSpeedStart, w.windBuildUpSpeedStart) &&
+              Rd(inst, WI_buSpeedEnd, w.windBuildUpSpeedEnd) && Rd(inst, WI_buAngleStart, w.windBuildUpAngleStart) &&
+              Rd(inst, WI_buAngleEnd, w.windBuildUpAngleEnd) && Rd(inst, WI_start, w.startMinutes) && Rd(inst, WI_end, w.endMinutes) &&
+              Rd(inst, WI_updWind, w.updateWindMinutes) && Rd(inst, WI_time, w.time);
+    w.windDir = {dir[0], dir[1], dir[2]};
+    w.windBuildUpEnded = ended != 0;
+    const float fl[] = {w.effectStrength, w.strength, w.windSpeed, dir[0], dir[1], dir[2], w.windBuildUpSpeedStart, w.windBuildUpSpeedEnd,
+                        w.windBuildUpAngleStart, w.windBuildUpAngleEnd, w.time};
+    for (float f : fl) ok = ok && std::isfinite(f);
+    return ok;
+}
+
+bool WriteRegionWeather(void* region, const kc::RegionWeather& w) {
+    void* inst = nullptr;
+    void* curSeason = nullptr;
+    void** seasonsBegin = nullptr;
+    void** seasonsEnd = nullptr;
+    if (!region || !Rd(region, WR_instance, inst) || !inst || !Rd(region, WR_seasonsBegin, seasonsBegin) || !Rd(region, WR_seasonsEnd, seasonsEnd))
+        return false;
+    // season: find it by id among the region's seasons
+    std::string sid;
+    if (!Rd(region, WR_season, curSeason) || !SidAt(curSeason, SEASON_data, sid) || sid != w.seasonSid) {
+        const size_t n = size_t(seasonsEnd - seasonsBegin);
+        if (n > 64) return false;
+        bool found = false;
+        for (size_t i = 0; i < n && !found; ++i) {
+            void* s = nullptr;
+            if (Rd(seasonsBegin, i * sizeof(void*), s) && SidAt(s, SEASON_data, sid) && sid == w.seasonSid) {
+                Wr(region, WR_season, s);
+                Wr(region, WR_seasonIndex, int32_t(i));
+                curSeason = s;
+                found = true;
+            }
+        }
+        if (!found) return false;
+    }
+    Wr(region, WR_seasonEnd, w.seasonEnd);
+    // weather type: find it in the season's list; switching it goes through the game's own setup
+    void* curWeather = nullptr;
+    if (!Rd(inst, WI_weather, curWeather) || !SidAt(curWeather, WEATHER_data, sid) || sid != w.weatherSid) {
+        uint32_t count = 0;
+        void** list = nullptr;
+        if (!Rd(curSeason, SEASON_weatherCount, count) || !Rd(curSeason, SEASON_weathers, list) || !list || count > 256) return false;
+        void* target = nullptr;
+        for (uint32_t i = 0; i < count && !target; ++i) {
+            void* wt = nullptr;
+            if (Rd(list, i * sizeof(void*), wt) && SidAt(wt, WEATHER_data, sid) && sid == w.weatherSid) target = wt;
+        }
+        if (!target || !CallPtrArg(FnAddr(FnInstanceSetupWeather), inst, target)) return false;
+        const uint8_t one = 1;
+        Wr(region, WR_newWeather, one);     // the main-thread update replays the weather change effects
+        Wr(region, WR_effectsDirty, one);
+    }
+    const float dir[3] = {w.windDir.x, w.windDir.y, w.windDir.z};
+    const uint8_t ended = w.windBuildUpEnded ? 1 : 0;
+    Wr(inst, WI_effectStrength, w.effectStrength); Wr(inst, WI_strength, w.strength); Wr(inst, WI_windSpeed, w.windSpeed);
+    Wr(inst, WI_windDir, dir); Wr(inst, WI_buEnded, ended); Wr(inst, WI_buStart, w.windBuildUpStart); Wr(inst, WI_buEnd, w.windBuildUpEnd);
+    Wr(inst, WI_buSpeedStart, w.windBuildUpSpeedStart); Wr(inst, WI_buSpeedEnd, w.windBuildUpSpeedEnd);
+    Wr(inst, WI_buAngleStart, w.windBuildUpAngleStart); Wr(inst, WI_buAngleEnd, w.windBuildUpAngleEnd);
+    Wr(inst, WI_start, w.startMinutes); Wr(inst, WI_end, w.endMinutes); Wr(inst, WI_updWind, w.updateWindMinutes); Wr(inst, WI_time, w.time);
+    return true;
+}
+
+bool ExpireRegionWeather(void* region) {
+    void* inst = nullptr;
+    const int32_t zero = 0;
+    return region && Rd(region, WR_instance, inst) && inst && Wr(inst, WI_end, zero);
+}
 
 bool SetRagdoll(Character* c, bool on) {
     return IsCharacter(c) && CallBoolInt(FnAddr(FnRagdollMode), c, on, kRagdollWhole);

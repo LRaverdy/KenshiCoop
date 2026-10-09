@@ -281,7 +281,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Ready)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Weather)) return std::nullopt;
     return Msg(t);
 }
 
@@ -320,6 +320,31 @@ bool Decode(Reader& r, WorldEnd& m) { m.worldHash = r.u64(); return Done(r); }
 
 void Encode(Writer& w, const ReadyMsg& m) { w.u8(uint8_t(Msg::Ready)); w.u64(m.worldHash); }
 bool Decode(Reader& r, ReadyMsg& m) { m.worldHash = r.u64(); return Done(r); }
+
+void Encode(Writer& w, const WeatherMsg& m) {
+    w.u8(uint8_t(Msg::Weather));
+    w.varint(m.regions.size());
+    for (const auto& r : m.regions) {
+        w.str(r.regionSid); w.str(r.seasonSid); w.i32(r.seasonEnd); w.str(r.weatherSid);
+        w.f32(r.effectStrength); w.f32(r.strength); w.f32(r.windSpeed); PutVec(w, r.windDir);
+        w.boolean(r.windBuildUpEnded); w.i32(r.windBuildUpStart); w.i32(r.windBuildUpEnd);
+        w.f32(r.windBuildUpSpeedStart); w.f32(r.windBuildUpSpeedEnd); w.f32(r.windBuildUpAngleStart); w.f32(r.windBuildUpAngleEnd);
+        w.i32(r.startMinutes); w.i32(r.endMinutes); w.i32(r.updateWindMinutes); w.f32(r.time);
+    }
+}
+bool Decode(Reader& r, WeatherMsg& m) {
+    const uint32_t n = r.count(kMaxWeatherRegions, 8);
+    m.regions.resize(n);
+    for (auto& x : m.regions) {
+        x.regionSid = r.str(kMaxSidLen); x.seasonSid = r.str(kMaxSidLen); x.seasonEnd = r.i32(); x.weatherSid = r.str(kMaxSidLen);
+        x.effectStrength = r.f32(); x.strength = r.f32(); x.windSpeed = r.f32(); x.windDir = GetVec(r);
+        x.windBuildUpEnded = r.boolean(); x.windBuildUpStart = r.i32(); x.windBuildUpEnd = r.i32();
+        x.windBuildUpSpeedStart = r.f32(); x.windBuildUpSpeedEnd = r.f32(); x.windBuildUpAngleStart = r.f32(); x.windBuildUpAngleEnd = r.f32();
+        x.startMinutes = r.i32(); x.endMinutes = r.i32(); x.updateWindMinutes = r.i32(); x.time = r.f32();
+        if (!r.ok()) return false;
+    }
+    return Done(r);
+}
 
 bool ValidWorldPath(const std::string& p) {
     if (p.empty() || p.size() > kMaxWorldPathLen || p.front() == '/' || p.back() == '/') return false;

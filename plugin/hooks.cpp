@@ -35,6 +35,7 @@ using AIUpdateFn = void (*)(void* ai, float t);
 using MedDamageFn = void (*)(void* med, void* part, const void* damage, bool loadingSavestate, bool canSever, const float* force);
 using MedKnockoutFn = void (*)(void* med, float skill01);
 using DeclareDeadFn = void (*)(void* chr);
+using VoidFn = void (*)(void* self);
 
 MainLoopFn o_mainLoop = nullptr;
 PlayerMoveFn o_playerMove = nullptr;
@@ -48,6 +49,8 @@ AIUpdateFn o_aiPeriodic = nullptr;
 MedDamageFn o_medDamage = nullptr;
 MedKnockoutFn o_medKnockout = nullptr;
 DeclareDeadFn o_declareDead = nullptr;
+VoidFn o_regionUpdateBT = nullptr;
+VoidFn o_seasonGetNewWeather = nullptr;
 
 void SafeTick(bool live) {
     // C++ exceptions must never unwind into game code.
@@ -190,6 +193,19 @@ void hk_declareDead(void* chr) {
     o_declareDead(chr);
 }
 
+// Weather: the host reports each region after the game advances it; clients impose the host's
+// weather first and never roll a new one themselves.
+void hk_regionUpdateBT(void* region) {
+    KenshiWorld* w = TheWorld();
+    if (w) w->WeatherRegionTick(region, false);
+    o_regionUpdateBT(region);
+    if (w) w->WeatherRegionTick(region, true);
+}
+void hk_seasonGetNewWeather(void* season) {
+    if (KenshiWorld::ClientActive() && !g_hostCall) return;
+    o_seasonGetNewWeather(season);
+}
+
 bool CallMoveOrderSEH(void* chr, const float* pos) {
     __try {
         o_moveOrder(chr, nullptr, nullptr, pos);
@@ -246,6 +262,8 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnMedApplyDamage, reinterpret_cast<void*>(&hk_medDamage), reinterpret_cast<void**>(&o_medDamage)},
         {kenshi::FnMedKnockout, reinterpret_cast<void*>(&hk_medKnockout), reinterpret_cast<void**>(&o_medKnockout)},
         {kenshi::FnDeclareDead, reinterpret_cast<void*>(&hk_declareDead), reinterpret_cast<void**>(&o_declareDead)},
+        {kenshi::FnRegionUpdateBT, reinterpret_cast<void*>(&hk_regionUpdateBT), reinterpret_cast<void**>(&o_regionUpdateBT)},
+        {kenshi::FnSeasonGetNewWeather, reinterpret_cast<void*>(&hk_seasonGetNewWeather), reinterpret_cast<void**>(&o_seasonGetNewWeather)},
     };
     const MH_STATUS init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {

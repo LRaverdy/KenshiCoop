@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 5;
+constexpr uint16_t kProtocolVersion = 6;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -51,6 +51,7 @@ enum class Msg : uint8_t {
     WorldChunk = 16,  // S->C  a piece of one save file
     WorldEnd = 17,    // S->C  all files sent
     Ready = 18,       // C->S  the client loaded the host's world
+    Weather = 19,     // S->C  weather of every region
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -213,6 +214,31 @@ struct Ping {
     double t = 0;  // sender clock, echoed back in Pong
 };
 
+// ---- weather ----
+// One weather region (Kenshi's WeatherRegion, one per biome group), identified by game data ids.
+// The instance block mirrors Kenshi's WeatherInstance so the client can reproduce it exactly.
+struct RegionWeather {
+    std::string regionSid;    // biome group
+    std::string seasonSid;
+    int32_t seasonEnd = 0;    // in-game day the season ends
+    std::string weatherSid;
+    float effectStrength = 0, strength = 0, windSpeed = 0;
+    Vec3 windDir;
+    bool windBuildUpEnded = false;
+    int32_t windBuildUpStart = 0, windBuildUpEnd = 0;
+    float windBuildUpSpeedStart = 0, windBuildUpSpeedEnd = 0, windBuildUpAngleStart = 0, windBuildUpAngleEnd = 0;
+    int32_t startMinutes = 0, endMinutes = 0, updateWindMinutes = 0;
+    float time = 0;
+    bool sameKind(const RegionWeather& o) const {
+        return regionSid == o.regionSid && seasonSid == o.seasonSid && weatherSid == o.weatherSid && seasonEnd == o.seasonEnd &&
+               startMinutes == o.startMinutes && endMinutes == o.endMinutes;
+    }
+};
+struct WeatherMsg {
+    std::vector<RegionWeather> regions;
+};
+constexpr uint32_t kMaxWeatherRegions = 256;
+
 // ---- world transfer ----
 struct WorldFile {
     std::string path;            // relative, '/'-separated, validated by ValidWorldPath
@@ -258,6 +284,7 @@ void Encode(Writer& w, const WorldBegin& m);
 void Encode(Writer& w, const WorldChunk& m);
 void Encode(Writer& w, const WorldEnd& m);
 void Encode(Writer& w, const ReadyMsg& m);
+void Encode(Writer& w, const WeatherMsg& m);
 
 // Snapshots are split into packets that each fit `budget` bytes; every packet is self-contained.
 std::vector<std::vector<uint8_t>> EncodeSnapshot(const Snapshot& s, size_t budget = kSnapshotBudget);
@@ -280,6 +307,7 @@ bool Decode(Reader& r, WorldBegin& m);
 bool Decode(Reader& r, WorldChunk& m);
 bool Decode(Reader& r, WorldEnd& m);
 bool Decode(Reader& r, ReadyMsg& m);
+bool Decode(Reader& r, WeatherMsg& m);
 bool Decode(Reader& r, Ping& m);
 
 // Name rules: 1..kMaxNameLen printable ASCII, no leading/trailing spaces.

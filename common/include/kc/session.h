@@ -77,6 +77,11 @@ public:
     // Orders the local player gave this frame (client: intercepted instead of executed).
     virtual void TakeLocalOrders(std::vector<std::pair<Handle, Command>>& out) = 0;
 
+    // Weather: host reads every region; client imposes the host's (applied by the game's own
+    // weather update, which may run on another thread, so ApplyWeather only stores it).
+    virtual void ReadWeather(std::vector<RegionWeather>& out) = 0;
+    virtual void ApplyWeather(const std::vector<RegionWeather>& regions) = 0;
+
     virtual TimeState GetTime() = 0;
     virtual void SetTime(const TimeState& t) = 0;
 
@@ -256,6 +261,9 @@ private:
     double nextVitalsApply_ = 0;
     double lastLive_ = 0;
     TimeState lastTime_;
+    double nextWeather_ = 0;
+    double weatherForceAt_ = 0;
+    std::vector<RegionWeather> lastWeather_;
     bool controllableDirty_ = true;
     uint32_t missingSquad_ = 0;
     double connectStarted_ = 0;

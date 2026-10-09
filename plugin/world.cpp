@@ -314,6 +314,43 @@ void KenshiWorld::TakeLocalOrders(std::vector<std::pair<kc::Handle, kc::Command>
     orders_.clear();
 }
 
+void KenshiWorld::WeatherRegionTick(void* region, bool afterUpdate) {
+    std::lock_guard<std::mutex> lk(weatherMutex_);
+    if (!active_) return;
+    if (afterUpdate) {   // remember every region's state after the game advanced it (host: what we send)
+        kc::RegionWeather w;
+        if (kenshi::ReadRegionWeather(region, w)) seenRegions_[region] = std::move(w);
+        return;
+    }
+    if (!client_) return;   // client: impose the host's weather before the game's update runs
+    kc::RegionWeather mine;
+    if (!kenshi::ReadRegionWeather(region, mine)) return;
+    auto it = hostWeather_.find(mine.regionSid);
+    if (it != hostWeather_.end()) {
+        HostCallScope scope;
+        kenshi::WriteRegionWeather(region, it->second);
+    }
+}
+
+size_t KenshiWorld::ExpireAllWeather() {
+    std::lock_guard<std::mutex> lk(weatherMutex_);
+    size_t n = 0;
+    for (auto& [r, w] : seenRegions_) n += kenshi::ExpireRegionWeather(r) ? 1 : 0;
+    return n;
+}
+
+void KenshiWorld::ReadWeather(std::vector<kc::RegionWeather>& out) {
+    std::lock_guard<std::mutex> lk(weatherMutex_);
+    out.clear();
+    for (auto& [r, w] : seenRegions_) out.push_back(w);
+    std::sort(out.begin(), out.end(), [](const kc::RegionWeather& a, const kc::RegionWeather& b) { return a.regionSid < b.regionSid; });
+}
+
+void KenshiWorld::ApplyWeather(const std::vector<kc::RegionWeather>& regions) {
+    std::lock_guard<std::mutex> lk(weatherMutex_);
+    for (const auto& w : regions) hostWeather_[w.regionSid] = w;
+}
+
 kc::TimeState KenshiWorld::GetTime() {
     kc::TimeState t{kenshi::GetFrameSpeed(), kenshi::GetPaused(), 0.0};
     kenshi::GetGameHours(t.gameHours);
@@ -423,6 +460,11 @@ void KenshiWorld::SetRole(bool client, bool active) {
     lastDest_.clear();
     postureSince_.clear();
     postureFixed_.clear();
+    {
+        std::lock_guard<std::mutex> lk(weatherMutex_);
+        seenRegions_.clear();
+        hostWeather_.clear();
+    }
     if (!active) controllable_.clear();
 }
 

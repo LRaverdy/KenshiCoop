@@ -52,7 +52,12 @@ public:
     void ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) override;
     bool Order(const kc::Handle& h, const kc::Command& c) override;
     void TakeLocalOrders(std::vector<std::pair<kc::Handle, kc::Command>>& out) override;
+    void ReadWeather(std::vector<kc::RegionWeather>& out) override;
+    void ApplyWeather(const std::vector<kc::RegionWeather>& regions) override;
     kc::TimeState GetTime() override;
+    // Called by the WeatherRegion::updateBT hook (background thread).
+    void WeatherRegionTick(void* region, bool afterUpdate);
+    size_t ExpireAllWeather();   // tests: every known region rolls a new weather
     void SetTime(const kc::TimeState& t) override;
     void HoldForJoin(bool hold) override;
     bool BeginWorldExport(std::string* err) override;
@@ -106,6 +111,9 @@ private:
     double exportStableSince_ = 0;
     bool haveHostTime_ = false;
     kc::TimeState hostTime_;
+    std::mutex weatherMutex_;   // weather is advanced by a game background thread
+    std::unordered_map<void*, kc::RegionWeather> seenRegions_;          // host: last state of each region
+    std::unordered_map<std::string, kc::RegionWeather> hostWeather_;    // client: what the host has
     std::mutex toastMutex_;
     std::vector<std::string> toasts_;
 

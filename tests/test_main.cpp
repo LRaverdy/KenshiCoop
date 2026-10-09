@@ -180,6 +180,9 @@ struct FakeWorld : IWorld {
         return true;
     }
     void TakeLocalOrders(std::vector<std::pair<Handle, Command>>& out) override { out.swap(localOrders); localOrders.clear(); }
+    std::vector<RegionWeather> weather;
+    void ReadWeather(std::vector<RegionWeather>& out) override { out = weather; }
+    void ApplyWeather(const std::vector<RegionWeather>& r) override { weather = r; }
     TimeState GetTime() override { return time; }
     void SetTime(const TimeState& t) override { time = t; }
     void HoldForJoin(bool h) override { holding = h; }
@@ -347,6 +350,7 @@ static void TestFuzz() {
     add([](Writer& w) { WorldChunk c; c.offset = 100; c.data = {1, 2}; Encode(w, c); });
     add([](Writer& w) { Encode(w, WorldEnd{7}); });
     add([](Writer& w) { Encode(w, ReadyMsg{7}); });
+    add([](Writer& w) { WeatherMsg m; m.regions.resize(2); m.regions[0].regionSid = "a"; m.regions[1].weatherSid = "b"; Encode(w, m); });
     { VitalsMsg v; v.entities.resize(2); for (auto& e : v.entities) { e.netId = 4; e.parts.resize(3); } seeds.push_back(EncodeVitals(v)[0]); }
     { Snapshot s; s.entities.resize(3); for (auto& e : s.entities) e.netId = 7; seeds.push_back(EncodeSnapshot(s)[0]); }
 
@@ -372,6 +376,7 @@ static void TestFuzz() {
         case Msg::WorldChunk: { WorldChunk m; if (Decode(r, m) && m.offset == 0 && !ValidWorldPath(m.path)) std::abort(); break; }
         case Msg::WorldEnd: { WorldEnd m; Decode(r, m); break; }
         case Msg::Ready: { ReadyMsg m; Decode(r, m); break; }
+        case Msg::Weather: { WeatherMsg m; Decode(r, m); break; }
         }
     };
     for (int i = 0; i < 300000; ++i) {
@@ -379,7 +384,7 @@ static void TestFuzz() {
         if (i % 2) {
             p.resize(rng() % 64);
             for (auto& b : p) b = uint8_t(rng());
-            if (!p.empty()) p[0] = uint8_t(1 + rng() % 18);
+            if (!p.empty()) p[0] = uint8_t(1 + rng() % 19);
         } else {
             p = seeds[rng() % seeds.size()];
             const int muts = 1 + rng() % 4;
@@ -586,6 +591,14 @@ static void TestWorldAuthority() {
     CHECK(cw.chars[2].vit.blood == 100 && cw.chars[2].vit.flags == 0);   // local death undone
     CHECK(cw.chars[1].vit.blood == 40 && (cw.chars[1].vit.flags & kVitUnconscious));
     CHECK(cw.time.paused && cw.time.gameHours == 1234.5);
+    // weather of every region follows the host
+    RegionWeather rw; rw.regionSid = "biome-1"; rw.seasonSid = "season-dry"; rw.weatherSid = "acid-rain"; rw.strength = 0.8f; rw.endMinutes = 900;
+    hw.weather = {rw};
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return !cw.weather.empty(); });
+    CHECK(cw.weather.size() == 1 && cw.weather[0].weatherSid == "acid-rain" && cw.weather[0].strength == 0.8f);
+    hw.weather[0].weatherSid = "clear"; hw.weather[0].endMinutes = 1200;
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return !cw.weather.empty() && cw.weather[0].weatherSid == "clear"; });
+    CHECK(!cw.weather.empty() && cw.weather[0].weatherSid == "clear");
 
     // melee: the NPC engages squad member 1 on the host; the client's copy engages the same target
     hw.chars[10].fights = 1;

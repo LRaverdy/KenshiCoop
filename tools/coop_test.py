@@ -150,7 +150,7 @@ def wait_for(pid, pred, timeout, what):
 
 
 def parse_state(path):
-    st = {"squad": {}, "char": {}, "entity": {}, "time": {}, "session": ""}
+    st = {"squad": {}, "char": {}, "entity": {}, "time": {}, "session": "", "weather": {}}
     with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
             parts = line.split()
@@ -168,6 +168,8 @@ def parse_state(path):
                     if k in d:
                         d[k] = tuple(float(x) for x in d[k].split(","))
                 st[tag][key] = d
+            elif tag == "weather":
+                st["weather"][parts[1]] = dict(p.split("=", 1) for p in parts[2:] if "=" in p)
             elif tag == "entity":
                 d = dict(p.split("=", 1) for p in parts[3:] if "=" in p)
                 d["key"] = parts[2]
@@ -228,6 +230,9 @@ def compare(h, c, label, pos_tol=3.0):
         report["speed"] = (ht.get("speed"), ct.get("speed"))
     except (KeyError, ValueError):
         pass
+    hw, cw = h.get("weather", {}), c.get("weather", {})
+    report["weather_regions"] = (len(hw), len(cw))
+    report["weather_mismatch"] = [k for k in hw if k not in cw or cw[k].get("type") != hw[k].get("type") or cw[k].get("season") != hw[k].get("season")][:5]
     report["missing_sample"] = missing[:5]
     report["extra_sample"] = extra[:5]
     report["worst"] = pos_err[-3:]
@@ -297,6 +302,10 @@ def scenario(host, cli, quick=False):
     log("host move", cmd(host, "moverel 1 300 -200"))
     time.sleep(25)
     reports.append(frozen_check(host, cli, "host walked squad1"))
+    # weather: the host rolls a new weather everywhere; the client must follow region by region
+    log("rollweather", cmd(host, "rollweather"))
+    time.sleep(8)
+    reports.append(compare(dump(host, "h_weather"), dump(cli, "c_weather"), "after the host rolled new weather"))
     # an NPC that only the host has: the client must recreate it, then mirror every posture change
     ok, text = cmd(host, "spawnnpc 12 8")
     log("host spawns an NPC", ok, text)
