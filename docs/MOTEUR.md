@@ -564,6 +564,12 @@ Tâches par défaut d'un clic droit sur un meuble, selon la recherche :
 
 ## 6. Comportements observés
 
+- `UseableStuff` : ensemble des occupants (`std::set<hand>`) à +0x3D0, taille à +0x3E0 (lit libre :
+  0). `BuildingFunction` (ordre de l'énumération) : 1 mine, 6 lit, 8 cage, 9 boutique, 12 tourelle,
+  18 décor, 27 gisement naturel.
+- Un handle de meuble de ville envoyé par un client peut désigner **un autre objet** chez l'hôte :
+  toujours vérifier type et position.
+
 **Unités et identifiants**
 - 1 unité du monde vaut environ 10 cm. On marche à environ 14 unités/s ; le bassin d'un ragdoll
   est 1 à 2 unités au-dessus du sol.

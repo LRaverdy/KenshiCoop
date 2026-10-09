@@ -6,6 +6,12 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+- **Robustesse (lot F)** : un PNJ bloqué chez un client (mur, porte, étage) est replacé où l'hôte
+  l'a après 1 s sans progrès ; les PNJ lointains sont replacés sur la position de l'hôte ; la TP
+  admin déplace aussi un personnage à terre ou porté ; un perso dans un lit ou une cage n'est plus
+  jeté au sol par un K.-O. ; l'hôte vérifie le meuble visé par un ordre client ; la suite compare
+  la rotation du corps hors combat ; nouvelles expériences `stuck`, `farnpc`, `beds`, `tpdown`.
+
 - Lots lancés en parallèle (un agent par lot, chacun dans sa copie du dépôt) : portes et
   crochetage, factions et primes, combat à distance et tourelles, prisons et capture, bâtiments et
   construction, désynchro de combat et PNJ lointains. Ils seront fusionnés puis testés en jeu

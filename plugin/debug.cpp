@@ -759,6 +759,71 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         return "ok " + std::to_string(best) + " windows=" + std::to_string(kenshi::OpenInventoryWindows());
     }
+    if (cmd == "robuststats") {   // robuststats: (client) characters freed from a wall and far walkers put back, since the last call
+        const std::string out = "ok stuck=" + std::to_string(w.stuckFixes) + " far=" + std::to_string(w.farSnaps);
+        w.stuckFixes = w.farSnaps = 0;
+        return out;
+    }
+    if (cmd == "strand") {
+        // strand <dx> <dy> <dz>: (client) our copy of the NPC nearest to squad member 0 is moved by that
+        // much here only (into a wall, under a floor): the client must bring it back by itself
+        float dx = 0, dy = 0, dz = 0;
+        in >> dx >> dy >> dz;
+        auto squad = SortedSquad(w);
+        kc::Vec3 mp, p;
+        if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), mp)) return "err";
+        std::vector<kenshi::Character*> all;
+        kenshi::ActiveCharacters(all);
+        kenshi::Character* best = nullptr;
+        float bestD = 1e30f;
+        kc::Handle bestH;
+        for (kenshi::Character* c : all) {
+            kc::Handle h;
+            if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsRagdoll(c) || !kenshi::GetPosition(c, p)) continue;
+            const float d = (p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z);
+            if (d < bestD) { bestD = d; best = c; bestH = h; }
+        }
+        if (!best || !kenshi::GetPosition(best, p)) return "err no NPC around";
+        kc::Quat q;
+        kenshi::GetRotation(best, q);
+        HostCallScope scope;
+        kenshi::Teleport(best, {p.x + dx, p.y + dy, p.z + dz}, q);
+        return "ok " + Key(w.HostHandleOf(bestH));
+    }
+    if (cmd == "bedreq" || cmd == "minereq") {
+        // bedreq <selectIndex>: that member alone is ordered to sleep in the nearest free bed (as a right click does)
+        // minereq <selectIndex>: ... to work the nearest mine or machine that mines
+        size_t sel = 0;
+        in >> sel;
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kc::Vec3 p, op;
+        if (!kenshi::GetPosition(me, p)) return "err";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(p, 2000, objs);
+        const bool bed = cmd == "bedreq";
+        void* best = nullptr;
+        float bestD = 1e30f;
+        std::string bestName;
+        for (void* o : objs) {
+            const int f = kenshi::BuildingFunctionOf(o);
+            if (bed ? f != 6 : (f != 1 && f != 27)) continue;   // BF_BED; BF_MINE, BF_MINE_NATURAL
+            uint64_t operators = 0;
+            if (bed && kenshi::ReadOperatorCount(o, operators) && operators) continue;   // taken
+            std::string sid, name;
+            if (!kenshi::ObjectTemplate(o, sid) || !kenshi::ObjectPosition(o, op)) continue;
+            kenshi::TemplateDisplayName(sid, name);
+            const float d = (op.x - p.x) * (op.x - p.x) + (op.z - p.z) * (op.z - p.z);
+            if (d < bestD) { bestD = d; best = o; bestName = name; }
+        }
+        if (!best) return bed ? "err no free bed around" : "err no mine around";
+        kenshi::ObjectPosition(best, op);
+        bool ok = false;
+        void* dest = kenshi::FurnitureParent(best);
+        kenshi::WithSelection(me, [&] { ok = kenshi::CallNewPlayerTaskOn(bed ? 258 : 87, best, op, dest); });   // USE_BED_ORDER / OPERATE_MACHINERY
+        return (ok ? "ok " : "err ") + bestName + " at " + std::to_string(int(std::sqrt(bestD)));
+    }
     if (cmd == "insomething") {   // insomething <squadIndex>: 0 nothing, 1 in bed, 2 in a cage
         size_t idx = 0;
         in >> idx;
