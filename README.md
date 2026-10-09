@@ -164,6 +164,8 @@ nom `LISEZMOI.md`.
 | [docs/MOTEUR.md](docs/MOTEUR.md) | notes sur le moteur de Kenshi 1.0.68 : adresses, structures, comportements |
 | [docs/TESTS.md](docs/TESTS.md) | tests unitaires, harnais de test en jeu, commandes de debug |
 | [docs/JOURNAUX.md](docs/JOURNAUX.md) | journaux, console de l'hôte, lecture et diagnostic |
+| [docs/INVENTAIRE.md](docs/INVENTAIRE.md) | inventaire du code : systèmes, messages, hooks, adresses, commandes, risques |
+| [docs/A_FAIRE.md](docs/A_FAIRE.md) | bugs signalés à traiter |
 | [CHANGELOG.md](CHANGELOG.md) | historique des changements |
 
 ## Développement
