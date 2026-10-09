@@ -2,8 +2,8 @@
 
 Mod multijoueur coopératif pour **Kenshi 1.0.68 (Steam, x64)**. L'hôte fait tourner le monde ; les
 autres joueurs rejoignent **le monde de l'hôte** (pas le leur) et chacun y contrôle son propre
-personnage. Tout ce qui compte (dégâts, KO, morts, IA, météo, heure, loot) est décidé chez l'hôte
-et appliqué à l'identique chez les clients.
+personnage. Tout ce qui compte (dégâts, KO, morts, IA, météo, heure, loot, dialogues) est décidé
+chez l'hôte et appliqué à l'identique chez les clients.
 
 ## Installation
 
@@ -15,22 +15,25 @@ et appliqué à l'identique chez les clients.
 ```
 Désinstaller : `.\install.ps1 -Uninstall`.
 
-**Chez un ami (sans rien compiler)** — lui envoyer `dist\KenshiCoop.zip`. Il le décompresse, ferme
-Kenshi et double-clique `Installer.bat` (Kenshi est retrouvé tout seul dans ses bibliothèques
-Steam ; `Desinstaller.bat` pour enlever le mod).
+**Chez un ami (sans rien compiler)** :
+- lui envoyer `dist\KenshiCoop.zip` ;
+- il le décompresse, ferme Kenshi et double-clique `Installer.bat`. Kenshi est retrouvé tout seul
+  dans ses bibliothèques Steam ;
+- `Desinstaller.bat` enlève le mod.
 
-Chaque joueur doit avoir **le même Kenshi (1.0.68 Steam) et les mêmes mods**, dans le même ordre
-(le mod refuse la connexion sinon, avec un message clair).
+Chaque joueur doit avoir **le même Kenshi (1.0.68 Steam) et les mêmes mods**, dans le même ordre.
+Sinon le mod refuse la connexion, avec un message clair.
 
-**Réseau** : le plus simple, **via Steam** — rien à ouvrir, pas d'IP à donner. Dès que l'hôte
-héberge, ses amis Steam le voient dans leur fenêtre Multijoueur (Ctrl+Shift+M, bouton **Rejoindre**
-à côté de son nom), ou font clic droit sur son nom dans la liste d'amis Steam > **Rejoindre la
-partie**. L'hôte peut aussi donner son **code Steam** (affiché avec un bouton Copier dans sa fenêtre
-Multijoueur) : l'ami le colle dans « Adresse ou code Steam ». Il faut être amis sur Steam pour la
-liste ; le code marche dans tous les cas.
+**Réseau** : le plus simple est de passer **par Steam** : rien à ouvrir, pas d'IP à donner. Dès que
+l'hôte héberge, ses amis Steam peuvent le rejoindre de trois façons :
+- dans leur fenêtre Multijoueur (Ctrl+Shift+M), bouton **Rejoindre** à côté de son nom ;
+- clic droit sur son nom dans la liste d'amis Steam, puis **Rejoindre la partie** ;
+- avec le **code Steam** de l'hôte, affiché avec un bouton Copier dans sa fenêtre Multijoueur, à
+  coller dans « Adresse ou code Steam ».
+Il faut être amis sur Steam pour la liste ; le code marche dans tous les cas.
 
 Sans Steam, par IP : l'hôte doit être joignable en UDP sur le port 27960 (redirection de port sur
-sa box, ou VPN de jeu type Radmin VPN, ZeroTier, Tailscale) et l'ami met son IP.
+sa box, ou VPN de jeu type Radmin VPN, ZeroTier, Tailscale) et l'ami entre son IP.
 
 Réglages : `KenshiCoop.ini` dans le dossier de Kenshi (créé au premier lancement).
 
@@ -38,9 +41,11 @@ Réglages : `KenshiCoop.ini` dans le dossier de Kenshi (créé au premier lancem
 |---|---|
 | `[player] name` | votre nom (par défaut celui de votre session Windows) ; c'est aussi le nom de votre personnage chez l'hôte. Si deux joueurs ont le même nom, le second devient « Nom 2 » |
 | `[network] join_address` | IP ou code Steam (`steam:7656...`) de l'hôte, pour rejoindre |
-| `[network] port` | port UDP (27960 par défaut, à ouvrir/rediriger chez l'hôte) |
+| `[network] port` | port UDP (27960 par défaut, à ouvrir ou rediriger chez l'hôte) |
 | `[coop] own_character` | 1 : chaque joueur qui rejoint reçoit son propre personnage (défaut) |
 | `[ui] overlay` | petit panneau d'état en haut à droite |
+| `[ui] host_console` | 1 : la console de l'hôte (fenêtre hors du jeu) s'ouvre toute seule quand on héberge |
+| `[sync] ...` | réglages fins de la synchronisation (laisser les valeurs par défaut) |
 | `[debug] commands` | canal de test automatisé : **laisser à 0** pour jouer |
 
 ## Jouer
@@ -50,63 +55,124 @@ Raccourcis (Kenshi au premier plan) :
 | Touches | Action |
 |---|---|
 | Ctrl+Shift+H | héberger la partie chargée |
-| Ctrl+Shift+M | fenêtre Multijoueur : héberger, rejoindre un ami Steam, liste des joueurs |
-| Ctrl+Shift+J | rejoindre l'hôte (`join_address`) — depuis le menu principal ou une partie |
+| Ctrl+Shift+M | fenêtre Multijoueur : héberger, rejoindre un ami Steam, liste des joueurs, outils de l'hôte |
+| Ctrl+Shift+J | rejoindre l'hôte (`join_address`), depuis le menu principal ou une partie |
 | Ctrl+Shift+L | quitter la session |
 | Ctrl+Shift+G | (hôte) donner les personnages sélectionnés au joueur suivant |
-| Ctrl+Shift+O | afficher / masquer le panneau |
+| Ctrl+Shift+K | console dans le jeu (journal récent et commandes) |
+| Ctrl+Shift+W | (hôte) montrer ou cacher la console hors du jeu |
+| Ctrl+Shift+O | afficher ou masquer le panneau |
 | Ctrl+Shift+D | écrire un diagnostic dans `KenshiCoop.log` |
 
 1. L'hôte charge sa partie et appuie sur **Ctrl+Shift+H**.
 2. L'ami clique **Rejoindre** à côté du nom de l'hôte dans sa fenêtre Multijoueur (ou colle son code
-   Steam, ou son IP) — même depuis le menu principal.
-   Le jeu de l'hôte se met en pause le temps qu'il arrive ; le client télécharge le monde de l'hôte
-   et le charge automatiquement.
-3. L'ami arrive avec **son propre personnage**, créé à son nom dans l'escouade de l'hôte (même race
-   que l'escouade, sans équipement) et retrouvé s'il se reconnecte plus tard. L'hôte peut lui confier
-   d'autres membres avec Ctrl+Shift+G. Si un 2e ami rejoint plus tard, le 1er voit aussi son personnage.
+   Steam, ou son IP), même depuis le menu principal. Le jeu de l'hôte se met en pause le temps
+   qu'il arrive ; le client télécharge le monde de l'hôte et le charge automatiquement.
+3. La première fois, l'ami reçoit **son propre personnage** dans l'escouade de l'hôte, et
+   **l'éditeur de personnage de Kenshi** s'ouvre chez lui : race, visage, cheveux, nom… Toute la
+   partie attend pendant qu'il le crée. Le bouton « Modifier mon personnage » de la fenêtre
+   Multijoueur le rouvre plus tard.
+4. Quand il revient plus tard, même sous un autre nom, il **retrouve le même personnage** : il est
+   reconnu par son compte Steam. L'hôte peut lui confier d'autres membres avec Ctrl+Shift+G.
 
-Chacun ne peut commander que ses personnages. Côté client, les ordres de déplacement, d'arrêt et de
-**loot** sont transmis à l'hôte ; les autres ordres (artisanat, construction, dialogue, commerce...)
-sont refusés avec un message pour l'instant.
+Chacun ne peut commander que ses personnages. Côté client, **tous les ordres** sont transmis à
+l'hôte, qui les fait exécuter par le personnage concerné : déplacement, fouille, premiers soins,
+porter, dormir, portes, machines, parler… Exceptions pour l'instant : le **commerce** et le
+recrutement au centre d'emploi, refusés avec un message.
+
+**Outils de l'hôte**, dans la fenêtre Multijoueur ou la console :
+- **TP vers moi** (`tp <id>`) : amène les personnages d'un joueur bloqué près de toi ;
+- **Resync** (`resync <id>`) et **Resynchroniser tout le monde** : en cas de désynchro, le joueur
+  recharge ton monde tel qu'il est, en quelques secondes ;
+- **la console hors du jeu** : une fenêtre Windows avec les joueurs, la qualité de leur synchro et
+  le journal en direct de **tout le monde**, clients compris.
+
+**Quitter** : un client qui quitte (Ctrl+Shift+L ou « Quitter la session ») garde une copie du
+monde, en pause. Kenshi ne sait pas revenir à son écran titre : pour reprendre une de tes parties,
+fais Échap, puis Charger, ou utilise le bouton « Quitter le jeu ».
 
 ## Ce qui est synchronisé
 
-- **Le monde** : le client joue dans une copie exacte du monde de l'hôte (sauvegarde transférée au
-  moment de rejoindre), puis tout est corrigé en continu depuis l'hôte.
-- **Personnages** (escouade et PNJ) : positions, déplacements, posture (debout / au sol), combats au
-  corps à corps, santé de chaque membre, KO, morts. Le client n'a pas d'IA ni de dégâts propres : il
-  ne peut pas diverger. Les PNJ que l'hôte fait apparaître sont recréés chez le client ; ceux que le
-  jeu du client créerait de lui-même sont retirés.
-- **Heure, vitesse et pause** : celles de l'hôte, imposées en permanence.
-- **Météo** (pluie, tempêtes, éclairs...) : celle de l'hôte, région par région.
-- **Inventaires et équipement** (armes, armures, vêtements, sacs) de tous les personnages proches.
-- **Loot** : clic droit « Fouiller » sur un personnage KO ou mort → votre personnage y va et la
-  fenêtre de loot du jeu s'ouvre ; chaque objet déplacé est rejoué par l'hôte. L'hôte refuse de
-  vider un PNJ conscient ou le personnage d'un autre joueur (et annule la tentative chez le client).
-- **Cadavres** : restent synchronisés et lootables près des joueurs.
+- **Le monde** : le client joue dans une copie exacte du monde de l'hôte, sauvegarde transférée au
+  moment de rejoindre. Tout est ensuite corrigé en continu depuis l'hôte.
+- **Personnages** (escouade et PNJ) :
+  - positions, déplacements, allure, direction ;
+  - animations, combats au corps à corps, posture (debout ou au sol) ;
+  - santé de chaque membre, K.-O., morts, corps portés.
+  Le client n'a pas d'IA ni de dégâts propres : il ne peut pas diverger. Les PNJ que l'hôte fait
+  apparaître sont recréés chez le client ; ceux que le jeu du client créerait de lui-même sont
+  retirés.
+- **Escouades** (noms, membres, ordre), **ordres permanents** (furtif, tenir la position, passif…),
+  **compétences et expérience**, **argent**.
+- **Dialogues** : les bulles chez tout le monde ; une conversation avec un PNJ s'ouvre chez le
+  joueur concerné (fenêtre du mod), qui choisit ses réponses.
+- **Heure, vitesse et pause** : celles de l'hôte, imposées en permanence. Les clients ne peuvent
+  pas les changer.
+- **Météo** (pluie, tempêtes, éclairs, nuages de gaz…) : celle de l'hôte, région par région.
+- **Inventaires et équipement** de tous les personnages proches.
+- **Fouille** : clic droit « Fouiller » sur un personnage K.-O. ou mort, ou sur un **coffre, une
+  étagère ou un coffre-fort**. Ton personnage y va, puis la fenêtre du jeu s'ouvre ; chaque objet
+  déplacé est rejoué par l'hôte.
+- **Vol** : prendre dans un contenant qui n'est pas à toi est un vol, décidé par le jeu de l'hôte.
+  Si on te voit, la fenêtre se ferme et l'objet reste.
+- **Objets au sol** : posés et ramassés, au même endroit pour tout le monde.
+- **Cadavres** : restent synchronisés et se fouillent, près des joueurs.
+
+Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui reste à faire :
+[docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
 ## Limites connues
 
-- Les corps au sol peuvent reposer à quelques dizaines de centimètres (rarement plus d'un mètre) de
-  leur position chez l'hôte : la chute du ragdoll est simulée par chaque PC.
-- Autour des joueurs, les positions sont exactes. Les PNJ éloignés (au-delà d'une trentaine de
-  mètres) qui marchent peuvent être décalés de quelques dizaines de centimètres à 1-2 m : le jeu ne
-  met à jour leur position que quelques fois par seconde.
-- Pas encore synchronisés : combat à distance (arbalètes), objets au sol et coffres, commerce,
-  construction, artisanat, recrutement par dialogue.
-- Quelques PNJ uniques ne peuvent pas être recréés chez le client s'il ne les a pas déjà (indiqué
-  par le panneau : « N not spawned here yet »).
+- **Pas encore synchronisés** :
+  - commerce (en cours) ;
+  - achat de bâtiments, construction et pose de meubles ;
+  - état des portes et crochetage ;
+  - prisons et esclavage ;
+  - combat à distance (projectiles, tourelles) ;
+  - relations de factions et primes.
+- Côté client, ne pas poser de bâtiment pour l'instant : il n'existerait probablement que chez
+  toi.
+- Les corps au sol peuvent reposer à quelques dizaines de centimètres (rarement plus d'un mètre)
+  de leur position chez l'hôte : la chute du ragdoll est simulée par chaque PC.
+- Autour des joueurs, les positions sont exactes. Les PNJ éloignés qui marchent peuvent être
+  décalés de quelques dizaines de centimètres à 1 ou 2 m : le jeu ne met à jour leur position que
+  quelques fois par seconde.
+- Quelques PNJ uniques ne peuvent pas être recréés chez le client s'il ne les a pas déjà (le
+  panneau l'indique : « N not spawned here yet »).
+- Le TP de l'hôte ne déplace pas un personnage au sol (assommé, en ragdoll).
 
 ## Dépannage
 
-- Journal : `KenshiCoop.log` dans le dossier de Kenshi (`KenshiCoop-<pid>.log` si deux Kenshi tournent).
+- Journal : `KenshiCoop.log` dans le dossier de Kenshi (`KenshiCoop-<pid>.log` si deux Kenshi
+  tournent). Les sessions précédentes sont dans `KenshiCoop-logs\` (les 30 dernières). L'hôte voit
+  aussi les lignes de chaque client dans son propre journal et dans sa console hors du jeu. Voir
+  [docs/JOURNAUX.md](docs/JOURNAUX.md).
 - « version/mods différents » : vérifier que les deux joueurs ont exactement les mêmes mods.
-- Rien ne se passe en rejoignant : vérifier l'IP, le port UDP 27960 ouvert chez l'hôte, et le pare-feu.
+- Rien ne se passe en rejoignant par IP : vérifier l'IP, le port UDP 27960 ouvert chez l'hôte et
+  le pare-feu. Par Steam : lancer le jeu depuis Steam, et être amis (ou utiliser le code Steam).
+- Désynchro visible : bouton **Resync** de l'hôte.
+
+## Documentation
+
+Dans le dépôt seulement : comme documentation, le zip des amis ne contient que ce fichier, sous le
+nom `LISEZMOI.md`.
+
+| Document | Contenu |
+|---|---|
+| [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md) | état de chaque fonctionnalité : vérifié, à vérifier, en cours, à faire |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | comment le mod marche : hooks, session, messages, flux par système, fichiers |
+| [docs/MOTEUR.md](docs/MOTEUR.md) | notes sur le moteur de Kenshi 1.0.68 : adresses, structures, comportements |
+| [docs/TESTS.md](docs/TESTS.md) | tests unitaires, harnais de test en jeu, commandes de debug |
+| [docs/JOURNAUX.md](docs/JOURNAUX.md) | journaux, console de l'hôte, lecture et diagnostic |
+| [CHANGELOG.md](CHANGELOG.md) | historique des changements |
 
 ## Développement
 
-- `build\bin\Release\kc_tests.exe` : tests du protocole et de la session (monde simulé).
-- `tools\coop_test.py` : lance deux Kenshi sur ce PC, les pilote via le canal de debug
-  (`[debug] commands=1`) et compare les deux mondes en pause. Exemples :
-  `python tools\coop_test.py run --save kctest_base`, `... soak --minutes 15`.
+- `build\bin\Release\kc_tests.exe` : tests du protocole et de la session, avec un monde simulé.
+- `tools\coop_test.py` : lance plusieurs Kenshi sur ce PC, les pilote via le canal de debug
+  (`[debug] commands=1`) et compare leurs mondes. **Il ferme tous les Kenshi en cours** : ne pas
+  le lancer pendant une partie. Exemples :
+  - `python tools\coop_test.py suite` (tout, point par point) ;
+  - `... four` (1 hôte + 3 clients) ;
+  - `... soak --minutes 15`.
+  Détails dans [docs/TESTS.md](docs/TESTS.md).

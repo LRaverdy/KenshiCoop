@@ -1,0 +1,889 @@
+# Notes moteur : Kenshi 1.0.68 (Steam, x64)
+
+Tout ce que le mod sait du jeu : adresses de fonctions, structures, énumérations et comportements
+observés.
+
+**Conventions**
+- Les adresses sont des **RVA** : un décalage depuis la base de `kenshi_x64.exe`.
+- Les offsets sont en hexadécimal.
+- Une « vt 0x… » est un décalage d'emplacement dans la table virtuelle (vtable) de l'objet.
+
+**Exécutable supporté** : « Kenshi 1.0.68 - x64 (Newland) », Steam, de SHA-256
+`A596AB4E407C67B58599C54FFB32DC1BF2B64510CDEBD3FA9359EF05A576AEB1`. Le mod refuse toute autre
+version.
+
+**Sources**
+- Analyse statique de l'exécutable : vtables RTTI, chaînes de caractères, désassemblage.
+- Les noms et offsets de KenshiLib (version 1.0.65), recalés sur 1.0.68 grâce à 693 vtables
+  communes.
+- Expériences en jeu.
+
+KenshiLib est sous licence GPLv3 : **on n'en reprend que des faits** (noms, adresses, offsets),
+jamais de code.
+
+**Code** : le mod les définit dans `plugin/kenshi.h` (`rva::`, `off::`, `slot::`) et
+`plugin/kenshi.cpp` (table `kFunctions`, constantes locales).
+
+---
+
+## 1. Vérifications au démarrage
+
+1. Le SHA-256 de `kenshi_x64.exe` doit être exactement celui ci-dessus.
+2. Pour chaque fonction de `kFunctions`, les 12 premiers octets à l'adresse donnée doivent être
+   exactement ceux de la table (prologue).
+Si l'un ou l'autre échoue, le mod se désactive, sans risquer de plantage, et l'écrit dans le
+journal.
+
+## 2. Fonctions appelées ou détournées (table `kFunctions`)
+
+Colonne « Hook » : la fonction est détournée par MinHook. Sinon, le mod se contente de l'appeler.
+Les signatures sont celles du commentaire du code.
+
+| # | Enum | Fonction (table) | RVA | Hook | Signature / rôle (commentaire du code) |
+|---|---|---|---|---|---|
+| 0 | `FnMainLoop` | `GameWorld::mainLoop_GPUSensitiveStuff` | `0x788A00` | oui | void GameWorld::mainLoop_GPUSensitiveStuff(float) |
+| 1 | `FnPlayerMove` | `PlayerInterface::playerMove` | `0x7FA850` | oui | void PlayerInterface::playerMove(const Vector3&, Building*) |
+| 2 | `FnAddOrderSelected` | `PlayerInterface::addOrderSelectedCharacters` | `0x7F9E20` | oui | void PlayerInterface::addOrderSelectedCharacters(Building*, TaskType, RootObject*, bool, bool, const Vector3&) |
+| 3 | `FnNewPlayerTaskSelected` | `PlayerInterface::newPlayerTaskSelectedCharacters` | `0x7FA650` | oui | void PlayerInterface::newPlayerTaskSelectedCharacters(TaskType, const hand&, Building*, const Vector3&, bool) |
+| 4 | `FnSetOrderSelected` | `PlayerInterface::setOrderSelectedCharacters` | `0x7F3880` | oui | void PlayerInterface::setOrderSelectedCharacters(StandingOrder) |
+| 5 | `FnStopCharactersMovement` | `PlayerInterface::stopCharactersMovement` | `0x7F6470` | oui | void PlayerInterface::stopCharactersMovement() |
+| 6 | `FnPlayerMoveOrderDefault` | `Character::playerMoveOrderDefault` | `0x5D22B0` | oui | void Character::playerMoveOrderDefault(Building*, RootObject*, const Vector3&) |
+| 7 | `FnAIUpdate4Frame` | `AI::update4Frame` | `0x5965B0` | oui | void AI::update4Frame(float) |
+| 8 | `FnAIPeriodicUpdate` | `AI::periodicUpdate` | `0x5112B0` | oui | void AI::periodicUpdate(float) |
+| 9 | `FnSetFrameSpeedMultiplier` | `GameWorld::setFrameSpeedMultiplier` | `0x787CB0` | — | void GameWorld::setFrameSpeedMultiplier(float) |
+| 10 | `FnUserPause` | `GameWorld::userPause` | `0x787FB0` | — | void GameWorld::userPause(bool) |
+| 11 | `FnHandleResolve` | `HandleTable::resolve` | `0x2676E0` | — | RootObject* resolve(HandleTable*, const hand*, bool) |
+| 12 | `FnTogglePause` | `GameWorld::togglePause` | `0x787D40` | — | void GameWorld::togglePause(bool) |
+| 13 | `FnMedApplyDamage` | `MedicalSystem::applyDamage` | `0x64F300` | oui | void MedicalSystem::applyDamage(HealthPartStatus*, const Damages&, bool loadingSavestate, bool canSever, const Vector3& force) |
+| 14 | `FnMedKnockout` | `MedicalSystem::knockout` | `0x644980` | oui | void MedicalSystem::knockout(float skill01) |
+| 15 | `FnDeclareDead` | `Character::declareDead` | `0x7A6200` | oui | void Character::declareDead() |
+| 16 | `FnSaveManagerGet` | `SaveManager::getSingleton` | `0x37DD00` | — | static SaveManager* SaveManager::getSingleton() |
+| 17 | `FnSaveManagerSave` | `SaveManager::save` | `0x47B920` | — | void SaveManager::save(const std::string& name, bool autosave) (différé) |
+| 18 | `FnSaveManagerLoad` | `SaveManager::load` | `0x47B480` | — | void SaveManager::load(const std::string& name) (différé) |
+| 19 | `FnCreateRandomCharacter` | `RootObjectFactory::createRandomCharacter` | `0x5836E0` | oui | RootObject* RootObjectFactory::createRandomCharacter(Faction*, Vector3, RootObjectContainer*, GameData*, Building*, float age) |
+| 20 | `FnWorldDestroy` | `GameWorld::destroy(RootObject*)` | `0x799AF0` | — | bool GameWorld::destroy(RootObject*, bool justUnloaded, const char* debugInfo) |
+| 21 | `FnEndCombatMode` | `Character::endCombatMode` | `0x5C91C0` | — | void Character::endCombatMode() |
+| 22 | `FnRagdollMode` | `Character::ragdollMode` | `0x5CBD60` | oui | void Character::ragdollMode(bool on, RagdollPart::Enum part) |
+| 23 | `FnRegionUpdateBT` | `WeatherRegion::updateBT` | `0x9DDE50` | oui | void WeatherRegion::updateBT() (thread d'arrière-plan : fait avancer la météo) |
+| 24 | `FnSeasonGetNewWeather` | `Season::getNewWeather` | `0x9DD980` | oui | void Season::getNewWeather() (tirage de la météo suivante) |
+| 25 | `FnInstanceSetupWeather` | `WeatherInstance::setupWeather` | `0x9DCF60` | — | void WeatherInstance::setupWeather(Weather*) |
+| 26 | `FnCreateItem` | `RootObjectFactory::createItem` | `0x580750` | — | Item* RootObjectFactory::createItem(GameData*, const hand&, GameData* company, GameData* material, int level, Faction*) |
+| 27 | `FnShowTradeWindow` | `ForgottenGUI::showTradeWindow` | `0x791830` | — | void ForgottenGUI::showTradeWindow(const hand& a, const hand& b, TradeWindowType) (différé) |
+| 28 | `FnIsRagdoll` | `Character::isRagdoll` | `0x7D1440` | — | bool Character::isRagdoll() const (au sol en ragdoll, ou porté) |
+| 29 | `FnRecruit` | `PlayerInterface::recruit` | `0x692820` | — | bool PlayerInterface::recruit(Character*, bool editor) |
+| 30 | `FnAddTaskNearest` | `PlayerInterface::addTaskNearestSelectedCharacter` | `0x7FAE70` | oui | void PlayerInterface::addTaskNearestSelectedCharacter(Building*, TaskType, RootObject*, bool shift, const Vector3&, bool noAnimals) |
+| 31 | `FnAddJobSelected` | `PlayerInterface::addJobSelectedCharacters` | `0x7F5A90` | oui | void PlayerInterface::addJobSelectedCharacters(TaskType, RootObject*, bool shift, bool add, const Vector3&) |
+| 32 | `FnEffectHandlerCtor` | `EffectHandler::EffectHandler` | `0x1034F0` | oui | EffectHandler::EffectHandler(GameData* effect, AreaBiomeGroup*, const Vector3& pos) |
+| 33 | `FnEffectAffectObjects` | `EffectHandler::affectObjects` | `0x1020E0` | oui | void EffectHandler::affectObjects() (un effet météo blesse les personnages qu'il atteint) |
+| 34 | `FnEffectStop` | `EffectHandler::stop` | `0x100B00` | oui | void EffectHandler::stop() (fondu, puis retrait) |
+| 35 | `FnRegionUpdateEffects` | `WeatherRegion::updateWeatherEffects` | `0x9DCAF0` | oui | void WeatherRegion::updateWeatherEffects() (remplace les groupes d'effets après un changement de météo) |
+| 36 | `FnAnimStartCombat` | `AnimationClass::startCombatAnimation` | `0x5B7800` | oui | void AnimationClass::startCombatAnimation(CombatTechniqueData*, float speed, std::string extra) |
+| 37 | `FnAnimRunCombat` | `AnimationClass::runCombatAnimation` | `0x5B7600` | oui | void AnimationClass::runCombatAnimation(CombatTechniqueData*, float speed, std::string extra) |
+| 38 | `FnAnimEndCombat` | `AnimationClass::endCombatAnimation` | `0x5B3C60` | oui | void AnimationClass::endCombatAnimation() |
+| 39 | `FnAnimPlayAction` | `AnimationClass::playAction(AnimationData*)` | `0x51EAB0` | oui | void AnimationClass::playAction(AnimationData*, float speedMult, float initialWeight, bool isStumble) |
+| 40 | `FnAnimStopAction` | `AnimationClass::stopAction()` | `0x51DFA0` | oui | bool AnimationClass::stopAction() |
+| 41 | `FnAnimStopActionNamed` | `AnimationClass::stopAction(name)` | `0x51E0E0` | oui | bool AnimationClass::stopAction(const std::string& name) |
+| 42 | `FnAnimStartStumble` | `AnimationClass::startStumble` | `0x520490` | oui | void AnimationClass::startStumble(AnimationData*) |
+| 43 | `FnAnimEndStumble` | `AnimationClass::endStumble` | `0x51E840` | oui | void AnimationClass::endStumble() |
+| 44 | `FnAnimSetCombatMode` | `AnimationClass::setCombatMode` | `0x51CC30` | oui | void AnimationClass::setCombatMode(bool) |
+| 45 | `FnAnimSetCarryMode` | `AnimationClass::setCarryMode` | `0x51C8D0` | oui | void AnimationClass::setCarryMode(bool carried, bool left, bool right) |
+| 46 | `FnDrawWeapon` | `CharacterHuman::drawWeapon` | `0x5DBF80` | oui | bool CharacterHuman::drawWeapon(Item*, std::string lastSection) |
+| 47 | `FnSheatheWeapon` | `CharacterHuman::sheatheWeapon` | `0x5CC820` | oui | void CharacterHuman::sheatheWeapon() |
+| 48 | `FnAnimGuardLegs` | `AnimationClass::setCombatModeLegsIdle` | `0x51C920` | oui | void AnimationClass::setCombatModeLegsIdle(bool) |
+| 49 | `FnAnimGuardUpper` | `AnimationClass::setCombatModeUpperIdle` | `0x51C940` | oui | void AnimationClass::setCombatModeUpperIdle(bool) |
+| 50 | `FnSingleAnimUpdate` | `SingleAnimation::update` | `0x5B1700` | oui | void AnimationClassBase::SingleAnimation::update(float masterTime, float frameTime, bool sounds) |
+| 51 | `FnRunAnimationLayer` | `AnimationClass::runAnimation(AnimationData*, layer)` | `0x5B7AC0` | — | void AnimationClass::runAnimation(AnimationData*, float speed, AnimationLayerEnum, float blend) |
+| 52 | `FnSectionCanItemGoHere` | `InventorySection::canItemGoHere` | `0x74BE40` | — | bool InventorySection::canItemGoHere(Item*, int x, int y) |
+| 53 | `FnSectionValidPosition` | `InventorySection::existsItemInFootprint` | `0x7466F0` | — | ⚠ voir la note ci-dessous |
+| 54 | `FnSectionFootprintTaken` | `InventorySection::getValidInventoryPosition` | `0x74BEC0` | — | ⚠ voir la note ci-dessous |
+| 55 | `FnPickupItem` | `PlayerInterface::pickupItem` | `0x7FB3A0` | oui | void PlayerInterface::pickupItem(Item*) (l'ordre « ramasser » du joueur) |
+| 56 | `FnGiveItem` | `Character::giveItem` | `0x5CB400` | oui | bool Character::giveItem(Item*, bool dropOnFail, bool destroyOnFail) (les ramassages passent par là) |
+| 57 | `FnDropItemHuman` | `CharacterHuman::dropItem` | `0x5CA740` | oui | void CharacterHuman::dropItem(RootObject*) |
+| 58 | `FnCreateScreenLabel` | `ForgottenGUI::createScreenLabel` | `0x73FAF0` | oui | ScreenLabel* ForgottenGUI::createScreenLabel(const std::string&, const Colour&, LabelSize, RisingSpeed) |
+| 59 | `FnLabelSetTracking` | `ScreenLabel::setTracking` | `0x6E25F0` | oui | void ScreenLabel::setTracking(const hand&, const Vector3& offset) |
+| 60 | `FnLabelSetColor` | `ScreenLabel::setColor` | `0x6E2670` | oui | void ScreenLabel::setColor(const Colour&) |
+| 61 | `FnReassessCollapse` | `MedicalSystem::reassessCollapseMode` | `0x649320` | oui | void MedicalSystem::reassessCollapseMode(bool medic, bool agony) (décide d'un effondrement) |
+| 62 | `FnAnimationSelection` | `AnimationClass::animationSelection` | `0x520500` | oui | void AnimationClass::animationSelection(float time) (choisit quoi jouer à chaque image) |
+| 63 | `FnTrackAnimationMovement` | `CharMovement::trackAnimationMovement` | `0x65E240` | oui | void CharMovement::trackAnimationMovement(bool) (les animations déplacent le personnage) |
+| 64 | `FnCombatMovementUpdate` | `CharMovement::combatMovementUpdate` | `0x2AF1E0` | oui | void CharMovement::combatMovementUpdate(float, const Vector3& pos, const Vector3& dir, bool moving, Vector3& repulsion, Vector3& facingOut, bool defensive, swordStateEnum, float raceSpeedMult) |
+| 65 | `FnIncreaseStat` | `increaseStat` | `0x8C5DF0` | oui | void increaseStat(float& stat, float amount, float upperLimit) (tout gain d'expérience finit ici) |
+| 66 | `FnObjectSelected` | `PlayerInterface::objectSelected` | `0x7F7F20` | — | void PlayerInterface::objectSelected(RootObject*, bool select) |
+| 67 | `FnUnselectAll` | `PlayerInterface::unselectAll` | `0x7F8DA0` | — | void PlayerInterface::unselectAll() |
+| 68 | `FnDialogueSay` | `Dialogue::say` | `0x67FD80` | oui | void Dialogue::say(const std::string& text, DialogLineData* line) (chaque bulle) |
+| 69 | `FnDialogueSetInDialog` | `Dialogue::setInDialog` | `0x6746A0` | oui | void Dialogue::setInDialog(bool on) (montre / cache la fenêtre de conversation) |
+| 70 | `FnDialogueSetResponses` | `Dialogue::setResponesGUI` | `0x674070` | oui | void Dialogue::setResponesGUI() (les réponses dans la fenêtre) |
+| 71 | `FnDialogueSetReplyText` | `Dialogue::setConversationReplyGUI` | `0x674170` | oui | void Dialogue::setConversationReplyGUI() (ce que dit l'interlocuteur dans la fenêtre) |
+| 72 | `FnDialogueReplyClicked` | `Dialogue::replyClicked` | `0x683DF0` | — | void Dialogue::replyClicked(int) |
+| 73 | `FnDialogueSendEvent` | `Dialogue::sendEvent` | `0x684990` | oui | bool Dialogue::sendEvent(Character*, EventTriggerEnum) |
+| 74 | `FnDialogueSendEventOverride` | `Dialogue::sendEventOverride` | `0x685660` | oui | bool Dialogue::sendEventOverride(Character*, EventTriggerEnum, bool) |
+| 75 | `FnDialogueStartConversation` | `Dialogue::startConversation` | `0x683F90` | oui | bool Dialogue::startConversation(Character*, DialogLineData*, EventTriggerEnum, bool) |
+| 76 | `FnDialogueStartPlayerConversation` | `Dialogue::startPlayerConversation` | `0x684320` | oui | bool Dialogue::startPlayerConversation(Character*, DialogLineData*) |
+| 77 | `FnDialogueDoActions` | `Dialogue::_doActions` | `0x680560` | oui | void Dialogue::_doActions(DialogLineData*) (recrutement, primes, relations… d'une réplique) |
+| 78 | `FnTaskSystemUpdate` | `AITaskSytem::update` | `0x50D920` | — | void AITaskSytem::update(Vector3 position, float time) (fait tourner la tâche en cours) |
+| 79 | `FnSensoryDialogAssessment` | `SensoryData::dialogAssessmentUpdate` | `0x85A5F0` | oui | void SensoryData::dialogAssessmentUpdate(float, bool) (remarque les crimes, décide de parler) |
+| 80 | `FnSensoryAssessCrimes` | `SensoryData::assessCrimes` | `0x854D10` | oui | void SensoryData::assessCrimes(Character*) |
+| 81 | `FnBlackboardUpdate` | `Blackboard::update` | `0x26A320` | oui | void Blackboard::update(float) (IA d'escouade) |
+| 82 | `FnBlackboardPeriodic` | `Blackboard::periodicUpdate` | `0x2732B0` | oui | void Blackboard::periodicUpdate(float) |
+| 83 | `FnFactionWarPeriodic` | `FactionWarMgr::periodicUpdate` | `0x9CB310` | oui | void FactionWarMgr::periodicUpdate() (raids, campagnes) |
+| 84 | `FnUniqueSquadPeriodic` | `FactionUniqueSquadManager::periodicUpdate` | `0x2DD680` | oui | void FactionUniqueSquadManager::periodicUpdate(float) |
+| 85 | `FnAffectRelationsAmount` | `FactionRelations::affectRelations(amount)` | `0x6B2EA0` | oui | void FactionRelations::affectRelations(Faction*, float amount, float mult) |
+| 86 | `FnAffectRelationsEvent` | `FactionRelations::affectRelations(event)` | `0x6B2D20` | oui | void FactionRelations::affectRelations(Faction*, FactionEvent, float mult) |
+| 87 | `FnSetRelation` | `FactionRelations::setRelation` | `0x6B4D80` | oui | void FactionRelations::setRelation(Faction*, float) |
+| 88 | `FnSetCrime` | `BountyManager::setCrime` | `0x852C80` | oui | bool BountyManager::setCrime(CrimeEnum, Faction*, const hand&) |
+| 89 | `FnAssignBounty` | `BountyManager::assignBountyForCrimes` | `0x853EC0` | oui | void BountyManager::assignBountyForCrimes(Faction*) |
+| 90 | `FnFocusCamera` | `PlayerInterface::focusCameraSelectedCharacter` | `0x7F37F0` | — | void PlayerInterface::focusCameraSelectedCharacter() |
+| 91 | `FnSquadAddCharacterAt` | `ActivePlatoon::addCharacterAt` | `0x796620` | oui | void ActivePlatoon::addCharacterAt(RootObject*, int index) (met un personnage dans une escouade) |
+| 92 | `FnCreateSquad` | `PlayerInterface::createSquad` | `0x7F4910` | — | ActivePlatoon* PlayerInterface::createSquad() |
+| 93 | `FnCloseCharacterEditor` | `ForgottenGUI::closeCharacterEditor` | `0x6E22B0` | oui | void ForgottenGUI::closeCharacterEditor() (seul le bouton de validation de l'éditeur l'appelle) |
+| 94 | `FnShowCharacterEditor` | `ForgottenGUI::showCharacterEditor` | `0x6E32F0` | — | void ForgottenGUI::showCharacterEditor(lektor<Character*>, CharacterEditMode, const vector<GameDataReference>* races) |
+| 95 | `FnSetAppearanceData` | `Character::setAppearanceData` | `0x5B9E90` | — | void Character::setAppearanceData(GameDataCopyStandalone*) |
+| 96 | `FnMapBool` | `GameData bool map []` | `0x6C7C0` | — | tables de valeurs d'une GameData : operator[](const std::string&) → pair* |
+| 97 | `FnMapString` | `GameData string map []` | `0x6D190` | — | idem (chaînes) |
+| 98 | `FnMapInt` | `GameData int map []` | `0x6CF30` | — | idem (entiers) |
+| 99 | `FnMapFloat` | `GameData float map []` | `0xB0AB0` | — | idem (flottants) |
+| 100 | `FnMapVec3` | `GameData vec3 map []` | `0xB0D40` | — | idem (vecteurs) |
+| 101 | `FnMapQuat` | `GameData quat map []` | `0x2E6110` | — | idem (quaternions) |
+| 102 | `FnStringAssign` | `std::string::assign` | `0x69BC0` | — | std::string& std::string::assign(const std::string&, size_t pos, size_t n) |
+| 103 | `FnCharAddOrder` | `Character::addOrder` | `0x5D20D0` | — | void Character::addOrder(Building* dest, TaskType, RootObject* subject, bool shift, bool clear, const Vector3&) |
+| 104 | `FnCharAddJob` | `Character::addJob` | `0x5C8DA0` | — | void Character::addJob(TaskType, RootObject* subject, bool shift, bool add, const Vector3&) |
+| 105 | `FnSetStandingOrder` | `Character::setStandingOrder` | `0x5CAA50` | oui | void Character::setStandingOrder(StandingOrder, bool on) |
+| 106 | `FnPickupCharacter` | `Character::pickupObject` | `0x5CFF90` | oui | void Character::pickupObject(Character* who) (met un corps sur l'épaule) |
+| 107 | `FnDropCarried` | `Character::dropCarriedObject` | `0x5CE1E0` | — | void Character::dropCarriedObject(bool ragdollHim, bool removeOnly) |
+| 108 | `FnSetCurrentPlatoon` | `PlayerInterface::setCurrentPlatoon` | `0x7F2800` | — | bool PlayerInterface::setCurrentPlatoon(Platoon*) (l'escouade montrée par la barre d'escouade) |
+| 109 | `FnShowLoadWindow` | `SaveManager::showLoad` | `0x4824C0` | — | void SaveManager::showLoad() (la fenêtre « Charger » du jeu) |
+| 110 | `FnReThinkAIAction` | `Character::reThinkCurrentAIAction` | `0x5C8330` | — | void Character::reThinkCurrentAIAction() (abandonne ce qu'il fait, à la manière du jeu) |
+
+| 111 | `FnGetOwnerships` | `Character::getOwnerships` | `0x7956A0` | — | Ownerships* Character::getOwnerships() : celles de la faction du joueur pour nos personnages, celles de l'escouade (Platoon) pour un PNJ |
+| 112 | `FnInteriorShopFurniture` | meubles de boutique d'un intérieur | `0x54ACB0` | — | void BuildingInterior::<?>(lektor<Building*>&) : les meubles d'où la fenêtre d'un marchand vend (ce que le constructeur de `ShopTrader` appelle) |
+| 113 | `FnGetNpcTrader` | `InventoryGUI::getNPCTrader` | `0x70E2D0` | — | static Character* getNPCTrader() : le marchand de la fenêtre de commerce ouverte (null si moins de 2 fenêtres) |
+| 114 | `FnCharTakeMoney` | `Character::takeMoney` | `0x7965F0` | — | bool Character::takeMoney(int) : `getOwnerships()->takeMoney` ; négatif = donner ; false si pas assez |
+| 115 | `FnRClickAutoTrade` | `InventoryGUI::RClickAutoTrade` | `0x713D20` | — | TradeResult* RClickAutoTrade(TradeResult* out, const std::string& section, int x, int y, InventoryGUI* vers, bool vol, bool premier) : clic droit, une unité passe de l'autre côté (achat / vente du jeu) ; tests seulement |
+
+L'ordre de la table doit suivre celui de l'énumération `Fn` : la vérification des prologues ne voit
+pas deux lignes inversées (chaque adresse correspond bien à ses octets). Deux lignes l'étaient
+(`getValidInventoryPosition` / `existsItemInFootprint`, sans effet car jamais appelées) ; c'est
+corrigé, et `python tools/check_functions.py` vérifie désormais que chaque entrée correspond au
+commentaire de son énumérateur.
+
+### Autres adresses de fonctions utilisées directement
+
+| RVA | Fonction | Usage |
+|---|---|---|
+| `0x4BE480` | `ActivePlatoon::setName(const std::string&)` | renommer une escouade |
+| `0x9FF210` | `ZoneSpacialGrid::getObjects(point, radius, filter, lektor&, max)` | objets autour d'un point |
+| `0xED6504` / `0xED64FE` | `operator new` / `operator delete` du jeu | allouer ce que le jeu libérera (lektor) |
+| `0x6508D0`–`0x651FF1` | corps de `MedicalSystem::addWound` | reconnaître les chiffres de dégâts (adresse de retour) |
+| `0x70CEF0` | `Inventory::getCallbackCharacter` | propriétaire d'un inventaire (victime d'un vol) |
+
+## 3. Objets globaux et vtables
+
+| RVA | Quoi |
+|---|---|
+| `0x2134110` | `GameWorld` global (`ou`) |
+| `0x2133F90` | table des handles (1ᵉʳ argument de `HandleTable::resolve`) |
+| `0x21303D0` | pointeur ; `+0xA0` = heure du jeu (double, en heures) |
+| `0x2133573` | bool : `SaveManager` utilise le chemin utilisateur, sinon le chemin local |
+| `0x21337B0` | `ForgottenGUI` (objet de l'interface ; fenêtres de commerce, de fouille, éditeur) |
+| `0x2128190` | pointeur ; `+0` = `WeatherRegion*` où se trouve la caméra |
+| `0x21349C0` | pointeur vers le gestionnaire de zones (grilles spatiales) |
+| `0x2011F78` | `lektor<CombatTechniqueData*>` : toutes les techniques de combat |
+| `0x1E3A5F8` | le `hand` vide que le jeu donne à un objet posé au sol |
+| `0x2247DA0` | pointeur vers `Quaternion::IDENTITY` |
+
+Vtables (pour reconnaître un objet) :
+
+| RVA | Classe |
+|---|---|
+| `0x16F9EB8` | `Character` |
+| `0x16F2848` | `CharacterHuman` |
+| `0x16F2208` | `CharacterAnimal` |
+| `0x1722608` | `GameWorld` |
+| `0x171A2B8` | `PlayerInterface` |
+| `0x16FCC88` | `CharMovement` |
+| `0x16FA3E8` | `AI` |
+| `0x16F6698` / `0x16F67B8` | `CombatClass` / `CombatClassAI` |
+| `0x16852D0` | `hand` |
+| `0x168BE10` / `0x168BE58` | groupes d'effets ponctuels / errants |
+| `0x168C0A8` / `0x168C128` | effets ponctuels / errants (`EffectHandler`) |
+| `0x168BAF0` | `lektor<RootObject*>` |
+| `0x16EFE88` | `lektor<Character*>` |
+
+## 4. Structures
+
+### Types de base
+- **`std::string`** (compilateur VS2010) : 0x28 octets.
+  - +0x00 : texte en ligne (moins de 16 caractères) ou pointeur ;
+  - +0x10 : taille ;
+  - +0x18 : capacité.
+  `GameStringView` fabrique une vue en lecture seule de ce format.
+- **`lektor<T>`** (le vecteur de Kenshi) : vtable, +0x8 `count` (u32), +0xC capacité, +0x10
+  `data`.
+- **`boost::unordered_set/map`** : +0x18 nombre de compartiments, +0x20 taille, +0x38
+  compartiments.
+  - Nœud : +0x0 suivant, +0x10 valeur.
+  - Table indexée par chaîne : clé à +0x10, valeur à +0x38.
+  - Table indexée par `hand` : valeur à +0x30.
+- **`hand`** (0x20 octets) : vtable, +0x8 `type`, +0xC `container`, +0x10 `containerSerial`, +0x14
+  `index`, +0x18 `serial`.
+  - Types connus : 0 bâtiment ou meuble ; 1 personnage ; 0x5B personnage animal ; 0xB « aucun ».
+
+### GameWorld
+| Offset | Champ |
+|---|---|
+| +0xF0 | gestionnaire de GameData (+0x20 : table chaîne → `GameData*`) |
+| +0x4A0 | `RootObjectFactory*` |
+| +0x4A8 | `FactionManager*` (+0 : `lektor<Faction*>`) |
+| +0x580 | `PlayerInterface*` |
+| +0x700 | `frameSpeedMult` (float) |
+| +0x708 | « death parade » : table `hand` → `Character*` des cadavres |
+| +0x750 | ensemble des personnages actifs (`Character*`) |
+| +0x8B9 | `paused` (bool) |
+
+### PlayerInterface
+| Offset | Champ |
+|---|---|
+| +0xF0 | `hand` du personnage sélectionné (panneau de détails) |
+| +0x208 | ensemble des `hand` sélectionnés |
+| +0x2A0 | `Faction*` du joueur |
+| +0x2A8 | escouade montrée par la barre d'escouade (`setCurrentPlatoon`) |
+| +0x2B0 | `lektor<Character*>` des personnages du joueur |
+
+### RootObject / Character
+| Offset | Champ |
+|---|---|
+| +0x10 | `Faction*` propriétaire |
+| +0x18 | nom affiché (`std::string`) |
+| +0x40 | `GameData*` modèle (nom à +0x28, type à +0x50, identifiant `sid` à +0x58) |
+| +0x58 | `hand` |
+| +0xB0 | rotation (quaternion w, x, y, z) |
+| +0xD4 | furtif (bool, ordres STEALTH_ON / OFF) |
+| +0xF0 | `BountyManager` du personnage (premier argument de `setCrime`) |
+| +0x148 / +0x150 / +0x160 / +0x180 | crime actif : type, faction, `hand` de la victime, expiration (au moins 3 s), d'après la recherche |
+| +0x280 | `Dialogue*` |
+| +0x2E8 | `Inventory*` |
+| +0x2F8 | `inSomething` : 0 rien, 1 au lit, 2 en prison / cage ; `inWhat` (`hand`) à +0x300 |
+| +0x348 / +0x380 | porte quelqu'un (bool) / `hand` du corps porté |
+| +0x418 | rang dans l'escouade (int) |
+| +0x448 | `AnimationClass*` |
+| +0x450 | `CharStats*` (son `me` à +0x10) |
+| +0x458 | `MedicalSystem` (en ligne) |
+| +0x640 | `CharMovement*` |
+| +0x648 | `CharBody*` (+0x8 `CombatClass*`) |
+| +0x650 | `AI*` (son `me` à +0x2F8) |
+| +0x658 | `ActivePlatoon*` (escouade ; +0x78 → `Platoon`, nommé) |
+
+`CharacterHuman` : +0x6D8 arme en main (`Item*`), +0x6E0 section d'où elle vient (`std::string`).
+
+Emplacements de vtable :
+
+| vt | Fonction |
+|---|---|
+| 0x10 | `setName` |
+| 0x30 | `isUnconcious` |
+| 0x40 | `getPosition` (retour par pointeur caché) |
+| 0x58 | `getFaction` |
+| 0x160 | `getInventory` (bâtiments, meubles) |
+| 0x1A8 | `dropItem` |
+| 0x290 | `isItOkForMeToLoot` |
+| 0x298 | `ImStealingDoYouNotice` |
+| 0x370 | `setProneState` |
+| 0x390 | `getAge` |
+
+### CharStats (ordres permanents et compétences)
+- Ordres permanents :
+  - +0x128 bloquer (défensif), +0x129 distance, +0x12A narguer, +0x12B tenir la position, +0x12C
+    passif ;
+  - « poursuivre » se lit dans `AI` (+0x20) puis +0x35 ;
+  - le style de combat se lit dans `AI` +0x2B8 : 0 attaque, 1 défense, 2 esquive.
+- Compétences (`kStatOffsets`, 34 flottants, dans l'ordre) : force, attaque, travail physique,
+  science, ingénierie, robotique, forge d'armes, forge d'armures, médecine, vol, tourelles,
+  agriculture, cuisine, discrétion, athlétisme, dextérité, défense, robustesse, assassinat, nage,
+  perception, katanas, sabres, hackers, armes lourdes, armes contondantes, arts martiaux, esquive,
+  armes d'hast, arbalètes, tir ami, crochetage, fabrication d'arcs, combat de masse.
+  - Offsets : 0x80, 0x120, 0xE4, 0xE0, 0xCC, 0xDC, 0xD0, 0xD4, 0x98, 0xAC, 0x114, 0xE8, 0xEC,
+    0xA4, 0x94, 0x88, 0x124, 0x90, 0xB8, 0xA8, 0x8C, 0xF8, 0xFC, 0x100, 0x108, 0x104, 0x10C,
+    0xF0, 0x118, 0x110, 0xF4, 0xB0, 0xD8, 0x9C.
+
+### MedicalSystem (Character + 0x458)
+| Offset | Champ |
+|---|---|
+| +0x60 | faim |
+| +0x70 | sang |
+| +0xA0 | minuteur de K.-O. |
+| +0xE0 | `me` (`Character*`) |
+| +0x161 | inconscient (bool) |
+| +0x164 | mort (bool) |
+| +0x190 | `lektor<HealthPartStatus*>` (membres : chair +0x40, étourdissement +0x44, bandage +0x48) |
+| +0x1A8 | pointeur utilisé par `knockout` pour calculer la durée |
+
+### CharMovement
+- +0x20 consigne d'allure (`MoveSpeed`, 4 valeurs) ; +0x24 en mouvement (bool) ; +0xB8 vitesse
+  actuelle ; +0xBC vitesse voulue ; +0xD0 direction regardée ; +0xDC destination.
+- vt 0x30 `faceDirection` ; vt 0x90 `setDestination(pos, priorité, bool)` ; vt 0x98 `halt` ; vt
+  0xB8 `_setPositionAndTeleport` ; vt 0xC0 `setPositionDirectionAndTeleport` (s'arrête d'abord) ;
+  vt 0xC8 `_setPositionSimple` (déplace le corps et la capsule physique, sans arrêter la marche).
+
+### CombatClass
+- +0x130 mode combat actif ; +0x298 `hand` de la cible.
+- vt 0x10 `initCombatMode(const hand&, int end, bool focused)` : `end` = 0 pour engager.
+
+### AnimationClass (Character + 0x448)
+| Offset | Champ |
+|---|---|
+| +0xC8 / +0xCC | horloge maîtresse : temps (phase 0..1) / vitesse |
+| +0xD0 | `lektor<AnimationLayer*>` (chaque couche : liste « ajout » +0x0, liste « retrait » +0x18 de `SingleAnimation*`) |
+| +0xE8 | `AppearanceBase*` (+0x148 : GameData d'apparence) |
+| +0x208 | technique demandée |
+| +0x210 | action demandée |
+| +0x21E / +0x21F / +0x220 | porter à gauche / à droite / être porté |
+| +0x228 | trébuché demandé |
+| +0x244 | mode combat |
+| +0x24C / +0x24D | garde des jambes / du haut du corps |
+| +0x2C0 | `AnimList*` (+0xB8 : table nom → `AnimationData*`) |
+| +0x2D8 | `me` (`Character*`) |
+
+- `SingleAnimation` : +0x0 nom Ogre, +0x30 `AnimationData*`, +0x38 classe propriétaire, +0x40
+  vitesse, +0x44 poids, +0x48 poids voulu, +0x50 temps, +0x54 temps 0..1, +0x5D en boucle, +0x67
+  « encore voulue ».
+- `AnimationData` : nom à +0x8. `CombatTechniqueData` : animation à +0x0.
+
+### Dialogue (Character + 0x280)
+- +0x149 crie (bool) ; +0x150 `me` ; +0x158 `hand` de l'interlocuteur ; +0x258 réponses
+  (`vector<std::string>`) ; +0x278 réplique de l'interlocuteur (`std::string`).
+- Événement 1 = `EV_PLAYER_TALK_TO_ME`.
+
+### Inventaires
+- `Inventory` : +0x10 tous les objets (`lektor<Item*>`) ; +0x28 sections (table nom →
+  `InventorySection*`) ; +0x68 sections dans l'ordre de recherche ; +0x80 objet de rappel
+  (`callbackObject`) ; +0x88 propriétaire.
+- vtable d'`Inventory` : 0x10 `addItem`, 0x18 `tryAddItem`, 0x20 `hasRoomForItem`, 0x28
+  `removeItemDontDestroy`, 0x30 `removeAutoDestroy`, 0x38 `dropItem`.
+- `InventorySection` : +0x30 largeur, +0x34 hauteur, +0x40 objets (`vector` de
+  `{Item*, u16 x, y, w, h}`, 0x10 octets chacun), +0xD0 activée. vt 0x10 `addItem`, vt 0x18
+  `_addItem(item, x, y)`.
+- `Item` : +0xC0 fabricant, +0xC8 matériau, +0xD8 dans un inventaire, +0xDC position, +0xE8
+  section, +0x118 charges, +0x11C qualité, +0x129 équipé, +0x12C quantité, +0x130 / +0x134
+  largeur / hauteur, +0x188 groupe d'objets.
+  - vt 0x228 `activate`, vt 0x238 `deactivate`, vt 0x2B8 `getLevel`, vt 0x358
+    `setInventoryWeAreIn`.
+- Les armes se créent à partir de leur fabricant :
+  `createItem(factory, fabricant, hand, type d'arme, matériau, niveau)`. Le fabricant vient en
+  premier, comme dans le code du jeu.
+- L'équipement porté n'existe que dans les sections d'équipement, pas dans la liste
+  `_allItems`.
+
+### Escouades
+- `Character` +0x658 → `ActivePlatoon` ; +0x78 → `Platoon` (nom à +0x18).
+- Créer une escouade : `PlayerInterface::createSquad`.
+- Déplacer un personnage : `ActivePlatoon::addCharacterAt`, ce que fait le dépôt d'un portrait.
+
+### Apparence et éditeur
+- GameData d'apparence : `Character` +0x448 → +0xE8 → +0x148.
+- Tables de valeurs dans la GameData :
+  - +0xF8 booléens, +0x138 chaînes, +0x178 entiers, +0x1B8 flottants, +0x238 vec3, +0x278
+    quaternions, +0x2B8 références ;
+  - une référence occupe 0x40 octets : identifiant à +0x10, `GameData*` à +0x38.
+- On écrit par l'`operator[]` du jeu (fonctions 96 à 101), puis
+  `setAppearanceData(c, même pointeur)` : le jeu reconstruit le corps.
+- Éditeur :
+  - `ForgottenGUI` +0x1C0 ; ses personnages à +0x260 (données) et +0x268 (nombre) ;
+  - ouverture : `showCharacterEditor(gui, lektor par valeur, mode, races)`. Mode 2 =
+    `EDIT_DEBUG` : race et sexe modifiables, rien de tiré au hasard ; `races = nullptr`.
+
+### SaveManager
+- +0x50 chemin local, +0x78 chemin utilisateur, +0xA0 opération en attente (0 = rien), +0xD8
+  dossier de la dernière demande.
+- Les sauvegardes sont dans `%LOCALAPPDATA%\kenshi\save\` sur cette machine.
+
+### Gestionnaire de zones (`*(0x21349C0)`)
+- Une grille spatiale par genre d'objet : +0x10 personnages, **+0x48 bâtiments et meubles**,
+  +0x80 objets.
+- Requête : `ZoneSpacialGrid::getObjects`, avec une `lektor` allouée par le `new` du jeu.
+
+### Météo
+- `WeatherRegion` :
+  - +0x0 groupe de biomes (GameData à +0x10) ; +0x8 / +0x10 saisons ; +0x30 `WeatherInstance` ;
+    +0x38 saison ; +0x40 rang de la saison ; +0x44 fin de saison ;
+  - +0x69 effets à refaire ; +0x70 / +0x78 groupes d'effets ; +0xB1 nouvelle météo.
+- `WeatherInstance` : +0x8 météo, +0x10 force des effets, +0x14 force, +0x18 vent, +0x1C direction
+  du vent, +0x28 à +0x40 montée du vent, +0x44 début, +0x48 fin, +0x4C mise à jour du vent, +0x50
+  temps.
+- Groupe d'effets : +0x8 données, +0x20 / +0x28 effets vivants, +0x40 minuteur d'apparition.
+  vt 0x20 `spawn()`.
+- Effet (`EffectHandler`) : +0x24 position, +0x48 force, +0x54 âge, +0x58 durée restante, +0x5C
+  sans fin. vt 0x20 `stop()`.
+  - Ponctuel (éclair) : +0x69 a frappé, +0x6C frappe dans.
+  - Errant : +0x68 direction, +0x74 cap visé, +0x80 délai avant de tourner.
+
+### Argent
+- Faction du joueur : `PlayerInterface` +0x2A0 → `Faction` +0x80 `Ownerships` → argent à +0x88.
+
+## 5. Énumérations
+
+### Ordres permanents (`StandingOrder`)
+| Valeur | Ordre |
+|---|---|
+| 0 / 1 / 2 | courir / trottiner / marcher |
+| 3 / 4 | furtif / fin du furtif |
+| 5 / 6 / 7 | combat : attaque / défense / esquive |
+| 8 / 9 | loin / près |
+| 11 | bloquer (défensif) |
+| 12 | tenir la position |
+| 13 | passif |
+| 14 | narguer |
+| 15 | poursuivre |
+| 16 | vitesse de groupe |
+| 17 | distance |
+
+Dans l'interface, les ordres 11 et plus sont des bascules : `setOrderSelectedCharacters` décide
+d'après les boutons du joueur **local**. Pour l'ordre d'un client, l'hôte calcule donc l'état voulu
+d'après le personnage lui-même (`on = !état actuel`) et appelle `Character::setStandingOrder`
+(ordre, on) directement.
+
+### Tâches (`TaskType`, celles que le mod nomme dans le journal)
+| Valeur | Tâche |
+|---|---|
+| 2 | construire |
+| 3 | ramasser |
+| 4, 5 | attaquer |
+| 6 / 7 | dégainer / rengainer |
+| 12 | parler |
+| 25 | premiers soins |
+| 26 | fouiller (`LOOT_TARGET`) |
+| 27 / 28 | s'accroupir / se relever |
+| 29 | aller à |
+| 30 | tenir la position |
+| 44 | suivre |
+| 54 | se reposer |
+| 55 | recruter (centre d'emploi) |
+| 57 | réparer un robot |
+| 58 | médecin (métier) |
+| 60, 61 | premiers soins (robot) |
+| 68, 225 | porter quelqu'un |
+| 69 | déposer |
+| 70 | déposer dans un lit |
+| 72 / 73 | ouvrir / fermer une porte |
+| 76 | crocheter |
+| 77 / 78 | verrouiller / déverrouiller |
+| 81, 226 | enfoncer une porte |
+| 87 | utiliser une machine (`OPERATE_MACHINERY`) |
+| 95 | réparer |
+| 96 | démonter |
+| 97 | s'entraîner |
+| 98, 258 | dormir |
+| 99 | mettre quelqu'un au lit |
+| 100 | utiliser un lit (`Task_UseBed`) |
+| 107 / 108 | entrer dans une cage / mettre en cage |
+| 110 | libérer un prisonnier |
+| 116, 208, 257 | sortir du lit |
+| 118, 119 | commerce (`SHOPPING`, `BUY_SHIT`) |
+| 124 | `OPERATE_STORAGE` (métier de PNJ) |
+| 126 | parler (au plus proche) |
+| 146, 149, 234 | servir une tourelle |
+| 152 | machine automatique |
+| 221 | faire semblant d'utiliser une machine |
+| 228 / 229 | assommer / tuer en furtif |
+| 231 | manger des cultures |
+| 235, 262, 263 | tirer |
+| 244 | prendre de la nourriture |
+| 246 | kidnapper |
+| 249, 250 | poser une attelle |
+| 255 | s'asseoir sur le trône |
+| 259 | manger |
+| 269 | soigner les jambes |
+| 275 | s'asseoir (`SIT_AROUND`) |
+| 284 | `LOOT_CONTAINER` (métier de PNJ) |
+| 285 | couper une serrure |
+| 286 | forcer une serrure |
+| 290 | enfoncer un portail |
+
+Tâches par défaut d'un clic droit sur un meuble, selon la recherche :
+- `StorageBuilding` : toujours 26 ;
+- `UseableStuff` :
+  - stockage ou boutique → 26 ;
+  - lit → 258 ;
+  - mannequin d'entraînement → 97 ;
+  - table → 29 ;
+  - cage → 108, ou 76 si verrouillée ;
+  - le reste → 87, ou 152 sans place d'opérateur.
+
+### Crimes (`CrimeEnum`)
+| Valeur | Crime |
+|---|---|
+| 1 | asservissement |
+| 2 | cambriolage |
+| 3 | vol (`THEFT`) |
+| 4 | meurtre |
+| 5 | agression |
+| 6 | trahison |
+| 7, 9 | terrorisme |
+| 8 | contrebande |
+| 10 | pillage (`LOOTING`) |
+| 11 | intrusion |
+| 12 | évasion |
+| 13 | recel |
+| 14 | vol de cultures |
+| 15 | enlèvement |
+| 16 | vol d'uniforme |
+
+### Fenêtre de commerce (`TradeWindowType`)
+1 commerce avec argent (`TW_MONEY_TRADING`) ; 2 fouille (`TW_LOOTING`) ; 3 automatique (`TW_AUTO`).
+
+### Résultat d'un échange (`TradeResult`)
+| Valeur | Sens |
+|---|---|
+| 0 | OK |
+| 1 | hors de portée |
+| 2 | pas de place |
+| 3 | pas assez d'argent |
+| 4 | le marchand n'a pas assez d'argent |
+| 5 | ne peut pas le porter |
+| 6 | incompatible |
+| 7 | verrouillé |
+| 8 | voleur repéré |
+| 9 | recel repéré |
+| 10 | position de l'objet |
+| 11 | invalide |
+| 12 | « c'est à moi » |
+| 13 | cible consciente |
+| 14 | contrebande seulement |
+| 15 | marchandise illégale |
+| 16 | uniformes |
+| 17 | contenant non vide |
+
+### Fonction d'un bâtiment (`BuildingFunction`, valeurs connues)
+- 2 stockage de ressources (`StorageBuilding`) ;
+- **9 boutique (`BF_SHOP`)** ;
+- 13 stockage général ;
+- 17 chaise ;
+- 24 trône.
+- Lits, entraînement, tables, lits squelette et équarrissage deviennent aussi des `UseableStuff`.
+
+### Types d'objets (`itemType`, valeurs utilisées)
+0 bâtiment ; 1 personnage ; 2 arme ; 7 race ; 0x5B personnage animal.
+
+## 6. Comportements observés
+
+**Unités et identifiants**
+- 1 unité du monde vaut environ 10 cm. On marche à environ 14 unités/s ; le bassin d'un ragdoll
+  est 1 à 2 unités au-dessus du sol.
+- Le `hand` d'un personnage change quand il meurt ou change d'escouade (sa partie « container »).
+  Il faut suivre l'identité du personnage, pas le handle.
+- Meubles, machines et maisons d'une ville ont **un handle différent sur chaque machine**, même
+  avec la même sauvegarde. Il faut les retrouver par type et endroit. Les meubles de ville n'ont
+  pas de lien vers leur bâtiment (`isFurnitureOf`, +0x238, est vide).
+
+**Mouvement**
+- Les PNJ lointains ne sont déplacés que quelques fois par seconde le long de leur chemin. Une
+  position écrite sur eux ne tient pas ; les personnages du joueur l'acceptent à chaque image.
+- **Pendant la pause, le jeu n'enregistre aucune position écrite** sur un personnage.
+
+**Ragdolls**
+- Téléporter juste avant le début d'un ragdoll projette le corps : la vitesse vient des écarts
+  entre les dernières poses.
+- Une téléportation ne déplace pas un ragdoll actif.
+- Reconstruire un ragdoll le lance en l'air.
+
+**Heure**
+- L'heure du jeu (`0x21303D0`, +0xA0) est recalculée à chaque image depuis un compteur interne.
+  L'écrire n'a aucun effet durable.
+
+**Santé**
+- `MedicalSystem` écrit lui-même ses drapeaux « mort » et « inconscient » avant d'appeler
+  `declareDead`.
+- `MedicalSystem::knockout` (`0x644980`) ne fait que calculer un minuteur de K.-O. (+0xA0) : il ne
+  rend pas inconscient tout de suite.
+- La faim, le sommeil et la perte de sang mettent K.-O. sans minuteur.
+- `reassessCollapseMode` décide qu'un personnage s'effondre (douleur, membres estropiés).
+
+**IA**
+- Les tâches qu'un personnage avait dans la sauvegarde (s'asseoir, patrouiller, errer) tournent
+  dans `AITaskSytem` (`AI` +0x20, file d'actions à +0x300, taille à +0x28).
+- `Character::reThinkCurrentAIAction` les abandonne proprement.
+- Bloquer tout `AITaskSytem::update` empêche aussi la marche vers une destination.
+
+**Animations**
+- L'horloge maîtresse est une phase entre 0 et 1, qui reboucle. Les cycles de marche et de course
+  la suivent.
+- Si on ne choisit pas les animations d'un personnage (`animationSelection` sautée), il faut faire
+  avancer cette horloge soi-même.
+
+**Conversations**
+- Le jeu prépare les conversations aussi sur des threads de travail. La première réplique peut
+  arriver avant l'ouverture de la fenêtre.
+
+**Sauvegarde**
+- `SaveManager` efface sa demande avant que tous les fichiers soient écrits : il recopie son
+  dossier de travail dans l'emplacement ensuite.
+- Il faut attendre que `quick.save` existe et que la taille du dossier ne bouge plus.
+
+**Interface**
+- Un glisser-déposer de souris simulé ne marche pas dans l'interface de Kenshi ; les clics et
+  clics droits, si (avec un léger mouvement relatif).
+- Le jeu lit clavier et souris par DirectInput, via OIS.
+
+## 7. Recherche : commerce, fouille et contenants
+
+Recherche faite le 9 octobre 2026 pour le commerce. Fiabilité de chaque fait :
+- **[D]** désassemblé, comportement confirmé ;
+- **[V]** emplacement de vtable confirmé par la vtable RTTI ;
+- **[P]** début de fonction réel et offset KenshiLib cohérent, comportement non lu ;
+- **[U]** déduit de l'usage.
+
+### ForgottenGUI (`0x21337B0`) [D]
+| Offset | Champ |
+|---|---|
+| +0x58 | type de fenêtre de commerce en attente (0 aucune, 1, 2, 3) |
+| +0x5C | demande de fermeture |
+| +0x60 | `hand` A (son type à +0x68) |
+| +0x80 | `hand` B |
+| +0xA0 | fenêtres d'inventaire ouvertes : table `hand` → `InventoryGUI*` (fenêtre à +0x20 de la paire renvoyée) |
+| +0x1C0 | éditeur de personnage |
+
+### Ouvrir et fermer
+- **`showTradeWindow`** `0x791830` `(gui, const hand& a, const hand& b, int type)` [D]
+  - Ne fait que **ranger la demande** (+0x58, +0x60, +0x80).
+  - Deux appelants seulement :
+    - `Task_Loot_Order::startAction`, avec le type 3 ;
+    - l'assistant `0x9524F0`.
+- **Assistant `0x9524F0`** `(?, Character* pnj, Character* joueur, int type)` [D]
+  - Appelle `showTradeWindow(&joueur->hand, &pnj->hand, type)`.
+  - Appelé par `Dialogue::_doActions` (`0x680560`) pour l'action de dialogue `DA_TRADE` (1) :
+    d'abord `endDialogue`, puis l'assistant avec `pnj = Dialogue+0x150` (celui qui parle) et le
+    type 1.
+- **`closeTradeWindow`** `0x791890` : met +0x5C à 1. Appelé par `Task_Loot_Order::endAction`
+  (`0x3466A0`). [D]
+- **`ForgottenGUI::update`** `0x6EA070` [D]
+  - Si +0x58 est posé : résout les deux handles (`hand::getRootObject` `0x79D410`), appelle
+    `_showTradeWindow`, puis remet +0x58 et +0x5C à 0.
+  - Si +0x5C est posé : `closeInventory(hand)` (`0x6E53D0`) de chaque côté.
+- **`_showTradeWindow`** `0x7918A0` `(gui, RootObject* a, RootObject* b, int type)` [D]
+  1. Ne fait rien si la faction de `a` n'est pas celle du joueur. On la reconnaît à
+     `Faction`+0x250 : un `PlayerInterface*` non nul.
+  2. `closeAllInventories` (`0x6E5740`).
+  3. `setTradingTown` avec la ville la plus proche de `a` (`TownList::getNearestTown`
+     `0x927F10`).
+  4. Fenêtre de A : `showInventory` (`0x6E6820`).
+  5. Fenêtre de B :
+     - type 2 : `showInventory(b)`, sans paiement ;
+     - type 1 : `showTraderInventory(b)` (`0x6E6AF0`), avec paiement ;
+     - type 3 : paiement et fenêtre de marchand seulement si `b` est un personnage, ni en ragdoll,
+       ni au lit ou en cage (+0x2F8 = 0), ni en train de se relever (+0x278 = 0), ni estropié
+       (vt 0x360). Sinon (corps, contenant, bâtiment), chemin de fouille sans paiement.
+  6. Enregistre les deux fenêtres comme partenaires d'échange (`addTradePartner`). Un personnage
+     mort du joueur n'y compte pas comme joueur.
+
+### Autres fonctions de `ForgottenGUI`
+| Fonction | RVA | Fiabilité |
+|---|---|---|
+| `showInventory` | `0x6E6820` | [U] |
+| `showTraderInventory` (obtient ou crée le `ShopTrader` via le gestionnaire `[0x212FA08]` et `0x953F90`) | `0x6E6AF0` | [D] |
+| `showInventoryBuilding` (ouvert par `Building::select`) | `0x6E6640` | [U] |
+| `closeInventory(hand)` | `0x6E53D0` | [U] |
+| `closeAllInventories` (aussi appelé quand un voleur est repéré) | `0x6E5740` | [U] |
+| `closeAllWindows` | `0x6E64F0` | [P] |
+| `createInventoryWindow(hand, Inventory*, disposition, marchand)` | `0x6E5260` | [U] |
+| `getNumOpenInventoryWindows` (`Task_Loot_Order::runAction` finit la tâche s'il vaut 0 pendant 5 ticks) | `0x6E2DF0` | [U] |
+
+### Fenêtres
+- **`InventoryGUI`** (vtable `0x1707568`, constructeur `0x716A40`) [D]
+  - +0x08 widget ; +0x10 `hand` du propriétaire ; +0x30 disposition ; +0x50 objet de rappel ;
+    +0x58 à rafraîchir ; +0x59 visible ; +0x60 sections.
+  - vt 0x78 `getCallbackCharacter` = `0x70CFE0`, qui appelle `Inventory::getCallbackCharacter`
+    (`0x70CEF0`). Celle-ci renvoie le personnage, le propriétaire d'un contenant, ou, pour un
+    bâtiment, le chef de l'escouade résidente (`Building::getResidentSquadLeader` `0x547BA0`).
+  - vt 0x80 `getCallbackObject` = `0x70D010`.
+- **`InventoryTraderGUI`** (vtable `0x1707618`) [D] : +0x50 `ShopTrader*`. Son inventaire est
+  `ShopTrader`+0xC8 (un `ShopTraderInventory`), son personnage de rappel `ShopTrader`+0xC0 (le
+  marchand).
+- **Table statique des partenaires d'échange** `0x2132BE0` (`std::map<InventoryGUI*, données>` ;
+  tête `0x2132BE8`, taille `0x2132BF0`) [D]
+  - Données : fenêtre +0x0 ; paiement +0x8 ; peut poser +0x9 ; joueur +0xA ; `hand` du
+    propriétaire +0x10.
+  - Recherche ou insertion : `0x6F57A0`.
+
+### État de l'échange
+| Fonction | RVA | Rôle |
+|---|---|---|
+| `addTradePartner` | `0x70F2A0` | enregistre une fenêtre [D] |
+| `removeTradePartner` | `0x70E540` | [D] |
+| `clearTradePartners` | `0x70DC20` | [D] |
+| `setTradingTown` / `getTradingTown` | `0x70D130` / `0x70D170` | `hand` statique en `0x1F396A0` [D] |
+| `getNPCTrader` | `0x70E2D0` | premier personnage de rappel non joueur parmi les partenaires [D] |
+| `isTradingForMoney` | `0x70FF10` | vrai si un côté paie, que les deux côtés ne sont pas joueurs, que les inventaires diffèrent et qu'il y a un objet de rappel [D] |
+| `isStealing` | `0x711740` | faux si les deux côtés sont joueurs, si la faction du propriétaire est factice (`Faction`+0x1D0), si source = destination, ou pour un bâtiment de catégorie « CAMPING » ; sinon vrai quand ce n'est pas un échange payant [D] |
+| `isWithinRangeToTrade` | `0x70D290` | [P] |
+| `canDropMouseItemWithoutPaying` | `0x70F340` | [D] |
+
+### Déplacer un objet dans ces fenêtres
+- Clic : `sectionMouseButtonPressed` (`0x716800`) prend l'objet à la souris
+  (`pickupItemToMouse` `0x7139A0`, sans aucun mouvement d'argent) ou le pose. [D]
+- Relâchement : `sectionMouseButtonReleased` (`0x7169A0`). Bouton gauche → `placeItemFromMouse` ;
+  bouton droit → `rightClickAutoEquipping` (`0x714A20`). [D]
+- Objet tenu par la souris (`MouseInventory`) : singleton `[0x2132B58]` (lecture `0x6EF0E0`).
+  +0x30 `Item*`, +0x40 section, +0x68 fenêtre d'origine. [D]
+- **`placeItemFromMouse`** `0x715560` : c'est l'**achat, la vente, le vol ou le transfert**. [D]
+  1. Vérifications : portée, contenant non vide, position valide, places limitées, race,
+     verrou.
+  2. Échange payant :
+     - confirmation de recel ;
+     - le marchand détecte une marchandise volée (vt 0x190) → recel repéré (9) ;
+     - contrôle de contrebande (vt 0x2A8) → marchandise illégale (15).
+  3. Vol (`isStealing`) :
+     - `setCrime(voleur+0xF0, crime, faction de la victime, hand de la victime)` ;
+     - puis `ImStealingDoYouNotice` (vt 0x298) ; si vrai : voleur repéré (8), fermeture de
+       toutes les fenêtres, l'objet revient.
+  4. Propriétaire de l'objet volé : `notifyTheftFrom` (vt 0x348).
+  5. **Prix** :
+     - quantité plafonnée par ce que l'acheteur peut payer (vt 0x298 de l'objet) ;
+     - `prix = getValueAll(vendeurEstJoueur ≠ (rachat ≠ 0))` (vt 0x290) ;
+     - si l'acheteur a assez d'argent (vt 0x1B8) : l'inventaire acheteur paie
+       (`takeMoney(prix)`), l'autre côté reçoit (`takeMoney(-prix)`) ;
+     - sinon : pas assez d'argent (3, ou 4 pour le marchand).
+  6. La monnaie échangée entre joueur et non-joueur est consommée (`MoneyItem::consume`
+     `0x75F700`).
+  7. Fusion de pile, puis `InventorySection::_addItem`.
+- **`RClickAutoTrade`** `0x713D20` : clic droit, une unité par appel, mêmes vérifications. Avec Maj
+  enfoncée (`0x2133449`), `RClickAutoTradeAll` (`0x714930`) le répète. Le jeu de base n'a pas de
+  bouton « tout prendre ». [D]
+- `setItemToPlayerPortrait` `0x712490` : déposer un objet sur un portrait. Même séquence de vol,
+  crime 3. [D]
+
+### Argent [D]
+- `Inventory::takeMoney` `0x745E30` → `callbackObject->takeMoney` (vt 0x1B0) ; `getMoney`
+  `0x745E60` (vt 0x1B8).
+- `Character::takeMoney` `0x7965F0` → `getOwnerships()->takeMoney`. `Character::getMoney`
+  `0x791660`.
+- `Character::getOwnerships` `0x7956A0` :
+  - faction du joueur : `[0x2134690]` (`PlayerInterface`) +0x2A0 → `Faction` +0x80 ;
+  - sinon : escouade (+0x658) +0x78 → `Platoon`, vt 0x98.
+- `ShopTrader::takeMoney` `0x9526C0` et `getMoney` `0x9526E0` passent au marchand (+0xC0).
+- `UseableStuff::takeMoney` `0x54E560` et `getMoney` `0x54E5D0` passent au `hand` +0x380, ou à la
+  faction.
+- `Ownerships` (argent à +0x88) :
+  - `takeMoney` (vt 0) `0x7CBAA0` : faux si pas assez d'argent pour un montant positif, sinon
+    retire (un montant négatif ajoute) ;
+  - `takeMoneyByForce` `0x7CBA90` ; `addMoney` `0x32DF80` ; `setMoney` `0x37DC50` ; `getMoney`
+    `0x37DC40`.
+- Il n'existe pas de `Character::addMoney` : on utilise `takeMoney(-n)`.
+
+### Valeur et prix [D]
+- `getValueSingle(bool joueur)` (vt 0x288, `0x7A8F90`), dans l'ordre :
+  1. valeur de base d'après la GameData et le niveau ;
+  2. × multiplicateur local de la ville (`Town::getLocalTradePriceMult` `0x92D590`) si une ville
+     d'échange est posée ;
+  3. si `joueur` et (objet non marchand ou volé) : × `[0x2133EBC]` ;
+  4. × charges / charges pleines s'il n'y en a qu'un ;
+  5. × `merchantPriceMod`.
+- `getValueAll` (vt 0x290, `0x7915B0`) : valeur unitaire × quantité. `getMaxAffordableNum`
+  (vt 0x298, `0x75D5C0`).
+- `merchantPriceMod` `0x79E6D0` :
+  - part du multiplicateur du marchand (`Platoon`+0xE8) quand un échange payant est ouvert ;
+  - × une constante si l'objet a été volé à un joueur ;
+  - × multiplicateur culturel de la ville du marchand (`0x92BEC0`).
+- **Conséquence** : le prix dépend de l'état de l'interface (ville d'échange, table des
+  partenaires). L'hôte ne peut pas recalculer exactement le prix vu par un client sans ouvrir
+  lui-même ces fenêtres. Le client calcule donc le prix et l'envoie.
+
+### Stock d'un marchand [D, partiel]
+- `ShopTrader` :
+  - construit par `0x953850` à partir des meubles du bâtiment du marchand (comptoirs
+    `UseableStuff` de fonction `BF_SHOP`) et de son « backpack_content » ;
+  - contient un `ShopTraderInventory` (vtable `0x1737768`, constructeur `0x953130`) ;
+  - `0x953F90` l'obtient ou le crée : il gère un `hand` de type 1 ou 0x5B et alloue 0xD0 octets.
+- La fenêtre du marchand est donc **une copie fusionnée** :
+  - retirer un objet passe par `_removeItemFromInventories` (`0x952A70`), qui le prend dans les
+    vraies sections ;
+  - ajouter le copie dans les vrais inventaires (`0x9529E0`).
+- Achat par un PNJ : `Inventory::buyItem` `0x74A630` (utilisé par `Task_Shopping`).
+- `getSpecialFunction` (vt 0x2F0, `0xF6B30`) lit la fonction du bâtiment à +0x158.
+- **D'où vend un marchand** (constructeur `0x953850`, lu en détail) :
+  - `Character::getOwnerships(marchand)` (`0x7956A0`) ; à +0x38, le `hand` de son **bâtiment
+    domicile** (type à +0x40 ; 0xB = aucun) ;
+  - s'il en a un : `Building+0x1F0` (`myInterior`) → `0x54ACB0(intérieur, lektor&)` remplit la liste
+    des meubles de boutique (un ensemble de `hand` de l'intérieur, sinon ses meubles) ; pour chacun,
+    l'inventaire (vt 0x160) donne une section ;
+  - sinon (marchand ambulant) : les sacs à dos (objet de fonction 12) des membres de son escouade ;
+  - le mod refait la même chose (`kenshi::ShopCounters`) pour savoir quels contenants envoyer.
+- `0x953F90` (appelé par `showTraderInventory`) **détruit le `ShopTrader` précédent et en crée un
+  neuf** à chaque ouverture : rouvrir la fenêtre suffit à montrer un stock changé.
+- `lektor<T*>` du jeu : vtable, `uint32` nombre (+8), `uint32` capacité (+0xC), données (+0x10) ;
+  l'agrandissement (`0xD9410`) passe par `operator new` / `delete` du jeu (`0xED6504` / `0xED64FE`) :
+  une liste qu'on donne au jeu doit avoir sa mémoire allouée par ces fonctions.
+- Table des fenêtres ouvertes (`std::map<InventoryGUI*, InventoryTradeData>` à `0x2132BE0`) :
+  tête `0x2132BE8`, taille `0x2132BF0` ; nœud : gauche +0, parent +8, droite +0x10, clé (fenêtre)
+  +0x18, données +0x20 (`isPlayer` à +0x2A), `isNil` +0x51. Le mod y retrouve la fenêtre du
+  marchand et celle du joueur.
+- Objet tenu à la souris : `*(0x2132B58)` +0x30 (`Item*`, null si rien).
+- `Character::takeMoney` passe par `Ownerships::takeMoney` (vt 0, `0x7CBAA0`) : refuse si l'argent
+  manque et que la somme est positive, sinon `argent -= somme` ; argent à `Ownerships+0x88`.
+
+### Tâches derrière ces fenêtres [D]
+- 26 `LOOT_TARGET` → `Task_Loot_Order` (vtable `0x16BE490`) :
+  - `startAction` `0x354DC0` appelle `showTradeWindow(moi, sujet, 3)` ;
+  - `runAction` `0x354EF0` ; `endAction` `0x3466A0`.
+- 119 `BUY_SHIT` → `Task_Shopping`.
+- 124 → `Task_FillMachine` ; 284 → `Task_EmptyMachine` : métiers de PNJ, **sans fenêtre**.
+- Ouvrir un coffre, c'est **26 avec le meuble pour sujet** : la tâche passe par
+  `addTaskNearestSelectedCharacter(maison du coffre, 26, coffre, …)`.
+
+### Bâtiments et meubles [D]
+- `RootObjectFactory::createBuilding` (`0x57CC70`) choisit la classe d'après la fonction :
+  - stockage de ressources → `StorageBuilding` (vtable `0x16B07A8`) ;
+  - lits, entraînement, boutique, stockage général, tables, chaises, trônes… → `UseableStuff`
+    (vtable `0x16B21C8`) ;
+  - sans fonction → `Building` (vtable `0x16EA4A8`).
+- `Building` : +0x158 fonction spéciale ; +0x198 type de classe ; +0x238 meuble de
+  (`isFurnitureOf`) ; +0xD0 `hand` de l'escouade résidente ; +0x100 identifiant d'instance ;
+  +0x130 identifiant de disposition. On ne sait pas si ces deux identifiants sont les mêmes d'une
+  machine à l'autre.
+  - vt 0x300 `getUseableStuff`, vt 0x418 tâche par défaut, vt 0x470 / 0x478 / 0x480 marqueurs de
+    position et de direction.
+- `UseableStuff` : +0x360 propriétaire de boutique ; +0x380 propriétaire de rappel ; +0x3AC nombre
+  d'opérateurs maximum ; +0x3D0 ensemble des opérateurs ; +0x400 données de fonction ; +0x408
+  animation ; +0x430 `Inventory*` ; +0x438 `DoorLock*`.
+  - vt 0x160 `getInventory` : `0xF6CF0`, renvoie +0x430 ; renvoie null pour un simple `Building`.
+- Retrouver un objet par `hand` : `HandleManager::getBuilding_UseableStuff` `0x9F9200`, ou
+  `ZoneMapHandleContainerList::getObject` `0x9F8F20`.
+- Requêtes spatiales : `GameWorld::getObjectsWithinSphere` `0x7861A0` (type 1 → grille +0x10,
+  type 0 → grille +0x48, sinon +0x80).
+
+## 8. Recherche : vol et crimes [D]
+
+- **`BountyManager::setCrime`** `0x852C80` `(voleur+0xF0, crime, faction, hand)` : aucun crime si
+  le voleur est garde, est en prison, si la faction est la sienne ou si elle est factice.
+- `notifyCrimeWitnessed` `0x852E10`.
+- **`Character::ImStealingDoYouNotice`** (vt 0x298, `0x794810`) :
+  - chance de réussite = `getStealingSuccessChance` (`0x7944D0`) ;
+  - repéré si un tirage aléatoire la dépasse. La victime se lève (ou se réveille si elle dort),
+    réagit, le crime est témoigné, et elle se souvient du voleur ;
+  - expérience de vol accordée.
+- Autres contrôles :
+  - `isItOkForMeToLoot` (vt 0x290, `0x793940`) ;
+  - `stolenGoodsDetectionCheck` (vt 0x190, `0x793770`) ;
+  - `smugglingTradeCheck` (vt 0x2A8, `0x794E80`) ;
+  - `sellingUniformDetectionCheck` (vt 0x2A0, `0x7936C0`) ;
+  - `Item::notifyTheftFrom` (vt 0x348, `0x792780`) : pose le propriétaire de l'objet, s'il était
+    vide ; pour un meuble, c'est l'escouade résidente du bâtiment.
+- **Pour que l'hôte rejoue le vol d'un joueur distant** (ce que fait `kenshi::StealCheck`) :
+  1. `setCrime(voleur+0xF0, 3, faction de la victime, hand de la victime)` ;
+  2. si `ImStealingDoYouNotice(contenant, objet)` est vrai : repéré, l'objet ne bouge pas ;
+  3. sinon `notifyTheftFrom(propriétaire de l'inventaire)`, puis on déplace l'objet.
+  Les PNJ réagissent ensuite tout seuls, d'après le crime actif (`SensoryData::assessCrimes`).
+
+## 9. Recherche : sièges, lits, cages [D]
+
+- `inSomething` (`Character`+0x2F8) : 0 rien, 1 au lit, 2 en prison ou en cage.
+  - Tant qu'il vaut autre chose que 0, `getPosition` renvoie la position du meuble.
+- **Chaise ou trône** : `Task_OperateMachine` (vtable `0x16BE898`).
+  - Chaque tick d'IA, `runAction` (`0x35BC90`) remet le personnage sur la chaise, le tourne vers
+    sa cible et joue l'animation du meuble.
+  - `isSitting` (`StateBroadcastData` +0xB8) passe à 1, et rien ne le remet à 0 : valeur peu
+    fiable.
+- **Lit** : `Task_UseBed` (vtable `0x16C0998`) ; `Character::setBedMode` `0x32E2F0`
+  `(c, bool on, UseableStuff* lit)` met `inSomething` à 1 et l'opérateur du lit.
+  - Pour se relever : `Task_GetOutOfBed`.
+- **Cage** : `setPrisonMode` `0x330600` met `inSomething` à 2 [P].
+  - Avec `inSomething` = 2, `animationSelection` joue l'animation de K.-O. du meuble.
+- **Occupation d'un meuble** : `tryOperate(hand)` (vt 0x4F8, `0xF8030`) et `stopOperating(hand)`
+  (`0x2ACA90`).

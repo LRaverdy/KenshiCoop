@@ -65,8 +65,8 @@ const FunctionSig kFunctions[FnCount] = {
     {"SingleAnimation::update", 0x5B1700, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x50, 0x0F, 0x29}},
     {"AnimationClass::runAnimation(AnimationData*, layer)", 0x5B7AC0, {0x48, 0x89, 0x6C, 0x24, 0x20, 0x56, 0x48, 0x83, 0xEC, 0x70, 0x48, 0x83}},
     {"InventorySection::canItemGoHere", 0x74BE40, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
-    {"InventorySection::existsItemInFootprint", 0x7466F0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
     {"InventorySection::getValidInventoryPosition", 0x74BEC0, {0x48, 0x89, 0x5C, 0x24, 0x18, 0x55, 0x56, 0x57, 0x48, 0x83, 0xEC, 0x20}},
+    {"InventorySection::existsItemInFootprint", 0x7466F0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
     {"PlayerInterface::pickupItem", 0x7FB3A0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B}},
     {"Character::giveItem", 0x5CB400, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
     {"CharacterHuman::dropItem", 0x5CA740, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48}},
@@ -123,6 +123,11 @@ const FunctionSig kFunctions[FnCount] = {
     {"PlayerInterface::setCurrentPlatoon", 0x7F2800, {0x48, 0x83, 0xEC, 0x28, 0x48, 0x39, 0x91, 0xA8, 0x02, 0x00, 0x00, 0x74}},
     {"SaveManager::showLoad", 0x4824C0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE}},
     {"Character::reThinkCurrentAIAction", 0x5C8330, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x81, 0x48, 0x06, 0x00}},
+    {"Character::getOwnerships", 0x7956A0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE}},
+    {"BuildingInterior shop furniture", 0x54ACB0, {0x40, 0x53, 0x55, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x83, 0xB9, 0x08}},
+    {"InventoryGUI::getNPCTrader", 0x70E2D0, {0x48, 0x83, 0xEC, 0x28, 0x48, 0x83, 0x3D, 0x14, 0x49, 0xA2, 0x01, 0x02}},
+    {"Character::takeMoney", 0x7965F0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0xDA, 0xE8, 0xB6, 0x56, 0x8B}},
+    {"InventoryGUI::RClickAutoTrade", 0x713D20, {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41}},
 };
 
 namespace {
@@ -2065,6 +2070,196 @@ int StealCheck(Character* thief, void* container, void* item) {
     Rd(inv, 0x88, owner);   // Inventory::owner
     if (void* fn = VSlot(item, 0x348)) TheftFromSeh(fn, item, owner);   // Item::notifyTheftFrom
     return 1;
+}
+
+// ---------------------------------------------------------------- trade with merchants
+namespace {
+constexpr uintptr_t OW_home = 0x38;          // Ownerships: hand of the home building (type 0xB: none)
+constexpr uintptr_t OW_cats = 0x88;          // Ownerships: money
+constexpr uintptr_t BU_interior = 0x1F0;     // Building::myInterior
+constexpr int kTradeForMoney = 1;            // TradeWindowType::TW_MONEY_TRADING
+// std::map node of the open trade windows: left, parent, right, key (InventoryGUI*) at +0x18,
+// InventoryTradeData at +0x20 (+0xA isPlayer), isNil at +0x51
+constexpr uintptr_t TP_left = 0x0, TP_right = 0x10, TP_key = 0x18, TP_isPlayer = 0x2A, TP_isNil = 0x51;
+constexpr uintptr_t GUIV_getInventory = 0x70;   // InventoryGUI vtable: Inventory* getInventory()
+
+struct ShopLektor {   // the game's lektor<Building*>
+    uintptr_t vt;
+    uint32_t count, capacity;
+    void** data;
+};
+using FnOwnershipsSig = void* (*)(void* c);
+using FnCollectSig = void (*)(void* interior, ShopLektor* out);
+using FnNewSig = void* (*)(size_t);
+using FnDeleteSig = void (*)(void*);
+using FnTakeMoneySig = bool (*)(void* c, int amount);
+using FnNpcTraderSig = void* (*)();
+using FnRClickSig = int* (*)(void* window, int* out, const void* section, int x, int y, void* to, bool thievery, bool first);
+
+void* OwnershipsSeh(void* c) {
+    __try { return reinterpret_cast<FnOwnershipsSig>(FnAddr(FnGetOwnerships))(c); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+bool CollectSeh(void* interior, ShopLektor* out) {
+    __try { reinterpret_cast<FnCollectSig>(FnAddr(FnInteriorShopFurniture))(interior, out); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* GameNewSeh(size_t n) {
+    __try { return reinterpret_cast<FnNewSig>(Addr(rva::GameNew))(n); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+void GameDeleteSeh(void* p) {
+    __try { reinterpret_cast<FnDeleteSig>(Addr(rva::GameDelete))(p); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+bool TakeMoneySeh(void* c, int amount, bool& ok) {
+    __try { ok = reinterpret_cast<FnTakeMoneySig>(FnAddr(FnCharTakeMoney))(c, amount); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* NpcTraderSeh() {
+    __try { return reinterpret_cast<FnNpcTraderSig>(FnAddr(FnGetNpcTrader))(); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+bool RClickSeh(void* window, int* out, const void* section, int x, int y, void* to) {
+    __try { reinterpret_cast<FnRClickSig>(FnAddr(FnRClickAutoTrade))(window, out, section, x, y, to, true, true); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+// The windows of the open trade (merchant's side, player's side), from the game's partner map.
+bool TradeWindows(void*& merchant, void*& player) {
+    merchant = player = nullptr;
+    void* head = nullptr;
+    uint64_t size = 0;
+    if (!Rd(reinterpret_cast<void*>(Addr(rva::TradePartnersHead)), 0, head) || !head ||
+        !Rd(reinterpret_cast<void*>(Addr(rva::TradePartnersSize)), 0, size) || size < 2 || size > 16)
+        return false;
+    void* root = nullptr;
+    if (!Rd(head, 0x8, root) || !root) return false;   // head->parent is the root
+    std::vector<void*> todo{root};
+    for (int guard = 0; !todo.empty() && guard < 64; ++guard) {
+        void* n = todo.back();
+        todo.pop_back();
+        uint8_t nil = 1;
+        if (!n || !Rd(n, TP_isNil, nil) || nil) continue;
+        void* window = nullptr;
+        uint8_t isPlayer = 0;
+        if (Rd(n, TP_key, window) && window && Rd(n, TP_isPlayer, isPlayer)) (isPlayer ? player : merchant) = window;
+        void* l = nullptr;
+        void* r = nullptr;
+        if (Rd(n, TP_left, l)) todo.push_back(l);
+        if (Rd(n, TP_right, r)) todo.push_back(r);
+    }
+    return merchant && player;
+}
+} // namespace
+
+bool ShopCounters(Character* trader, std::vector<void*>& out) {
+    out.clear();
+    if (!IsCharacter(trader)) return false;
+    void* own = OwnershipsSeh(trader);
+    kc::Handle home;
+    if (!own || !ReadHandle(reinterpret_cast<uint8_t*>(own) + OW_home, home) || home.type != 0 || !home.valid()) return false;
+    void* building = ResolveObject(home);
+    void* interior = nullptr;
+    if (!building || !Rd(building, BU_interior, interior) || !interior) return false;
+    // what the game's own trade window collects (ShopTrader's constructor), into a list of the
+    // game's own kind (its memory comes from the game's allocator: the game may grow it)
+    constexpr uint32_t kCap = 256;
+    ShopLektor l{Addr(rva::VtLektor), 0, kCap, static_cast<void**>(GameNewSeh(kCap * sizeof(void*)))};
+    if (!l.data) return false;
+    const bool ok = CollectSeh(interior, &l);
+    for (uint32_t i = 0; ok && i < l.count && i < 1024; ++i) {
+        void* f = nullptr;
+        if (Rd(l.data, i * sizeof(void*), f) && f && InventoryOf(f)) out.push_back(f);
+    }
+    GameDeleteSeh(l.data);
+    return !out.empty();
+}
+
+bool MoneyOf(Character* c, int32_t& out) {
+    void* own = IsCharacter(c) ? OwnershipsSeh(c) : nullptr;
+    return own && Rd(own, OW_cats, out);
+}
+
+bool SetMoneyOf(Character* c, int32_t money) {
+    void* own = IsCharacter(c) ? OwnershipsSeh(c) : nullptr;
+    return own && Wr(own, OW_cats, money);
+}
+
+bool TakeMoney(Character* c, int32_t amount) {
+    bool ok = false;
+    return IsCharacter(c) && TakeMoneySeh(c, amount, ok) && ok;
+}
+
+bool OpenTradeWindow(Character* looter, Character* trader) {
+    if (!IsCharacter(looter) || !IsCharacter(trader)) return false;
+    // stored by the game, opened by its GUI on the next update (like the loot window)
+    const auto* a = reinterpret_cast<const uint8_t*>(looter) + off::RO_handle;
+    const auto* b = reinterpret_cast<const uint8_t*>(trader) + off::RO_handle;
+    return CallShowTrade(FnAddr(FnShowTradeWindow), reinterpret_cast<void*>(Addr(rva::TradeGui)), a, b, kTradeForMoney);
+}
+
+Character* NpcTrader() {
+    void* c = NpcTraderSeh();
+    return IsCharacter(c) ? static_cast<Character*>(c) : nullptr;
+}
+
+int BuildingFunctionOf(void* building) {
+    void* fn = building && !IsCharacter(building) ? VSlot(building, 0x2F0) : nullptr;   // Building::getSpecialFunction
+    int v = -1;
+    return fn && CallItemInt(fn, building, v) ? v : -1;
+}
+
+bool MouseHoldsItem() {
+    void* mouse = nullptr;
+    void* item = nullptr;
+    return Rd(reinterpret_cast<void*>(Addr(rva::MouseInventory)), 0, mouse) && mouse && Rd(mouse, 0x30, item) && item;
+}
+
+bool TradeWindowItems(bool merchantSide, std::vector<WindowItem>& out) {
+    out.clear();
+    void* merchant = nullptr;
+    void* player = nullptr;
+    if (!TradeWindows(merchant, player)) return false;
+    void* window = merchantSide ? merchant : player;
+    void* fn = VSlot(window, GUIV_getInventory);
+    void* inv = fn ? CallNoArgPtrOn(fn, window) : nullptr;
+    if (!inv) return false;
+    // every section of that inventory (by name) and the items laid out in it
+    const auto* map = reinterpret_cast<const uint8_t*>(inv) + INV_sections;
+    uint64_t size = 0, bucketCount = 0;
+    void** buckets = nullptr;
+    if (!Rd(map, off::US_size, size) || size == 0 || size > 256) return true;
+    if (!Rd(map, off::US_bucketCount, bucketCount) || !Rd(map, off::US_buckets, buckets) || !buckets) return true;
+    void* node = nullptr;
+    if (!Rd(buckets, bucketCount * sizeof(void*), node)) return true;
+    for (uint64_t i = 0; node && i < size; ++i) {
+        std::string name;
+        void* sec = nullptr;
+        if (ReadGameString(reinterpret_cast<uint8_t*>(node) + off::MapNode_key, name) && Rd(node, off::MapNode_mapped, sec) && sec) {
+            uintptr_t first = 0, last = 0;
+            if (Rd(sec, SEC_items, first) && Rd(sec, SEC_items + 8, last) && last >= first && (last - first) % kSectionItemSize == 0 &&
+                (last - first) / kSectionItemSize < 2000) {
+                for (uintptr_t p = first; p < last; p += kSectionItemSize) {
+                    void* it = nullptr;
+                    uint16_t box[2] = {0, 0};
+                    WindowItem w;
+                    if (!Rd(reinterpret_cast<const void*>(p), 0, it) || !it || !Rd(reinterpret_cast<const void*>(p), 8, box) || !ReadItemState(it, w.state)) continue;
+                    w.section = name;
+                    w.x = box[0];
+                    w.y = box[1];
+                    out.push_back(std::move(w));
+                }
+            }
+        }
+        if (!Rd(node, off::USNode_next, node)) break;
+    }
+    return true;
+}
+
+int TradeRightClick(bool merchantSide, const WindowItem& item) {
+    void* merchant = nullptr;
+    void* player = nullptr;
+    if (!TradeWindows(merchant, player)) return -1;
+    alignas(8) uint8_t section[kGameStringSize];
+    GameStringView(item.section, section);
+    int result = -1;
+    if (!RClickSeh(merchantSide ? merchant : player, &result, section, item.x, item.y, merchantSide ? player : merchant)) return -1;
+    return result;
 }
 
 bool ReadInventory(const void* c, std::vector<kc::ItemState>& out) {

@@ -54,12 +54,15 @@ const char* StateName(kc::SessionState s) {
     return "?";
 }
 
+std::string FrenchError(const std::string& e);
+const char* FrenchState(kc::SessionState s);
+
 void Toast(const std::string& msg, double seconds = 4.0) {
     const double now = NowSeconds();
     for (auto& t : g_toasts) if (t.first == msg) { t.second = now + seconds; return; }
     g_toasts.emplace_back(msg, now + seconds);
     while (g_toasts.size() > 4) g_toasts.pop_front();
-    Log("toast: %s", msg.c_str());
+    Log("toast shown: \"%s\"", msg.c_str());
 }
 
 // ---- hotkeys: Ctrl+Shift+<key>, edge-triggered, only while Kenshi has focus
@@ -86,12 +89,12 @@ bool Pressed(Hotkey& k, bool modifiers) {
 }
 
 void GiveSelectedToNextPlayer() {
-    if (!g_session->isHost()) { Toast("Only the host can hand characters to players."); return; }
+    if (!g_session->isHost()) { Toast("Seul l'hôte peut confier des personnages aux joueurs."); return; }
     std::vector<kc::Handle> sel;
     kenshi::SelectedHandles(sel);
     std::vector<kc::Handle> mine;
     for (auto& h : sel) if (g_world->FindSquad(h)) mine.push_back(h);
-    if (mine.empty()) { Toast("Select one of your squad members first."); return; }
+    if (mine.empty()) { Toast("Sélectionne d'abord un membre de ton escouade."); return; }
     // cycle owner: host -> each connected player -> host
     std::vector<uint8_t> order{g_session->localId()};
     for (auto& [id, p] : g_session->players()) order.push_back(id);
@@ -143,21 +146,21 @@ void HandleHotkeys() {
     if (Pressed(g_hkConsole, mods)) OverlayToggleConsole();
     if (Pressed(g_hkOverlay, mods)) g_overlayVisible = !g_overlayVisible;
     if (Pressed(g_hkHost, mods)) {
-        if (g_session->isHost()) Toast("Already hosting.");
-        else if (g_session->Host(&err)) Toast("Hosting on port " + std::to_string(g_cfg.port) + ".");
-        else Toast("Cannot host: " + err);
+        if (g_session->isHost()) Toast("Tu héberges déjà la partie.");
+        else if (g_session->Host(&err)) Toast("Partie hébergée (port " + std::to_string(g_cfg.port) + ").");
+        else Toast("Impossible d'héberger : " + FrenchError(err));
     }
     if (Pressed(g_hkJoin, mods)) {
-        if (g_session->isClient()) Toast("Already connected.");
-        else if (JoinAndRemember(g_cfg.joinAddress, g_cfg.port, &err)) Toast("Joining " + g_cfg.joinAddress + "...");
-        else Toast("Cannot join: " + err);
+        if (g_session->isClient()) Toast("Tu es déjà connecté.");
+        else if (JoinAndRemember(g_cfg.joinAddress, g_cfg.port, &err)) Toast("Connexion à " + g_cfg.joinAddress + "...");
+        else Toast("Impossible de rejoindre : " + FrenchError(err));
     }
     if (Pressed(g_hkLeave, mods)) {
         g_session->Leave();
-        Toast("Left the session.");
+        Toast("Tu as quitté la session.");
     }
     if (Pressed(g_hkGive, mods)) GiveSelectedToNextPlayer();
-    if (Pressed(g_hkDiag, mods)) { DumpDiagnostics("hotkey"); Toast("Diagnostics written to KenshiCoop.log"); }
+    if (Pressed(g_hkDiag, mods)) { DumpDiagnostics("hotkey"); Toast("Diagnostic écrit dans KenshiCoop.log"); }
     if (Pressed(g_hkConsoleWindow, mods)) HostConsoleShow(!HostConsoleVisible());
 }
 
@@ -404,36 +407,36 @@ void HandleOverlayActions() {
 void PublishOverlay() {
     OverlayModel m;
     m.visible = g_overlayVisible;
-    m.title = std::string("KenshiCoop ") + kVersion + "  -  " + StateName(g_session->state());
+    m.title = std::string("KenshiCoop ") + kVersion + "  -  " + FrenchState(g_session->state());
     const auto st = g_session->state();
     if (st == kc::SessionState::Downloading) {
-        m.lines.push_back("Receiving the host's world: " + std::to_string(int(g_session->downloadProgress() * 100)) + "%");
+        m.lines.push_back("Réception du monde de l'hôte : " + std::to_string(int(g_session->downloadProgress() * 100)) + " %");
     } else if (st == kc::SessionState::Loading || st == kc::SessionState::Connecting || st == kc::SessionState::Handshake) {
-        m.lines.push_back("Please wait...");
+        m.lines.push_back("Patiente...");
     } else if (st == kc::SessionState::Idle || st == kc::SessionState::Failed) {
-        if (st == kc::SessionState::Failed && !g_session->lastError().empty()) m.lines.push_back(g_session->lastError());
-        m.lines.push_back("Ctrl+Shift+H  host this game");
-        m.lines.push_back("Ctrl+Shift+J  join " + g_cfg.joinAddress + ":" + std::to_string(g_cfg.port) + " (works from the main menu)");
-        m.lines.push_back("Ctrl+Shift+M  multiplayer window   Ctrl+Shift+K  console");
-        m.lines.push_back("Ctrl+Shift+O  hide this panel");
+        if (st == kc::SessionState::Failed && !g_session->lastError().empty()) m.lines.push_back(FrenchError(g_session->lastError()));
+        m.lines.push_back("Ctrl+Shift+H  héberger cette partie");
+        m.lines.push_back("Ctrl+Shift+J  rejoindre " + g_cfg.joinAddress + ":" + std::to_string(g_cfg.port) + " (marche depuis le menu principal)");
+        m.lines.push_back("Ctrl+Shift+M  fenêtre Multijoueur   Ctrl+Shift+K  console");
+        m.lines.push_back("Ctrl+Shift+O  masquer ce panneau");
     } else {
-        m.lines.push_back("You: " + g_cfg.name + " (player " + std::to_string(g_session->localId()) + ")" +
+        m.lines.push_back("Toi : " + g_cfg.name + " (joueur " + std::to_string(g_session->localId()) + ")" +
                           (g_session->isHost() ? "" : "   ping " + std::to_string(g_session->pingMs()) + " ms"));
         for (auto& [id, p] : g_session->players())
-            m.lines.push_back("  player " + std::to_string(id) + ": " + p.name + (g_session->isHost() ? "   ping " + std::to_string(p.rttMs) + " ms" : ""));
+            m.lines.push_back("  joueur " + std::to_string(id) + " : " + p.name + (g_session->isHost() ? "   ping " + std::to_string(p.rttMs) + " ms" : ""));
         size_t mine = 0;
         std::vector<kc::Handle> hs;
         g_world->PlayerCharacters(hs);
         for (auto& h : hs) if (g_session->ownerOf(h) == g_session->localId()) ++mine;
-        m.lines.push_back("Squad: " + std::to_string(hs.size()) + " characters, " + std::to_string(mine) + " yours");
-        m.lines.push_back("World: " + std::to_string(g_session->npcCount()) + " NPCs synced" +
-                          (g_session->isClient() && g_session->missingNpcs() ? " (" + std::to_string(g_session->missingNpcs()) + " not spawned here yet)" : ""));
+        m.lines.push_back("Escouade : " + std::to_string(hs.size()) + " personnages, dont " + std::to_string(mine) + " à toi");
+        m.lines.push_back("Monde : " + std::to_string(g_session->npcCount()) + " PNJ synchronisés" +
+                          (g_session->isClient() && g_session->missingNpcs() ? " (" + std::to_string(g_session->missingNpcs()) + " pas encore là)" : ""));
         if (g_session->missingSquad())
-            m.lines.push_back("WARNING: " + std::to_string(g_session->missingSquad()) + " squad members missing here - load the host's save!");
+            m.lines.push_back("ATTENTION : " + std::to_string(g_session->missingSquad()) + " membres de l'escouade manquent ici (charge la sauvegarde de l'hôte)");
         if (g_session->isHost() && g_session->joiningPlayers())
-            m.lines.push_back(std::to_string(g_session->joiningPlayers()) + " player(s) joining - game paused");
-        if (g_session->isHost()) m.lines.push_back("Ctrl+Shift+G  give selected to next player");
-        m.lines.push_back("Ctrl+Shift+L  leave");
+            m.lines.push_back(std::to_string(g_session->joiningPlayers()) + " joueur(s) en train d'arriver : partie en pause");
+        if (g_session->isHost()) m.lines.push_back("Ctrl+Shift+G  confier la sélection au joueur suivant");
+        m.lines.push_back("Ctrl+Shift+L  quitter la session");
     }
     const auto& chat = g_session->chatLog();
     for (size_t i = chat.size() > 6 ? chat.size() - 6 : 0; i < chat.size(); ++i) m.chat.push_back(chat[i]);

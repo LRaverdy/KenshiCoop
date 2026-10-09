@@ -80,6 +80,19 @@ public:
     bool ContainerWindowOpen() override { return kenshi::OpenInventoryWindows() > 0; }
     void CloseContainerWindows() override { kenshi::CloseInventoryWindows(); }
     void QueueContainerRequest(kenshi::Character* looter, void* container);   // hooks: a right click on a container
+    void TakeTradeRequests(std::vector<TradeRequest>& out) override;
+    bool ShopCounters(const kc::Handle& trader, std::vector<ShopCounter>& out) override;
+    bool MoneyOf(const kc::Handle& who, int32_t& money) override;
+    bool PayTrade(const kc::Handle& buyer, const kc::Handle& trader, int32_t price) override;
+    void RefreshTradeWindow(const kc::Handle& trader) override;
+    bool OpenTradeWindow(const kc::Handle& looter, const kc::Handle& trader) override;
+    bool TradeWindowBusy() override { return kenshi::MouseHoldsItem(); }
+    void SetMoneyOf(const kc::Handle& who, int32_t money) override;
+    std::string CharacterNameOf(const kc::Handle& h) override;
+    // Hooks (host): the game asked for a trade window for another player's character (any thread);
+    // the host's own trade window (to show it again when another player changed the stock).
+    void QueueTradeRequest(const kc::Handle& looter, const kc::Handle& trader);
+    void NoteHostTradeWindow(const kc::Handle& looter, const kc::Handle& trader);
     void TakeEditedCharacters(std::vector<kc::Handle>& out) override;
     bool ReadAppearance(const kc::Handle& h, kc::AppearanceMsg& out) override;
     void ApplyAppearance(const kc::Handle& h, const kc::AppearanceMsg& m) override;
@@ -273,6 +286,9 @@ private:   // first few lifecycle events (tests)
     std::vector<std::pair<kenshi::Character*, kc::ItemState>> localDrops_;   // client, under groundMutex_
     std::vector<kenshi::Character*> edited_;   // characters whose looks the editor just changed
     std::vector<ContainerRequest> containerReqs_;   // client: right clicks on containers, for the host
+    std::mutex tradeMutex_;
+    std::vector<TradeRequest> tradeReqs_;            // host, under tradeMutex_
+    kc::Handle hostTradeLooter_, hostTradeTrader_;   // host: our own last trade window (under tradeMutex_)
     void* InventoryHolder(const kc::Handle& h);       // a character, or a container
     double pauseSeenAt_ = -1;   // client: when the host's pause arrived (we pause a little later)
     std::unordered_map<kc::Handle, double, kc::HandleHash> taskDropAt_;   // client: when its local tasks were last dropped

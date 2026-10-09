@@ -24,6 +24,12 @@ inline constexpr uintptr_t GameClockOwner = 0x21303d0;      // pointer; +0xA0 = 
 inline constexpr uintptr_t SaveUsesUserPath = 0x2133573;    // bool: SaveManager uses userSavePath, else localSavePath
 inline constexpr uintptr_t TradeGui = 0x21337B0;            // the GUI object showTradeWindow() is called on
 inline constexpr uintptr_t WeatherSystem = 0x2128190;       // pointer; +0 = WeatherRegion* where the camera is
+inline constexpr uintptr_t TradePartnersHead = 0x2132BE8;   // std::map<InventoryGUI*, InventoryTradeData> of the open trade windows: head node
+inline constexpr uintptr_t TradePartnersSize = 0x2132BF0;   //                                                                   size
+inline constexpr uintptr_t MouseInventory = 0x2132B58;      // pointer to the item being dragged (+0x30 Item*)
+inline constexpr uintptr_t GameNew = 0xED6504;              // the game's operator new (its CRT's)
+inline constexpr uintptr_t GameDelete = 0xED64FE;           // the game's operator delete
+inline constexpr uintptr_t VtLektor = 0x168BAF0;            // lektor<RootObject*> (the game's small vector)
 
 inline constexpr uintptr_t VtCharacter = 0x16f9eb8;
 inline constexpr uintptr_t VtCharacterHuman = 0x16f2848;
@@ -155,6 +161,11 @@ enum Fn : int {
     FnSetCurrentPlatoon,        // bool PlayerInterface::setCurrentPlatoon(Platoon*)   (the squad the squad bar shows)
     FnShowLoadWindow,           // void SaveManager::showLoad()   (the game's "Load" window)
     FnReThinkAIAction,          // void Character::reThinkCurrentAIAction()   (drops what it is doing, the game's own way)
+    FnGetOwnerships,            // Ownerships* Character::getOwnerships()   (the player faction's for ours, the squad's for NPCs)
+    FnInteriorShopFurniture,    // void BuildingInterior::<shop furniture>(lektor<Building*>&)   (what a merchant's trade window sells from)
+    FnGetNpcTrader,             // static Character* InventoryGUI::getNPCTrader()   (the merchant of the open trade window)
+    FnCharTakeMoney,            // bool Character::takeMoney(int)   (negative: gives)
+    FnRClickAutoTrade,          // TradeResult* InventoryGUI::RClickAutoTrade(TradeResult*, const std::string& section, int x, int y, InventoryGUI* to, bool thievery, bool first)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -292,10 +303,26 @@ void MakeHand(const kc::Handle& h, void* out);               // writes a game `h
 bool OpenLootWindow(Character* looter, void* target);   // a character or a container
 bool CloseInventoryWindows();                           // every inventory window of the game
 int OpenInventoryWindows();                             // how many are open
-// Theft from a container by `thief`: 0 not theft (ours, nobody's, a camp), 1 theft unseen (the crime
-// is set, the item now belongs to us), 2 caught (the owners react; the move must not happen).
+// Theft from a container by `thief`: 0 not theft (ours, nobody's, a faction that is not a real one),
+// 1 theft unseen (the crime is set, the item now belongs to us), 2 caught (the owners react; the move
+// must not happen).
 int StealCheck(Character* thief, void* container, void* item);
 void* FindItemIn(void* container, const kc::ItemState& s);   // the stack in its inventory
+// Trade with merchants. A merchant with a home sells from its shop's counters (furniture of its home
+// building); its trade window shows them merged.
+bool ShopCounters(Character* trader, std::vector<void*>& out);
+bool MoneyOf(Character* c, int32_t& out);           // the player faction's cats for ours, a merchant's own
+bool SetMoneyOf(Character* c, int32_t money);
+bool TakeMoney(Character* c, int32_t amount);       // Character::takeMoney (negative gives; false: cannot pay)
+bool OpenTradeWindow(Character* looter, Character* trader);   // the game's trade window (for cats)
+Character* NpcTrader();                              // the merchant of the trade window open here, or null
+bool MouseHoldsItem();                               // an item is being dragged in an inventory window
+int BuildingFunctionOf(void* building);              // BuildingFunction (9 BF_SHOP...), -1 unknown
+// tests: the items of the open trade window's merchant side (or the player side), and a right click
+// on one of them (one unit goes to the other side, bought or sold the game's own way)
+struct WindowItem { std::string section; int x = 0, y = 0; kc::ItemState state; };
+bool TradeWindowItems(bool merchantSide, std::vector<WindowItem>& out);
+int TradeRightClick(bool merchantSide, const WindowItem& item);   // TradeResult (0 ok), -1 failed
 // tests: the order a right-click on `subject` gives to the nearest selected character
 bool CallAddTaskNearest(int task, Character* subject);
 bool CallAddTaskNearestObject(int task, void* subject, const kc::Vec3& at);   // tests: the same on any object

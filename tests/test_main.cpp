@@ -241,34 +241,88 @@ struct FakeWorld : IWorld {
         return true;
     }
     void TakeLocalOrders(std::vector<std::pair<Handle, Command>>& out) override { out.swap(localOrders); localOrders.clear(); }
-    bool ReadInventory(const Handle& h, std::vector<ItemState>& out) override {
+    // containers (shop counters): handle type 0, items by serial; where they stand
+    struct FakeBox { std::string sid; Vec3 pos; std::vector<ItemState> items; };
+    std::map<uint32_t, FakeBox> boxes;
+    static Handle B(uint32_t serial) { Handle h; h.type = 0; h.index = serial; h.serial = serial; return h; }
+    std::vector<ItemState>* ItemsOf(const Handle& h) {
+        if (h.type == 0) { auto b = boxes.find(h.serial); return b == boxes.end() ? nullptr : &b->second.items; }
         auto it = chars.find(h.serial);
-        if (it == chars.end()) return false;
-        out = it->second.items;
+        return it == chars.end() ? nullptr : &it->second.items;
+    }
+    bool ReadInventory(const Handle& h, std::vector<ItemState>& out) override {
+        auto* items = ItemsOf(h);
+        if (!items) return false;
+        out = *items;
         return true;
     }
     bool ApplyInventory(const Handle& h, const std::vector<ItemState>& items) override {
-        auto it = chars.find(h.serial);
-        if (it == chars.end()) return false;
-        it->second.items = items;
+        auto* mine = ItemsOf(h);
+        if (!mine) return false;
+        *mine = items;
         return true;
     }
     bool ExecuteInvOp(const Handle& from, const Handle& to, const InvOp& op) override {
-        auto a = chars.find(from.serial), b = chars.find(to.serial);
-        if (a == chars.end() || b == chars.end()) return false;
-        for (size_t i = 0; i < a->second.items.size(); ++i) {
-            ItemState& it = a->second.items[i];
+        auto* a = ItemsOf(from);
+        auto* b = ItemsOf(to);
+        if (!a || !b) return false;
+        for (size_t i = 0; i < a->size(); ++i) {
+            ItemState& it = (*a)[i];
             if (!it.sameKind(op.item) || it.quantity < op.item.quantity) continue;
             ItemState moved = it;
             moved.quantity = op.item.quantity;
             moved.section = op.toSection; moved.x = op.toX; moved.y = op.toY;
             it.quantity -= op.item.quantity;
-            if (it.quantity == 0) a->second.items.erase(a->second.items.begin() + ptrdiff_t(i));
-            if (op.kind == InvOpKind::Move) b->second.items.push_back(moved);
+            if (it.quantity == 0) a->erase(a->begin() + ptrdiff_t(i));
+            if (op.kind == InvOpKind::Move) b->push_back(moved);
             return true;
         }
         return false;
     }
+    float DistanceTo(const Handle& who, const Vec3& pos) override {
+        auto it = chars.find(who.serial);
+        return it == chars.end() ? 1e9f : Dist(it->second.pos, pos);
+    }
+    std::string CharacterNameOf(const Handle& h) override { return "npc-" + std::to_string(h.serial); }
+    bool FindContainer(const std::string& sid, const Vec3& pos, Handle& out) override {
+        for (auto& [s, b] : boxes)
+            if (b.sid == sid && Dist(b.pos, pos) < 30) { out = B(s); return true; }
+        return false;
+    }
+    // trade: the player faction's cats, merchants' cats and counters; trade windows
+    int32_t money = 0;
+    std::map<uint32_t, int32_t> merchantMoney;
+    std::map<uint32_t, std::vector<uint32_t>> shops;   // merchant serial -> its counters
+    std::vector<TradeRequest> tradeReqs;               // host: what the game asked for
+    bool tradeWindow = false;                          // client: the trade window is open
+    int tradeWindowOpens = 0;
+    bool ReadMoney(int32_t& m) override { m = money; return true; }
+    void ApplyMoney(int32_t m) override { money = m; }
+    void TakeTradeRequests(std::vector<TradeRequest>& out) override { out.swap(tradeReqs); tradeReqs.clear(); }
+    bool ShopCounters(const Handle& trader, std::vector<ShopCounter>& out) override {
+        out.clear();
+        auto s = shops.find(trader.serial);
+        if (s == shops.end()) return false;
+        for (uint32_t b : s->second) out.push_back({B(b), boxes[b].sid, boxes[b].pos});
+        return !out.empty();
+    }
+    bool MoneyOf(const Handle& who, int32_t& m) override {
+        if (chars.count(who.serial) && chars[who.serial].squad) { m = money; return true; }
+        auto it = merchantMoney.find(who.serial);
+        if (it == merchantMoney.end()) return false;
+        m = it->second;
+        return true;
+    }
+    void SetMoneyOf(const Handle& who, int32_t m) override { if (!chars[who.serial].squad) merchantMoney[who.serial] = m; }
+    bool PayTrade(const Handle& buyer, const Handle& trader, int32_t price) override {
+        (void)buyer;
+        money -= price;
+        merchantMoney[trader.serial] += price;
+        return true;
+    }
+    bool OpenTradeWindow(const Handle&, const Handle&) override { tradeWindow = true; ++tradeWindowOpens; return true; }
+    bool ContainerWindowOpen() override { return tradeWindow; }
+    void CloseContainerWindows() override { tradeWindow = false; }
     std::vector<RegionWeather> weather;
     void ReadWeather(std::vector<RegionWeather>& out) override { out = weather; }
     void ApplyWeather(const std::vector<RegionWeather>& r) override { weather = r; }
@@ -519,6 +573,28 @@ static void TestWire() {
         EditState es; CHECK(Decode(er, es) && es.editing);
         CHECK(std::string(TaskLabel(258)) == "sleep" && std::string(TaskLabel(9999)) == "?");
     }
+    {   // trading: the window with the shop's counters, then a purchase with its price
+        TradeOpen to; to.traderNetId = 40; to.looterNetId = 7; to.traderMoney = -3;
+        to.counters = {{41, "box-a", {1, 2, 3}}, {42, "box-b", {4, 5, 6}}};
+        Writer tw; Encode(tw, to);
+        Reader tr(tw.data(), tw.size()); CHECK(PeekType(tr) == Msg::TradeOpen);
+        TradeOpen to2; CHECK(Decode(tr, to2));
+        CHECK(to2.traderNetId == 40 && to2.looterNetId == 7 && to2.traderMoney == -3 && to2.counters.size() == 2 &&
+              to2.counters[1].netId == 42 && to2.counters[1].sid == "box-b" && to2.counters[1].pos.z == 6 && to2.note.empty());
+        TradeOpen none; none.traderNetId = 40; none.note = "pas d'etal";
+        Writer nw; Encode(nw, none);
+        Reader nr(nw.data(), nw.size()); PeekType(nr);
+        TradeOpen none2; CHECK(Decode(nr, none2) && none2.counters.empty() && none2.note == "pas d'etal");
+        InvOp buy; buy.fromNetId = 41; buy.toNetId = 7; buy.item.templateSid = "bread"; buy.item.quantity = 2; buy.toSection = "main";
+        buy.traderNetId = 40; buy.price = 61;
+        Writer bw; Encode(bw, buy);
+        Reader br(bw.data(), bw.size()); PeekType(br);
+        InvOp buy2; CHECK(Decode(br, buy2) && buy2.traderNetId == 40 && buy2.price == 61 && buy2.item.quantity == 2);
+        buy.price = -25;
+        Writer sw; Encode(sw, buy);
+        Reader sr(sw.data(), sw.size()); PeekType(sr);
+        InvOp sell; CHECK(Decode(sr, sell) && sell.price == -25);
+    }
     {   // hunger travels with the vitals
         VitalsMsg vm; vm.entities.resize(1); vm.entities[0].netId = 2; vm.entities[0].hunger = 250.5f;
         auto pk = EncodeVitals(vm)[0];
@@ -584,6 +660,11 @@ static void TestFuzz() {
     { DialogMsg dm; DialogEvent e; e.netId = 1; e.text = "hi"; e.replies = {"a", "b"}; dm.events = {e}; add([&](Writer& w) { Encode(w, dm); }); }
     { ProgressMsg pm; pm.hasMoney = true; CharProgress cp; cp.netId = 1; cp.stats.assign(kStatCount, 1.0f); pm.chars = {cp}; add([&](Writer& w) { Encode(w, pm); }); }
     { VitalsMsg v; v.entities.resize(2); for (auto& e : v.entities) { e.netId = 4; e.parts.resize(3); } seeds.push_back(EncodeVitals(v)[0]); }
+    add([](Writer& w) { ContainerOpen m; m.looterNetId = 2; m.sid = "chest"; Encode(w, m); });
+    add([](Writer& w) { ContainerOpened m; m.netId = 9; m.looterNetId = 2; m.sid = "chest"; Encode(w, m); });
+    add([](Writer& w) { Encode(w, ContainerClose{9, "trop loin"}); });
+    add([](Writer& w) { TradeOpen m; m.traderNetId = 4; m.looterNetId = 2; m.counters = {{5, "box", {1, 2, 3}}}; Encode(w, m); });
+    add([](Writer& w) { InvOp m; m.fromNetId = 5; m.toNetId = 2; m.item.templateSid = "x"; m.traderNetId = 4; m.price = 12; Encode(w, m); });
     { Snapshot s; s.entities.resize(3); for (auto& e : s.entities) e.netId = 7; seeds.push_back(EncodeSnapshot(s)[0]); }
 
     auto decodeAll = [](const std::vector<uint8_t>& p) {
@@ -623,6 +704,11 @@ static void TestFuzz() {
         case Msg::ClientReport: { ClientReport m; Decode(r, m); break; }
         case Msg::EditState: { EditState m; Decode(r, m); break; }
         case Msg::DialogReply: { DialogReply m; Decode(r, m); break; }
+        case Msg::ContainerOpen: { ContainerOpen m; Decode(r, m); break; }
+        case Msg::ContainerOpened: { ContainerOpened m; Decode(r, m); break; }
+        case Msg::ContainerClose: { ContainerClose m; Decode(r, m); break; }
+        case Msg::TradeOpen: { TradeOpen m; Decode(r, m); break; }
+        default: break;
         }
     };
     for (int i = 0; i < 300000; ++i) {
@@ -630,7 +716,7 @@ static void TestFuzz() {
         if (i % 2) {
             p.resize(rng() % 64);
             for (auto& b : p) b = uint8_t(rng());
-            if (!p.empty()) p[0] = uint8_t(1 + rng() % 21);
+            if (!p.empty()) p[0] = uint8_t(1 + rng() % 39);
         } else {
             p = seeds[rng() % seeds.size()];
             const int muts = 1 + rng() % 4;
@@ -1104,6 +1190,92 @@ static void TestInventories() {
     CHECK(hw.chars[2].items.size() == 2 && cw.chars[2].items == hw.chars[2].items);
 }
 
+static void TestTrade() {
+    std::printf("session: trading with a merchant: the window opens on the player's screen, purchases and sales replayed with their price\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    auto item = [](const char* sid, int q, const char* sec, int x, int y) {
+        ItemState i; i.templateSid = sid; i.quantity = q; i.section = sec; i.x = int16_t(x); i.y = int16_t(y); return i;
+    };
+    // the client player's character arrives at (0, 0, -20): the shop is there
+    FakeChar merchant; merchant.squad = false; merchant.pos = {10, 0, -20}; merchant.dest = merchant.pos;
+    hw.chars[50] = merchant;
+    hw.boxes[900] = {"counter", {15, 0, -15}, {item("bread", 5, "main", 0, 0), item("sword", 1, "main", 2, 0)}};
+    hw.shops[50] = {900};
+    hw.money = 1000;
+    hw.merchantMoney[50] = 500;
+    AtMenu(cw);
+    cw.boxes = hw.boxes;               // the save the client loads has the same shop
+    cw.boxes[900].items.clear();       // (its stock comes from the host anyway)
+    SessionConfig hc; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 5));
+    const uint32_t me = 5000;   // the client player's own character (the host's EnsurePlayerCharacter made it)
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return cw.money == 1000; });
+    CHECK(cw.money == 1000);
+    // the merchant's "let's trade" in the client player's conversation
+    hw.tradeReqs.push_back({FakeWorld::H(me), FakeWorld::H(50)});
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cli.tradeView().open; });
+    CHECK(cli.tradeView().open && cli.tradeView().counters == 1 && host.hostTrades() == 1);
+    CHECK(cw.boxes[900].items == hw.boxes[900].items && cw.merchantMoney[50] == 500 && cw.tradeWindow);
+    // the client's game buys 2 breads for 60 cats (part of a stack, into the bag)
+    cw.boxes[900].items[0].quantity = 3;
+    cw.chars[me].items.push_back(item("bread", 2, "main", 4, 1));
+    cw.money -= 60;
+    cw.merchantMoney[50] += 60;
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return hw.money == 940 && cw.chars[me].items == hw.chars[me].items && cw.money == 940; });
+    CHECK(hw.money == 940 && hw.merchantMoney[50] == 560);
+    CHECK(hw.boxes[900].items.size() == 2 && hw.boxes[900].items[0].quantity == 3);
+    CHECK(hw.chars[me].items.size() == 1 && hw.chars[me].items[0].templateSid == "bread" && hw.chars[me].items[0].quantity == 2 && hw.chars[me].items[0].x == 4);
+    CHECK(cw.money == 940 && cw.chars[me].items == hw.chars[me].items && cw.boxes[900].items == hw.boxes[900].items);
+    // it sells one back for 25 (onto the shop's stack)
+    cw.chars[me].items[0].quantity = 1;
+    cw.boxes[900].items[0].quantity = 4;
+    cw.money += 25;
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return hw.money == 965 && cw.money == 965 && cw.boxes[900].items == hw.boxes[900].items; });
+    CHECK(hw.money == 965 && hw.merchantMoney[50] == 535);
+    int breadInShop = 0;
+    for (const auto& i : hw.boxes[900].items) if (i.templateSid == "bread") breadInShop += i.quantity;
+    CHECK(breadInShop == 4 && hw.chars[me].items.size() == 1 && hw.chars[me].items[0].quantity == 1);
+    CHECK(cw.money == 965 && cw.chars[me].items == hw.chars[me].items);
+    // a purchase it cannot pay is refused: the sword goes back to the shop, the cats back to 965
+    {
+        auto& box = cw.boxes[900].items;
+        box.erase(std::remove_if(box.begin(), box.end(), [](const ItemState& i) { return i.templateSid == "sword"; }), box.end());
+    }
+    cw.chars[me].items.push_back(item("sword", 1, "main", 0, 3));
+    cw.money -= 5000;
+    Run({{&host, &hw}, {&cli, &cw}}, 5.0, [&] { return cw.money == 965 && cw.chars[me].items == hw.chars[me].items && cw.boxes[900].items == hw.boxes[900].items; });
+    CHECK(hw.money == 965 && hw.merchantMoney[50] == 535 && hw.chars[me].items.size() == 1);
+    CHECK(cw.money == 965 && cw.chars[me].items == hw.chars[me].items && cw.boxes[900].items == hw.boxes[900].items);
+    // the host buys the sword itself: the client's window shows the new stock
+    const int opens = cw.tradeWindowOpens;
+    {
+        auto& box = hw.boxes[900].items;
+        box.erase(std::remove_if(box.begin(), box.end(), [](const ItemState& i) { return i.templateSid == "sword"; }), box.end());
+    }
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return cw.boxes[900].items == hw.boxes[900].items && cw.tradeWindowOpens > opens; });
+    CHECK(cw.boxes[900].items == hw.boxes[900].items && cw.tradeWindowOpens > opens);
+    // the merchant's cats change on the host: the client's copy follows
+    hw.merchantMoney[50] = 777;
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cw.merchantMoney[50] == 777; });
+    CHECK(cw.merchantMoney[50] == 777);
+    // the player closes the window: the host forgets the trade
+    cw.tradeWindow = false;
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return host.hostTrades() == 0 && !cli.tradeView().open; });
+    CHECK(host.hostTrades() == 0 && !cli.tradeView().open);
+    // a merchant without a shop: the player is told, nothing opens
+    hw.chars[51] = merchant;
+    hw.merchantMoney[51] = 10;
+    Run({{&host, &hw}, {&cli, &cw}}, 1.5);
+    hw.tradeReqs.push_back({FakeWorld::H(me), FakeWorld::H(51)});
+    Run({{&host, &hw}, {&cli, &cw}}, 1.5);
+    CHECK(!cli.tradeView().open && !cli.tradeView().pending && host.hostTrades() == 0);
+}
+
 static void TestManyPlayers() {
     std::printf("session: 1 host + 4 clients joining at once, 120 characters\n");
     FakeWorld hw;
@@ -1164,6 +1336,7 @@ int main() {
     TestOwnCharacter();
     TestSpawnReplication();
     TestInventories();
+    TestTrade();
     TestManyPlayers();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

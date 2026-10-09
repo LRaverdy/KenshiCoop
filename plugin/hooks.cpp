@@ -158,7 +158,7 @@ SelectionInfo ClassifySelection(const HookView& v) {
 }
 
 void ToastForeign() {
-    if (KenshiWorld* w = TheWorld()) w->Toast("This character belongs to another player.");
+    if (KenshiWorld* w = TheWorld()) w->Toast("Ce personnage appartient à un autre joueur.");
 }
 
 void hk_playerMove(void* pi, const float* pos, void* building) {
@@ -182,9 +182,9 @@ void hk_playerMove(void* pi, const float* pos, void* building) {
     o_playerMove(pi, pos, building);
 }
 
-// Orders whose result is a window on the screen of whoever gives them (trade, containers): the
-// host would open it on its own screen. Not synchronized yet. (Conversations are: the host sends
-// the window to the player whose character talks, see KenshiWorld::NoteDialogWindow.)
+// Orders the player gives that only NPC jobs use (shopping trips, storage chores, the job centre):
+// not available to client players. Trading goes through the merchant's conversation (the host sends
+// the trade window to the player, see hk_showTrade) and containers through ClientLootContainer.
 bool OpensWindow(int task) {
     switch (task) {
     case 55:    // RECRUIT_AT_JOBCENTER
@@ -216,7 +216,7 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
     if (!w) return false;
     if (OpensWindow(task)) {
         Log("client order refused (task %d opens a window)", task);
-        w->Toast("Commercer et ouvrir un coffre ne sont pas encore synchronises.");
+        w->Toast("Cette action n'est pas encore disponible en multijoueur.");
         return false;
     }
     if (s.mine.empty()) {
@@ -512,6 +512,28 @@ void hk_closeEditor(void* gui) {
     o_closeEditor(gui);
     if (KenshiWorld* w = TheWorld(); w && KenshiWorld::View()->active)
         for (kenshi::Character* c : chars) w->NoteEdited(c);
+}
+
+// Trade windows: on the host, a merchant's "let's trade" in another player's conversation asks the
+// game for a trade window between that player's character and the merchant. It must open on that
+// player's screen, not ours: the session sends it there (with the shop's stock).
+using ShowTradeFn = void (*)(void* gui, const void* a, const void* b, int type);
+ShowTradeFn o_showTrade = nullptr;
+void hk_showTrade(void* gui, const void* a, const void* b, int type) {
+    auto v = KenshiWorld::View();
+    KenshiWorld* w = TheWorld();
+    if (w && v->active && !v->client && !g_hostCall) {
+        kc::Handle ha, hb;
+        kenshi::Character* ca = kenshi::HandleFromHand(a, ha) ? kenshi::Resolve(ha) : nullptr;
+        const bool other = kenshi::HandleFromHand(b, hb);
+        if (ca && v->squadForeign.count(ca)) {
+            if (type == 1 && other) w->QueueTradeRequest(ha, hb);   // TW_MONEY_TRADING
+            else Log("trade window type %d for another player's character: not opened here", type);
+            return;
+        }
+        if (type == 1 && other) w->NoteHostTradeWindow(ha, hb);
+    }
+    o_showTrade(gui, a, b, type);
 }
 
 // Picking a body up on a client happens only when the host's character does (see ApplyCarry).
@@ -1036,6 +1058,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnCloseCharacterEditor, reinterpret_cast<void*>(&hk_closeEditor), reinterpret_cast<void**>(&o_closeEditor)},
         {kenshi::FnSetStandingOrder, reinterpret_cast<void*>(&hk_standing), reinterpret_cast<void**>(&o_standing)},
         {kenshi::FnPickupCharacter, reinterpret_cast<void*>(&hk_pickChar), reinterpret_cast<void**>(&o_pickChar)},
+        {kenshi::FnShowTradeWindow, reinterpret_cast<void*>(&hk_showTrade), reinterpret_cast<void**>(&o_showTrade)},
         {kenshi::FnDialogueSay, reinterpret_cast<void*>(&hk_say), reinterpret_cast<void**>(&o_say)},
         {kenshi::FnDialogueSetInDialog, reinterpret_cast<void*>(&hk_setInDialog), reinterpret_cast<void**>(&o_setInDialog)},
         {kenshi::FnDialogueSetResponses, reinterpret_cast<void*>(&hk_setResponses), reinterpret_cast<void**>(&o_setResponses)},

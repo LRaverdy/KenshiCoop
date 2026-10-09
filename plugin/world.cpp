@@ -666,6 +666,79 @@ void KenshiWorld::TakeContainerRequests(std::vector<ContainerRequest>& out) {
     containerReqs_.clear();
 }
 
+void KenshiWorld::QueueTradeRequest(const kc::Handle& looter, const kc::Handle& trader) {
+    std::lock_guard<std::mutex> lk(tradeMutex_);
+    if (tradeReqs_.size() < 8) tradeReqs_.push_back({looter, trader});
+}
+
+void KenshiWorld::NoteHostTradeWindow(const kc::Handle& looter, const kc::Handle& trader) {
+    std::lock_guard<std::mutex> lk(tradeMutex_);
+    hostTradeLooter_ = looter;
+    hostTradeTrader_ = trader;
+}
+
+void KenshiWorld::TakeTradeRequests(std::vector<TradeRequest>& out) {
+    std::lock_guard<std::mutex> lk(tradeMutex_);
+    out.swap(tradeReqs_);
+    tradeReqs_.clear();
+}
+
+bool KenshiWorld::ShopCounters(const kc::Handle& trader, std::vector<ShopCounter>& out) {
+    out.clear();
+    std::vector<void*> found;
+    if (!kenshi::ShopCounters(Find(trader), found)) return false;
+    for (void* f : found) {
+        ShopCounter c;
+        if (kenshi::ObjectHandle(f, c.handle) && kenshi::ObjectTemplate(f, c.sid) && kenshi::ObjectPosition(f, c.pos)) out.push_back(std::move(c));
+    }
+    return !out.empty();
+}
+
+bool KenshiWorld::MoneyOf(const kc::Handle& who, int32_t& money) { return kenshi::MoneyOf(Find(who), money); }
+
+void KenshiWorld::SetMoneyOf(const kc::Handle& who, int32_t money) { kenshi::SetMoneyOf(Find(who), money); }
+
+// The price of a purchase: the buyer's cats (the player faction's) go to the merchant; a sale
+// (negative price) the other way. Checked by the caller: whoever pays can.
+bool KenshiWorld::PayTrade(const kc::Handle& buyer, const kc::Handle& trader, int32_t price) {
+    kenshi::Character* b = Find(buyer);
+    kenshi::Character* t = Find(trader);
+    if (!b || !t || price == 0) return price == 0;
+    HostCallScope scope;
+    kenshi::Character* payer = price > 0 ? b : t;
+    kenshi::Character* payee = price > 0 ? t : b;
+    const int32_t amount = price > 0 ? price : -price;
+    if (!kenshi::TakeMoney(payer, amount)) return false;
+    kenshi::TakeMoney(payee, -amount);
+    return true;
+}
+
+// Our own trade window on that merchant shows a copy of its stock made when it opened: after
+// another player bought or sold there, open it again (the game rebuilds the copy).
+void KenshiWorld::RefreshTradeWindow(const kc::Handle& trader) {
+    kc::Handle looter, open;
+    {
+        std::lock_guard<std::mutex> lk(tradeMutex_);
+        looter = hostTradeLooter_;
+        open = hostTradeTrader_;
+    }
+    kenshi::Character* t = Find(trader);
+    if (!t || open != trader || kenshi::NpcTrader() != t || kenshi::MouseHoldsItem()) return;
+    kenshi::Character* me = Find(looter);
+    if (me && kenshi::OpenTradeWindow(me, t)) Log("trade: our own window on that merchant shows its new stock");
+}
+
+bool KenshiWorld::OpenTradeWindow(const kc::Handle& looter, const kc::Handle& trader) {
+    return kenshi::OpenTradeWindow(Find(looter), Find(trader));
+}
+
+std::string KenshiWorld::CharacterNameOf(const kc::Handle& h) {
+    std::string name;
+    kenshi::Character* c = Find(h);
+    if (c && kenshi::CharacterName(c, name) && !name.empty()) return name;
+    return "a merchant";
+}
+
 bool KenshiWorld::OpenContainerWindow(const kc::Handle& looter, const kc::Handle& container) {
     kenshi::Character* me = Find(looter);
     void* cont = kenshi::ResolveObject(container);
@@ -821,8 +894,11 @@ void KenshiWorld::ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) {
     if (dies) {
         kenshi::CallDeclareDead(c);
     } else {
-        kenshi::CallKnockout(c);
-        kenshi::WriteVitals(c, v);   // knockout() picks its own timer; the host's wins
+        // knockout() only arms a timer, which the host's values replace at once (blood loss and
+        // hunger knock out with no timer at all), and clients never collapse on their own: the
+        // state itself, then the fall
+        kenshi::SetUnconscious(c, true);
+        kenshi::SetRagdoll(c, true);
     }
     Log("vitals: %s %s as on the host (now down=%d unconscious=%d dead=%d)", KeyOf(h).c_str(), dies ? "dies" : "faints",
         int(kenshi::IsRagdoll(c)), int(kenshi::IsUnconscious(c)), int(kenshi::IsDead(c)));
@@ -1831,7 +1907,7 @@ void KenshiWorld::HoldForJoin(bool hold) {
     if (hold) {
         pausedByHold_ = !kenshi::GetPaused();
         if (pausedByHold_) kenshi::CallUserPause(true);   // the real pause: game speed 0
-        Toast("A player is joining: the game is paused until they are in.");
+        Toast("Un joueur arrive : la partie est en pause jusqu'à son arrivée.");
     } else {
         if (pausedByHold_ && kenshi::GetPaused()) kenshi::CallUserPause(false);
         pausedByHold_ = false;

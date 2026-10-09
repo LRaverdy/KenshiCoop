@@ -11,6 +11,7 @@ import ctypes
 import ctypes.wintypes as wt
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -79,7 +80,20 @@ def dismiss_launcher(pid, timeout=25):
     return False
 
 
+def clean_command_files():
+    """The command channel's files of instances that are gone (they pile up in Kenshi's folder)."""
+    live = set(running_pids())
+    for name in os.listdir(KENSHI):
+        m = re.match(r"kcp_(?:cmd|out)_(\d+)\.txt(?:\.tmp)?$", name)
+        if m and int(m.group(1)) not in live:
+            try:
+                os.remove(os.path.join(KENSHI, name))
+            except OSError:
+                pass
+
+
 def launch(fake_steam_id=None):
+    clean_command_files()
     before = set(running_pids())
     env = dict(os.environ)
     env.pop("KC_FAKE_STEAM_ID", None)
@@ -795,6 +809,69 @@ def exp_talk(host, cli):
             return
 
 
+def exp_trade(host, cli, merchant="Marchand"):
+    """Trading with a merchant: the host's game asks for a trade window for the client's character; it
+    opens on the client with the shop's stock. A purchase and a sale, the game's own way (right click),
+    are replayed by the host with their price; stock and cats end the same everywhere; the host's own
+    window on that merchant shows what the client bought gone."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    log("merchants around the squad (host):", cmd(host, "merchants")[1])
+    opened = cmd(host, f"tradeopen {own} {merchant} near")
+    log("host asks for the trade window:", opened)
+    state = "?"
+    for _ in range(30):
+        time.sleep(0.5)
+        state = cmd(cli, "tradestate")[1]
+        if "open=1" in state:
+            break
+    check("commerce : la fenetre s'ouvre chez le client", "open=1" in state and "windows=0" not in state, state)
+    check("commerce : l'hote ne l'ouvre pas chez lui", "windows=0" in cmd(host, "tradestate")[1], cmd(host, "tradestate")[1])
+    stock_c = cmd(cli, "tradelist merchant")[1]
+    log("client sees the stock:", stock_c[:300])
+    check("commerce : le stock du marchand est la chez le client", stock_c.startswith("ok") and stock_c.split()[1] != "0", stock_c[:120])
+    cats0_h, cats0_c = cmd(host, "money")[1], cmd(cli, "money")[1]
+    bought = cmd(cli, "tradebuy 0")
+    log("client buys:", bought)
+    time.sleep(3)
+    cats1_h, cats1_c = cmd(host, "money")[1], cmd(cli, "money")[1]
+    log("cats host", cats0_h, "->", cats1_h, "/ client", cats0_c, "->", cats1_c)
+    check("commerce : achat paye chez l'hote", bought[0] and cats1_h != cats0_h, f"{bought[1]} | hote {cats0_h} -> {cats1_h}")
+    check("commerce : meme argent partout apres l'achat", cats1_h == cats1_c, f"hote {cats1_h} / client {cats1_c}")
+    rep = compare(dump(host, "h_trade1"), dump(cli, "c_trade1"), "trade1")
+    check("commerce : inventaires identiques apres l'achat", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    stock_c2 = cmd(cli, "tradelist merchant")[1]
+    check("commerce : le stock du client a change", stock_c2 != stock_c, stock_c2[:120])
+    sold = cmd(cli, "tradesell 0")
+    log("client sells:", sold)
+    time.sleep(3)
+    cats2_h, cats2_c = cmd(host, "money")[1], cmd(cli, "money")[1]
+    check("commerce : vente payee chez l'hote", sold[0] and cats2_h != cats1_h, f"{sold[1]} | hote {cats1_h} -> {cats2_h}")
+    check("commerce : meme argent partout apres la vente", cats2_h == cats2_c, f"hote {cats2_h} / client {cats2_c}")
+    rep = compare(dump(host, "h_trade2"), dump(cli, "c_trade2"), "trade2")
+    check("commerce : inventaires identiques apres la vente", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    # the host trades with the same merchant: same stock as the client's window
+    log("host opens its own window:", cmd(host, f"tradeopen 0 {merchant} near"))
+    time.sleep(2)
+    stock_h = cmd(host, "tradelist merchant")[1]
+    stock_c3 = cmd(cli, "tradelist merchant")[1]
+    check("commerce : l'hote voit le meme stock que le client", stock_h.split()[1:2] == stock_c3.split()[1:2], f"hote {stock_h[:80]} / client {stock_c3[:80]}")
+    bought2 = cmd(cli, "tradebuy 0")
+    log("client buys again:", bought2)
+    time.sleep(3)
+    stock_h2 = cmd(host, "tradelist merchant")[1]
+    stock_c4 = cmd(cli, "tradelist merchant")[1]
+    check("commerce : la fenetre de l'hote ne propose plus ce que le client a achete", stock_h2 != stock_h and stock_h2.split()[1:2] == stock_c4.split()[1:2],
+          f"hote {stock_h2[:80]} / client {stock_c4[:80]}")
+    cmd(host, "closewindows")
+    cmd(cli, "closewindows")
+    time.sleep(3)
+    check("commerce : fermeture, l'hote oublie le commerce", "hosttrades=0" in cmd(host, "tradestate")[1], cmd(host, "tradestate")[1])
+    summary()
+
+
 def exp_facing(host, cli):
     """A host character runs in several directions: on the client it must really run (speed), facing the same way."""
     import math
@@ -897,6 +974,7 @@ def exp_far(host, cli):
 def exp_squads(host, cli):
     """New squads and moves between squads, from the host and from the client: both see the same squads."""
     time.sleep(6)
+    me = client_char_name()
     def show(label):
         time.sleep(4)
         h, c = cmd(host, "squads")[1], cmd(cli, "squads")[1]
@@ -904,15 +982,15 @@ def exp_squads(host, cli):
         log("    host  :", h)
         log("    client:", c)
     show("start")
-    log("host: Player 2 into a new squad", cmd(host, "squadmove Player_2 new"))
-    show("host made a squad with Player 2")
-    log("host: Ribs joins Player 2's squad", cmd(host, "squadmove Ribs Player_2"))
+    log(f"host: {me} into a new squad", cmd(host, f"squadmove {me} new"))
+    show(f"host made a squad with {me}")
+    log(f"host: Ribs joins {me}'s squad", cmd(host, f"squadmove Ribs {me}"))
     show("host moved Ribs")
-    log("client: Player 2 into a new squad", cmd(cli, "squadmove Player_2 new"))
+    log(f"client: {me} into a new squad", cmd(cli, f"squadmove {me} new"))
     show("client made a new squad for its own character")
-    log("client: Player 2 back with Truth", cmd(cli, "squadmove Player_2 Truth"))
+    log(f"client: {me} back with Truth", cmd(cli, f"squadmove {me} Truth"))
     show("client moved its character back")
-    log("client: tries to move the host's Jurgen", cmd(cli, "squadmove Jurgen Player_2"))
+    log("client: tries to move the host's Jurgen", cmd(cli, f"squadmove Jurgen {me}"))
     show("client tried to move a host character (must be refused)")
 
 RESULTS = []
@@ -935,6 +1013,15 @@ def summary():
 def host_log():
     with open(os.path.join(KENSHI, "KenshiCoop.log"), encoding="utf-8", errors="replace") as f:
         return f.read()
+
+
+def client_char_name():
+    """The joining player's own character, as the host named it ('_' for spaces: debug commands)."""
+    import re as _re
+    names = _re.findall(r"created (.+?)'s own character", host_log())
+    if not names:
+        names = _re.findall(r"\* (.+?) is in the world", host_log())
+    return (names[-1] if names else "Player 2").replace(" ", "_")
 
 
 def own_index(pid):
@@ -1005,13 +1092,18 @@ def exp_suite(host, cli):
     carried_c = cmd(cli, f"carrying {own}")[1]
     check("porter : le client fait porter un corps a son perso (hote)", carried_h not in ("ok none", "?"), carried_h)
     check("porter : le client voit le meme corps porte", carried_c == carried_h, f"hote {carried_h} / client {carried_c}")
-    # --- 5. squads
-    cmd(host, "squadmove Player_2 new")
+    # --- 5. squads: the host puts the player's character in a squad of its own, the player puts it back
+    me = client_char_name()
+    before = cmd(host, "squads")[1]
+    moved = cmd(host, f"squadmove {me} new")
     time.sleep(4)
-    check("escouades : nouvelle escouade de l'hote visible chez le client", cmd(host, "squads")[1] == cmd(cli, "squads")[1], cmd(cli, "squads")[1])
-    cmd(cli, "squadmove Player_2 Truth")
+    after_h, after_c = cmd(host, "squads")[1], cmd(cli, "squads")[1]
+    check("escouades : nouvelle escouade de l'hote visible chez le client", moved[0] and after_h != before and after_h == after_c,
+          f"{moved[1]} | {after_c}")
+    back = cmd(cli, f"squadmove {me} Truth")
     time.sleep(4)
-    check("escouades : le client remet son perso, identique partout", cmd(host, "squads")[1] == cmd(cli, "squads")[1], cmd(cli, "squads")[1])
+    end_h, end_c = cmd(host, "squads")[1], cmd(cli, "squads")[1]
+    check("escouades : le client remet son perso, identique partout", back[0] and end_h != after_h and end_h == end_c, f"{back[1]} | {end_c}")
     # --- 6. orientation and animations at speed 1 and 3
     import math
     def yaw(f):
@@ -1421,6 +1513,10 @@ def main():
     cp = sub.add_parser("clientpickup")
     cp.add_argument("--save", default="kctest_base")
     cp.add_argument("--keep", action="store_true")
+    td = sub.add_parser("trade", help="a client trades with a merchant: purchase, sale, stock everywhere")
+    td.add_argument("--save", default="kctest_town")
+    td.add_argument("--keep", action="store_true")
+    td.add_argument("--merchant", default="Marchand", help="part of the merchant's name ('_' for spaces)")
     tk = sub.add_parser("talk")
     tk.add_argument("--save", default="kctest_base")
     tk.add_argument("--keep", action="store_true")
@@ -1518,6 +1614,8 @@ def main():
             exp_facing(host, cli)
         elif a.what == "talk":
             exp_talk(host, cli)
+        elif a.what == "trade":
+            exp_trade(host, cli, a.merchant)
         elif a.what == "progress":
             exp_progress(host, cli)
         elif a.what == "clientpickup":

@@ -15,6 +15,8 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 option(KC_ASAN "Build tests with AddressSanitizer" OFF)
 
 add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS _WINSOCK_DEPRECATED_NO_WARNINGS)
+# Sources are UTF-8: wide literals (the host console window) must not be read as the ANSI code page.
+add_compile_options(/utf-8)
 
 # ---- third party ----
 add_library(enet STATIC

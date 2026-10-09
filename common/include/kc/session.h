@@ -175,6 +175,23 @@ public:
     virtual void CloseContainerWindows() {}
     // Client: items the local player dropped from a character (asked of the host, not done locally).
     virtual void TakeLocalDrops(std::vector<std::pair<Handle, ItemState>>& out) { out.clear(); }
+    // Trade with merchants. Host: trade windows the game asked to open for another player's character
+    // (who trades, with whom); a merchant's shop counters (the containers its trade window sells
+    // from); a character's cats (ours: the player faction's; a merchant: its own); move the price of
+    // a purchase from the buyer's cats to the merchant's (negative: a sale); show the host's own trade
+    // window on that merchant again after its stock changed. Client: open the game's trade window
+    // between our character and the merchant; impose the merchant's cats.
+    struct TradeRequest { Handle looter, trader; };
+    virtual void TakeTradeRequests(std::vector<TradeRequest>& out) { out.clear(); }
+    struct ShopCounter { Handle handle; std::string sid; Vec3 pos; };
+    virtual bool ShopCounters(const Handle& trader, std::vector<ShopCounter>& out) { (void)trader; out.clear(); return false; }
+    virtual bool MoneyOf(const Handle& who, int32_t& money) { (void)who; (void)money; return false; }
+    virtual bool PayTrade(const Handle& buyer, const Handle& trader, int32_t price) { (void)buyer; (void)trader; (void)price; return false; }
+    virtual void RefreshTradeWindow(const Handle& trader) { (void)trader; }
+    virtual bool OpenTradeWindow(const Handle& looter, const Handle& trader) { (void)looter; (void)trader; return false; }
+    virtual bool TradeWindowBusy() { return false; }   // client: an item is on the mouse (do not reopen the window now)
+    virtual void SetMoneyOf(const Handle& who, int32_t money) { (void)who; (void)money; }
+    virtual std::string CharacterNameOf(const Handle& h) { (void)h; return {}; }
 
     // Inventories. Host: read; execute a client's item movement (false = refused/impossible).
     virtual bool ReadInventory(const Handle& h, std::vector<ItemState>& out) = 0;
@@ -303,6 +320,17 @@ public:
     size_t RequestResync(uint8_t playerId);
     bool TakeResyncRequest() { return std::exchange(resyncRequested_, false); }
     void AnswerDialog(int index);
+    // Client: the trade window the host opened for us (tests, overlay).
+    struct TradeView {
+        bool pending = false, open = false;
+        uint32_t trader = 0;
+        size_t counters = 0;
+        int32_t unsentSpend = 0;
+    };
+    TradeView tradeView() const {
+        return {trade_.pending, trade_.open, trade_.trader, trade_.counters.size(), unsentSpend_};
+    }
+    size_t hostTrades() const { return trades_.size(); }   // host: trade windows open by players
 
 private:
     struct Sample { double t; EntityState s; };
@@ -393,11 +421,12 @@ private:
     void ClientInventoryDiff(double now);
     void SendLocalDrops();
     void HostInvOp(uint8_t from, const InvOp& op);
+    void HostTradeOp(uint8_t from, const InvOp& op);
     void SendReliable(PeerId to, const Writer& w);
     void BroadcastReliable(const Writer& w, bool inGameOnly, PeerId except = kNoPeer);
     void PushControllable();
     void Fail(const std::string& why);
-    void AddChat(const std::string& line);
+    void AddChat(const std::string& shown, const std::string& logged = {});   // logged: the log's English line (default: shown)
     void Kick(RemotePlayer& p, RejectReason why);
     RemotePlayer* playerByPeer(PeerId p);
     Entity* entityByHandle(const Handle& h);
@@ -448,6 +477,35 @@ private:
     std::vector<IWorld::ContainerRequest> scratchContainerReqs_;
     void HostContainers(double now);
     void ClientContainers(double now);
+    // Trade windows. Host: what each player has open (the merchant, their character, the shop's
+    // counters); a merchant's cats last sent to them.
+    struct HostTrade {
+        uint32_t trader = 0, looter = 0;
+        std::vector<uint32_t> counters;
+        int32_t traderMoney = 0;
+        double since = 0;
+    };
+    std::map<uint8_t, HostTrade> trades_;
+    std::vector<IWorld::TradeRequest> scratchTradeReqs_;
+    void HostTrades(double now);
+    void EndTrade(uint8_t player, const std::string& reason);   // host: close it (reason shown to the player)
+    bool InTrade(uint8_t player, uint32_t container) const;
+    // Client: the trade window the host opened for us. Our game counts the price of each purchase or
+    // sale itself: the cats it took (moneyBase_ - our cats) go with the item move to the host.
+    struct ClientTrade {
+        uint32_t trader = 0, looter = 0;
+        std::vector<uint32_t> counters;
+        int32_t traderMoney = 0;
+        bool pending = false, open = false, refresh = false;
+    };
+    ClientTrade trade_;
+    bool IsTradeCounter(uint32_t netId) const;
+    void EndClientTrade();
+    int32_t moneyBase_ = 0;                // client: our cats as last seen or set
+    bool haveMoneyBase_ = false;
+    int32_t unsentSpend_ = 0;              // client: cats our trade window took (gave: negative), not sent yet
+    void CaptureLocalSpend();
+    void ApplyHostMoney(int32_t money);
     std::vector<std::pair<uint8_t, AppearanceMsg>> pendingLooks_;   // host: from players, applied on the next live tick
     uint32_t editRequest_ = 0;             // client: the host asked us to make our new character
     bool editingSent_ = false;             // client: what we last told the host about our editor

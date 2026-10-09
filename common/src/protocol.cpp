@@ -565,6 +565,36 @@ const char* StandingOrderLabel(int order) {
 
 void EncodeResync(Writer& w) { w.u8(uint8_t(Msg::Resync)); }
 
+void Encode(Writer& w, const TradeOpen& m) {
+    w.u8(uint8_t(Msg::TradeOpen));
+    w.varint(m.traderNetId);
+    w.varint(m.looterNetId);
+    w.i32(m.traderMoney);
+    const size_t n = std::min<size_t>(m.counters.size(), kMaxTradeCounters);
+    w.varint(n);
+    for (size_t i = 0; i < n; ++i) {
+        w.varint(m.counters[i].netId);
+        w.str(m.counters[i].sid);
+        PutVec(w, m.counters[i].pos);
+    }
+    w.str(m.note.size() > 200 ? m.note.substr(0, 200) : m.note);
+}
+bool Decode(Reader& r, TradeOpen& m) {
+    m.traderNetId = GetU32Var(r);
+    m.looterNetId = GetU32Var(r);
+    m.traderMoney = r.i32();
+    const uint32_t n = r.count(kMaxTradeCounters, 3);
+    m.counters.resize(n);
+    for (auto& c : m.counters) {
+        c.netId = GetU32Var(r);
+        c.sid = r.str(kMaxSidLen);
+        c.pos = GetVec(r);
+        if (!c.netId || c.sid.empty()) return false;
+    }
+    m.note = r.str(200);
+    return Done(r) && m.traderNetId != 0;
+}
+
 void Encode(Writer& w, const ContainerOpen& m) {
     w.u8(uint8_t(Msg::ContainerOpen));
     w.varint(m.looterNetId);
@@ -651,7 +681,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::ContainerClose)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::TradeOpen)) return std::nullopt;
     return Msg(t);
 }
 
@@ -780,6 +810,8 @@ void Encode(Writer& w, const InvOp& m) {
     w.str(m.toSection);
     w.u16(uint16_t(m.toX));
     w.u16(uint16_t(m.toY));
+    w.varint(m.traderNetId);
+    w.i32(m.price);
 }
 bool Decode(Reader& r, InvOp& m) {
     const uint8_t k = r.u8();
@@ -791,6 +823,8 @@ bool Decode(Reader& r, InvOp& m) {
     m.toSection = r.str(kMaxSectionLen);
     m.toX = int16_t(r.u16());
     m.toY = int16_t(r.u16());
+    m.traderNetId = GetU32Var(r);
+    m.price = r.i32();
     return Done(r) && m.fromNetId != 0;
 }
 

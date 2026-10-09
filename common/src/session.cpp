@@ -158,6 +158,10 @@ void Session::Leave() {
     containerAsks_.clear();
     pendingWindow_ = 0;
     windowOpenedAt_ = -1;
+    trades_.clear();
+    trade_ = ClientTrade{};
+    haveMoneyBase_ = false;
+    unsentSpend_ = 0;
     dialogReplies_.clear();
     holdForEditor_ = false;
     pendingAnswers_.clear();
@@ -221,6 +225,7 @@ void Session::HostTick(double now, bool live) {
     for (const auto& a : pendingAnswers_) world_.DialogAnswer(a.dialogId, a.index);
     pendingAnswers_.clear();
     HostContainers(now);
+    HostTrades(now);
     // A player's new looks: applied here, then shown to everyone else.
     for (auto& [from, m] : pendingLooks_) {
         auto it = entities_.find(m.netId);
@@ -504,7 +509,7 @@ void Session::FinishJoin(RemotePlayer& p) {
     weatherForceAt_ = 0;   // the newcomer gets the full weather on the next weather tick
     nextWeather_ = 0;
     effectsFullAt_ = clock_() + 1.0;   // and every weather effect once that weather is in place
-    AddChat("* " + p.name + " is in the world");
+    AddChat("* " + p.name + " est dans la partie", "* " + p.name + " is in the world");
     squadsAt_ = -1e9;   // the newcomer gets the squads now
     PlayerSync& s = sync_[p.id];
     if (s.ownCreated && s.own.valid()) {
@@ -877,6 +882,7 @@ void Session::HostContainers(double now) {
     for (auto& [id, e] : entities_) {
         if (!e.container) continue;
         for (auto o = e.openBy.begin(); o != e.openBy.end();) {
+            if (InTrade(*o, id)) { ++o; continue; }   // a shop counter: see HostTrades
             bool near = false;
             for (auto& [lid, le] : entities_)
                 if (le.squad && le.owner == *o && world_.DistanceTo(le.handle, e.containerPos) <= kReach * 2) { near = true; break; }
@@ -888,6 +894,130 @@ void Session::HostContainers(double now) {
             }
             o = e.openBy.erase(o);
         }
+    }
+}
+
+bool Session::InTrade(uint8_t player, uint32_t container) const {
+    auto t = trades_.find(player);
+    return t != trades_.end() && std::find(t->second.counters.begin(), t->second.counters.end(), container) != t->second.counters.end();
+}
+
+void Session::EndTrade(uint8_t player, const std::string& reason) {
+    auto t = trades_.find(player);
+    if (t == trades_.end()) return;
+    auto pl = players_.find(player);
+    bool told = false;
+    for (uint32_t id : t->second.counters) {
+        auto e = entities_.find(id);
+        if (e == entities_.end() || !e->second.openBy.erase(player) || pl == players_.end()) continue;
+        Writer w;
+        Encode(w, ContainerClose{id, told ? std::string{} : reason});
+        SendReliable(pl->second.peer, w);
+        told = true;
+    }
+    trades_.erase(t);
+}
+
+// A merchant's trade window asked for by the host's game for another player's character (its "let's
+// trade" in their conversation): it opens on that player's screen, with the shop's counters (the
+// containers it sells from) sent like open containers. The trade lasts while the player keeps the
+// window open and stays near the merchant.
+void Session::HostTrades(double now) {
+    world_.TakeTradeRequests(scratchTradeReqs_);
+    for (const auto& req : scratchTradeReqs_) {
+        Entity* looter = entityByHandle(req.looter);
+        if (!looter || !looter->squad || looter->owner == hostId_) continue;
+        auto pl = players_.find(looter->owner);
+        if (pl == players_.end() || !pl->second.inGame) continue;
+        const std::string who = pl->second.name;
+        Entity* trader = entityByHandle(req.trader);
+        const std::string merchant = world_.CharacterNameOf(req.trader);
+        TradeOpen m;
+        m.looterNetId = looter->netId;
+        m.traderNetId = trader ? trader->netId : 0;
+        std::vector<IWorld::ShopCounter> counters;
+        if (!trader || !world_.ShopCounters(req.trader, counters) || counters.empty()) {
+            log_("[" + who + "] cannot trade with " + merchant + ": " + (trader ? "no shop counters (a travelling merchant)" : "the merchant is not followed"));
+            if (!trader) continue;
+            m.note = merchant + " n'a pas d'étal : le commerce avec les marchands ambulants n'est pas encore géré en multijoueur.";
+            Writer w;
+            Encode(w, m);
+            SendReliable(pl->second.peer, w);
+            continue;
+        }
+        EndTrade(pl->first, {});   // one trade window at a time
+        HostTrade t;
+        t.trader = trader->netId;
+        t.looter = looter->netId;
+        t.since = now;
+        world_.MoneyOf(req.trader, m.traderMoney);
+        t.traderMoney = m.traderMoney;
+        for (const auto& c : counters) {
+            if (t.counters.size() >= kMaxTradeCounters) break;
+            uint32_t id = 0;
+            if (auto b = byHandle_.find(c.handle); b != byHandle_.end()) id = b->second;
+            else {
+                Entity e;
+                e.netId = nextNetId_++;
+                e.handle = c.handle;
+                e.container = true;
+                e.containerPos = c.pos;
+                e.keep = true;
+                id = e.netId;
+                byHandle_[c.handle] = id;
+                entities_[id] = std::move(e);
+            }
+            Entity& e = entities_[id];
+            if (!e.container) continue;   // never a character
+            e.openBy.insert(pl->first);
+            e.invHash = 0;                // its items go out now
+            t.counters.push_back(id);
+            m.counters.push_back({id, c.sid, c.pos});
+        }
+        trades_[pl->first] = t;
+        Writer w;
+        Encode(w, m);
+        SendReliable(pl->second.peer, w);
+        log_("[" + who + "] trades with " + merchant + " (" + std::to_string(t.counters.size()) + " shop counters, the merchant has " +
+             std::to_string(m.traderMoney) + " cats)");
+    }
+    scratchTradeReqs_.clear();
+    for (auto it = trades_.begin(); it != trades_.end();) {
+        const uint8_t pid = it->first;
+        auto pl = players_.find(pid);
+        auto trader = entities_.find(it->second.trader);
+        auto looter = entities_.find(it->second.looter);
+        bool open = false;
+        for (uint32_t id : it->second.counters)
+            if (auto e = entities_.find(id); e != entities_.end() && e->second.openBy.count(pid)) open = true;
+        if (pl == players_.end() || !open || trader == entities_.end() || looter == entities_.end()) {
+            if (pl != players_.end()) log_("[" + pl->second.name + "] closes the trade window");
+            ++it;
+            EndTrade(pid, {});
+            continue;
+        }
+        // the merchant's cats changed (another player traded, or the host): the window shows them
+        int32_t money = 0;
+        if (world_.MoneyOf(trader->second.handle, money) && money != it->second.traderMoney) {
+            it->second.traderMoney = money;
+            TradeOpen m;
+            m.traderNetId = it->second.trader;
+            m.looterNetId = it->second.looter;
+            m.traderMoney = money;
+            Writer w;
+            Encode(w, m);
+            SendReliable(pl->second.peer, w);
+        }
+        // walked away from the merchant: the trade closes (not in its first seconds: the character
+        // may still be walking up to the merchant)
+        EntityState st;
+        if (now - it->second.since > 5.0 && world_.Read(trader->second.handle, st) && world_.DistanceTo(looter->second.handle, st.pos) > 150.0f) {
+            log_("[" + pl->second.name + "] walked away from the merchant: trade window closed");
+            ++it;
+            EndTrade(pid, "trop loin du marchand");
+            continue;
+        }
+        ++it;
     }
 }
 
@@ -915,9 +1045,51 @@ void Session::ClientContainers(double now) {
             pendingWindow_ = 0;
         }
     }
+    // a trade window: it opens once every counter holds the host's items, with the merchant's cats
+    if (trade_.pending) {
+        bool ready = true;
+        for (uint32_t id : trade_.counters) {
+            auto it = entities_.find(id);
+            if (it == entities_.end() || !it->second.haveInv || it->second.invDirty) ready = false;
+        }
+        auto trader = entities_.find(trade_.trader);
+        auto looter = entities_.find(trade_.looter);
+        if (trader == entities_.end() || looter == entities_.end() || !trader->second.present || !looter->second.present) {
+            log_("trade window cancelled: the merchant or our character is not here");
+            EndClientTrade();
+        } else if (ready) {
+            trade_.pending = false;
+            world_.SetMoneyOf(trader->second.handle, trade_.traderMoney);
+            if (world_.OpenTradeWindow(looter->second.handle, trader->second.handle)) {
+                windowOpenedAt_ = now;
+                trade_.open = true;
+                CaptureLocalSpend();
+                unsentSpend_ = 0;
+                log_("trade window open: " + std::to_string(trade_.counters.size()) + " shop counters");
+            } else {
+                log_("trade window could not open here");
+                EndClientTrade();
+            }
+        }
+    }
+    // the stock changed under our window: show it again (not while an item is on the mouse)
+    if (trade_.open && trade_.refresh && !world_.TradeWindowBusy()) {
+        bool ready = true;
+        for (uint32_t id : trade_.counters)
+            if (auto it = entities_.find(id); it == entities_.end() || it->second.invDirty) ready = false;
+        auto trader = entities_.find(trade_.trader);
+        auto looter = entities_.find(trade_.looter);
+        if (ready && trader != entities_.end() && looter != entities_.end()) {
+            trade_.refresh = false;
+            if (world_.OpenTradeWindow(looter->second.handle, trader->second.handle)) windowOpenedAt_ = now;
+            log_("trade window shown again: the merchant's stock changed");
+        }
+    }
     // the player closed it: the host forgets it for us
     if (windowOpenedAt_ > 0 && now - windowOpenedAt_ > 1.5 && !world_.ContainerWindowOpen()) {
         windowOpenedAt_ = -1;
+        if (trade_.open) log_("trade window closed");
+        EndClientTrade();
         for (auto it = entities_.begin(); it != entities_.end();) {
             if (!it->second.container) { ++it; continue; }
             Writer w;
@@ -926,6 +1098,32 @@ void Session::ClientContainers(double now) {
             it = entities_.erase(it);
         }
     }
+}
+
+bool Session::IsTradeCounter(uint32_t netId) const {
+    return (trade_.open || trade_.pending) && std::find(trade_.counters.begin(), trade_.counters.end(), netId) != trade_.counters.end();
+}
+
+void Session::EndClientTrade() {
+    trade_ = ClientTrade{};
+    unsentSpend_ = 0;
+}
+
+// Client: our cats changed without the host saying so: only our trade window does that (the price
+// of a purchase or sale), counted for the next item move it made.
+void Session::CaptureLocalSpend() {
+    int32_t local = 0;
+    if (!world_.ReadMoney(local)) return;
+    if (haveMoneyBase_ && local != moneyBase_ && trade_.open) unsentSpend_ += moneyBase_ - local;
+    moneyBase_ = local;
+    haveMoneyBase_ = true;
+}
+
+void Session::ApplyHostMoney(int32_t money) {
+    CaptureLocalSpend();
+    world_.ApplyMoney(money);
+    moneyBase_ = money;
+    haveMoneyBase_ = true;
 }
 
 void Session::QueueLog(std::string line) {
@@ -1082,7 +1280,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         PlayerSync s;
         s.joinedAt = clock_();
         sync_[id] = std::move(s);
-        AddChat("* " + h.name + " is joining...");
+        AddChat("* " + h.name + " rejoint la partie...", "* " + h.name + " is joining...");
         return;
     }
     if (!pl) return;  // everything else requires a completed handshake
@@ -1152,7 +1350,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
             pl->editing = m.editing;
             pl->editingSince = clock_();
             log_(pl->name + (m.editing ? " opened the character editor: the game waits for them" : " closed the character editor"));
-            if (m.editing) AddChat("* " + pl->name + " crée son personnage : partie en pause.");
+            if (m.editing) AddChat("* " + pl->name + " crée son personnage : partie en pause.", "* " + pl->name + " is making their character: game paused");
         }
         break;
     }
@@ -1227,6 +1425,7 @@ void Session::SendInventories(double now, bool force, PeerId onlyTo) {
 // NPCs that are knocked out or dead, into its own characters. Never out of a conscious NPC (it
 // still uses its gear) nor out of another player's characters.
 void Session::HostInvOp(uint8_t from, const InvOp& op) {
+    if (op.traderNetId) { HostTradeOp(from, op); return; }
     auto src = entities_.find(op.fromNetId);
     if (src == entities_.end()) return;
     EntityState st;
@@ -1273,11 +1472,67 @@ void Session::HostInvOp(uint8_t from, const InvOp& op) {
     dst->second.invHash = 0;
 }
 
+// A purchase or sale in a merchant's trade window: the item moves between the shop's counters and
+// the player's character, and the price the player's game counted between the player faction's
+// cats and the merchant's. Whatever happens, the player gets the true state back (items and cats).
+void Session::HostTradeOp(uint8_t from, const InvOp& op) {
+    auto pl = players_.find(from);
+    const std::string who = pl != players_.end() ? pl->second.name : "player " + std::to_string(from);
+    auto src = entities_.find(op.fromNetId);
+    auto dst = entities_.find(op.toNetId);
+    auto t = trades_.find(from);
+    auto refuse = [&](const std::string& why, const std::string& note) {
+        log_("[" + who + "] trade refused: " + why);
+        if (src != entities_.end()) src->second.invHash = 0;
+        if (dst != entities_.end()) dst->second.invHash = 0;
+        moneyAt_ = -1e9;       // their cats as the host has them, now
+        nextProgress_ = 0;
+        if (!note.empty() && pl != players_.end()) {
+            Chat c;
+            c.from = 0;   // a notice, not a player's line
+            c.text = note;
+            Writer w;
+            Encode(w, c);
+            SendReliable(pl->second.peer, w);
+        }
+    };
+    if (t == trades_.end() || t->second.trader != op.traderNetId) return refuse("no trade window open with that merchant", "Le commerce est fermé.");
+    if (src == entities_.end() || dst == entities_.end()) return refuse("unknown inventory", {});
+    auto counter = [&](uint32_t id) { return std::find(t->second.counters.begin(), t->second.counters.end(), id) != t->second.counters.end(); };
+    auto own = [&](const Entity& e) { return e.squad && e.owner == from; };
+    const bool buying = counter(op.fromNetId) && own(dst->second);
+    const bool selling = own(src->second) && counter(op.toNetId);
+    if (!buying && !selling) return refuse("the item does not go between the shop and their character", {});
+    if (buying ? op.price <= 0 : op.price > 0)
+        return refuse("price " + std::to_string(op.price) + " does not fit a " + (buying ? "purchase" : "sale"), "Le prix n'a pas pu être compté : rien n'a changé.");
+    auto trader = entities_.find(t->second.trader);
+    if (trader == entities_.end()) return refuse("the merchant is gone", {});
+    const Handle& player = buying ? dst->second.handle : src->second.handle;
+    int32_t playerMoney = 0, traderMoney = 0;
+    world_.MoneyOf(player, playerMoney);
+    world_.MoneyOf(trader->second.handle, traderMoney);
+    if (buying && playerMoney < op.price)
+        return refuse("not enough cats (" + std::to_string(playerMoney) + " for " + std::to_string(op.price) + ")", "Pas assez d'argent.");
+    if (selling && traderMoney < -op.price)
+        return refuse("the merchant cannot pay (" + std::to_string(traderMoney) + " for " + std::to_string(-op.price) + ")", "Le marchand n'a pas assez d'argent.");
+    if (!world_.ExecuteInvOp(src->second.handle, dst->second.handle, op)) return refuse("the item could not move", "L'objet n'est plus disponible.");
+    const bool paid = world_.PayTrade(player, trader->second.handle, op.price);
+    log_("[" + who + "] " + (buying ? "buys " : "sells ") + world_.TemplateName(op.item.templateSid) + " x" + std::to_string(op.item.quantity) +
+         (buying ? " from " : " to ") + world_.CharacterNameOf(trader->second.handle) + " for " + std::to_string(buying ? op.price : -op.price) +
+         " cats" + (paid ? "" : " (PAYMENT FAILED)"));
+    src->second.invHash = 0;
+    dst->second.invHash = 0;
+    moneyAt_ = -1e9;
+    nextProgress_ = 0;    // the new cats go out with the new items
+    world_.RefreshTradeWindow(trader->second.handle);   // the host's own window on that merchant, if open
+}
+
 // Client: compare what our characters hold with what the host last told us; a difference is
 // the local player moving things in the inventory UI. Turn it into item movements for the host.
 void Session::ClientInventoryDiff(double now) {
     if (now < nextInvDiff_) return;
     nextInvDiff_ = now + 0.2;
+    CaptureLocalSpend();
     struct Delta { uint32_t netId; ItemState item; };
     std::vector<Delta> gone, added;
     std::vector<uint32_t> involved;
@@ -1316,35 +1571,119 @@ void Session::ClientInventoryDiff(double now) {
             if (auto it = entities_.find(id); it != entities_.end()) { it->second.invDirty = true; it->second.invUnmatchedSince = 0; }
         if (now >= nextForeignNote_) {
             nextForeignNote_ = now + 3.0;
-            AddChat("* Ce personnage appartient a " + foreignOwner + " : tu ne peux pas gerer son inventaire.");
+            AddChat("* Ce personnage appartient à " + foreignOwner + " : tu ne peux pas gérer son inventaire.",
+                    "inventory change refused: that character belongs to " + foreignOwner);
         }
         return;
     }
-    // pair each disappeared stack with an appeared one of the same kind
-    std::vector<bool> addUsed(added.size(), false);
-    size_t sent = 0;
-    for (const auto& g : gone) {
-        for (size_t i = 0; i < added.size(); ++i) {
-            if (addUsed[i] || !added[i].item.sameKind(g.item)) continue;
-            addUsed[i] = true;
+    std::vector<InvOp> ops;
+    // 1. Items that went from one inventory to another, counted by kind in each inventory: a whole
+    //    stack or part of one, landing alone or on a stack already there (trading and looting do
+    //    all of these).
+    struct Flow { uint32_t netId; ItemState kind; int qty; };
+    std::vector<Flow> flows;
+    auto flowOf = [&](uint32_t netId, const ItemState& kind) -> Flow& {
+        for (auto& f : flows)
+            if (f.netId == netId && f.kind.sameKind(kind)) return f;
+        flows.push_back({netId, kind, 0});
+        return flows.back();
+    };
+    for (const auto& g : gone) flowOf(g.netId, g.item).qty -= g.item.quantity;
+    for (const auto& a : added) flowOf(a.netId, a.item).qty += a.item.quantity;
+    const std::vector<Flow> before = flows;
+    for (auto& lost : flows) {
+        for (auto& got : flows) {
+            if (lost.qty >= 0) break;
+            if (got.qty <= 0 || got.netId == lost.netId || !got.kind.sameKind(lost.kind)) continue;
+            // the host's stack it came out of (the biggest that shrank or went) and where it landed
+            const ItemState* from = nullptr;
+            const ItemState* to = nullptr;
+            for (const auto& g : gone)
+                if (g.netId == lost.netId && g.item.sameKind(lost.kind) && (!from || g.item.quantity > from->quantity)) from = &g.item;
+            for (const auto& a : added)
+                if (a.netId == got.netId && a.item.sameKind(got.kind) && (!to || a.item.quantity > to->quantity)) to = &a.item;
+            if (!from || !to) continue;
+            const int n = std::min(-lost.qty, got.qty);
             InvOp op;
             op.kind = InvOpKind::Move;
-            op.fromNetId = g.netId;
-            op.toNetId = added[i].netId;
-            op.item = g.item;
-            op.item.quantity = std::min(g.item.quantity, added[i].item.quantity);
-            op.toSection = added[i].item.section;
-            op.toX = added[i].item.x;
-            op.toY = added[i].item.y;
-            log_("inventory move asked of the host: " + g.item.templateSid + " " + g.item.section + " -> " + op.toSection + " " +
-                 std::to_string(op.toX) + "," + std::to_string(op.toY));
-            Writer w;
-            Encode(w, op);
-            SendReliable(net_.serverPeer(), w);
-            ++sent;
-            break;
+            op.fromNetId = lost.netId;
+            op.toNetId = got.netId;
+            op.item = *from;
+            op.item.quantity = n;
+            op.toSection = to->section;
+            op.toX = to->x;
+            op.toY = to->y;
+            if (IsTradeCounter(lost.netId) || IsTradeCounter(got.netId)) op.traderNetId = trade_.trader;
+            ops.push_back(op);
+            lost.qty += n;
+            got.qty -= n;
         }
     }
+    // 2. Moves inside one inventory (rearranging, equipping): a stack gone from one place and found,
+    //    whole or in part, at another place of the same inventory.
+    auto netBefore = [&](uint32_t netId, const ItemState& kind) {
+        for (const auto& f : before)
+            if (f.netId == netId && f.kind.sameKind(kind)) return f.qty;
+        return 0;
+    };
+    std::vector<bool> addUsed(added.size(), false);
+    for (const auto& g : gone) {
+        if (netBefore(g.netId, g.item) != 0) continue;   // part of a move between inventories (above)
+        size_t pick = added.size();
+        for (size_t i = 0; i < added.size(); ++i) {
+            const auto& a = added[i];
+            if (addUsed[i] || a.netId != g.netId || !a.item.sameKind(g.item) || a.item.quantity > g.item.quantity) continue;
+            if (a.item.section == g.item.section && a.item.x == g.item.x && a.item.y == g.item.y) continue;
+            if (pick == added.size() || a.item.quantity == g.item.quantity) pick = i;
+            if (a.item.quantity == g.item.quantity) break;
+        }
+        if (pick == added.size()) continue;
+        addUsed[pick] = true;
+        InvOp op;
+        op.kind = InvOpKind::Move;
+        op.fromNetId = g.netId;
+        op.toNetId = g.netId;
+        op.item = g.item;
+        op.item.quantity = added[pick].item.quantity;
+        op.toSection = added[pick].item.section;
+        op.toX = added[pick].item.x;
+        op.toY = added[pick].item.y;
+        ops.push_back(op);
+    }
+    // Only what the player can touch in the game's windows is the player's doing: the squad's
+    // characters, an open container, a body on the ground (anything else the host refuses, and the
+    // client is told). A standing NPC's gear differing on its own (a character that just streamed
+    // in) is not: no move is asked, it simply goes back to the host's state.
+    auto touchable = [&](uint32_t netId) {
+        auto it = entities_.find(netId);
+        if (it == entities_.end()) return false;
+        const Entity& e = it->second;
+        const bool down = (!e.buf.empty() && (e.buf.back().s.flags & (kFlagDown | kFlagDead))) ||
+                          (e.haveVitals && (e.vitals.flags & (kVitUnconscious | kVitDead)));
+        return e.squad || e.container || down;
+    };
+    ops.erase(std::remove_if(ops.begin(), ops.end(), [&](const InvOp& op) { return !touchable(op.fromNetId) && !touchable(op.toNetId); }), ops.end());
+    for (uint32_t id : involved) {
+        if (touchable(id)) continue;
+        const bool moved = std::any_of(ops.begin(), ops.end(), [&](const InvOp& op) { return op.fromNetId == id || op.toNetId == id; });
+        if (auto it = entities_.find(id); it != entities_.end() && !moved) { it->second.invDirty = true; it->second.invUnmatchedSince = 0; }
+    }
+    // The price our trade window counted goes with the first purchase or sale of this round.
+    bool priced = false;
+    for (auto& op : ops) {
+        if (op.traderNetId && !priced) {
+            op.price = unsentSpend_;
+            unsentSpend_ = 0;
+            priced = true;
+        }
+        log_("inventory move asked of the host: " + op.item.templateSid + " x" + std::to_string(op.item.quantity) + " " + op.item.section +
+             " -> " + op.toSection + " " + std::to_string(op.toX) + "," + std::to_string(op.toY) +
+             (op.traderNetId ? " (trade, " + std::to_string(op.price) + " cats)" : std::string{}));
+        Writer w;
+        Encode(w, op);
+        SendReliable(net_.serverPeer(), w);
+    }
+    const size_t sent = ops.size();
     for (uint32_t id : involved) {
         auto it = entities_.find(id);
         if (it == entities_.end()) continue;
@@ -1447,7 +1786,7 @@ void Session::ClientTick(double now, bool live) {
             lastLive_ = now;
             world_.SetRole(true, true);
             controllableDirty_ = true;
-            AddChat("* in the host's world as player " + std::to_string(localId_));
+            AddChat("* dans le monde de l'hôte (joueur " + std::to_string(localId_) + ")", "* in the host's world as player " + std::to_string(localId_));
         }
         return;
     default: break;
@@ -1470,8 +1809,11 @@ void Session::ClientTick(double now, bool live) {
     for (auto& [id, e] : entities_) {
         if (e.container) continue;   // furniture: found by kind and place when opened
         if (fullCheck || !e.checked) {
+            const bool was = e.present;
             e.present = world_.Exists(e.handle);
             e.checked = true;
+            // streamed in, adopted or recreated: a new local object, whose items are not the host's yet
+            if (e.present && !was && e.haveInv) { e.invDirty = true; e.invRetry = 0; }
         }
         if (e.present) e.missingSince = -1;
         else if (e.missingSince < 0) e.missingSince = now;
@@ -1499,6 +1841,7 @@ void Session::ClientTick(double now, bool live) {
                 e->spawned = true;
                 e->present = world_.Exists(h);
                 if (e->present) e->missingSince = -1;
+                if (e->present && e->haveInv) { e->invDirty = true; e->invRetry = 0; }
             }
     }
     // Still not in our world (the host spawned it after the save): create a stand-in where the
@@ -1511,6 +1854,7 @@ void Session::ClientTick(double now, bool live) {
             e.spawned = true;
             e.present = world_.Exists(e.handle);
             if (e.present) e.missingSince = -1;
+            if (e.present && e.haveInv) { e.invDirty = true; e.invRetry = 0; }
         }
     }
     if (missing != missingSquad_ && missing > missingSquad_)
@@ -1562,6 +1906,17 @@ void Session::ClientTick(double now, bool live) {
     SendLocalDrops();
     for (auto& [id, e] : entities_) {
         if (!e.present || !e.invDirty || now < e.invRetry) continue;
+        // Trading: the host's stock differs from what our window shows (another player bought or
+        // sold, or the host placed it otherwise): the window shows it again. Our character or a
+        // counter going back to the host's state undoes a purchase the host never got: its cats too.
+        if (trade_.open && (IsTradeCounter(id) || id == trade_.looter)) {
+            std::vector<ItemState> local;
+            if (!(world_.ReadInventory(e.handle, local) && local == e.inv)) {
+                if (IsTradeCounter(id)) trade_.refresh = true;
+                if (haveMoney_) ApplyHostMoney(hostMoney_);
+                unsentSpend_ = 0;
+            }
+        }
         if (world_.ApplyInventory(e.handle, e.inv)) { e.invDirty = false; e.invFailures = 0; continue; }
         // The game would not lay it out exactly like the host: retry a few times, then stop
         // (and never mistake that difference for a player action: see ClientInventoryDiff).
@@ -1585,7 +1940,7 @@ void Session::ClientTick(double now, bool live) {
         world_.ApplyProgress(e.handle, e.stats, e.modes, e.style);
         e.statsDirty = false;
     }
-    if (restats && haveMoney_) world_.ApplyMoney(hostMoney_);
+    if (restats && haveMoney_) ApplyHostMoney(hostMoney_);
     // Our log lines go to the host's log, and every 5 s a report on how well we follow.
     if (now >= nextLogSend_ && (!logOut_.empty() || logDropped_)) {
         nextLogSend_ = now + 0.5;
@@ -1621,7 +1976,7 @@ void Session::ClientTick(double now, bool live) {
         auto it = entities_.find(editRequest_);
         if (it != entities_.end() && it->second.present && world_.OpenCharacterEditor(it->second.handle)) {
             editRequest_ = 0;
-            AddChat("* Crée ton personnage, puis valide : tout le monde le verra ainsi.");
+            AddChat("* Crée ton personnage, puis valide : tout le monde le verra ainsi.", "the host asks us to make our character (editor open)");
         }
     }
     SendEditedAppearances();
@@ -1680,7 +2035,8 @@ void Session::ClientPacket(Msg type, Reader& r) {
         dlFiles_.clear();
         dlBytes_ = 0;
         dlComplete_ = importStarted_ = false;
-        AddChat("* joined as player " + std::to_string(localId_) + ", receiving the host's world...");
+        AddChat("* connecté (joueur " + std::to_string(localId_) + "), réception du monde de l'hôte...",
+                "* joined as player " + std::to_string(localId_) + ", receiving the host's world...");
         break;
     }
     case Msg::Reject: {
@@ -1725,19 +2081,23 @@ void Session::ClientPacket(Msg type, Reader& r) {
         PlayerInfo m;
         if (!Decode(r, m) || m.id == localId_) break;
         players_[m.id] = RemotePlayer{m.id, m.name};
-        AddChat("* " + m.name + " is joining...");
+        AddChat("* " + m.name + " rejoint la partie...", "* " + m.name + " is joining...");
         break;
     }
     case Msg::PlayerLeft: {
         PlayerLeft m;
         if (!Decode(r, m)) break;
         auto it = players_.find(m.id);
-        if (it != players_.end()) { AddChat("* " + it->second.name + " left"); players_.erase(it); }
+        if (it != players_.end()) { AddChat("* " + it->second.name + " a quitté la partie", "* " + it->second.name + " left"); players_.erase(it); }
         break;
     }
     case Msg::Chat: {
         Chat m;
         if (!Decode(r, m)) break;
+        if (m.from == 0) {   // a notice from the host's game for this player (trade refused...)
+            AddChat("* " + SanitizeChat(m.text), "notice from the host: " + SanitizeChat(m.text));
+            break;
+        }
         auto it = players_.find(m.from);
         const std::string who = m.from == localId_ ? cfg_.name : (it != players_.end() ? it->second.name : "?");
         AddChat(who + ": " + SanitizeChat(m.text));
@@ -1847,7 +2207,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
         ContainerOpened m;
         if (state_ != SessionState::Connected || !Decode(r, m)) break;
         Handle local;
-        if (!world_.FindContainer(m.sid, m.pos, local)) { AddChat("* Ce contenant n'est pas trouvable ici."); break; }
+        if (!world_.FindContainer(m.sid, m.pos, local)) { AddChat("* Ce contenant est introuvable ici.", "container " + world_.TemplateName(m.sid) + " not found here"); break; }
         Entity e;
         e.netId = m.netId;
         e.handle = local;
@@ -1864,11 +2224,67 @@ void Session::ClientPacket(Msg type, Reader& r) {
         ContainerClose m;
         if (state_ != SessionState::Connected || !Decode(r, m)) break;
         if (auto it = entities_.find(m.netId); it != entities_.end() && it->second.container) {
+            if (IsTradeCounter(m.netId)) EndClientTrade();   // the whole trade window goes
             entities_.erase(it);
             world_.CloseContainerWindows();
             windowOpenedAt_ = -1;
-            if (!m.reason.empty()) AddChat("* " + m.reason);
+            if (!m.reason.empty()) AddChat("* " + m.reason, "the host closes the window: " + m.reason);
         }
+        break;
+    }
+    case Msg::TradeOpen: {
+        TradeOpen m;
+        if (state_ != SessionState::Connected || !Decode(r, m)) break;
+        auto trader = entities_.find(m.traderNetId);
+        if ((trade_.open || trade_.pending) && trade_.trader == m.traderNetId && m.counters.empty()) {   // the merchant's cats changed
+            trade_.traderMoney = m.traderMoney;
+            if (trader != entities_.end() && trader->second.present) world_.SetMoneyOf(trader->second.handle, m.traderMoney);
+            break;
+        }
+        if (m.counters.empty()) {
+            if (!m.note.empty()) AddChat("* " + m.note, "the host cannot open this trade window");
+            break;
+        }
+        // a new trade window: the shop's counters are containers we look into
+        pendingWindow_ = 0;
+        std::vector<uint32_t> ids;
+        bool missing = trader == entities_.end() || !trader->second.present;
+        for (const auto& c : m.counters) {
+            Handle local;
+            if (!world_.FindContainer(c.sid, c.pos, local)) {
+                missing = true;
+                log_("trade: shop counter " + world_.TemplateName(c.sid) + " not found here");
+                continue;
+            }
+            Entity e;
+            e.netId = c.netId;
+            e.handle = local;
+            e.container = true;
+            e.present = true;
+            e.checked = true;
+            e.containerPos = c.pos;
+            e.looter = m.looterNetId;
+            entities_[c.netId] = std::move(e);
+            ids.push_back(c.netId);
+        }
+        if (missing) {
+            AddChat("* Le commerce ne peut pas s'ouvrir ici : marchand ou comptoir introuvable.", "trade window cancelled: merchant or counter not found here");
+            for (const auto& c : m.counters) {
+                Writer w;
+                Encode(w, ContainerClose{c.netId, {}});
+                SendReliable(net_.serverPeer(), w);
+                entities_.erase(c.netId);
+            }
+            break;
+        }
+        EndClientTrade();
+        trade_.trader = m.traderNetId;
+        trade_.looter = m.looterNetId;
+        trade_.counters = std::move(ids);
+        trade_.traderMoney = m.traderMoney;
+        trade_.pending = true;
+        log_("the host opens a trade window for us: " + std::to_string(trade_.counters.size()) + " shop counters, the merchant has " +
+             std::to_string(m.traderMoney) + " cats");
         break;
     }
     case Msg::Resync:
@@ -1893,7 +2309,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
     case Msg::Progress: {
         ProgressMsg m;
         if (state_ != SessionState::Connected || !Decode(r, m)) break;
-        if (m.hasMoney) { hostMoney_ = m.money; haveMoney_ = true; world_.ApplyMoney(m.money); }
+        if (m.hasMoney) { hostMoney_ = m.money; haveMoney_ = true; ApplyHostMoney(m.money); }
         for (auto& c : m.chars) {
             auto it = entities_.find(c.netId);
             if (it == entities_.end()) continue;
@@ -1998,7 +2414,7 @@ void Session::OnDisconnect(PeerId peer) {
     Writer w;
     Encode(w, PlayerLeft{id});
     BroadcastReliable(w, false);
-    AddChat("* " + name + " left");
+    AddChat("* " + name + " a quitté la partie", "* " + name + " left");
 }
 
 void Session::SendChat(const std::string& text) {
@@ -2026,10 +2442,10 @@ void Session::BroadcastReliable(const Writer& w, bool inGameOnly, PeerId except)
         if (p.peer != except && (!inGameOnly || p.inGame)) net_.Send(p.peer, kChanReliable, w.data(), w.size(), true);
 }
 
-void Session::AddChat(const std::string& line) {
-    chat_.push_back(line);
+void Session::AddChat(const std::string& shown, const std::string& logged) {
+    chat_.push_back(shown);
     while (chat_.size() > kMaxChatLines) chat_.pop_front();
-    log_(line);
+    log_(logged.empty() ? shown : logged);
 }
 
 RemotePlayer* Session::playerByPeer(PeerId p) {

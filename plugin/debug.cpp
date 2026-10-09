@@ -862,6 +862,118 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         if (!t) return "err no such character";
         return kenshi::CallAddTaskNearest(26, t) ? "ok" : "err call failed";
     }
+    if (cmd == "merchants" || cmd == "tradeopen") {
+        // merchants: NPCs around squad member 0 who sell from shop counters ("name(counters)" each)
+        // tradeopen <squadIndex> <name part|any> [near]: the game asks for a trade window between that
+        //   squad member and the nearest such merchant (what "let's trade" in a conversation does); on
+        //   the host, for another player's character, it opens on that player's screen. near: the
+        //   member is first put next to the merchant (host)
+        size_t sel = 0;
+        std::string part = "any", nearArg;
+        if (cmd == "tradeopen") in >> sel >> part >> nearArg;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kc::Vec3 mp, p;
+        if (!kenshi::GetPosition(me, mp)) return "err";
+        std::vector<kenshi::Character*> all;
+        kenshi::ActiveCharacters(all);
+        std::string list;
+        kenshi::Character* best = nullptr;
+        float bestD = 1e30f;
+        size_t bestCounters = 0;
+        for (kenshi::Character* c : all) {
+            kc::Handle h;
+            std::string name;
+            std::vector<void*> counters;
+            if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || !kenshi::GetPosition(c, p)) continue;
+            const float d = (p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z);
+            if (d > 1500.0f * 1500.0f || !kenshi::CharacterName(c, name) || !kenshi::ShopCounters(c, counters)) continue;
+            if (part != "any" && name.find(part) == std::string::npos) continue;
+            list += " " + name + "(" + std::to_string(counters.size()) + ")";
+            if (d < bestD) { bestD = d; best = c; bestCounters = counters.size(); }
+        }
+        if (cmd == "merchants") return "ok" + list;
+        if (!best) return "err no merchant around";
+        std::string name;
+        kenshi::CharacterName(best, name);
+        if (nearArg == "near" && kenshi::GetPosition(best, p)) {
+            kc::Quat q;
+            kenshi::GetRotation(me, q);
+            HostCallScope scope;
+            kenshi::Teleport(me, {p.x + 8.0f, p.y + 1.0f, p.z + 8.0f}, q);
+            bestD = 128.0f;
+        }
+        return kenshi::OpenTradeWindow(me, best) ? "ok " + name + " " + std::to_string(bestCounters) + " at " + std::to_string(int(std::sqrt(bestD)))
+                                                 : "err call failed";
+    }
+    if (cmd == "tradestate") {   // tradestate: the trade window here (client: the one the host opened for us)
+        const auto t = s.tradeView();
+        void* npc = kenshi::NpcTrader();
+        std::string name = "-";
+        if (npc) kenshi::CharacterName(static_cast<kenshi::Character*>(npc), name);
+        int32_t mine = 0, theirs = 0;
+        kenshi::ReadPlayerMoney(mine);
+        if (npc) kenshi::MoneyOf(static_cast<kenshi::Character*>(npc), theirs);
+        return "ok pending=" + std::to_string(t.pending) + " open=" + std::to_string(t.open) + " counters=" + std::to_string(t.counters) +
+               " unsent=" + std::to_string(t.unsentSpend) + " hosttrades=" + std::to_string(s.hostTrades()) + " windows=" +
+               std::to_string(kenshi::OpenInventoryWindows()) + " cats=" + std::to_string(mine) + " merchant=" + name + " merchantcats=" +
+               std::to_string(theirs);
+    }
+    if (cmd == "tradelist") {   // tradelist [merchant|player]: the items of that side of the open trade window
+        std::string side = "merchant";
+        in >> side;
+        std::vector<kenshi::WindowItem> items;
+        if (!kenshi::TradeWindowItems(side != "player", items)) return "err no trade window";
+        std::string out = "ok " + std::to_string(items.size());
+        for (const auto& it : items)
+            out += " " + it.state.templateSid + ":" + std::to_string(it.state.quantity) + "@" + it.section + ":" + std::to_string(it.x) + "," + std::to_string(it.y);
+        return out;
+    }
+    if (cmd == "tradebuy" || cmd == "tradesell") {
+        // tradebuy [index]: right click on the merchant's item #index (one unit is bought, the game's way)
+        // tradesell [index]: right click on our item #index (one unit is sold); skips worn gear
+        size_t idx = 0;
+        in >> idx;
+        const bool buy = cmd == "tradebuy";
+        std::vector<kenshi::WindowItem> items;
+        if (!kenshi::TradeWindowItems(buy, items)) return "err no trade window";
+        std::vector<kenshi::WindowItem> pick;
+        for (const auto& it : items)
+            if (buy || !it.state.equipped) pick.push_back(it);
+        if (idx >= pick.size()) return "err only " + std::to_string(pick.size()) + " items";
+        int32_t before = 0, after = 0;
+        kenshi::ReadPlayerMoney(before);
+        const int r = kenshi::TradeRightClick(buy, pick[idx]);
+        kenshi::ReadPlayerMoney(after);
+        return (r == 0 ? "ok " : "err result=" + std::to_string(r) + " ") + pick[idx].state.templateSid + " cats " + std::to_string(before) + "->" +
+               std::to_string(after);
+    }
+    if (cmd == "shopcounters") {   // shopcounters <name part>: what that merchant sells from: "name/function/stacks" each
+        std::string part;
+        in >> part;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        std::vector<kenshi::Character*> all;
+        kenshi::ActiveCharacters(all);
+        for (kenshi::Character* c : all) {
+            std::string name;
+            std::vector<void*> counters;
+            if (!kenshi::CharacterName(c, name) || name.find(part) == std::string::npos || !kenshi::ShopCounters(c, counters)) continue;
+            std::string out = "ok " + name + ":";
+            for (void* f : counters) {
+                std::string sid, shown;
+                std::vector<kc::ItemState> items;
+                kenshi::ObjectTemplate(f, sid);
+                kenshi::TemplateDisplayName(sid, shown);
+                kenshi::ReadInventory(f, items);
+                out += " " + shown + "/" + std::to_string(kenshi::BuildingFunctionOf(f)) + "/" + std::to_string(items.size());
+            }
+            return out;
+        }
+        return "err no such merchant";
+    }
+    if (cmd == "closewindows") return kenshi::CloseInventoryWindows() ? "ok" : "err";   // every inventory / trade window here
     if (cmd == "tradegui") {   // the trade window request the game has not consumed yet (type 0 = none)
         int type = -1;
         std::memcpy(&type, reinterpret_cast<const void*>(kenshi::Addr(kenshi::rva::TradeGui) + 0x58), 4);

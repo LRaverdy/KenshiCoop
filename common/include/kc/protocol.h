@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 27;
+constexpr uint16_t kProtocolVersion = 28;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -71,6 +71,7 @@ enum class Msg : uint8_t {
     ContainerOpen = 36,   // C->S  my character wants to look into this container (chest, shelf...)
     ContainerOpened = 37, // S->C  it is there: here is the container's netId (its items follow as an Inventory)
     ContainerClose = 38,  // both  the window is closed (client) / must close (host: caught stealing, too far)
+    TradeOpen = 39,       // S->C  trade with a merchant: its shop counters (their items follow), its cats
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -389,6 +390,8 @@ struct InvOp {
     ItemState item;                // identity + where it was (section/x/y) + quantity moved
     std::string toSection;
     int16_t toX = 0, toY = 0;
+    uint32_t traderNetId = 0;      // a purchase or sale in that merchant's trade window (0: none)
+    int32_t price = 0;             // cats the player's game took for it (negative: paid to the player)
 };
 constexpr uint32_t kMaxItemsPerInventory = 2000;
 
@@ -600,6 +603,25 @@ struct ContainerClose {
     uint32_t netId = 0;
     std::string reason;   // host: why it closes (empty: none)
 };
+// Trading with a merchant. The host's game asks for the trade window (a merchant's "let's trade"
+// in a conversation); it opens on the player's own screen instead, with the shop's counters (the
+// containers its trade window sells from) as the host has them. Every purchase or sale is then an
+// InvOp with its price. Sent again (no counters, same merchant) when the merchant's cats change.
+struct TradeCounter {
+    uint32_t netId = 0;
+    std::string sid;
+    Vec3 pos;
+};
+struct TradeOpen {
+    uint32_t traderNetId = 0;
+    uint32_t looterNetId = 0;      // the player's character trading
+    int32_t traderMoney = 0;       // the merchant's cats on the host
+    std::vector<TradeCounter> counters;
+    std::string note;              // no counters: why the trade cannot open (shown to the player)
+};
+constexpr uint32_t kMaxTradeCounters = 32;
+void Encode(Writer& w, const TradeOpen& m);
+bool Decode(Reader& r, TradeOpen& m);
 void Encode(Writer& w, const ContainerOpen& m);
 bool Decode(Reader& r, ContainerOpen& m);
 void Encode(Writer& w, const ContainerOpened& m);
