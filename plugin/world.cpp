@@ -622,8 +622,19 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     // ...while its position is continuously pulled onto the host's: no drift.
     if (err > 0.01f) {
         const float k = err > 2.0f ? 0.5f : 0.25f;
-        const kc::Vec3 p{local.x + (target.pos.x - local.x) * k, local.y + (target.pos.y - local.y) * k,
-                         local.z + (target.pos.z - local.z) * k};
+        kc::Vec3 d{target.pos.x - local.x, target.pos.y - local.y, target.pos.z - local.z};
+        // Walking a little ahead of the host's point is normal (the game walks it at its own pace): pulling
+        // it straight back would slide it backwards while it walks forwards (a "moonwalk"). Behind it,
+        // only the sideways part is pulled at once; the part along the walk is caught up gently.
+        if (hostMoving && !latest.combatTarget && err < 0.8f) {
+            const kc::Vec3 f = kenshi::ForwardOf(target.rot);
+            const float along = d.x * f.x + d.z * f.z;
+            if (along < 0) {
+                d.x -= f.x * along * 0.9f;
+                d.z -= f.z * along * 0.9f;
+            }
+        }
+        const kc::Vec3 p{local.x + d.x * k, local.y + d.y * k, local.z + d.z * k};
         kenshi::SetPositionSimple(c, err < 0.05f ? target.pos : p);
     }
     if (traceFrames > 0 && h == traceHandle && (--traceFrames % 15 == 0 || err > 1.0f || (haveHostTime_ && hostTime_.paused))) {
