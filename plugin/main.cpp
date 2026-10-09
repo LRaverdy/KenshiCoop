@@ -255,6 +255,9 @@ void ConsoleCommand(const std::string& line) {
             out("speed <x>            vitesse du jeu (1, 2, 3...)");
             out("tp <id> [vers <id>]  téléporter les persos du joueur <id> près de ton perso sélectionné (ou d'un autre joueur)");
             out("resync [id]          le joueur <id> (sans id : tout le monde) recharge ton monde tel qu'il est");
+            out("heal <id|all>        soigne complètement les persos du joueur <id> (all : toute l'escouade)");
+            out("xp <id|all> <n>      +n niveaux dans toutes les compétences (ex. xp 2 10)");
+            out("god <id|all> [off]   mode dieu : plus aucun dégât ni K.-O. (off pour l'enlever)");
         }
         return;
     }
@@ -310,6 +313,39 @@ void ConsoleCommand(const std::string& line) {
         if (!host) { out("pas de partie hébergée"); return; }
         const size_t n = g_session->RequestResync(uint8_t(std::clamp(id, 0, 255)));
         out(n ? std::to_string(n) + " joueur(s) rechargent ton monde" : "aucun joueur en jeu");
+        return;
+    }
+    if (cmd == "heal" || cmd == "xp" || cmd == "god") {   // admin: heal / xp / god mode on a player's characters
+        std::string who, arg;
+        in >> who >> arg;
+        if (!host) { out("seul l'hôte peut faire ça"); return; }
+        const bool all = who == "all" || who == "tous";
+        int id = -1;
+        if (!all) { try { id = std::stoi(who); } catch (...) { id = -1; } }
+        if (!all && (id < 0 || id > 255)) { out("usage : " + cmd + " <id|all> ...  (tape players pour les numéros)"); return; }
+        std::vector<kc::Handle> squad;
+        g_world->PlayerCharacters(squad);
+        int n = 0;
+        for (const auto& h : squad) {
+            if (!all && g_session->ownerOf(h) != id) continue;
+            kenshi::Character* c = g_world->FindSquad(h);
+            if (!c) continue;
+            HostCallScope scope;
+            if (cmd == "heal") n += kenshi::HealCompletely(c) ? 1 : 0;
+            else if (cmd == "god") { kenshi::SetGodMode(c, arg != "off"); if (arg != "off") kenshi::HealCompletely(c); ++n; }
+            else {
+                float levels = 0;
+                try { levels = std::stof(arg); } catch (...) { levels = 0; }
+                std::vector<float> stats;
+                if (levels <= 0 || !kenshi::ReadStats(c, stats)) continue;
+                for (auto& v : stats) v = std::min(100.0f, v + levels);
+                kenshi::WriteStats(c, stats);
+                ++n;
+            }
+        }
+        const std::string what = cmd == "heal" ? "soigné(s)" : cmd == "xp" ? "monté(s) de niveau" : (arg == "off" ? "sans mode dieu" : "en mode dieu");
+        out(std::to_string(n) + " personnage(s) " + what);
+        Log("admin: %s %s %s -> %d character(s)", cmd.c_str(), who.c_str(), arg.c_str(), n);
         return;
     }
     if (cmd == "tp") {   // tp <id> [<toId>]: unstick a player's characters next to my selection (or another player's)

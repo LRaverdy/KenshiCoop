@@ -1,5 +1,8 @@
 #include "kenshi.h"
 
+#include <mutex>
+#include <unordered_set>
+
 #include <windows.h>
 
 #include <algorithm>
@@ -155,6 +158,8 @@ const FunctionSig kFunctions[FnCount] = {
     {"Building::addDismantleProgress", 0x2A2860, {0x48, 0x8B, 0xC4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
     {"Building::clearUsageNodes", 0x54C4D0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
     {"Building::calculateSaleValue", 0x7AD300, {0x40, 0x53, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00, 0x48, 0xC7, 0x44}},
+    // ---- admin console
+    {"Character::healCompletely", 0x6464C0, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48}},
 };
 
 namespace {
@@ -3349,6 +3354,27 @@ void BuildingTemplates(const std::string& part, std::vector<std::pair<std::strin
 bool DestroyAnyObject(void* obj) {
     GameWorld* w = World();
     return w && obj && CallDestroy(FnAddr(FnWorldDestroy), w, obj);
+}
+
+// ---- admin console
+namespace {
+std::mutex g_godMutex;
+std::unordered_set<const void*> g_god;
+} // namespace
+
+bool HealCompletely(Character* c) {
+    return IsCharacter(c) && CallVoid(FnAddr(FnHealCompletely), c);
+}
+
+void SetGodMode(Character* c, bool on) {
+    std::lock_guard<std::mutex> lk(g_godMutex);
+    if (on) g_god.insert(c);
+    else g_god.erase(c);
+}
+
+bool GodMode(const void* c) {
+    std::lock_guard<std::mutex> lk(g_godMutex);
+    return g_god.count(c) != 0;
 }
 
 } // namespace kenshi

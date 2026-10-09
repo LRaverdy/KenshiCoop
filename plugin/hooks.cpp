@@ -382,10 +382,12 @@ void hk_aiPeriodic(void* ai, float t) {
 // KenshiCoop inside a HostCallScope) and save-game loading may change health.
 void hk_medDamage(void* med, void* part, const void* damage, bool loadingSavestate, bool canSever, const float* force) {
     if (KenshiWorld::ClientActive() && !g_hostCall && !loadingSavestate) return;
+    if (!loadingSavestate && med && kenshi::GodMode(static_cast<uint8_t*>(med) - 0x458)) return;   // admin god mode
     o_medDamage(med, part, damage, loadingSavestate, canSever, force);
 }
 void hk_medKnockout(void* med, float skill01) {
     if (KenshiWorld::ClientActive() && !g_hostCall) return;
+    if (med && kenshi::GodMode(static_cast<uint8_t*>(med) - 0x458)) return;
     o_medKnockout(med, skill01);
 }
 // ---- conversations and the AI's decisions

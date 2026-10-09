@@ -193,6 +193,8 @@ enum Fn : int {
     FnAddDismantleProgress,     // bool Building::addDismantleProgress(float amount)   (a worker dismantles)
     FnClearUsageNodes,          // void Building::clearUsageNodes()
     FnCalculateSaleValue,       // int Building::calculateSaleValue()   (price of a building for sale)
+    // ---- admin console
+    FnHealCompletely,           // void Character::healCompletely()   (every wound, blood, KO)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -387,7 +389,11 @@ bool WriteStats(Character* c, const std::vector<float>& stats);
 bool ReadPlayerMoney(int32_t& out);
 bool WritePlayerMoney(int32_t money);
 bool IsStatOfCharacter(const void* statField);
-bool GainExperience(Character* c, size_t statIndex, float amount);   // tests: increaseStat on that stat
+bool GainExperience(Character* c, size_t statIndex, float amount);
+bool HealCompletely(Character* c);                 // every wound healed, blood back, awake
+// God mode (host): these characters take no damage and are never knocked out.
+void SetGodMode(Character* c, bool on);
+bool GodMode(const void* c);   // tests: increaseStat on that stat
 bool CallSay(Character* c, const std::string& text);
 bool FocusCamera(Character* c);   // tests: the camera goes to that character
 // Carrying a body on the shoulder.
