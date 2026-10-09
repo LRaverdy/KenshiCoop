@@ -139,6 +139,7 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   14 466). À vitesse 3, 168 sur 17 882 à 19 h 05, mais 4 % à 19 h 34, pendant le combat.
 
 ### PNJ bloqué chez le client (mur, porte, autre étage) 🟡 implémenté, à vérifier en jeu
+> **Désactivé** dans le code (`world.cpp` `kStuckDetection = false`).
 - **Le joueur** ne voit plus un PNJ coincé dans une maison chez lui alors qu'il se bat dehors chez
   l'hôte.
 - **Fonctionnement** : le client suit la progression de chaque personnage vers la position de
@@ -511,6 +512,8 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
     à confirmer en jeu.
 
 ### Factions, relations, primes, crimes 🟡 (implémenté, à vérifier en jeu)
+> **Primes désactivées chez le client** depuis le 10/10 (`ApplyBounties` retourne tout de suite) :
+> tous les clients plantaient à l'apparition d'une prime. Seules les relations sont appliquées.
 - **Le joueur** voit partout les mêmes relations de sa faction avec chaque faction (écran des
   factions : valeur, alliance, guerre, paix), dans les deux sens (ce que chaque faction pense de la
   faction du joueur compte pour les PNJ et l'interface). Il voit aussi le même rang et la même
