@@ -902,15 +902,30 @@ void KenshiWorld::ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& 
     const bool carrying = kenshi::ReadCarried(c, local);
     kenshi::Character* who = carry ? Find(carried) : nullptr;
     HostCallScope scope;
+    const double now = NowSeconds();
     if (carrying && (!carry || !who || kenshi::Resolve(local) != who)) {
+        // The game drops it as a ragdoll from the shoulder, where the host's fell. It must not be
+        // pulled or teleported while that ragdoll sets up (that is what threw it away).
+        const kc::Handle dropped = HostHandleOf(local);
+        kenshi::Character* body = kenshi::Resolve(local);
         kenshi::DropCarried(c);
-        Log("carry: %s puts a body down as on the host", carry ? "swaps and" : "");
+        if (body && !kenshi::IsRagdoll(body) && !kenshi::IsDead(body)) kenshi::SetRagdoll(body, true);
+        carriedHere_.erase(dropped);
+        fellAt_[dropped] = now;
+        fallPrep_.erase(dropped);
+        lastDest_.erase(dropped);
+        Log("carry: %s puts a body down as on the host (ragdoll %d)", carry ? "swaps and" : "", body ? int(kenshi::IsRagdoll(body)) : -1);
     }
-    if (carry && who) carriedHere_.insert(carried);
-    else if (carrying) carriedHere_.erase(HostHandleOf(local));
     if (carry && who && (!carrying || kenshi::Resolve(local) != who)) {
+        // only once it really is on the shoulder is it left alone by posture and position code
         const bool ok = kenshi::CarryCharacter(c, who);
-        Log("carry: a body goes on the shoulder as on the host (%s)", ok ? "ok" : "failed");
+        if (ok) carriedHere_.insert(carried);
+        else carriedHere_.erase(carried);
+        fallPrep_.erase(carried);
+        lastDest_.erase(carried);
+        Log("carry: a body goes on the shoulder as on the host (%s)", ok ? "ok" : "refused by the game");
+    } else if (carry && who) {
+        carriedHere_.insert(carried);
     }
 }
 

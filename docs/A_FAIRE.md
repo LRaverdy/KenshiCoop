@@ -43,12 +43,14 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   « pas de place », renvoie l'état réel, et l'objet revient : d'où l'aspect dupliqué puis annulé.
   À faire : envoyer d'abord ce qui libère une place, et en cas de place prise, laisser l'hôte poser l'objet
   ailleurs dans l'inventaire. Il y a aussi des refus « refused an inventory move from player 3 » à éclaircir.
-- **Porter un corps (vu par un client)** : le corps porté par l'hôte apparaît debout sur sa tête au lieu
-  d'être sur l'épaule, et quand l'hôte le pose, il s'envole. Le correctif de la 0.2.0 (ne plus déplacer un
-  perso porté) ne suffit pas : chez le client, la mise sur l'épaule ne prend pas (le corps n'est pas en
-  ragdoll quand on l'attache), et à la pose le corps est relâché à une position fausse, ce qui le projette
-  (comme un ragdoll déplacé juste avant sa chute). À reprendre avec un test en jeu dédié (porter puis
-  poser, regardé chez le client).
+- ✅ **Porter un corps (vu par un client)** — corrigé, à vérifier en jeu (`coop_test.py carry`). Le corps
+  porté apparaissait debout sur la tête du porteur, puis s'envolait à la pose (PNJ comme persos de joueurs).
+  Cause : `pickupObject` (0x5CFF90) refuse sans rien dire un corps en ragdoll (+0x3d4), or un client garde
+  les corps KO en ragdoll ; la mise sur l'épaule échouait donc chez lui (journal « ok » trompeur) et le
+  code de posture se battait avec le corps. À la pose, le corps était ensuite redressé ou téléporté
+  pendant que son ragdoll démarrait, d'où la projection. Correctif : le ragdoll est retiré juste avant le
+  ramassage, le succès est vérifié (sinon nouvel essai chaque seconde) ; à la pose, le corps passe en
+  ragdoll tout de suite et on ne le touche plus pendant 2 s.
 - **Un PNJ invisible en combat chez 2 clients sur 3** (10/10 vers 00:38). Les rapports des clients le
   confirment : chez nass4, 1 PNJ de l'hôte « pas encore là » ; chez Geoffrey, 31 en permanence ; rob, 0.
   Ces PNJ n'existent pas dans le jeu du client, et sa recréation (modèle + faction) échoue. Voir pourquoi
