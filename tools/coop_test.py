@@ -311,6 +311,93 @@ def setup(save, name="Tester"):
     return host, cli
 
 
+def setup_many(save, clients):
+    """A host and several clients, each joining in turn (every client must be in before the next joins)."""
+    kill_all()
+    host = launch()
+    log("host pid", host)
+    wait_for(host, lambda s: s.get("state") == "idle", 180, "host menu")
+    time.sleep(3)
+    log("load", cmd(host, f"load {save}"))
+    wait_for(host, lambda s: s.get("ready") == "1", 240, "host world")
+    log("host", cmd(host, "host"))
+    clis = []
+    for n in range(clients):
+        c = launch()
+        log("client", n + 1, "pid", c)
+        wait_for(c, lambda s: s.get("state") == "idle", 240, f"client {n + 1} menu")
+        time.sleep(3)
+        log("join", cmd(c, "join " + os.environ["KC_JOIN"]) if os.environ.get("KC_JOIN") else cmd(c, "join"))
+        wait_for(c, lambda s: s.get("state") == "connected" and s.get("ready") == "1", 420, f"client {n + 1} in host world")
+        log("client", n + 1, "connected")
+        clis.append(c)
+    return host, clis
+
+
+def arrange_grid(pids):
+    """Two rows of two windows (the second row overlaps the first a little on a 1080p screen)."""
+    sw, sh = user32.GetSystemMetrics(0), user32.GetSystemMetrics(17)   # SM_CYFULLSCREEN: above the taskbar
+    wins = [hwnd for pid in pids for hwnd, w, h in windows_of(pid) if w >= 640]
+    if not wins:
+        return
+    r = wt.RECT()
+    user32.GetWindowRect(wins[-1], ctypes.byref(r))
+    W, H = r.right - r.left, r.bottom - r.top
+    for i, hwnd in enumerate(wins):
+        x = 0 if i % 2 == 0 else sw - W
+        y = 0 if i < 2 else max(0, sh - H)
+        user32.SetWindowPos(hwnd, 0, x, y, W, H, 0x0004)
+
+
+def exp_four(host, clis):
+    """1 host + 3 clients: every client sees the same world, each one commands only its own character."""
+    time.sleep(6)
+    log("players on the host:", cmd(host, "status")[1])
+    for i, c in enumerate(clis):
+        log("client", i + 1, cmd(c, "status")[1])
+    reports = []
+    def frozen_all(label):
+        cmd(host, "pause 1")
+        time.sleep(3)
+        h = dump(host, "h4_" + label.replace(" ", "_"))
+        cs = [dump(c, f"c{i + 1}_" + label.replace(" ", "_")) for i, c in enumerate(clis)]
+        for i, c in enumerate(cs):
+            reports.append(compare(h, c, f"FROZEN {label} / host vs client {i + 1}", pos_tol=0.1))
+        # clients between themselves: what client A sees of client B's character (and of everything) is what B sees
+        for i in range(len(cs)):
+            for j in range(i + 1, len(cs)):
+                reports.append(compare(cs[i], cs[j], f"FROZEN {label} / client {i + 1} vs client {j + 1}", pos_tol=0.1))
+        cmd(host, "pause 0")
+    frozen_all("after joins")
+    # each client walks every squad member: only its own character may obey
+    for i, c in enumerate(clis):
+        for k in range(9):
+            cmd(c, f"moverel {k} {40 + 30 * i} {25 - 20 * i}")
+    time.sleep(15)
+    frozen_all("each client walked its own")
+    # skills, bubbles: everyone gets the host's
+    log("host xp", cmd(host, "xp 0 1 5"))
+    log("host say", cmd(host, "say 1 Bonjour a tous les joueurs"))
+    time.sleep(3)
+    hs = cmd(host, "stats 0")[1].split()[1]
+    for i, c in enumerate(clis):
+        log("client", i + 1, "stats equal:", cmd(c, "stats 0")[1].split()[1] == hs, "| bubbles:", cmd(c, "says")[1])
+    # a fight with everyone watching
+    log("spawn", cmd(host, "spawnnpc 15 10"))
+    time.sleep(3)
+    for k in (0, 1, 2):
+        log("fight", k, cmd(host, f"fight {k}"))
+    time.sleep(12)
+    frozen_all("during a fight")
+    time.sleep(20)
+    frozen_all("after the fight")
+    log("=" * 60)
+    for r in reports:
+        log(r["label"], "| chars", r["host_chars"], r["client_chars"], "missing", r["missing_on_client"], "extra", r["extra_on_client"],
+            "| pos max", r["pos_err_max"], "| vital mismatch", r["vital_flag_mismatch"], "| combat mismatch", r["combat_mismatch"],
+            "| inventory mismatch", r["inventory_mismatch"], "| squad", [(t[0][-12:],) + tuple(t[1:]) for t in r["squad"] if not isinstance(t[1], (int, float)) or t[1] > 0.1])
+
+
 def arrange(host, cli):
     """Side by side: host on the left half of the screen, client on the right."""
     sw = user32.GetSystemMetrics(0)
@@ -989,6 +1076,9 @@ def main():
     tk = sub.add_parser("talk")
     tk.add_argument("--save", default="kctest_base")
     tk.add_argument("--keep", action="store_true")
+    fo = sub.add_parser("four", help="1 host + 3 clients")
+    fo.add_argument("--save", default="kctest_base")
+    fo.add_argument("--clients", type=int, default=3)
     pg = sub.add_parser("progress")
     pg.add_argument("--save", default="kctest_base")
     pg.add_argument("--keep", action="store_true")
@@ -1019,6 +1109,12 @@ def main():
     a = ap.parse_args()
     if a.what == "cmd":
         print(cmd(a.pid, " ".join(a.command)))
+        return
+    if a.what == "four":
+        host, clis = setup_many(a.save, a.clients)
+        arrange_grid([host] + clis)
+        exp_four(host, clis)
+        log("instances left running: host", host, "clients", clis)
         return
     host, cli = setup(a.save)
     if a.what == "up":
