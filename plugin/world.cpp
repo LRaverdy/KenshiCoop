@@ -881,6 +881,41 @@ void KenshiWorld::TakeAnimEvents(std::vector<std::pair<kc::Handle, kc::AnimEvent
     }
 }
 
+void KenshiWorld::NoteGround(kc::GroundEvent e) {
+    if (client_ || !active_) return;
+    std::lock_guard<std::mutex> lk(groundMutex_);
+    if (groundOut_.size() < 4096) groundOut_.push_back(std::move(e));
+}
+
+void KenshiWorld::TakeGroundEvents(std::vector<kc::GroundEvent>& out) {
+    std::lock_guard<std::mutex> lk(groundMutex_);
+    out.swap(groundOut_);
+    groundOut_.clear();
+}
+
+void KenshiWorld::ApplyGround(const kc::GroundEvent& e) {
+    if (!client_) return;
+    HostCallScope scope;
+    if (e.kind == kc::GroundKind::PickedUp) {
+        // the same item here (from the shared save), or the copy we made when the host dropped it
+        auto a = groundAlias_.find(e.item);
+        void* item = kenshi::ResolveItem(a != groundAlias_.end() ? a->second : e.item);
+        const bool onGround = item && kenshi::ItemOnGround(item);
+        const bool gone = onGround && kenshi::DestroyItem(item);
+        Log("host picked up item %u:%u: %s", e.item.index, e.item.serial,
+            gone ? "removed here" : !item ? "we do not have it" : !onGround ? "not on the ground here" : "could not remove it");
+        if (a != groundAlias_.end()) groundAlias_.erase(a);
+        return;
+    }
+    kc::Handle mine;
+    std::string why;
+    if (kenshi::CreateGroundItem(e.state, e.pos, mine, &why)) {
+        groundAlias_[e.item] = mine;
+        Log("host dropped item %u:%u (%s): placed here as %u:%u", e.item.index, e.item.serial, e.state.templateSid.c_str(), mine.index, mine.serial);
+    }
+    else Log("cannot place the host's dropped item %s: %s", e.state.templateSid.c_str(), why.c_str());
+}
+
 bool KenshiWorld::ReadAnimFrame(const kc::Handle& h, kc::AnimFrame& frame) {
     frame = kc::AnimFrame{};
     std::vector<kc::AnimEntry>& out = frame.anims;
@@ -1379,6 +1414,7 @@ void KenshiWorld::SetRole(bool client, bool active) {
         fxFullDone_.clear();
         fxStopped_.clear();
         fxRebuild_.clear();
+        groundAlias_.clear();
     }
     if (!active) controllable_.clear();
 }

@@ -248,6 +248,16 @@ void Session::HostTick(double now, bool live) {
             BroadcastReliable(out, true);
         }
     }
+    // Items dropped and picked up: the tick it happened.
+    {
+        GroundMsg g;
+        world_.TakeGroundEvents(g.events);
+        if (anyInGame && !g.events.empty()) {
+            Writer out(512);
+            Encode(out, g);
+            BroadcastReliable(out, true);
+        }
+    }
     // What every nearby character is playing, 15 times a second (unreliable, like snapshots).
     if (anyInGame && now >= nextAnimFrame_) {
         nextAnimFrame_ = std::max(nextAnimFrame_ + 1.0 / 15.0, now - 0.5 / 15.0);
@@ -1168,6 +1178,12 @@ void Session::ClientPacket(Msg type, Reader& r) {
     case Msg::Effects: {
         EffectsMsg m;
         if (state_ == SessionState::Connected && Decode(r, m)) world_.ApplyEffects(m);
+        break;
+    }
+    case Msg::Ground: {
+        GroundMsg m;
+        if (state_ == SessionState::Connected && Decode(r, m))
+            for (const auto& e : m.events) world_.ApplyGround(e);
         break;
     }
     case Msg::AnimFrame: {

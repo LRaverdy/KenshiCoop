@@ -74,6 +74,13 @@ public:
     void TakeAnimEvents(std::vector<std::pair<kc::Handle, kc::AnimEvent>>& out, bool state) override;
     bool ReadAnimFrame(const kc::Handle& h, kc::AnimFrame& out) override;
     void ApplyAnimFrame(const kc::Handle& h, const kc::AnimFrame& f, double ageSeconds) override;
+    void TakeGroundEvents(std::vector<kc::GroundEvent>& out) override;
+    void ApplyGround(const kc::GroundEvent& e) override;
+    void NoteGround(kc::GroundEvent e);   // host: a hook saw an item dropped / picked up (any thread)
+    kc::Handle GroundCopyOf(const kc::Handle& hostItem) const {   // tests (client)
+        auto it = groundAlias_.find(hostItem);
+        return it != groundAlias_.end() ? it->second : hostItem;
+    }
     void ApplyAnim(const kc::Handle& h, const kc::AnimEvent& e) override;
     // Host: an animation hook saw one of our characters start/stop something (any game thread).
     void NoteAnim(kenshi::Character* c, kc::AnimEvent e);
@@ -218,7 +225,10 @@ private:   // first few lifecycle events (tests)
     double animCentersAt_ = -1e9;
     std::unordered_map<kenshi::Character*, std::shared_ptr<const HookView::AnimTarget>> animTargets_;   // client
     std::unordered_map<std::string, double> animCreateTried_;
-    std::unordered_map<kenshi::Character*, void*> lastFloater_;             // client: last damage number shown on each               // client: "<char>|<anim>" -> last attempt
+    std::unordered_map<kenshi::Character*, void*> lastFloater_;
+    std::mutex groundMutex_;
+    std::vector<kc::GroundEvent> groundOut_;                                // host: not sent yet
+    std::unordered_map<kc::Handle, kc::Handle, kc::HandleHash> groundAlias_;   // client: host item -> our copy             // client: last damage number shown on each               // client: "<char>|<anim>" -> last attempt
     std::mutex toastMutex_;
     std::vector<std::string> toasts_;
 

@@ -261,6 +261,49 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         return "ok";
     }
+    if (cmd == "drop") {   // drop <squadIndex>: that squad member drops an unequipped item; answers its handle
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        kenshi::Character* c = w.FindSquad(squad[idx]);
+        void* item = kenshi::FirstLooseItem(c);
+        if (!item) return "err nothing to drop";
+        if (!kenshi::CallDropItem(c, item)) return "err drop failed";
+        kc::Handle ih;
+        kc::ItemState st;
+        kc::Vec3 p;
+        if (!kenshi::DescribeGroundItem(item, ih, st, p)) return "err dropped but unreadable";
+        char b[200];
+        snprintf(b, sizeof(b), "ok %s %s %.1f,%.1f,%.1f", Key(ih).c_str(), st.templateSid.c_str(), p.x, p.y, p.z);
+        return b;
+    }
+    if (cmd == "pickup") {   // pickup <squadIndex> <itemKey>: that squad member takes the item from the ground
+        size_t idx = 0;
+        std::string k;
+        in >> idx >> k;
+        kc::Handle ih;
+        sscanf(k.c_str(), "%u:%u:%u:%u:%u", &ih.type, &ih.container, &ih.containerSerial, &ih.index, &ih.serial);
+        auto squad = SortedSquad(w);
+        void* item = kenshi::ResolveItem(ih);
+        if (idx >= squad.size() || !item) return "err no such squad member or item";
+        return kenshi::CallGiveItem(w.FindSquad(squad[idx]), item) ? "ok" : "err giveItem refused";
+    }
+    if (cmd == "ground") {   // ground <hostItemKey>: is (our copy of) that item lying on the ground here?
+        std::string k;
+        in >> k;
+        kc::Handle ih;
+        sscanf(k.c_str(), "%u:%u:%u:%u:%u", &ih.type, &ih.container, &ih.containerSerial, &ih.index, &ih.serial);
+        void* item = kenshi::ResolveItem(w.GroundCopyOf(ih));
+        if (!item) return "ok absent";
+        kc::Handle h2;
+        kc::ItemState st;
+        kc::Vec3 p;
+        if (!kenshi::ItemOnGround(item) || !kenshi::DescribeGroundItem(item, h2, st, p)) return "ok not-on-ground";
+        char b[200];
+        snprintf(b, sizeof(b), "ok on-ground %s %.1f,%.1f,%.1f", st.templateSid.c_str(), p.x, p.y, p.z);
+        return b;
+    }
     if (cmd == "fxhurry") return "ok " + std::to_string(w.HurryEffects());   // fxhurry: every effect group places one now
     if (cmd == "setweather") {   // setweather <regionSid> <seasonSid> <weatherSid>
         std::string region, season, weather;

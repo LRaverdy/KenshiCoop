@@ -100,6 +100,8 @@ enum Fn : int {
     FnAnimGuardUpper,           // void AnimationClass::setCombatModeUpperIdle(bool)
     FnSingleAnimUpdate,         // void AnimationClassBase::SingleAnimation::update(float masterTime, float frameTime, bool sounds)
     FnRunAnimationLayer,        // void AnimationClass::runAnimation(AnimationData*, float speed, AnimationLayerEnum, float blend)
+    FnGiveItem,                 // bool Character::giveItem(Item*, bool dropOnFail, bool destroyOnFail)   (pickups go through it)
+    FnDropItemHuman,            // void CharacterHuman::dropItem(RootObject*)
     FnCreateScreenLabel,        // ScreenLabel* ForgottenGUI::createScreenLabel(const std::string&, const Colour&, LabelSize, RisingSpeed)
     FnLabelSetTracking,         // void ScreenLabel::setTracking(const hand&, const Vector3& offset)
     FnLabelSetColor,            // void ScreenLabel::setColor(const Colour&)
@@ -375,6 +377,15 @@ bool CallSetGuard(Character* c, bool legs, bool on);
 // Damage numbers ("floaters"): the game shows them from MedicalSystem::addWound.
 inline constexpr uintptr_t kAddWoundBegin = 0x6508D0, kAddWoundEnd = 0x651FF1;
 Character* CharacterOfHand(const void* hand);
+// Items on the ground
+bool ItemOnGround(void* item);                             // in the world, not in an inventory
+bool DescribeGroundItem(void* item, kc::Handle& h, kc::ItemState& s, kc::Vec3& pos);
+void* ResolveItem(const kc::Handle& h);                    // the item with that handle here, if any
+void* CreateGroundItem(const kc::ItemState& s, const kc::Vec3& pos, kc::Handle& localHandle, std::string* why);
+bool DestroyItem(void* item);
+void* FirstLooseItem(Character* c);                        // tests: an unequipped item it carries
+bool CallDropItem(Character* c, void* item);               // tests: the character drops it (the game's own drop)
+bool CallGiveItem(Character* c, void* item);               // tests: the character takes it
 void* ShowFloater(Character* c, const std::string& text, const float colour[4], int size, int speed);   // returns the label
 bool SetLabelColor(void* label, const float colour[4]);
 bool CallSetCarryMode(Character* c, bool carried, bool left, bool right);

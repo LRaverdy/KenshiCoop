@@ -288,7 +288,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::AnimFrame)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Ground)) return std::nullopt;
     return Msg(t);
 }
 
@@ -368,6 +368,32 @@ bool GetItem(Reader& r, ItemState& i) {
     return r.ok() && !i.templateSid.empty() && i.quantity > 0 && i.quantity < 1000000;
 }
 } // namespace
+
+void Encode(Writer& w, const GroundMsg& m) {
+    w.u8(uint8_t(Msg::Ground));
+    w.varint(m.events.size());
+    for (const auto& e : m.events) {
+        w.u8(uint8_t(e.kind));
+        PutHandle(w, e.item);
+        if (e.kind == GroundKind::Dropped) {
+            PutItem(w, e.state);
+            PutVec(w, e.pos);
+        }
+    }
+}
+bool Decode(Reader& r, GroundMsg& m) {
+    const uint32_t n = r.count(kMaxGroundEvents, 2);   // a pickup is just a kind and a handle
+    m.events.resize(n);
+    for (auto& e : m.events) {
+        const uint8_t k = r.u8();
+        if (k != uint8_t(GroundKind::Dropped) && k != uint8_t(GroundKind::PickedUp)) return false;
+        e.kind = GroundKind(k);
+        e.item = GetHandle(r);
+        if (e.kind == GroundKind::Dropped && (!GetItem(r, e.state) || (e.pos = GetVec(r), false))) return false;
+        if (!r.ok()) return false;
+    }
+    return Done(r);
+}
 
 void Encode(Writer& w, const InventoryMsg& m) {
     w.u8(uint8_t(Msg::Inventory));

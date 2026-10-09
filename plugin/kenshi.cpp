@@ -64,6 +64,8 @@ const FunctionSig kFunctions[FnCount] = {
     {"AnimationClass::setCombatModeUpperIdle", 0x51C940, {0x38, 0x91, 0x4D, 0x02, 0x00, 0x00, 0x88, 0x91, 0x4D, 0x02, 0x00, 0x00}},
     {"SingleAnimation::update", 0x5B1700, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x50, 0x0F, 0x29}},
     {"AnimationClass::runAnimation(AnimationData*, layer)", 0x5B7AC0, {0x48, 0x89, 0x6C, 0x24, 0x20, 0x56, 0x48, 0x83, 0xEC, 0x70, 0x48, 0x83}},
+    {"Character::giveItem", 0x5CB400, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
+    {"CharacterHuman::dropItem", 0x5CA740, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48}},
     {"ForgottenGUI::createScreenLabel", 0x73FAF0, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x40, 0x48, 0xC7, 0x44, 0x24, 0x30, 0xFE}},
     {"ScreenLabel::setTracking", 0x6E25F0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0x42, 0x08, 0x48, 0x8B, 0xD9}},
     {"ScreenLabel::setColor", 0x6E2670, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48}},
@@ -1838,6 +1840,97 @@ void* ShowFloater(Character* c, const std::string& text, const float colour[4], 
     const float offset[3] = {0.0f, 15.0f, 0.0f};   // as addWound places it
     SehLabelTrack(FnAddr(FnLabelSetTracking), label, reinterpret_cast<const uint8_t*>(c) + off::RO_handle, offset);
     return label;
+}
+
+namespace {
+constexpr uintptr_t IT_inInventoryFlag = 0xD8, IT_itemGroup = 0x188;
+constexpr uintptr_t IV_isPhysical = 0xF8, IV_activate = 0x228, IV_setInventoryWeAreIn = 0x358, IV_getPosition = 0x40;
+constexpr uintptr_t kNoHandleGlobal = 0x1E3A5F8;      // the empty hand the game gives a dropped item
+constexpr uintptr_t kIdentityQuatPtr = 0x2247DA0;     // pointer to Quaternion::IDENTITY, as dropItem uses it
+using FnActivate = void (*)(void* item, bool on, const float* pos, const float* quat, bool a, const int* indoors, bool b);
+bool SehActivate(void* fn, void* item, const float* pos, const float* quat) {
+    const int maybe = 2;
+    __try { reinterpret_cast<FnActivate>(fn)(item, true, pos, quat, false, &maybe, false); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+bool ItemOnGround(void* item) {
+    uint8_t inInv = 1;
+    void* group = nullptr;
+    bool physical = false;
+    void* fn = VSlot(item, IV_isPhysical);
+    return item && Rd(item, IT_inInventoryFlag, inInv) && inInv == 0 && Rd(item, IT_itemGroup, group) && !group && fn &&
+           CallBool(fn, item, physical) && physical;
+}
+
+bool DescribeGroundItem(void* item, kc::Handle& h, kc::ItemState& s, kc::Vec3& pos) {
+    float p[3];
+    void* fn = VSlot(item, IV_getPosition);
+    if (!item || !ReadHandle(reinterpret_cast<uint8_t*>(item) + off::RO_handle, h) || !ReadItemState(item, s) || !fn || !CallGetVec3(fn, item, p))
+        return false;
+    pos = {p[0], p[1], p[2]};
+    s.section.clear();
+    s.x = s.y = 0;
+    s.equipped = false;
+    return Finite(pos);
+}
+
+void* ResolveItem(const kc::Handle& h) {
+    alignas(8) uint8_t hand[off::HandSize] = {};
+    const uintptr_t vt = Addr(rva::VtHand);
+    std::memcpy(hand, &vt, 8);
+    std::memcpy(hand + off::H_type, &h.type, 4);
+    std::memcpy(hand + off::H_container, &h.container, 4);
+    std::memcpy(hand + off::H_containerSerial, &h.containerSerial, 4);
+    std::memcpy(hand + off::H_index, &h.index, 4);
+    std::memcpy(hand + off::H_serial, &h.serial, 4);
+    void* obj = CallResolve(FnAddr(FnHandleResolve), reinterpret_cast<void*>(Addr(rva::HandleTable)), hand);
+    kc::Handle back;
+    return obj && ReadHandle(reinterpret_cast<uint8_t*>(obj) + off::RO_handle, back) && back == h && !IsCharacter(obj) ? obj : nullptr;
+}
+
+void* CreateGroundItem(const kc::ItemState& s, const kc::Vec3& pos, kc::Handle& localHandle, std::string* why) {
+    void* item = CreateItemFromState(s, why);
+    if (!item) return nullptr;
+    void* setInv = VSlot(item, IV_setInventoryWeAreIn);
+    void* activate = VSlot(item, IV_activate);
+    void* quat = nullptr;
+    if (!setInv || !activate || !Rd(reinterpret_cast<void*>(Addr(kIdentityQuatPtr)), 0, quat) || !quat) return nullptr;
+    CallPtrArg2(setInv, item, reinterpret_cast<void*>(Addr(kNoHandleGlobal)));
+    const float p[3] = {pos.x, pos.y, pos.z};
+    if (!SehActivate(activate, item, p, static_cast<const float*>(quat))) return nullptr;
+    ReadHandle(reinterpret_cast<uint8_t*>(item) + off::RO_handle, localHandle);
+    return item;
+}
+
+void* FirstLooseItem(Character* c) {
+    void* inv = InventoryOf(c);
+    if (!inv) return nullptr;
+    for (void* it : InventoryItems(inv)) {
+        uint8_t equipped = 0;
+        if (Rd(it, IT_equipped, equipped) && !equipped) return it;
+    }
+    return nullptr;
+}
+
+bool CallDropItem(Character* c, void* item) {
+    constexpr uintptr_t CH_vDropItem = 0x1A8;
+    void* fn = VSlot(c, CH_vDropItem);
+    return IsCharacter(c) && item && fn && CallPtrArg2(fn, c, item);
+}
+
+bool CallGiveItem(Character* c, void* item) {
+    using FnGive = bool (*)(void*, void*, bool, bool);
+    return IsCharacter(c) && item && reinterpret_cast<FnGive>(FnAddr(FnGiveItem))(c, item, false, false);
+}
+
+bool DestroyItem(void* item) {
+    constexpr uintptr_t IV_deactivate = 0x238;   // out of the world first, as a pickup does
+    GameWorld* w = World();
+    if (!w || !item || IsCharacter(item)) return false;
+    if (void* fn = VSlot(item, IV_deactivate)) CallVoid(fn, item);
+    return CallDestroy(FnAddr(FnWorldDestroy), w, item);
 }
 
 bool SetLabelColor(void* label, const float colour[4]) { return label && SehLabelColor(FnAddr(FnLabelSetColor), label, colour); }

@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 13;
+constexpr uint16_t kProtocolVersion = 14;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -57,6 +57,7 @@ enum class Msg : uint8_t {
     Effects = 22,     // S->C  weather effects the host's game placed (lightning, storms, gas clouds)
     Anim = 23,        // S->C  animations the host's characters start and stop (attacks, actions, stumbles)
     AnimFrame = 24,   // S->C  (unreliable) every animation each nearby character is playing: name, time, weight
+    Ground = 25,      // S->C  items dropped on and picked up from the ground in the host's world
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -371,6 +372,19 @@ struct AnimFrameMsg {
     std::vector<AnimFrame> chars;
 };
 constexpr uint32_t kMaxAnimsPerChar = 32;
+
+// ---- items on the ground ----
+enum class GroundKind : uint8_t { Dropped = 1, PickedUp = 2 };
+struct GroundEvent {
+    GroundKind kind = GroundKind::Dropped;
+    Handle item;          // the host's handle of the item
+    ItemState state;      // Dropped: what it is
+    Vec3 pos;             // Dropped: where it lies
+};
+struct GroundMsg {
+    std::vector<GroundEvent> events;
+};
+constexpr uint32_t kMaxGroundEvents = 1024;
 constexpr size_t kMaxAnimNameLen = 200;
 
 // ---- world transfer ----
@@ -423,6 +437,7 @@ void Encode(Writer& w, const InventoryMsg& m);
 void Encode(Writer& w, const InvOp& m);
 void Encode(Writer& w, const EffectsMsg& m);
 void Encode(Writer& w, const AnimMsg& m);
+void Encode(Writer& w, const GroundMsg& m);
 
 // Snapshots are split into packets that each fit `budget` bytes; every packet is self-contained.
 std::vector<std::vector<uint8_t>> EncodeSnapshot(const Snapshot& s, size_t budget = kSnapshotBudget);
@@ -452,6 +467,7 @@ bool Decode(Reader& r, InvOp& m);
 bool Decode(Reader& r, EffectsMsg& m);
 bool Decode(Reader& r, AnimMsg& m);
 bool Decode(Reader& r, AnimFrameMsg& m);
+bool Decode(Reader& r, GroundMsg& m);
 bool Decode(Reader& r, Ping& m);
 
 // Name rules: 1..kMaxNameLen printable ASCII, no leading/trailing spaces.

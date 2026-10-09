@@ -640,6 +640,22 @@ def exp_animframe(host, cli, rounds=10):
     log("animframe worst differing sets:", worst_set, "worst time diff:", round(worst_t, 3))
 
 
+def exp_ground(host, cli):
+    """An item the host drops lies at the same spot on the client; once picked up, it is gone there too."""
+    time.sleep(8)
+    for idx in (0, 1, 2):
+        ok, text = cmd(host, f"drop {idx}")
+        log("host drop", idx, ok, text)
+        if not ok:
+            continue
+        key = text.split()[1]
+        time.sleep(2)
+        log("  client sees:", cmd(cli, f"ground {key}"))
+        log("  host pickup:", cmd(host, f"pickup {idx} {key}"))
+        time.sleep(0.7)
+        log("  client after pickup:", cmd(cli, f"ground {key}"), "| host:", cmd(host, f"ground {key}"))
+
+
 def exp_bodies(host, cli):
     """Where does a knocked-out body lie on each side, over time, for each body mode?"""
     time.sleep(6)
@@ -873,6 +889,9 @@ def main():
     t.add_argument("--save", default="kctest_base")
     e = sub.add_parser("bodies")
     e.add_argument("--save", default="kctest_base")
+    gr = sub.add_parser("ground")
+    gr.add_argument("--save", default="kctest_base")
+    gr.add_argument("--keep", action="store_true")
     af = sub.add_parser("animframe")
     af.add_argument("--save", default="kctest_base")
     af.add_argument("--keep", action="store_true")
@@ -904,7 +923,9 @@ def main():
         log("ready: host", host, "client", cli)
         return
     try:
-        if a.what == "animframe":
+        if a.what == "ground":
+            exp_ground(host, cli)
+        elif a.what == "animframe":
             exp_animframe(host, cli)
         elif a.what == "anim":
             exp_anim(host, cli)

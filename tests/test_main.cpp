@@ -436,6 +436,23 @@ static void TestWire() {
     CHECK(am2.events.size() == 2 && am2.events[0].kind == AnimKind::Combat && am2.events[0].name == "attack_chop_long_name_over_15" &&
           am2.events[0].a == 1.25f && am2.events[1].kind == AnimKind::State && am2.events[1].flags == 5 && am2.events[1].netId == 12);
 
+    {   // items on the ground: a pickup alone (short) and a drop (with the item)
+        GroundMsg g;
+        GroundEvent up; up.kind = GroundKind::PickedUp; up.item.index = 467; up.item.serial = 9;
+        g.events = {up};
+        Writer gw; Encode(gw, g);
+        Reader gr(gw.data(), gw.size()); CHECK(PeekType(gr) == Msg::Ground);
+        GroundMsg g2; CHECK(Decode(gr, g2));
+        CHECK(g2.events.size() == 1 && g2.events[0].kind == GroundKind::PickedUp && g2.events[0].item.index == 467);
+        GroundEvent dn; dn.kind = GroundKind::Dropped; dn.item.index = 5; dn.state.templateSid = "209-gamedata.base"; dn.state.quantity = 2;
+        dn.pos = {1, 2, 3};
+        g.events = {dn, up};
+        Writer gw2; Encode(gw2, g);
+        Reader gr2(gw2.data(), gw2.size()); PeekType(gr2);
+        GroundMsg g3; CHECK(Decode(gr2, g3));
+        CHECK(g3.events.size() == 2 && g3.events[0].state.quantity == 2 && g3.events[0].pos.z == 3 && g3.events[1].kind == GroundKind::PickedUp);
+    }
+
     WorldChunk c; c.file = 2; c.path = "zone/zone.1.2.zone"; c.fileSize = 5; c.data = {1, 2, 3};
     Writer cw; Encode(cw, c);
     Reader cr(cw.data(), cw.size()); CHECK(PeekType(cr) == Msg::WorldChunk);
@@ -521,6 +538,8 @@ static void TestFuzz() {
         case Msg::InvOp: { InvOp m; Decode(r, m); break; }
         case Msg::Effects: { EffectsMsg m; Decode(r, m); break; }
         case Msg::Anim: { AnimMsg m; Decode(r, m); break; }
+        case Msg::AnimFrame: { AnimFrameMsg m; Decode(r, m); break; }
+        case Msg::Ground: { GroundMsg m; Decode(r, m); break; }
         }
     };
     for (int i = 0; i < 300000; ++i) {

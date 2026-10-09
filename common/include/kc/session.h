@@ -112,6 +112,9 @@ public:
     virtual bool ReadAnimFrame(const Handle& h, AnimFrame& out) { (void)h; out = AnimFrame{}; return false; }
     // Client: impose them (ageSeconds: how long ago the host sampled them).
     virtual void ApplyAnimFrame(const Handle& h, const AnimFrame& f, double ageSeconds) { (void)h; (void)f; (void)ageSeconds; }
+    // Items on the ground. Host: dropped/picked up since the last call. Client: replay one.
+    virtual void TakeGroundEvents(std::vector<GroundEvent>& out) { out.clear(); }
+    virtual void ApplyGround(const GroundEvent& e) { (void)e; }
 
     // Inventories. Host: read; execute a client's item movement (false = refused/impossible).
     virtual bool ReadInventory(const Handle& h, std::vector<ItemState>& out) = 0;

@@ -62,6 +62,10 @@ using CreateLabelFn = void* (*)(void* gui, const void* text, const float* colour
 using LabelTrackFn = void (*)(void* label, const void* hand, const float* offset);
 using LabelColorFn = void (*)(void* label, const float* colour);
 CreateLabelFn o_createLabel = nullptr;
+using GiveItemFn = bool (*)(void* chr, void* item, bool dropOnFail, bool destroyOnFail);
+using DropItemFn = void (*)(void* chr, void* item);
+GiveItemFn o_giveItem = nullptr;
+DropItemFn o_dropItem = nullptr;
 LabelTrackFn o_labelTrack = nullptr;
 LabelColorFn o_labelColor = nullptr;
 // host: the damage number addWound is building (created, then tracked, then coloured)
@@ -290,6 +294,33 @@ void hk_medKnockout(void* med, float skill01) {
 void hk_collapse(void* med, bool medic, bool agony) {
     if (KenshiWorld::ClientActive() && !g_hostCall) return;
     o_collapse(med, medic, agony);
+}
+// Items on the ground belong to the host's world: its pickups and drops are replayed on clients,
+// whose own (for host-driven characters) are refused.
+bool hk_giveItem(void* chr, void* item, bool dropOnFail, bool destroyOnFail) {
+    if (!item || !kenshi::ItemOnGround(item)) return o_giveItem(chr, item, dropOnFail, destroyOnFail);   // inventory to inventory
+    if (KenshiWorld::ClientActive()) {
+        if (!g_hostCall && KenshiWorld::View()->replicated.count(chr)) return false;
+        return o_giveItem(chr, item, dropOnFail, destroyOnFail);
+    }
+    kc::GroundEvent e;
+    e.kind = kc::GroundKind::PickedUp;
+    kc::ItemState s;
+    kc::Vec3 pos;
+    const bool known = kenshi::DescribeGroundItem(item, e.item, s, pos);
+    const bool ok = o_giveItem(chr, item, dropOnFail, destroyOnFail);
+    if (ok && known && KenshiWorld::View()->active)
+        if (KenshiWorld* w = TheWorld()) w->NoteGround(e);
+    return ok;
+}
+void hk_dropItem(void* chr, void* item) {
+    if (KenshiWorld::ClientActive() && !g_hostCall && KenshiWorld::View()->replicated.count(chr)) return;
+    o_dropItem(chr, item);
+    if (KenshiWorld::ClientActive() || !KenshiWorld::View()->active || !item || !kenshi::ItemOnGround(item)) return;
+    kc::GroundEvent e;
+    e.kind = kc::GroundKind::Dropped;
+    if (kenshi::DescribeGroundItem(item, e.item, e.state, e.pos))
+        if (KenshiWorld* w = TheWorld()) w->NoteGround(e);
 }
 std::string ColourHex(const float* c) {
     char b[16];
@@ -638,6 +669,8 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnMedKnockout, reinterpret_cast<void*>(&hk_medKnockout), reinterpret_cast<void**>(&o_medKnockout)},
         {kenshi::FnDeclareDead, reinterpret_cast<void*>(&hk_declareDead), reinterpret_cast<void**>(&o_declareDead)},
         {kenshi::FnReassessCollapse, reinterpret_cast<void*>(&hk_collapse), reinterpret_cast<void**>(&o_collapse)},
+        {kenshi::FnGiveItem, reinterpret_cast<void*>(&hk_giveItem), reinterpret_cast<void**>(&o_giveItem)},
+        {kenshi::FnDropItemHuman, reinterpret_cast<void*>(&hk_dropItem), reinterpret_cast<void**>(&o_dropItem)},
         {kenshi::FnCreateScreenLabel, reinterpret_cast<void*>(&hk_createLabel), reinterpret_cast<void**>(&o_createLabel)},
         {kenshi::FnLabelSetTracking, reinterpret_cast<void*>(&hk_labelTrack), reinterpret_cast<void**>(&o_labelTrack)},
         {kenshi::FnLabelSetColor, reinterpret_cast<void*>(&hk_labelColor), reinterpret_cast<void**>(&o_labelColor)},
