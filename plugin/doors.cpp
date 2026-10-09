@@ -165,7 +165,10 @@ bool ApplyDoorState(void* obj, const kc::DoorState& d) {
             // the game's own opening and closing (animation and sound); halfway the other way: turn back
             if (st == 0 && hostOpen) CallDoorBool(FnDoorOpen, door);
             else if (st == 1 && !hostOpen) CallDoorBool(FnDoorClose, door);
-            else Wr(door, DS_state, int32_t(hostOpen ? 2 : 3));
+            // the game refused (it checks things the host already settled): turn it the host's way
+            int32_t now = st;
+            Rd(door, DS_state, now);
+            if (now == st) Wr(door, DS_state, int32_t(hostOpen ? 2 : 3));
         }
         const uint8_t wants = (d.flags & kc::kDoorWantsLock) ? 1 : 0;
         uint8_t localWants = 0;
