@@ -615,6 +615,7 @@ private:
         std::vector<uint32_t> counters;
         int32_t traderMoney = 0;
         bool pending = false, open = false, refresh = false;
+        double pendingSince = 0;
     };
     ClientTrade trade_;
     bool IsTradeCounter(uint32_t netId) const;

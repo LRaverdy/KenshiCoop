@@ -882,11 +882,6 @@ def exp_doors(host, cli):
     """Doors and locks: the host's doors reach the client; the client's own game cannot open a door by
     itself; a door panel button and door orders given on the client run on the host; lockpicking ends
     the same everywhere; a locked chest stays shut for a client."""
-def exp_prison(host, cli):
-    """Lot D (prisons): the host puts the client player's character in the nearest cage, shackles it,
-    enslaves it, then frees it. The client must show each state like the host, keep the character in
-    its cage (no position fight), and clear everything at the release. Needs a cage (BF_CAGE) within
-    300 m of the squad: use --save with a prison, slaver camp or cage nearby."""
     time.sleep(6)
     cmd(cli, "editdone")
     time.sleep(3)
@@ -974,6 +969,18 @@ def exp_prison(host, cli):
     cmd(host, "doorset 0 lock unlock")
     check("portes : le client connait les portes de l'hote", int(re.search(r"known=(\d+)", cmd(cli, "doorsknown")[1]).group(1)) > 0,
           cmd(cli, "doorsknown")[1])
+    summary()
+
+
+def exp_prison(host, cli):
+    """Lot D (prisons): the host puts the client player's character in the nearest cage, shackles it,
+    enslaves it, then frees it. The client must show each state like the host, keep the character in
+    its cage (no position fight), and clear everything at the release. Needs a cage (BF_CAGE) within
+    300 m of the squad: use --save with a prison, slaver camp or cage nearby."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
     def fields(t):
         return dict(kv.split("=", 1) for kv in t.split()[1:] if "=" in kv)
     def both():
@@ -1564,7 +1571,13 @@ def exp_suite(host, cli):
     cmd(host, "pause 0")
     # --- 8. admin teleport
     cmd(host, "moverel 0 600 0")
-    time.sleep(16)   # until it got there
+    last = None
+    for _ in range(60):   # until it got there (stands still)
+        time.sleep(1)
+        cur = cmd(host, "where 0")[1]
+        if cur == last:
+            break
+        last = cur
     cmd(host, "tpplayer 2")
     time.sleep(3)
     p0, pc = vec(cmd(host, "where 0")[1]), vec(cmd(host, f"where {own}")[1])
@@ -1593,12 +1606,12 @@ def exp_suite(host, cli):
     check("fin : aucun inventaire different", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
     check("fin : personne ne manque chez le client", rep["missing_on_client"] == 0, rep["missing_sample"])
     # --- 11. the host's resync: the player reloads the host's world and is back with its character
-    backs = host_log().count("is back with their character")
+    backs = host_log().count(" is in the world")
     log("resync", cmd(host, "resync 2"))
     ok_back = False
     for _ in range(90):
         time.sleep(1)
-        if host_log().count("is back with their character") > backs and cmd(cli, "status")[1].find("state=connected") >= 0:
+        if host_log().count(" is in the world") > backs and cmd(cli, "status")[1].find("state=connected") >= 0:
             ok_back = True
             break
     time.sleep(4)

@@ -1079,10 +1079,18 @@ void Session::ClientContainers(double now) {
         }
         auto trader = entities_.find(trade_.trader);
         auto looter = entities_.find(trade_.looter);
-        if (trader == entities_.end() || looter == entities_.end() || !trader->second.present || !looter->second.present) {
+        const bool here = trader != entities_.end() && looter != entities_.end() && trader->second.present && looter->second.present;
+        if (trade_.pendingSince == 0) trade_.pendingSince = now;
+        if (!here && now - trade_.pendingSince > 10.0) {
             log_("trade window cancelled: the merchant or our character is not here");
+            for (uint32_t id : trade_.counters) {
+                Writer w;
+                Encode(w, ContainerClose{id, {}});
+                SendReliable(net_.serverPeer(), w);
+                entities_.erase(id);
+            }
             EndClientTrade();
-        } else if (ready) {
+        } else if (here && ready) {
             trade_.pending = false;
             world_.SetMoneyOf(trader->second.handle, trade_.traderMoney);
             if (world_.OpenTradeWindow(looter->second.handle, trader->second.handle)) {
@@ -1106,6 +1114,7 @@ void Session::ClientContainers(double now) {
         trade_.refresh = false;
         trade_.open = false;
         trade_.pending = true;
+        trade_.pendingSince = 0;
         windowOpenedAt_ = -1;   // not the player closing it
         world_.CloseContainerWindows();
         log_("trade window closed for a moment: the merchant's stock changed");

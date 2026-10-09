@@ -356,22 +356,36 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
 
 ## En cours et à faire
 
-### Commerce 🔧
-- **Demande** : un commerce cohérent. Si un joueur achète un objet, le marchand ne doit plus le
-  proposer à personne.
-- **Ce qui se passe aujourd'hui** :
-  - côté client, l'ordre « commercer » est refusé ;
-  - l'action « Commercer » d'une conversation tourne chez l'hôte et ouvrirait la fenêtre sur
-    l'écran de l'hôte.
-- **Conception en cours** :
-  1. L'hôte intercepte `showTradeWindow` pour le personnage d'un autre joueur.
-  2. Il envoie à ce joueur le marchand et ses comptoirs (meubles `BF_SHOP`), traités comme des
-     contenants ouverts.
-  3. Le client ouvre la vraie fenêtre de commerce du jeu sur ces copies.
-  4. Chaque achat ou vente part à l'hôte avec son prix, calculé par le client : le prix dépend
-     d'un état de l'interface que l'hôte n'a pas.
-  5. L'hôte vérifie, déplace l'objet et l'argent, puis envoie le nouveau stock à tous les joueurs
-     qui ont ouvert ce marchand.
+### Commerce ✅ (vérifié en jeu le 9 octobre)
+- **Le joueur** parle à un marchand et choisit « commercer » comme d'habitude. La fenêtre de
+  commerce du jeu s'ouvre **chez lui**, jamais chez l'hôte. Elle montre le stock du marchand tel
+  que l'hôte l'a. Il achète et vend par glisser-déposer ou clic droit, aux prix du jeu.
+- **Cohérence** : un objet acheté par un joueur disparaît du stock partout. Une fenêtre déjà
+  ouverte sur ce marchand, chez un autre joueur ou chez l'hôte, se rafraîchit d'elle-même : elle
+  ne propose plus cet objet. L'argent du joueur et celui du marchand sont ceux de l'hôte.
+- **Fonctionnement** :
+  - l'hôte intercepte la fenêtre que son jeu ouvrirait pour le personnage d'un autre joueur ;
+  - il envoie à ce joueur le marchand et les meubles d'où il vend (ses comptoirs, les meubles de
+    son bâtiment), traités comme des contenants ouverts ;
+  - le client ouvre la vraie fenêtre de commerce du jeu ;
+  - chaque achat ou vente part à l'hôte avec le prix que le jeu du client a compté (il dépend de
+    l'état de l'interface, que l'hôte n'a pas) ;
+  - l'hôte vérifie que l'acheteur peut payer, déplace l'objet et l'argent, puis renvoie le stock ;
+  - un achat refusé (pas assez d'argent, objet déjà parti) revient en arrière, objet et argent.
+- **Vérifié en jeu** (expérience `trade`, marchand Shinobi en ville, 12 points sur 13 puis la
+  vente à la main) :
+  - la fenêtre s'ouvre chez le client et pas chez l'hôte, avec les 15 objets du stock ;
+  - un achat de 745 cats est payé chez l'hôte, avec le même argent partout ;
+  - une vente rapporte l'argent au client chez tout le monde ;
+  - les inventaires sont identiques ;
+  - la fenêtre de l'hôte sur ce marchand ne propose plus l'objet acheté par le client.
+- **Sécurité** : la fenêtre du jeu montre les objets des comptoirs eux-mêmes. Quand le stock change
+  sous une fenêtre ouverte, elle se ferme un instant, les comptoirs prennent le stock de l'hôte,
+  puis elle se rouvre. Un personnage montré par une fenêtre n'est jamais supprimé sous elle. Ces
+  deux cas faisaient planter le client.
+- **Limites** :
+  - les marchands ambulants (sans bâtiment) ne sont pas encore gérés : le joueur en est prévenu ;
+  - la détection des objets volés à la revente n'est tirée que par le jeu du client.
 
 ### Construction, meubles, achat et démontage de bâtiments 🟡 (implémenté, à vérifier en jeu)
 - **Le joueur** (hôte comme client) construit comme d'habitude : mode construction, il pose un

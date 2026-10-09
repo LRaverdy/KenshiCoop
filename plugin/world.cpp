@@ -551,6 +551,7 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     // Stuck: a wall, a closed door or another floor between our copy and the host's position (an
     // NPC shut in a house here while it fights outside on the host): neither the locomotion nor the
     // pull below gets it there. No progress for a second: put it exactly where the host has it.
+    if (haveHostTime_ && hostTime_.paused) stuck_.erase(h);   // nothing moves while paused: start over afterwards
     if (!(haveHostTime_ && hostTime_.paused)) {
         const float stuckErr = 3.0f * std::max(1.0f, haveHostTime_ ? hostTime_.speed : 1.0f);
         Stuck& sk = stuck_[h];
