@@ -6,6 +6,14 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+- **Fix G5, ordres, tâches et commerce** (à vérifier en jeu) : un perso d'un autre joueur dans la
+  sélection de l'hôte en est retiré au lieu de faire refuser tous ses ordres (le mode passif de l'hôte
+  n'était jamais posé, d'où son perso qui attaquait avec l'ami, et il ne pouvait plus bouger le sien) ;
+  retirer ou déplacer une tâche dans le panneau Tâches d'un client passe par l'hôte, qui renvoie les
+  listes de tâches (message `JobList` 68, `TaskVia` 6 à 8) ; la fenêtre de commerce d'un client ne
+  s'ouvre plus chez l'hôte quand le joueur a lancé la conversation ou passe par un clic droit.
+  Expériences `passive`, `jobs`, `tradepaths`.
+
 - **Robustesse (lot F)** : un PNJ bloqué chez un client (mur, porte, étage) est replacé où l'hôte
   l'a après 1 s sans progrès ; les PNJ lointains sont replacés sur la position de l'hôte ; la TP
   admin déplace aussi un personnage à terre ou porté ; un perso dans un lit ou une cage n'est plus

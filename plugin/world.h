@@ -70,6 +70,8 @@ public:
     int TeleportCharacters(const std::vector<kc::Handle>& who, const kc::Vec3& to);
     void ApplyProgress(const kc::Handle& h, const std::vector<float>& stats, uint16_t modes, uint8_t style) override;
     bool ReadMoney(int32_t& money) override { return kenshi::ReadPlayerMoney(money); }
+    bool ReadJobs(const kc::Handle& h, std::vector<int32_t>& jobs) override;      // fix G5
+    void ApplyJobs(const kc::Handle& h, const std::vector<int32_t>& jobs) override;
     bool ReadTool(const kc::Handle& h, std::string& sid) override;
     void ApplyTool(const kc::Handle& h, const std::string& sid) override;
     void ReadSquads(std::vector<WorldSquad>& out) override;

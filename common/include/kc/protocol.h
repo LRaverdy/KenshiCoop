@@ -88,6 +88,8 @@ enum class Msg : uint8_t {
     BuildState = 53,      // S->C  construction progress of player buildings (complete, paused, dismantling)
     BuildRemove = 54,     // S->C  a player building is gone (dismantled, destroyed)
     BuildAction = 55,     // both  buy / dismantle a building (client: asks the host; host: replay of a purchase)
+    // ---- fix G5
+    JobList = 68,         // S->C  the job list (Tâches panel) of the players' characters, as the host has it
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -229,6 +231,10 @@ enum class TaskVia : uint8_t {
     TaskNearest = 3,   // addTaskNearestSelectedCharacter(building, task, subject, shift, pos, noAnimals)
     AddJob = 4,        // addJobSelectedCharacters(task, subject, shift, add, pos)
     SetOrder = 5,      // setOrderSelectedCharacters(order)
+    // the Tâches panel (fix G5): run on that character itself, no selection
+    RemovePermajob = 6,   // Character::removePermajob: task = the job's TaskType, pos.x = its slot on the client
+    MovePermajob = 7,     // Character::movePermajob: task = the job's TaskType, pos.x = from slot, pos.y = to slot
+    RemoveJob = 8,        // Character::removeJob(task): every job of that kind
 };
 struct Command {
     uint32_t seq = 0;
@@ -710,6 +716,17 @@ struct BuildStateMsg {
     std::vector<BuildStateEntry> entries;
 };
 constexpr uint32_t kMaxBuildStates = 256;
+// fix G5: a character's job list, by kind (TaskType), in the panel's order.
+struct JobListEntry {
+    uint32_t netId = 0;
+    std::vector<int32_t> jobs;
+};
+struct JobListMsg {
+    std::vector<JobListEntry> entries;
+};
+constexpr uint32_t kMaxJobLists = 64, kMaxJobsPerCharacter = 64;
+void Encode(Writer& w, const JobListMsg& m);
+bool Decode(Reader& r, JobListMsg& m);
 struct BuildRemove {
     uint32_t netId = 0;
     std::string sid;

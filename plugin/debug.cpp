@@ -658,6 +658,119 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         const uint16_t m = kenshi::ReadModes(w.FindSquad(squad[idx]), style);
         return "ok " + std::to_string(m) + " " + std::to_string(style);
     }
+    // ---- fix G5
+    if (cmd == "attackreq") {   // attackreq <selectIndex>: that member alone is ordered to attack the last spawned NPC (a right click's addOrderSelectedCharacters)
+        size_t sel = 0;
+        in >> sel;
+        auto squad = SortedSquad(w);
+        kenshi::Character* t = w.Find(lastSpawned_);
+        kc::Vec3 tp;
+        if (sel >= squad.size() || !t || !kenshi::GetPosition(t, tp)) return "err need a squad member and a spawned NPC";
+        const float loc[3] = {tp.x, tp.y, tp.z};
+        using FnAddOrder = void (*)(void*, void*, int, void*, bool, bool, const float*);
+        kenshi::WithSelection(w.FindSquad(squad[sel]), [&] {
+            reinterpret_cast<FnAddOrder>(kenshi::FnAddr(kenshi::FnAddOrderSelected))(kenshi::Player(), nullptr, 5, t, false, false, loc);   // ATTACK
+        });
+        return "ok";
+    }
+    if (cmd == "combat") {   // combat <squadIndex>: 1 and its target when that member is in combat mode
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err";
+        kc::Handle t;
+        const bool on = kenshi::ReadCombat(w.FindSquad(squad[idx]), t);
+        return std::string("ok ") + (on ? "1 " + Key(t) : "0");
+    }
+    if (cmd == "selectset") {   // selectset <i> [<j>...]: the player's selection becomes those squad members (as clicks would)
+        auto squad = SortedSquad(w);
+        void* pi = kenshi::Player();
+        if (!pi) return "err";
+        reinterpret_cast<void (*)(void*)>(kenshi::FnAddr(kenshi::FnUnselectAll))(pi);
+        size_t i = 0, n = 0;
+        while (in >> i)
+            if (i < squad.size()) {
+                reinterpret_cast<void (*)(void*, void*, bool)>(kenshi::FnAddr(kenshi::FnObjectSelected))(pi, w.FindSquad(squad[i]), true);
+                ++n;
+            }
+        return "ok " + std::to_string(n);
+    }
+    if (cmd == "selorder") {   // selorder <standingOrder>: the squad bar's toggle on the current selection, as a click does
+        int order = 0;
+        in >> order;
+        reinterpret_cast<void (*)(void*, int)>(kenshi::FnAddr(kenshi::FnSetOrderSelected))(kenshi::Player(), order);
+        std::vector<kc::Handle> sel;
+        kenshi::SelectedHandles(sel);
+        return "ok " + std::to_string(sel.size()) + " selected";
+    }
+    if (cmd == "npcreq") {   // npcreq <selectIndex> <task> <namePart>: that member alone gets the order on the nearest NPC whose name has that part ('_' for spaces), as a right click does
+        size_t sel = 0;
+        int task = 0;
+        std::string part;
+        in >> sel >> task >> part;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kc::Vec3 mp, p;
+        if (!kenshi::GetPosition(me, mp)) return "err";
+        std::vector<kenshi::Character*> all;
+        kenshi::ActiveCharacters(all);
+        kenshi::Character* best = nullptr;
+        float bestD = 1e30f;
+        for (kenshi::Character* c : all) {
+            kc::Handle h;
+            std::string name;
+            if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsDown(c) || !kenshi::GetPosition(c, p)) continue;
+            if (!part.empty() && (!kenshi::CharacterName(c, name) || name.find(part) == std::string::npos)) continue;
+            const float d = (p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z);
+            if (d < bestD) { bestD = d; best = c; }
+        }
+        if (!best) return "err no such NPC around";
+        std::string name;
+        kenshi::CharacterName(best, name);
+        bool ok = false;
+        kenshi::WithSelection(me, [&] { ok = kenshi::CallAddTaskNearest(task, best); });
+        return ok ? "ok " + name + " at " + std::to_string(int(std::sqrt(bestD))) : "err call failed";
+    }
+    if (cmd == "jobs") {   // jobs <squadIndex>: its job list (Tâches panel), by kind
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err";
+        kenshi::Character* c = w.FindSquad(squad[idx]);
+        const int n = kenshi::PermajobCount(c);
+        std::string o = "ok " + std::to_string(n);
+        for (int i = 0; i < n; ++i) o += " " + std::to_string(kenshi::PermajobType(c, i));
+        return o;
+    }
+    if (cmd == "jobreq") {   // jobreq <selectIndex> <task> <subjectIndex>: that member alone gets a job on the other (addJobSelectedCharacters, as the UI does)
+        size_t sel = 0, subj = 0;
+        int task = 0;
+        in >> sel >> task >> subj;
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size() || subj >= squad.size()) return "err no such squad member";
+        kenshi::Character* s2 = w.FindSquad(squad[subj]);
+        kc::Vec3 p;
+        if (!kenshi::GetPosition(s2, p)) return "err";
+        const float loc[3] = {p.x, p.y, p.z};
+        using FnAddJob = void (*)(void*, int, void*, bool, bool, const float*);
+        kenshi::WithSelection(w.FindSquad(squad[sel]), [&] {
+            reinterpret_cast<FnAddJob>(kenshi::FnAddr(kenshi::FnAddJobSelected))(kenshi::Player(), task, s2, false, true, loc);
+        });
+        return "ok";
+    }
+    if (cmd == "jobremove") {   // jobremove <squadIndex> <slot>: the Tâches panel's cross on that job (Character::removePermajob)
+        size_t idx = 0;
+        int slot = 0;
+        in >> idx >> slot;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err";
+        kenshi::Character* c = w.FindSquad(squad[idx]);
+        if (slot < 0 || slot >= kenshi::PermajobCount(c)) return "err no such job";
+        reinterpret_cast<void (*)(void*, int)>(kenshi::FnAddr(kenshi::FnCharRemovePermajob))(c, slot);
+        return "ok";
+    }
     if (cmd == "carryreq") {   // carryreq <selectIndex> <targetIndex>: that member alone is ordered to carry the other (as a right click does)
         size_t sel = 0, tgt = 0;
         in >> sel >> tgt;

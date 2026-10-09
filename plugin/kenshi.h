@@ -196,6 +196,12 @@ enum Fn : int {
     // ---- admin console
     FnHealCompletely,           // void Character::healCompletely()   (every wound, blood, KO)
     FnShowInventoryBuilding,    // InventoryGUI* ForgottenGUI::showInventoryBuilding(const hand& owner)   (a building's own inventory panel)
+    // ---- fix G5: a character's job list (the Tâches panel)
+    FnCharRemovePermajob,       // void Character::removePermajob(int slot)   (the panel's cross on a job)
+    FnCharMovePermajob,         // void Character::movePermajob(int from, int to)   (a job dragged in the panel)
+    FnCharRemoveJob,            // void Character::removeJob(TaskType)   (every job of that kind)
+    FnCharGetPermajob,          // TaskType Character::getPermajob(int slot) const
+    FnCharPermajobCount,        // int Character::getPermajobCount() const
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -445,6 +451,16 @@ bool ReadDialogueWindowText(const void* dialogue, std::string& text, std::vector
 void GameStringView(const std::string& s, void* out);
 // Orders: make `only` the whole selection, run `fn`, then restore the player's selection.
 void WithSelection(Character* only, const std::function<void()>& fn);
+// Run `fn`, then put the player's selection, squad bar and details panel back as they were (fn may
+// select characters: a squad created or joined).
+void KeepSelection(const std::function<void()>& fn);
+void UnselectObject(void* obj);   // PlayerInterface::objectSelected(obj, false)
+// The job list of a character (the Tâches panel: follow, operate a machine...), by kind, in order.
+int PermajobCount(Character* c);
+int PermajobType(Character* c, int slot);              // TaskType, -1: none
+bool RemovePermajob(Character* c, int slot);
+bool MovePermajob(Character* c, int from, int to);
+bool RemoveJobKind(Character* c, int task);            // every job of that kind
 bool IsDead(Character* c);
 bool IsUnconscious(Character* c);
 void SetUnconscious(Character* c, bool on);   // the medical state only (no fall, no timer)

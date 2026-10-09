@@ -145,6 +145,7 @@ void hk_mainLoop(void* gw, float t) {
 // Classifies the current selection: are all selected characters ours to command?
 struct SelectionInfo {
     std::vector<kc::Handle> mine;
+    std::vector<kc::Handle> others;   // other players' characters
     size_t foreign = 0;
 };
 SelectionInfo ClassifySelection(const HookView& v) {
@@ -153,13 +154,27 @@ SelectionInfo ClassifySelection(const HookView& v) {
     kenshi::SelectedHandles(sel);
     for (const auto& h : sel) {
         if (v.controllable.count(h)) s.mine.push_back(h);
-        else if (h.type == kenshi::kItemTypeCharacter || h.type == kenshi::kItemTypeAnimalCharacter) ++s.foreign;
+        else if (h.type == kenshi::kItemTypeCharacter || h.type == kenshi::kItemTypeAnimalCharacter) { ++s.foreign; s.others.push_back(h); }
     }
     return s;
 }
 
 void ToastForeign() {
     if (KenshiWorld* w = TheWorld()) w->Toast("Ce personnage appartient à un autre joueur.");
+}
+
+// Host: other players' characters in the host's selection (a click or a box on them, a squad the
+// game selected) are taken out of it, so that the host's own order (move, stop, passive...) goes to
+// the host's characters only. It used to be refused as a whole: the host could no longer move his
+// own character, and a standing order he clicked (passive) showed on the squad bar but was never
+// set. False when nothing of the host's is left to order.
+bool HostDropForeign(const SelectionInfo& s) {
+    if (!s.foreign) return true;
+    for (const auto& h : s.others)
+        if (void* o = kenshi::Resolve(h)) kenshi::UnselectObject(o);
+    Log("host order: %zu character(s) of other players taken out of the host's selection", s.others.size());
+    if (KenshiWorld* w = TheWorld()) w->Toast("Les persos des autres joueurs sont retirés de ta sélection : chacun commande les siens.");
+    return !s.mine.empty();
 }
 
 void hk_playerMove(void* pi, const float* pos, void* building) {
@@ -179,7 +194,7 @@ void hk_playerMove(void* pi, const float* pos, void* building) {
         if (s.foreign) ToastForeign();
         return;
     }
-    if (s.foreign) { ToastForeign(); return; }
+    if (!HostDropForeign(s)) return;
     o_playerMove(pi, pos, building);
 }
 
@@ -209,10 +224,7 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
     auto v = KenshiWorld::View();
     if (g_hostCall || !v->active) return true;
     const SelectionInfo s = ClassifySelection(*v);
-    if (!v->client) {
-        if (s.foreign) { ToastForeign(); return false; }
-        return true;
-    }
+    if (!v->client) return HostDropForeign(s);
     KenshiWorld* w = TheWorld();
     if (!w) return false;
     if (OpensWindow(task)) {
@@ -261,6 +273,49 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
     for (const auto& h : who) w->QueueLocalOrder(h, c);
     if (s.foreign) ToastForeign();
     return false;
+}
+
+// ---- fix G5: the Tâches panel. On a client, removing or moving a job of one of our characters (the
+// panel's cross, a drag, the game's "remove job" of the selection) is done by the host's game, which
+// runs the jobs; our copy does it too, and the host's job lists keep it in line (Session::ClientJobs).
+// Another player's character keeps its jobs.
+using PermajobIntFn = void (*)(void* c, int i);
+using PermajobMoveFn = void (*)(void* c, int from, int to);
+PermajobIntFn o_removePermajob = nullptr;
+PermajobIntFn o_removeJob = nullptr;
+PermajobMoveFn o_movePermajob = nullptr;
+// False when the local game must not do it.
+bool ClientJobChange(void* chr, kc::TaskVia via, int task, int a, int b) {
+    auto v = KenshiWorld::View();
+    if (g_hostCall || !v->active || !v->client || !kenshi::IsCharacter(chr)) return true;
+    kc::Handle h;
+    KenshiWorld* w = TheWorld();
+    if (!w || !kenshi::GetHandle(static_cast<kenshi::Character*>(chr), h)) return true;
+    if (!v->controllable.count(h)) {
+        if (!v->squadForeign.count(chr)) return true;   // not a player's character
+        ToastForeign();
+        return false;
+    }
+    if (task < 0) return true;
+    kc::Command c;
+    c.kind = kc::CommandKind::Task;
+    c.via = via;
+    c.task = task;
+    c.pos = {float(a), float(b), 0.0f};
+    w->QueueLocalOrder(h, c);
+    Log("client job change (via %d, task %d, slot %d -> %d) asked of the host", int(via), task, a, b);
+    return true;
+}
+void hk_removePermajob(void* c, int slot) {
+    const int task = kenshi::PermajobType(static_cast<kenshi::Character*>(c), slot);
+    if (ClientJobChange(c, kc::TaskVia::RemovePermajob, task, slot, 0)) o_removePermajob(c, slot);
+}
+void hk_movePermajob(void* c, int from, int to) {
+    const int task = kenshi::PermajobType(static_cast<kenshi::Character*>(c), from);
+    if (ClientJobChange(c, kc::TaskVia::MovePermajob, task, from, to)) o_movePermajob(c, from, to);
+}
+void hk_removeJob(void* c, int task) {
+    if (ClientJobChange(c, kc::TaskVia::RemoveJob, task, 0, 0)) o_removeJob(c, task);
 }
 
 // Looting a knocked-out or dead character from a client: the looter walks there through the host
@@ -356,7 +411,7 @@ void hk_stopMove(void* pi) {
         }
         return;
     }
-    if (s.foreign) { ToastForeign(); return; }
+    if (!HostDropForeign(s)) return;
     o_stopMove(pi);
 }
 
@@ -520,25 +575,42 @@ void hk_closeEditor(void* gui) {
 // Trade windows: on the host, a merchant's "let's trade" in another player's conversation asks the
 // game for a trade window between that player's character and the merchant. It must open on that
 // player's screen, not ours: the session sends it there (with the shop's stock).
+// Every trade window goes through ForgottenGUI::showTradeWindow (the dialogue's "trade" action, the
+// loot/trade task of a right click): this is the one place to catch them. Whoever calls it: the
+// client's own order and its dialogue answer run inside a HostCallScope. And either side: the
+// dialogue action passes (its target, its owner), so a conversation the player started arrives
+// with the merchant first and the player second.
 using ShowTradeFn = void (*)(void* gui, const void* a, const void* b, int type);
 ShowTradeFn o_showTrade = nullptr;
 void hk_showTrade(void* gui, const void* a, const void* b, int type) {
     auto v = KenshiWorld::View();
     KenshiWorld* w = TheWorld();
-    if (w && v->active && !v->client && !g_hostCall) {
+    if (w && v->active && !v->client) {
         kc::Handle ha, hb;
-        kenshi::Character* ca = kenshi::HandleFromHand(a, ha) ? kenshi::Resolve(ha) : nullptr;
-        const bool other = kenshi::HandleFromHand(b, hb);
-        if (ca && v->squadForeign.count(ca)) {
+        const bool haveA = kenshi::HandleFromHand(a, ha), haveB = kenshi::HandleFromHand(b, hb);
+        kenshi::Character* ca = haveA ? kenshi::Resolve(ha) : nullptr;
+        kenshi::Character* cb = haveB ? kenshi::Resolve(hb) : nullptr;
+        // the player second only for the dialogue's trade (type 1): in a loot (type 3) `a` is always the
+        // looter, and the host's character looting another player's body must keep its window
+        const bool fa = ca && v->squadForeign.count(ca), fb = !fa && type == 1 && cb && v->squadForeign.count(cb);
+        if (fa || fb) {
             // TW_MONEY_TRADING (a merchant's "let's trade"), or TW_AUTO on a merchant standing there
             // (a right click on it): a trade window for that player
-            kenshi::Character* cb = other ? kenshi::Resolve(hb) : nullptr;
-            const bool merchant = cb && !kenshi::IsDead(cb) && !kenshi::IsDown(cb) && !kenshi::IsUnconscious(cb);
-            if (other && (type == 1 || (type == 3 && merchant))) w->QueueTradeRequest(ha, hb);
-            else Log("trade window type %d for another player's character: not opened here", type);
+            const kc::Handle& player = fa ? ha : hb;
+            const kc::Handle& trader = fa ? hb : ha;
+            kenshi::Character* other = fa ? cb : ca;
+            const bool haveOther = fa ? haveB : haveA;
+            const bool merchant = other && !kenshi::IsDead(other) && !kenshi::IsDown(other) && !kenshi::IsUnconscious(other);
+            if (haveOther && (type == 1 || (type == 3 && merchant))) {
+                w->QueueTradeRequest(player, trader);
+                Log("trade window type %d for another player's character (%s side%s): sent to that player", type, fa ? "first" : "second",
+                    g_hostCall ? ", from its own order" : "");
+            } else {
+                Log("trade window type %d for another player's character: not opened here", type);
+            }
             return;
         }
-        if (type == 1 && other) w->NoteHostTradeWindow(ha, hb);
+        if (!g_hostCall && type == 1 && haveB) w->NoteHostTradeWindow(ha, hb);
     }
     o_showTrade(gui, a, b, type);
 }
@@ -1130,6 +1202,7 @@ bool CallTaskSeh(void* pi, const kc::Command& cmd, void* subject, void* building
         case kc::TaskVia::TaskNearest: o_addTaskNearest(pi, building, cmd.task, subject, cmd.shift, loc, cmd.add); break;
         case kc::TaskVia::AddJob: o_addJob(pi, cmd.task, subject, cmd.shift, cmd.add, loc); break;
         case kc::TaskVia::SetOrder: o_setOrder(pi, cmd.task); break;
+        default: return false;
         }
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1143,6 +1216,19 @@ bool CallTaskSeh(void* pi, const kc::Command& cmd, void* subject, void* building
 bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, void* building) {
     void* pi = kenshi::Player();
     if (!pi || !kenshi::IsCharacter(c)) return false;
+    if (cmd.via == kc::TaskVia::RemovePermajob || cmd.via == kc::TaskVia::MovePermajob || cmd.via == kc::TaskVia::RemoveJob) {
+        // the Tâches panel: on that character itself. The slot the client saw, if it holds that job
+        // here, else the first job of that kind.
+        HostCallScope scope;
+        if (cmd.via == kc::TaskVia::RemoveJob) return kenshi::RemoveJobKind(c, cmd.task);
+        const int hint = int(cmd.pos.x);
+        int slot = kenshi::PermajobType(c, hint) == cmd.task ? hint : -1;
+        for (int i = 0, n = kenshi::PermajobCount(c); slot < 0 && i < n; ++i)
+            if (kenshi::PermajobType(c, i) == cmd.task) slot = i;
+        if (slot < 0) return false;
+        if (cmd.via == kc::TaskVia::RemovePermajob) return kenshi::RemovePermajob(c, slot);
+        return kenshi::MovePermajob(c, slot, std::min(int(cmd.pos.y), kenshi::PermajobCount(c) - 1));
+    }
     if (cmd.via == kc::TaskVia::SetOrder) {
         // the squad bar's toggles, set on the character itself: the game's selection function
         // decides from the host's own toggle buttons, not from that character
@@ -1215,6 +1301,10 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnPickupCharacter, reinterpret_cast<void*>(&hk_pickChar), reinterpret_cast<void**>(&o_pickChar)},
         {kenshi::FnShowTradeWindow, reinterpret_cast<void*>(&hk_showTrade), reinterpret_cast<void**>(&o_showTrade)},
         {kenshi::FnShowInventoryBuilding, reinterpret_cast<void*>(&hk_showInvBuilding), reinterpret_cast<void**>(&o_showInvBuilding)},
+        // ---- fix G5
+        {kenshi::FnCharRemovePermajob, reinterpret_cast<void*>(&hk_removePermajob), reinterpret_cast<void**>(&o_removePermajob)},
+        {kenshi::FnCharMovePermajob, reinterpret_cast<void*>(&hk_movePermajob), reinterpret_cast<void**>(&o_movePermajob)},
+        {kenshi::FnCharRemoveJob, reinterpret_cast<void*>(&hk_removeJob), reinterpret_cast<void**>(&o_removeJob)},
         // ---- lot D: prisons
         {kenshi::FnSetPrisonMode, reinterpret_cast<void*>(&hk_prisonMode), reinterpret_cast<void**>(&o_prisonMode)},
         {kenshi::FnSetChainedMode, reinterpret_cast<void*>(&hk_chainedMode), reinterpret_cast<void**>(&o_chainedMode)},

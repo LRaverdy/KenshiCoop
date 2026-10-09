@@ -163,6 +163,7 @@ void Session::Leave() {
     trade_ = ClientTrade{};
     ResetFactions();
     ResetDoors();   // lot A
+    ResetJobs();   // fix G5
     captiveSent_.clear(); captives_.clear(); captivesDirty_.clear();   // lot D: prisons
     haveMoneyBase_ = false;
     unsentSpend_ = 0;
@@ -235,6 +236,7 @@ void Session::HostTick(double now, bool live) {
     HostCaptives(now);   // lot D: prisons
     HostRanged(now);   // lot C
     HostBuildings(now);
+    HostJobs(now);   // fix G5
     // A player's new looks: applied here, then shown to everyone else.
     for (auto& [from, m] : pendingLooks_) {
         auto it = entities_.find(m.netId);
@@ -1788,6 +1790,8 @@ void Session::ApplyCommand(uint8_t from, const Command& c) {
     case CommandKind::PickUp: what = "pick up " + world_.TemplateName(c.itemSid); break;
     case CommandKind::Task:
         if (c.via == TaskVia::SetOrder) what = std::string("mode \"") + StandingOrderLabel(c.task) + "\"";
+        else if (c.via == TaskVia::RemovePermajob || c.via == TaskVia::RemoveJob) what = std::string("remove job \"") + TaskLabel(c.task) + "\" (" + std::to_string(c.task) + ")";
+        else if (c.via == TaskVia::MovePermajob) what = std::string("move job \"") + TaskLabel(c.task) + "\" (" + std::to_string(c.task) + ")";
         else what = std::string("order \"") + TaskLabel(c.task) + "\" (" + std::to_string(c.task) + ")" + (c.itemSid.empty() ? "" : " on " + world_.TemplateName(c.itemSid));
         break;
     case CommandKind::SquadMove: what = "change squad"; break;
@@ -2048,6 +2052,7 @@ void Session::ClientTick(double now, bool live) {
     ClientCaptives(now);   // lot D: prisons
     ClientRanged(now);   // lot C
     ClientBuildings(now);
+    ClientJobs(now);   // fix G5
     // Squads: split our characters as the host does (again now and then: stand-ins, late arrivals).
     if (haveSquads_ && now - squadsAt_ > 2.0) {
         squadsAt_ = now;
@@ -2450,6 +2455,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
         break;
     }
     case Msg::Doors: ClientDoorsPacket(r); break;   // lot A
+    case Msg::JobList: ClientJobsPacket(r); break;   // fix G5
     case Msg::Shots: case Msg::Ranged: ClientRangedPacket(type, r); break;   // lot C
     case Msg::Pong: break;
     default: break;
