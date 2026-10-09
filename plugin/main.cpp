@@ -36,6 +36,7 @@ bool g_overlayVisible = true;
 std::deque<std::pair<std::string, double>> g_toasts;   // text, expiry time
 bool g_wasReady = false;
 bool g_leftHostWorld = false;   // a client left the host's world: what it shows is only a copy
+bool JoinAndRemember(const std::string& address, uint16_t port, std::string* err);
 bool g_menuWindowShown = false;   // the Multijoueur window opens by itself once, on the main menu
 double g_startedAt = 0;
 
@@ -148,7 +149,7 @@ void HandleHotkeys() {
     }
     if (Pressed(g_hkJoin, mods)) {
         if (g_session->isClient()) Toast("Already connected.");
-        else if (steam::JoinAddress(*g_session, g_cfg.joinAddress, g_cfg.port, &err)) Toast("Joining " + g_cfg.joinAddress + "...");
+        else if (JoinAndRemember(g_cfg.joinAddress, g_cfg.port, &err)) Toast("Joining " + g_cfg.joinAddress + "...");
         else Toast("Cannot join: " + err);
     }
     if (Pressed(g_hkLeave, mods)) {
@@ -250,6 +251,7 @@ void ConsoleCommand(const std::string& line) {
             out("pause [0|1]          mettre en pause / reprendre");
             out("speed <x>            vitesse du jeu (1, 2, 3...)");
             out("tp <id> [vers <id>]  téléporter les persos du joueur <id> près de ton perso sélectionné (ou d'un autre joueur)");
+            out("resync [id]          le joueur <id> (sans id : tout le monde) recharge ton monde tel qu'il est");
         }
         return;
     }
@@ -299,6 +301,14 @@ void ConsoleCommand(const std::string& line) {
         return;
     }
     if (!g_world->Ready()) { out("aucune partie chargée"); return; }
+    if (cmd == "resync") {
+        int id = 0;
+        in >> id;
+        if (!host) { out("pas de partie hébergée"); return; }
+        const size_t n = g_session->RequestResync(uint8_t(std::clamp(id, 0, 255)));
+        out(n ? std::to_string(n) + " joueur(s) rechargent ton monde" : "aucun joueur en jeu");
+        return;
+    }
     if (cmd == "tp") {   // tp <id> [<toId>]: unstick a player's characters next to my selection (or another player's)
         int id = -1, to = -1;
         in >> id >> to;
@@ -367,7 +377,7 @@ void HandleOverlayActions() {
             if (g_session->isClient()) { Toast("Déjà connecté."); break; }
             if (a.address.empty()) { Toast("Entre l'adresse ou le code Steam de l'hôte."); break; }
             if (!ApplyConnection(a.name, a.address, a.port)) break;
-            if (steam::JoinAddress(*g_session, g_cfg.joinAddress, g_cfg.port, &err)) Toast("Connexion à " + g_cfg.joinAddress + "...");
+            if (JoinAndRemember(g_cfg.joinAddress, g_cfg.port, &err)) Toast("Connexion à " + g_cfg.joinAddress + "...");
             else Toast("Impossible de rejoindre : " + FrenchError(err));
             break;
         case OverlayAction::Kind::Leave:
@@ -486,7 +496,7 @@ void SteamUpkeep() {
     if (auto id = steam::TakeJoinRequest()) {
         std::string err;
         if (g_session->isHost() || g_session->isClient()) Toast("Quitte la session en cours avant de rejoindre un ami.");
-        else if (steam::Join(*g_session, *id, &err)) Toast("Connexion à ton ami via Steam...");
+        else if (JoinAndRemember("steam:" + std::to_string(*id), g_cfg.port, &err)) Toast("Connexion à ton ami via Steam...");
         else Toast("Impossible de rejoindre : " + FrenchError(err));
     }
 }
@@ -551,7 +561,30 @@ void LogAndConsoleUpkeep() {
 }
 
 bool g_clientInWorld = false;
+double g_rejoinAt = -1;          // resync: when to join again
+bool JoinAndRemember(const std::string& address, uint16_t port, std::string* err) {
+    return steam::JoinAddress(*g_session, address, port, err);   // which remembers it for a resync
+}
+
+// The host asked us to reload its world: leave, then join the same host again a moment later.
+void ResyncUpkeep() {
+    std::string address;
+    uint16_t port = 0;
+    if (g_session->TakeResyncRequest() && steam::LastJoin(address, port)) {
+        g_clientInWorld = false;   // not a departure: no "you left" message
+        g_session->Leave();
+        g_rejoinAt = NowSeconds() + 1.5;
+        Toast("L'hôte resynchronise la partie : rechargement de son monde...");
+    }
+    if (g_rejoinAt > 0 && NowSeconds() >= g_rejoinAt) {
+        g_rejoinAt = -1;
+        std::string err;
+        if (!steam::LastJoin(address, port) || !JoinAndRemember(address, port, &err)) Toast("Resynchronisation impossible : " + FrenchError(err));
+    }
+}
+
 void AfterLeavingHostWorld() {
+    if (g_rejoinAt > 0) return;   // a resync is under way
     const bool inWorld = g_session->state() == kc::SessionState::Connected;
     if (inWorld || g_session->isHost()) g_leftHostWorld = false;
     if (inWorld) { g_clientInWorld = true; return; }
@@ -588,6 +621,7 @@ void Tick(bool live) {
     if (live) g_session->CountFrame();
     LogAndConsoleUpkeep();
     g_session->Tick(live);
+    ResyncUpkeep();
     AfterLeavingHostWorld();
     if (live) g_world->EndFrame();
     PublishOverlay();

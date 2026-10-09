@@ -263,7 +263,7 @@ void DrawMultiplayer(const OverlayModel& m, float w, float h) {
             ImGui::TableSetupColumn("Joueur");
             ImGui::TableSetupColumn("Ping", ImGuiTableColumnFlags_WidthFixed, 70.0f);
             ImGui::TableSetupColumn("Persos", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-            if (m.hosting) ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+            if (m.hosting) ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 160.0f);
             ImGui::TableHeadersRow();
             for (const auto& p : m.players) {
                 ImGui::TableNextRow();
@@ -280,11 +280,19 @@ void DrawMultiplayer(const OverlayModel& m, float w, float h) {
                         ImGui::PushID(int(p.id));
                         if (ImGui::SmallButton("TP vers moi")) PushAction({OverlayAction::Kind::Command, {}, {}, "tp " + std::to_string(p.id), 0});
                         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Amène ses personnages près de ton personnage sélectionné (pour le débloquer).");
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Resync")) PushAction({OverlayAction::Kind::Command, {}, {}, "resync " + std::to_string(p.id), 0});
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Il recharge ton monde tel qu'il est maintenant (en cas de désynchro).");
                         ImGui::PopID();
                     }
                 }
             }
             ImGui::EndTable();
+        }
+        if (m.hosting && m.players.size() > 1) {
+            if (ImGui::Button("Resynchroniser tout le monde")) PushAction({OverlayAction::Kind::Command, {}, {}, "resync", 0});
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Chaque joueur recharge ton monde tel qu'il est maintenant (quelques secondes, la partie attend).");
+            ImGui::SameLine();
         }
         if (ImGui::Button("Quitter la session")) PushAction({OverlayAction::Kind::Leave, {}, {}, {}, 0});
     }

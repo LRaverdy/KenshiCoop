@@ -122,6 +122,7 @@ const FunctionSig kFunctions[FnCount] = {
     {"Character::dropCarriedObject", 0x5CE1E0, {0x48, 0x8B, 0xC4, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x83, 0xEC, 0x70}},
     {"PlayerInterface::setCurrentPlatoon", 0x7F2800, {0x48, 0x83, 0xEC, 0x28, 0x48, 0x39, 0x91, 0xA8, 0x02, 0x00, 0x00, 0x74}},
     {"SaveManager::showLoad", 0x4824C0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE}},
+    {"Character::reThinkCurrentAIAction", 0x5C8330, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x81, 0x48, 0x06, 0x00}},
 };
 
 namespace {
@@ -1250,6 +1251,19 @@ namespace {
 void* SaveManagerInstance() { return CallNoArgPtr(FnAddr(FnSaveManagerGet)); }
 }
 
+size_t LocalTaskCount(Character* c) {
+    // Character -> AI (+0x650) -> AITaskSytem (+0x20) -> its actions (ActionDeque at +0x300, size at +0x28)
+    void* ai = nullptr;
+    void* ts = nullptr;
+    uint64_t n = 0;
+    if (!IsCharacter(c) || !Rd(c, off::CH_ai, ai) || !ai || !Rd(ai, 0x20, ts) || !ts || !Rd(ts, 0x300 + 0x28, n) || n > 1000) return 0;
+    return size_t(n);
+}
+
+bool DropLocalTasks(Character* c) {
+    return IsCharacter(c) && CallVoid(FnAddr(FnReThinkAIAction), c);
+}
+
 bool ShowLoadWindow() {
     void* sm = SaveManagerInstance();
     return sm && CallVoid(FnAddr(FnShowLoadWindow), sm);
@@ -1451,6 +1465,48 @@ bool CallAddTaskNearestRaw(void* fn, void* pi, int task, void* subject, const fl
     }
 }
 } // namespace
+
+bool CallAddTaskNearestObject(int task, void* subject, const kc::Vec3& at) {
+    PlayerInterface* pi = Player();
+    if (!pi || !subject) return false;
+    const float loc[3] = {at.x, at.y, at.z};
+    return CallAddTaskNearestRaw(FnAddr(FnAddTaskNearest), pi, task, subject, loc);
+}
+
+void* FurnitureParent(void* furniture) {
+    if (!furniture || IsCharacter(furniture)) return nullptr;
+    std::string sid;
+    // Building::isFurnitureOf at +0x238: a pointer, or a hand to resolve
+    void* parent = nullptr;
+    if (Rd(furniture, 0x238, parent) && parent && parent != furniture && ObjectTemplate(parent, sid)) return parent;
+    kc::Handle h;
+    if (ReadHandle(reinterpret_cast<uint8_t*>(furniture) + 0x238, h) && h.valid()) {
+        void* p = ResolveItem(h);
+        if (p && p != furniture && ObjectTemplate(p, sid)) return p;
+    }
+    return nullptr;
+}
+
+namespace {
+using FnNewTaskSig = void (*)(void* pi, int task, const void* targetHand, void* building, const float* clickPos, bool addDontClear);
+bool NewTaskSeh(void* fn, void* pi, int task, const void* hand, void* building, const float* loc) {
+    __try { reinterpret_cast<FnNewTaskSig>(fn)(pi, task, hand, building, loc, false); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+bool CallNewPlayerTaskOn(int task, void* subject, const kc::Vec3& at, void* building) {
+    PlayerInterface* pi = Player();
+    kc::Handle h;
+    if (!pi || !ObjectHandle(subject, h)) return false;
+    alignas(8) uint8_t hand[off::HandSize];
+    MakeHand(h, hand);
+    const float loc[3] = {at.x, at.y, at.z};
+    return NewTaskSeh(FnAddr(FnNewPlayerTaskSelected), pi, task, hand, building, loc);
+}
+
+bool ReadInSomething(Character* c, int& v) {
+    return IsCharacter(c) && Rd(c, 0x2F8, v);
+}
 
 bool CallAddTaskNearest(int task, Character* subject) {
     kc::Vec3 p;
@@ -2664,16 +2720,20 @@ void AllObjectsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out) 
     out.clear();
     void* zm = nullptr;
     if (!Rd(reinterpret_cast<void*>(Addr(kZoneManagerPtr)), 0, zm) || !zm) return;
-    GameLektor lk{Addr(kLektorPtrVt), 0, 10, nullptr};
-    lk.data = static_cast<void**>(reinterpret_cast<FnNew>(Addr(kGameNew))(10 * sizeof(void*)));
-    if (!lk.data) return;
-    const float pt[3] = {pos.x, pos.y, pos.z};
-    if (SehGetObjects(reinterpret_cast<uint8_t*>(zm) + ZM_objectGrid, pt, radius, &lk))
-        for (uint32_t i = 0; i < lk.count && i < 100000; ++i) {
-            void* o = nullptr;
-            if (Rd(lk.data, i * sizeof(void*), o) && o) out.push_back(o);
-        }
-    if (lk.data) reinterpret_cast<FnDelete>(Addr(kGameDelete))(lk.data);
+    // the zone manager keeps one grid per kind: buildings and furniture (beds, stools, chests,
+    // machines) at +0x48, items at +0x80 (characters at +0x10, not wanted here)
+    for (uintptr_t grid : {uintptr_t(0x48), ZM_objectGrid}) {
+        GameLektor lk{Addr(kLektorPtrVt), 0, 10, nullptr};
+        lk.data = static_cast<void**>(reinterpret_cast<FnNew>(Addr(kGameNew))(10 * sizeof(void*)));
+        if (!lk.data) return;
+        const float pt[3] = {pos.x, pos.y, pos.z};
+        if (SehGetObjects(reinterpret_cast<uint8_t*>(zm) + grid, pt, radius, &lk))
+            for (uint32_t i = 0; i < lk.count && i < 100000; ++i) {
+                void* o = nullptr;
+                if (Rd(lk.data, i * sizeof(void*), o) && o) out.push_back(o);
+            }
+        if (lk.data) reinterpret_cast<FnDelete>(Addr(kGameDelete))(lk.data);
+    }
 }
 
 void GroundItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out) {

@@ -39,6 +39,8 @@ bool Join(kc::Session& s, uint64_t hostId, std::string* err);
 bool JoinAddress(kc::Session& s, const std::string& address, uint16_t port, std::string* err);
 void Stop();
 bool Active();
+// The last address joined (IP or steam:<id>) and port: a resync joins it again.
+bool LastJoin(std::string& address, uint16_t& port);
 
 struct Friend {
     uint64_t id = 0;

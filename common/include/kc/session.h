@@ -284,6 +284,10 @@ public:
     void CountFrame() { ++frames_; }
     // Client: open the game's character editor on our own character (its looks go to everyone).
     bool EditOwnCharacter();
+    // Host: that player (0: everyone) leaves and joins again at once, reloading the host's world as
+    // it is now. Client: the host asked for it (the caller leaves and joins again).
+    size_t RequestResync(uint8_t playerId);
+    bool TakeResyncRequest() { return std::exchange(resyncRequested_, false); }
     void AnswerDialog(int index);
 
 private:
@@ -422,6 +426,7 @@ private:
     uint32_t editRequest_ = 0;             // client: the host asked us to make our new character
     bool editingSent_ = false;             // client: what we last told the host about our editor
     bool holdForEditor_ = false;           // host: the world is held still while a player edits
+    bool resyncRequested_ = false;         // client: the host asked us to reload its world
     std::vector<std::string> logOut_;      // client: log lines waiting to go to the host
     size_t logDropped_ = 0;
     double nextLogSend_ = 0, nextReport_ = 0, reportStart_ = 0;

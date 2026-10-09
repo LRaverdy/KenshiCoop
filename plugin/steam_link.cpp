@@ -60,6 +60,8 @@ Api g_api;
 bool g_steam = false;          // the Steam API answered
 bool g_loopback = false;       // [debug] steam_loopback=1
 uint64_t g_myId = 0;
+std::string g_lastAddress;   // what was joined last: a resync joins it again
+uint16_t g_lastPort = 0;
 
 constexpr int kFriendFlagImmediate = 4;   // k_EFriendFlagImmediate
 constexpr int kSendUnreliable = 0;        // k_EP2PSendUnreliable (ENet does the reliability)
@@ -389,6 +391,7 @@ bool Join(kc::Session& s, uint64_t hostId, std::string* err) {
         if (err) *err = "this Steam id is your own";
         return false;
     }
+    g_lastAddress = "steam:" + std::to_string(static_cast<unsigned long long>(hostId));
     Stop();
     auto* l = new Link;
     l->hostId = hostId;
@@ -408,7 +411,15 @@ bool Join(kc::Session& s, uint64_t hostId, std::string* err) {
     return s.Join("127.0.0.1", localPort, err, kMtu);
 }
 
+bool LastJoin(std::string& address, uint16_t& port) {
+    address = g_lastAddress;
+    port = g_lastPort;
+    return !address.empty();
+}
+
 bool JoinAddress(kc::Session& s, const std::string& address, uint16_t port, std::string* err) {
+    g_lastAddress = address;
+    g_lastPort = port;
     uint64_t id = 0;
     if (ParseAddress(address, id)) return Join(s, id, err);
     Stop();

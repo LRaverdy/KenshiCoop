@@ -1065,8 +1065,8 @@ def exp_suite(host, cli):
     names = set(_re.findall(r"\* (.+?) is in the world", hl))
     cname = sorted(names)[-1] if names else "Player 2"
     check("journal : lignes du client relayees chez l'hote", f"[{cname}] connecting" in hl, cname)
-    check("journal : rapport de synchro du client", f"[{cname}] synchro" in hl)
-    check("journal : ordres du client en clair", f"[{cname}] mode \"furtif\"" in hl and f"[{cname}] ordre \"porter" in hl)
+    check("journal : rapport de synchro du client", f"[{cname}] sync" in hl)
+    check("journal : ordres du client en clair", f"[{cname}] mode \"stealth\"" in hl and f"[{cname}] order \"carry" in hl)
     # --- 10. a full frozen comparison at the end
     cmd(host, "pause 1")
     time.sleep(3)
@@ -1077,7 +1077,24 @@ def exp_suite(host, cli):
     check("fin : aucun etat vital different", rep["vital_flag_mismatch"] == 0, rep["vital_flag_mismatch"])
     check("fin : aucun inventaire different", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
     check("fin : personne ne manque chez le client", rep["missing_on_client"] == 0, rep["missing_sample"])
-    # --- 11. reconnect: same character back
+    # --- 11. the host's resync: the player reloads the host's world and is back with its character
+    backs = host_log().count("is back with their character")
+    log("resync", cmd(host, "resync 2"))
+    ok_back = False
+    for _ in range(90):
+        time.sleep(1)
+        if host_log().count("is back with their character") > backs and cmd(cli, "status")[1].find("state=connected") >= 0:
+            ok_back = True
+            break
+    time.sleep(4)
+    check("resync : le joueur recharge le monde et retrouve son perso", ok_back)
+    cmd(host, "pause 1")
+    time.sleep(3)
+    rep = compare(dump(host, "h_suite_resync"), dump(cli, "c_suite_resync"), "resync", pos_tol=0.1)
+    cmd(host, "pause 0")
+    check("resync : tout est identique ensuite", rep["vital_flag_mismatch"] == 0 and rep["inventory_mismatch"] == 0 and rep["missing_on_client"] == 0,
+          (rep["vital_flag_mismatch"], rep["inventory_mismatch"], rep["missing_on_client"]))
+    # --- 12. reconnect: same character back
     cmd(cli, "leave")
     time.sleep(4)
     cmd(cli, "join")
@@ -1085,6 +1102,36 @@ def exp_suite(host, cli):
     time.sleep(3)
     check("reconnexion : le joueur retrouve son personnage", "is back with their character" in host_log())
     summary()
+
+
+def exp_jitter(host, cli):
+    """Standing NPCs on the client must not shake, whatever the game speed (they did after a speed change)."""
+    import statistics
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(2)
+    for speed in (1, 3, 1):
+        cmd(host, f"speed {speed}")
+        time.sleep(4)
+        cmd(cli, "animstats")
+        tracks = {}
+        for _ in range(12):
+            c = dump(cli, "cj", 1500)
+            for k, v in c["char"].items():
+                if "pos" in v and not (int(v.get("flags", 0)) & 5):
+                    tracks.setdefault(k, []).append(v["pos"])
+            time.sleep(0.25)
+        shaky = []
+        for k, ps in tracks.items():
+            if len(ps) < 8:
+                continue
+            steps = [dist(ps[i], ps[i + 1]) for i in range(len(ps) - 1)]
+            # a standing character that moves back and forth: many small steps that do not add up
+            net = dist(ps[0], ps[-1])
+            if sum(steps) > 3.0 and net < sum(steps) * 0.3:
+                shaky.append((k[-14:], round(sum(steps), 1), round(net, 1)))
+        st = cmd(cli, "animstats")[1].split()
+        log(f"speed {speed}: {len(tracks)} standing characters watched, shaking: {len(shaky)} {shaky[:5]} | animation clock jumps {st[1]}/{st[2]}")
 
 
 def t_dist(a, b):
@@ -1377,6 +1424,9 @@ def main():
     tk = sub.add_parser("talk")
     tk.add_argument("--save", default="kctest_base")
     tk.add_argument("--keep", action="store_true")
+    ji = sub.add_parser("jitter")
+    ji.add_argument("--save", default="kctest_town")
+    ji.add_argument("--keep", action="store_true")
     su = sub.add_parser("suite", help="every feature, PASS / FAIL per point")
     su.add_argument("--save", default="kctest_base")
     su.add_argument("--keep", action="store_true")
@@ -1454,7 +1504,9 @@ def main():
         log("ready: host", host, "client", cli)
         return
     try:
-        if a.what == "suite":
+        if a.what == "jitter":
+            exp_jitter(host, cli)
+        elif a.what == "suite":
             exp_suite(host, cli)
         elif a.what == "squads":
             exp_squads(host, cli)

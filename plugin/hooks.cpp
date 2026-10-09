@@ -238,7 +238,11 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
         kenshi::ObjectTemplate(subj, c.itemSid);
         kenshi::ObjectPosition(subj, c.subjectPos);
     }
-    if (building) kenshi::ObjectHandle(building, c.building);
+    if (building) {
+        kenshi::ObjectHandle(building, c.building);
+        kenshi::ObjectTemplate(building, c.buildingSid);
+        kenshi::ObjectPosition(building, c.buildingPos);
+    }
     std::vector<kc::Handle> who = s.mine;
     if (via == kc::TaskVia::TaskNearest && loc && who.size() > 1) {   // the game picks the nearest one
         kc::Handle best = who.front();
@@ -952,6 +956,15 @@ bool CallTaskSeh(void* pi, const kc::Command& cmd, void* subject, void* building
 bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, void* building) {
     void* pi = kenshi::Player();
     if (!pi || !kenshi::IsCharacter(c)) return false;
+    if (cmd.via == kc::TaskVia::SetOrder) {
+        // the squad bar's toggles, set on the character itself: the game's selection function
+        // decides from the host's own toggle buttons, not from that character
+        HostCallScope scope;
+        const int order = cmd.task;
+        const bool on = order > 10 ? !kenshi::GetStandingOrder(c, order) : true;
+        kenshi::SetStandingOrder(c, order, on);
+        return true;
+    }
     const float loc[3] = {cmd.pos.x, cmd.pos.y, cmd.pos.z};
     alignas(8) uint8_t hand[kenshi::off::HandSize];
     kc::Handle target = cmd.subject;

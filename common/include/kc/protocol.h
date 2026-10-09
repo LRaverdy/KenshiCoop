@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 24;
+constexpr uint16_t kProtocolVersion = 26;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -67,6 +67,7 @@ enum class Msg : uint8_t {
     EditState = 32,   // C->S  the character editor is open / closed here (the host waits meanwhile)
     ClientLog = 33,   // C->S  the client's log lines: the host's log shows what happens on every machine
     ClientReport = 34, // C->S  how well the client's game follows the host's (every few seconds)
+    Resync = 35,      // S->C  reload the host's world now (the host's cure for any desync)
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -224,6 +225,8 @@ struct Command {
     Handle building;       // the building the character goes into, if any
     Vec3 subjectPos;       // where the subject is (objects of towns have other handles on every machine:
                            // the host finds the same kind of object there, see itemSid)
+    std::string buildingSid;   // the destination building's kind and place, found the same way
+    Vec3 buildingPos;
 };
 
 struct TimeState {
@@ -576,6 +579,7 @@ void Encode(Writer& w, const EditCharacter& m);
 void Encode(Writer& w, const EditState& m);
 const char* TaskLabel(int task);   // a player order's name, for logs ("?" when unknown)
 const char* StandingOrderLabel(int order);   // a squad bar toggle's name, for logs
+void EncodeResync(Writer& w);
 void Encode(Writer& w, const ClientLog& m);
 bool Decode(Reader& r, ClientLog& m);
 void Encode(Writer& w, const ClientReport& m);

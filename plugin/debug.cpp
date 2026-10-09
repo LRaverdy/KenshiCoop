@@ -497,7 +497,12 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         std::vector<void*> objs;
         kenshi::ObjectsNear(p, r, objs);
         std::map<std::string, int> kinds;
-        for (void* o : objs) { std::string sid; kenshi::ObjectTemplate(o, sid); ++kinds[sid.empty() ? "?" : sid]; }
+        for (void* o : objs) {
+            std::string sid, name;
+            kenshi::ObjectTemplate(o, sid);
+            if (!sid.empty()) kenshi::TemplateDisplayName(sid, name);
+            ++kinds[(sid.empty() ? "?" : sid) + "(" + name + ")"];
+        }
         std::ostringstream o;
         o << "ok " << objs.size();
         for (auto& [k, n] : kinds) o << " " << k << "x" << n;
@@ -610,6 +615,88 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             if (n > longest) { longest = n; edit = c; }
         }
         return "ok window visible=" + std::to_string(IsWindowVisible(wnd) ? 1 : 0) + " log=" + std::to_string(longest);
+    }
+    if (cmd == "resync") {   // resync [playerId]: (host) that player (0: everyone) reloads the host's world
+        int id = 0;
+        in >> id;
+        return "ok " + std::to_string(s.RequestResync(uint8_t(std::clamp(id, 0, 255))));
+    }
+    if (cmd == "objreq") {   // objreq <selectIndex> <task> <name part>: that member alone is ordered to use the nearest object whose name has that text ('_' for spaces)
+        size_t sel = 0;
+        int task = 0;
+        std::string part;
+        in >> sel >> task >> part;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kc::Vec3 p, op;
+        if (!kenshi::GetPosition(me, p)) return "err";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(p, 1500, objs);
+        void* best = nullptr;
+        float bestD = 1e30f;
+        std::string bestName;
+        for (void* o : objs) {
+            std::string sid, name;
+            if (!kenshi::ObjectTemplate(o, sid) || !kenshi::TemplateDisplayName(sid, name) || name.find(part) == std::string::npos || !kenshi::ObjectPosition(o, op)) continue;
+            const float d = (op.x - p.x) * (op.x - p.x) + (op.z - p.z) * (op.z - p.z);
+            if (d < bestD) { bestD = d; best = o; bestName = name; }
+        }
+        if (!best) return "err nothing called " + part;
+        kenshi::ObjectPosition(best, op);
+        bool ok = false;
+        // the UI's path for furniture: a new task on that object's handle, with the building it is in
+        // (the click gives it; here: the nearest house-like building)
+        void* dest = nullptr;
+        float destD = 1e30f;
+        for (void* o : objs) {
+            std::string sid, name;
+            kc::Vec3 hp;
+            if (!kenshi::ObjectTemplate(o, sid) || !kenshi::TemplateDisplayName(sid, name) || !kenshi::ObjectPosition(o, hp)) continue;
+            if (name.find("Maison") == std::string::npos && name.find("Cabane") == std::string::npos && name.find("Abri") == std::string::npos &&
+                name.find("Tente") == std::string::npos && name.find("Tour") == std::string::npos)
+                continue;
+            const float d = (hp.x - op.x) * (hp.x - op.x) + (hp.z - op.z) * (hp.z - op.z);
+            if (d < destD) { destD = d; dest = o; }
+        }
+        kenshi::WithSelection(me, [&] { ok = kenshi::CallNewPlayerTaskOn(task, best, op, dest); });
+        return (ok ? "ok " : "err ") + bestName + " at " + std::to_string(int(std::sqrt(bestD)));
+    }
+    if (cmd == "furnparent") {   // furnparent <name part>: what the nearest object with that name is furniture of (tests)
+        std::string part;
+        in >> part;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        kc::Vec3 p, op;
+        if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), p)) return "err";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(p, 1500, objs);
+        std::ostringstream o;
+        o << "ok";
+        int n = 0;
+        for (void* obj : objs) {
+            std::string sid, name;
+            if (!kenshi::ObjectTemplate(obj, sid) || !kenshi::TemplateDisplayName(sid, name) || name.find(part) == std::string::npos) continue;
+            void* parent = kenshi::FurnitureParent(obj);
+            std::string psid, pname;
+            if (parent && kenshi::ObjectTemplate(parent, psid)) kenshi::TemplateDisplayName(psid, pname);
+            uint8_t raw[0x28] = {};
+            for (size_t k = 0; k < sizeof(raw); ++k) raw[k] = reinterpret_cast<const uint8_t*>(obj)[0x238 + k];
+            char hex[100];
+            snprintf(hex, sizeof(hex), "%02x%02x%02x%02x%02x%02x%02x%02x %02x%02x%02x%02x", raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7], raw[8], raw[9], raw[10], raw[11]);
+            o << " | " << name << " -> " << (parent ? pname : "none") << " [" << hex << "]";
+            if (++n >= 6) break;
+        }
+        return o.str();
+    }
+    if (cmd == "insomething") {   // insomething <squadIndex>: 0 nothing, 1 in bed, 2 in a cage
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        int v = -1;
+        if (idx < squad.size()) kenshi::ReadInSomething(w.FindSquad(squad[idx]), v);
+        return "ok " + std::to_string(v);
     }
     if (cmd == "camto") {   // camto <squadIndex>: the camera goes to that squad member
         size_t idx = 0;

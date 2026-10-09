@@ -454,6 +454,17 @@ bool KenshiWorld::ReadVitals(const kc::Handle& h, kc::EntityVitals& out) {
 void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, const kc::EntityState& latest) {
     kenshi::Character* c = Find(h);
     if (!c) return;
+    // The tasks it had in the save (sit on a stool, patrol, wander...) would keep running here and
+    // fight the host's positions (characters jumping back and forth between two spots): it drops
+    // them, the game's own way. Nothing gives it new ones on a client.
+    if (kenshi::LocalTaskCount(c) > 0) {
+        double& at = taskDropAt_[h];
+        if (NowSeconds() - at > 2.0) {
+            at = NowSeconds();
+            HostCallScope scope;
+            kenshi::DropLocalTasks(c);
+        }
+    }
     applied_.insert(c);
     kc::EntityState& last = lastTarget_[h];
     last = target;
@@ -796,22 +807,31 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
         return ok;
     }
     case kc::CommandKind::Task: {
+        // town furniture, machines and houses get other handles on every machine: the same kind
+        // of object at the same place
+        auto byKindAndPlace = [](const std::string& sid, const kc::Vec3& at) -> void* {
+            std::vector<void*> around;
+            kenshi::ObjectsNear(at, 60.0f, around);
+            void* found = nullptr;
+            float best = 40.0f;
+            for (void* o : around) {
+                std::string s;
+                kc::Vec3 p;
+                if (!kenshi::ObjectTemplate(o, s) || s != sid || !kenshi::ObjectPosition(o, p)) continue;
+                const float d = Dist(p, at);
+                if (d < best) { best = d; found = o; }
+            }
+            return found;
+        };
         void* subject = kenshi::ResolveObject(cmd.subject);
         void* building = kenshi::ResolveObject(cmd.building);
         if (cmd.subject.valid() && !subject && !cmd.itemSid.empty()) {
-            // town furniture and machines get other handles on every machine: the same kind of
-            // object at the same place
-            std::vector<void*> around;
-            kenshi::ObjectsNear(cmd.subjectPos, 60.0f, around);
-            float best = 40.0f;
-            for (void* o : around) {
-                std::string sid;
-                kc::Vec3 p;
-                if (!kenshi::ObjectTemplate(o, sid) || sid != cmd.itemSid || !kenshi::ObjectPosition(o, p)) continue;
-                const float d = Dist(p, cmd.subjectPos);
-                if (d < best) { best = d; subject = o; }
-            }
-            Log("client task %d: subject %s found by kind and place (%zu objects around)", cmd.task, subject ? "" : "NOT", around.size());
+            subject = byKindAndPlace(cmd.itemSid, cmd.subjectPos);
+            Log("client task %d: subject %sfound by kind and place", cmd.task, subject ? "" : "NOT ");
+        }
+        if (cmd.building.valid() && !building && !cmd.buildingSid.empty()) {
+            building = byKindAndPlace(cmd.buildingSid, cmd.buildingPos);
+            Log("client task %d: destination building %sfound by kind and place", cmd.task, building ? "" : "NOT ");
         }
         if (cmd.subject.valid() && !subject) Log("client task %d: its subject is not in the host's world", cmd.task);
         const bool ok = RunPlayerTask(c, cmd, subject, building);

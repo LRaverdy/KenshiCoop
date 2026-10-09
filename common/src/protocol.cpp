@@ -221,6 +221,8 @@ void Encode(Writer& w, const Command& m) {
         PutHandle(w, m.building);
         PutVec(w, m.subjectPos);
         w.str(m.itemSid);
+        w.str(m.buildingSid);
+        PutVec(w, m.buildingPos);
     }
 }
 bool Decode(Reader& r, Command& m) {
@@ -248,6 +250,8 @@ bool Decode(Reader& r, Command& m) {
         m.building = GetHandle(r);
         m.subjectPos = GetVec(r);
         m.itemSid = r.str(kMaxSidLen);
+        m.buildingSid = r.str(kMaxSidLen);
+        m.buildingPos = GetVec(r);
         if (m.task < -1000 || m.task > 1000) return false;
     }
     return Done(r) && m.netId != 0;
@@ -476,88 +480,90 @@ void Encode(Writer& w, const EditCharacter& m) {
 }
 const char* TaskLabel(int task) {
     switch (task) {
-    case 2: return "construire";
-    case 3: return "ramasser";
-    case 4: case 5: return "attaquer";
-    case 6: return "equiper une arme";
-    case 7: return "ranger son arme";
-    case 12: return "parler";
-    case 25: return "premiers soins";
-    case 26: return "piller";
-    case 27: return "s'accroupir";
-    case 28: return "se relever";
-    case 29: return "aller a";
-    case 30: return "tenir la position";
-    case 44: return "suivre";
-    case 54: return "se reposer";
-    case 55: return "recruter";
-    case 57: return "reparer un robot";
-    case 58: return "soigner (metier)";
-    case 60: case 61: return "premiers soins (robot)";
-    case 68: case 225: return "porter quelqu'un";
-    case 69: return "poser";
-    case 70: return "poser dans un lit";
-    case 72: return "ouvrir une porte";
-    case 73: return "fermer une porte";
-    case 76: return "crocheter";
-    case 77: return "verrouiller";
-    case 78: return "deverrouiller";
-    case 81: case 226: return "enfoncer une porte";
-    case 87: return "utiliser une machine";
-    case 95: return "reparer";
-    case 96: return "demonter";
-    case 97: return "s'entrainer";
-    case 98: case 258: return "dormir";
-    case 99: return "coucher quelqu'un";
-    case 107: return "entrer dans une cage";
-    case 108: return "mettre en cage";
-    case 110: return "liberer un prisonnier";
-    case 116: case 257: return "sortir du lit";
-    case 118: case 119: return "commercer";
-    case 124: return "ouvrir un rangement";
-    case 126: return "parler (au plus proche)";
-    case 146: case 149: case 234: return "utiliser une tourelle";
-    case 152: return "utiliser une machine automatique";
-    case 228: return "assommer en douce";
-    case 229: return "tuer en douce";
-    case 231: return "manger des cultures";
-    case 235: case 262: case 263: return "tirer";
-    case 244: return "prendre a manger";
-    case 246: return "kidnapper";
-    case 249: case 250: return "poser une attelle";
-    case 255: return "s'asseoir sur le trone";
-    case 259: return "manger";
-    case 269: return "soigner ses jambes";
-    case 284: return "piller un contenant";
-    case 285: return "couper un cadenas";
-    case 286: return "forcer une serrure";
-    case 290: return "enfoncer un portail";
+    case 2: return "build";
+    case 3: return "pick up";
+    case 4: case 5: return "attack";
+    case 6: return "equip weapon";
+    case 7: return "put weapon away";
+    case 12: return "talk";
+    case 25: return "first aid";
+    case 26: return "loot";
+    case 27: return "crouch";
+    case 28: return "stand up";
+    case 29: return "go to";
+    case 30: return "hold position";
+    case 44: return "follow";
+    case 54: return "rest";
+    case 55: return "recruit";
+    case 57: return "repair robot";
+    case 58: return "medic (job)";
+    case 60: case 61: return "first aid (robot)";
+    case 68: case 225: return "carry someone";
+    case 69: return "put down";
+    case 70: return "put down in a bed";
+    case 72: return "open door";
+    case 73: return "close door";
+    case 76: return "pick lock";
+    case 77: return "lock";
+    case 78: return "unlock";
+    case 81: case 226: return "bash door";
+    case 87: return "operate machine";
+    case 95: return "repair";
+    case 96: return "dismantle";
+    case 97: return "train";
+    case 98: case 258: return "sleep";
+    case 99: return "put someone in a bed";
+    case 107: return "get in a cage";
+    case 108: return "put in a cage";
+    case 110: return "free a prisoner";
+    case 116: case 257: return "get out of bed";
+    case 118: case 119: return "trade";
+    case 124: return "open storage";
+    case 126: return "talk (nearest)";
+    case 146: case 149: case 234: return "man a turret";
+    case 152: return "operate automatic machine";
+    case 228: return "knock out (stealth)";
+    case 229: return "kill (stealth)";
+    case 231: return "eat crops";
+    case 235: case 262: case 263: return "shoot";
+    case 244: return "grab food";
+    case 246: return "kidnap";
+    case 249: case 250: return "splint";
+    case 255: return "sit on the throne";
+    case 259: return "eat";
+    case 269: return "heal legs";
+    case 284: return "loot container";
+    case 285: return "cut lock";
+    case 286: return "force lock";
+    case 290: return "bash gate";
     default: return task < 0 ? "mode" : "?";
     }
 }
 
 const char* StandingOrderLabel(int order) {
     switch (order) {
-    case 0: return "courir";
-    case 1: return "trottiner";
-    case 2: return "marcher";
-    case 3: return "furtif";
-    case 4: return "sortir du mode furtif";
-    case 5: return "combat : attaquer";
-    case 6: return "combat : defendre";
-    case 7: return "combat : esquiver";
-    case 8: return "de loin";
-    case 9: return "de pres";
-    case 11: return "bloquer";
-    case 12: return "tenir la position";
-    case 13: return "passif";
-    case 14: return "narguer";
-    case 15: return "poursuivre";
-    case 16: return "vitesse de groupe";
-    case 17: return "tir a distance";
+    case 0: return "run";
+    case 1: return "jog";
+    case 2: return "walk";
+    case 3: return "stealth";
+    case 4: return "stealth off";
+    case 5: return "fight: attack";
+    case 6: return "fight: defend";
+    case 7: return "fight: evade";
+    case 8: return "far";
+    case 9: return "near";
+    case 11: return "block";
+    case 12: return "hold position";
+    case 13: return "passive";
+    case 14: return "taunt";
+    case 15: return "chase";
+    case 16: return "group speed";
+    case 17: return "ranged";
     default: return "?";
     }
 }
+
+void EncodeResync(Writer& w) { w.u8(uint8_t(Msg::Resync)); }
 
 void Encode(Writer& w, const ClientLog& m) {
     w.u8(uint8_t(Msg::ClientLog));
@@ -608,7 +614,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::ClientReport)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Resync)) return std::nullopt;
     return Msg(t);
 }
 

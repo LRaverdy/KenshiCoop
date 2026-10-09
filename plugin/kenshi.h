@@ -154,6 +154,7 @@ enum Fn : int {
     FnDropCarried,              // void Character::dropCarriedObject(bool ragdollHim, bool removeOnly)
     FnSetCurrentPlatoon,        // bool PlayerInterface::setCurrentPlatoon(Platoon*)   (the squad the squad bar shows)
     FnShowLoadWindow,           // void SaveManager::showLoad()   (the game's "Load" window)
+    FnReThinkAIAction,          // void Character::reThinkCurrentAIAction()   (drops what it is doing, the game's own way)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -291,6 +292,10 @@ void MakeHand(const kc::Handle& h, void* out);               // writes a game `h
 bool OpenLootWindow(Character* looter, Character* target);
 // tests: the order a right-click on `subject` gives to the nearest selected character
 bool CallAddTaskNearest(int task, Character* subject);
+bool CallAddTaskNearestObject(int task, void* subject, const kc::Vec3& at);   // tests: the same on any object
+bool CallNewPlayerTaskOn(int task, void* subject, const kc::Vec3& at, void* building = nullptr);   // tests: newPlayerTaskSelectedCharacters on that object
+bool ReadInSomething(Character* c, int& v);   // 0 nothing, 1 in bed, 2 in a cage
+void* FurnitureParent(void* furniture);       // the building a piece of furniture belongs to (or null)
 // A new member of the player's squad, of the same kind as `model`, named `name` (15 chars max).
 Character* CreateRecruit(Character* model, const std::string& name, const kc::Vec3& pos, std::string* err);
 bool CharacterName(const Character* c, std::string& out);
@@ -365,6 +370,8 @@ bool GetGameHours(double& out);
 // Save management (deferred operations, executed by the game a frame later).
 bool SaveManagerBusy();                                     // a save/load is pending or running
 bool ShowLoadWindow();                                      // opens the game's "Load" window
+size_t LocalTaskCount(Character* c);                        // tasks waiting in its own task system
+bool DropLocalTasks(Character* c);                          // it drops them (Character::reThinkCurrentAIAction)
 bool RequestSave(const std::string& name, std::string* folderOut);   // folder = where it will be written
 bool RequestLoad(const std::string& name);
 bool SaveFolder(std::string& out);                          // where this machine's saves live

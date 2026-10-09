@@ -517,7 +517,7 @@ static void TestWire() {
         Writer ew; Encode(ew, EditState{true});
         Reader er(ew.data(), ew.size()); CHECK(PeekType(er) == Msg::EditState);
         EditState es; CHECK(Decode(er, es) && es.editing);
-        CHECK(std::string(TaskLabel(258)) == "dormir" && std::string(TaskLabel(9999)) == "?");
+        CHECK(std::string(TaskLabel(258)) == "sleep" && std::string(TaskLabel(9999)) == "?");
     }
     {   // hunger travels with the vitals
         VitalsMsg vm; vm.entities.resize(1); vm.entities[0].netId = 2; vm.entities[0].hunger = 250.5f;

@@ -707,14 +707,14 @@ void Session::SendDialogs() {
         if (d.kind == DialogKind::Close) dialogOwner_.erase(d.dialogId);
         else dialogOwner_[d.dialogId] = owner;
         const std::string who = players_.count(owner) ? players_[owner].name : "?";
-        if (d.kind == DialogKind::Open) log_("[" + who + "] conversation avec " + e.text);
+        if (d.kind == DialogKind::Open) log_("[" + who + "] conversation with " + e.text);
         if (d.kind == DialogKind::Text) {
             std::string r;
             for (size_t i = 0; i < e.replies.size(); ++i) r += (i ? " | " : "") + std::to_string(i + 1) + ". " + e.replies[i];
-            log_("[" + who + "] l'autre dit : \"" + e.text.substr(0, 160) + "\"" + (r.empty() ? "" : "  reponses : " + r));
+            log_("[" + who + "] they say: \"" + e.text.substr(0, 160) + "\"" + (r.empty() ? "" : "  answers: " + r));
             dialogReplies_[d.dialogId] = e.replies;
         }
-        if (d.kind == DialogKind::Close) { log_("[" + who + "] fin de la conversation"); dialogReplies_.erase(d.dialogId); }
+        if (d.kind == DialogKind::Close) { log_("[" + who + "] conversation over"); dialogReplies_.erase(d.dialogId); }
         perPlayer[owner].events.push_back(std::move(e));
     }
     scratchDialogs_.clear();
@@ -789,6 +789,20 @@ bool Session::EditOwnCharacter() {
     for (auto& [id, e] : entities_)
         if (e.squad && e.owner == localId_ && e.present) return world_.OpenCharacterEditor(e.handle);
     return false;
+}
+
+size_t Session::RequestResync(uint8_t playerId) {
+    if (!isHost()) return 0;
+    size_t n = 0;
+    for (auto& [pid, p] : players_) {
+        if (!p.inGame || (playerId && pid != playerId)) continue;
+        Writer w;
+        EncodeResync(w);
+        SendReliable(p.peer, w);
+        log_("resync: " + p.name + " reloads the host's world");
+        ++n;
+    }
+    return n;
 }
 
 void Session::QueueLog(std::string line) {
@@ -986,8 +1000,8 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         if (now - pl->reportLoggedAt > (bad ? 15.0 : 60.0)) {
             pl->reportLoggedAt = now;
             char b[200];
-            snprintf(b, sizeof(b), "[%s] synchro%s : %u persos suivis, %u PNJ pas encore chez lui, %u de l'escouade manquants, %u decales, correction max %.1f, %u img/s",
-                     pl->name.c_str(), bad ? " A SURVEILLER" : "", unsigned(m.entities), unsigned(m.missingNpcs), unsigned(m.missingSquad),
+            snprintf(b, sizeof(b), "[%s] sync%s: %u characters followed, %u NPCs not there yet, %u squad members missing, %u off, max offset %.1f, %u fps",
+                     pl->name.c_str(), bad ? " NEEDS A LOOK" : "", unsigned(m.entities), unsigned(m.missingNpcs), unsigned(m.missingSquad),
                      unsigned(m.farOff), double(m.maxErr), unsigned(m.fps));
             log_(b);
         }
@@ -1011,7 +1025,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         if (o == dialogOwner_.end() || o->second != pl->id) { log_("ignored an answer to a conversation player " + std::to_string(pl->id) + " is not in"); break; }
         if (pendingAnswers_.size() < 64) pendingAnswers_.push_back(a);
         if (auto rr = dialogReplies_.find(a.dialogId); rr != dialogReplies_.end() && a.index < int(rr->second.size()))
-            log_("[" + pl->name + "] repond : \"" + rr->second[size_t(a.index)] + "\"");
+            log_("[" + pl->name + "] answers: \"" + rr->second[size_t(a.index)] + "\"");
         break;
     }
     case Msg::InvOp: {
@@ -1202,26 +1216,26 @@ void Session::SendLocalDrops() {
 }
 
 void Session::ApplyCommand(uint8_t from, const Command& c) {
-    const std::string who = players_.count(from) ? players_[from].name : "joueur " + std::to_string(from);
+    const std::string who = players_.count(from) ? players_[from].name : "player " + std::to_string(from);
     auto it = entities_.find(c.netId);
-    if (it == entities_.end()) { log_("[" + who + "] ordre pour un personnage inconnu (ignore)"); return; }
+    if (it == entities_.end()) { log_("[" + who + "] order for an unknown character (ignored)"); return; }
     if (!it->second.squad || it->second.owner != from) {
-        log_("[" + who + "] ordre refuse : ce personnage ne lui appartient pas");
+        log_("[" + who + "] order refused: not their character");
         return;
     }
     std::string what;
     switch (c.kind) {
-    case CommandKind::MoveTo: what = "se deplacer"; break;
-    case CommandKind::Stop: what = "s'arreter"; break;
-    case CommandKind::PickUp: what = "ramasser " + world_.TemplateName(c.itemSid); break;
+    case CommandKind::MoveTo: what = "move"; break;
+    case CommandKind::Stop: what = "stop"; break;
+    case CommandKind::PickUp: what = "pick up " + world_.TemplateName(c.itemSid); break;
     case CommandKind::Task:
         if (c.via == TaskVia::SetOrder) what = std::string("mode \"") + StandingOrderLabel(c.task) + "\"";
-        else what = std::string("ordre \"") + TaskLabel(c.task) + "\" (" + std::to_string(c.task) + ")" + (c.itemSid.empty() ? "" : " sur " + world_.TemplateName(c.itemSid));
+        else what = std::string("order \"") + TaskLabel(c.task) + "\" (" + std::to_string(c.task) + ")" + (c.itemSid.empty() ? "" : " on " + world_.TemplateName(c.itemSid));
         break;
-    case CommandKind::SquadMove: what = "changer d'escouade"; break;
+    case CommandKind::SquadMove: what = "change squad"; break;
     }
     const bool ok = world_.Order(it->second.handle, c);
-    if (c.kind != CommandKind::MoveTo || !ok) log_("[" + who + "] " + what + (ok ? " -> ok" : " -> ECHEC"));
+    if (c.kind != CommandKind::MoveTo || !ok) log_("[" + who + "] " + what + (ok ? " -> ok" : " -> FAILED"));
 }
 
 // ============================== client ==============================
@@ -1661,6 +1675,12 @@ void Session::ClientPacket(Msg type, Reader& r) {
         if (auto it = entities_.find(m.netId); it != entities_.end() && it->second.present) world_.ApplyAppearance(it->second.handle, m);
         break;
     }
+    case Msg::Resync:
+        if (state_ == SessionState::Connected) {
+            log_("the host asks for a resync: leaving and joining again");
+            resyncRequested_ = true;
+        }
+        break;
     case Msg::EditCharacter: {
         EditCharacter m;
         if (state_ == SessionState::Connected && Decode(r, m)) editRequest_ = m.netId;

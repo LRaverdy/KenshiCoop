@@ -264,6 +264,7 @@ private:   // first few lifecycle events (tests)
     std::vector<std::pair<kenshi::Character*, kc::ItemState>> localDrops_;   // client, under groundMutex_
     std::vector<kenshi::Character*> edited_;   // characters whose looks the editor just changed
     double pauseSeenAt_ = -1;   // client: when the host's pause arrived (we pause a little later)
+    std::unordered_map<kc::Handle, double, kc::HandleHash> taskDropAt_;   // client: when its local tasks were last dropped
     float syncMaxErr_ = 0;      // client: largest correction since the last report
 public:
     uint64_t masterCorrections = 0, masterChecks = 0;   // tests: animation clock corrections on clients
