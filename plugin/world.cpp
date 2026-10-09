@@ -617,6 +617,61 @@ std::string KenshiWorld::TemplateName(const std::string& sid) {
     return kenshi::TemplateDisplayName(sid, name) ? name : sid;
 }
 
+// Containers are furniture: found by kind and place (handles differ between machines).
+bool KenshiWorld::FindContainer(const std::string& sid, const kc::Vec3& pos, kc::Handle& out) {
+    std::vector<void*> around;
+    kenshi::ObjectsNear(pos, 60.0f, around);
+    void* best = nullptr;
+    float bestD = 30.0f;
+    for (void* o : around) {
+        std::string s;
+        kc::Vec3 p;
+        std::vector<kc::ItemState> items;
+        if (!kenshi::ObjectTemplate(o, s) || s != sid || !kenshi::ObjectPosition(o, p) || !kenshi::ReadInventory(o, items)) continue;
+        const float d = Dist(p, pos);
+        if (d < bestD) { bestD = d; best = o; }
+    }
+    return best && kenshi::ObjectHandle(best, out);
+}
+
+bool KenshiWorld::ContainerKind(const kc::Handle& container, std::string& sid) {
+    void* o = kenshi::ResolveObject(container);
+    return o && kenshi::ObjectTemplate(o, sid);
+}
+
+float KenshiWorld::DistanceTo(const kc::Handle& who, const kc::Vec3& pos) {
+    kenshi::Character* c = Find(who);
+    kc::Vec3 p;
+    return c && kenshi::GetPosition(c, p) ? Dist(p, pos) : 1e9f;
+}
+
+int KenshiWorld::TheftCheck(const kc::Handle& thief, const kc::Handle& container, const kc::ItemState& item) {
+    kenshi::Character* c = Find(thief);
+    void* cont = kenshi::ResolveObject(container);
+    void* it = cont ? kenshi::FindItemIn(cont, item) : nullptr;
+    if (!c || !it) return 0;
+    HostCallScope scope;
+    return kenshi::StealCheck(c, cont, it);
+}
+
+void KenshiWorld::QueueContainerRequest(kenshi::Character* looter, void* container) {
+    ContainerRequest r;
+    if (!kenshi::GetHandle(looter, r.looter) || !kenshi::ObjectTemplate(container, r.sid) || !kenshi::ObjectPosition(container, r.pos)) return;
+    r.looter = HostHandleOf(r.looter);
+    if (containerReqs_.size() < 8) containerReqs_.push_back(r);
+}
+
+void KenshiWorld::TakeContainerRequests(std::vector<ContainerRequest>& out) {
+    out.swap(containerReqs_);
+    containerReqs_.clear();
+}
+
+bool KenshiWorld::OpenContainerWindow(const kc::Handle& looter, const kc::Handle& container) {
+    kenshi::Character* me = Find(looter);
+    void* cont = kenshi::ResolveObject(container);
+    return me && cont && kenshi::OpenLootWindow(me, cont);
+}
+
 void KenshiWorld::ReadSquads(std::vector<WorldSquad>& out) {
     out.clear();
     std::vector<kenshi::Character*> all;
@@ -1700,14 +1755,20 @@ std::string KenshiWorld::EffectsReport() {
     return out;
 }
 
+// The object holding an inventory: one of the characters, or a container (furniture).
+void* KenshiWorld::InventoryHolder(const kc::Handle& h) {
+    if (kenshi::Character* c = Find(h)) return c;
+    return h.type == 0 ? kenshi::ResolveObject(h) : nullptr;   // type 0: a building
+}
+
 bool KenshiWorld::ReadInventory(const kc::Handle& h, std::vector<kc::ItemState>& out) {
-    kenshi::Character* c = Find(h);
+    void* c = InventoryHolder(h);
     return c && kenshi::ReadInventory(c, out);
 }
 
 bool KenshiWorld::ExecuteInvOp(const kc::Handle& from, const kc::Handle& to, const kc::InvOp& op) {
-    kenshi::Character* a = Find(from);
-    kenshi::Character* b = Find(to);
+    void* a = InventoryHolder(from);
+    void* b = InventoryHolder(to);
     if (!a || !b) return false;
     std::string err;
     HostCallScope scope;
@@ -1720,7 +1781,7 @@ bool KenshiWorld::ExecuteInvOp(const kc::Handle& from, const kc::Handle& to, con
 }
 
 bool KenshiWorld::ApplyInventory(const kc::Handle& h, const std::vector<kc::ItemState>& items) {
-    kenshi::Character* c = Find(h);
+    void* c = InventoryHolder(h);
     if (!c) return false;
     std::vector<kc::ItemState> local;
     if (kenshi::ReadInventory(c, local) && local == items) return true;

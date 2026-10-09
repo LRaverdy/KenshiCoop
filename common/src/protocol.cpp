@@ -565,6 +565,43 @@ const char* StandingOrderLabel(int order) {
 
 void EncodeResync(Writer& w) { w.u8(uint8_t(Msg::Resync)); }
 
+void Encode(Writer& w, const ContainerOpen& m) {
+    w.u8(uint8_t(Msg::ContainerOpen));
+    w.varint(m.looterNetId);
+    w.str(m.sid);
+    PutVec(w, m.pos);
+}
+bool Decode(Reader& r, ContainerOpen& m) {
+    m.looterNetId = GetU32Var(r);
+    m.sid = r.str(kMaxSidLen);
+    m.pos = GetVec(r);
+    return Done(r) && m.looterNetId != 0 && !m.sid.empty();
+}
+void Encode(Writer& w, const ContainerOpened& m) {
+    w.u8(uint8_t(Msg::ContainerOpened));
+    w.varint(m.netId);
+    w.varint(m.looterNetId);
+    w.str(m.sid);
+    PutVec(w, m.pos);
+}
+bool Decode(Reader& r, ContainerOpened& m) {
+    m.netId = GetU32Var(r);
+    m.looterNetId = GetU32Var(r);
+    m.sid = r.str(kMaxSidLen);
+    m.pos = GetVec(r);
+    return Done(r) && m.netId != 0;
+}
+void Encode(Writer& w, const ContainerClose& m) {
+    w.u8(uint8_t(Msg::ContainerClose));
+    w.varint(m.netId);
+    w.str(m.reason);
+}
+bool Decode(Reader& r, ContainerClose& m) {
+    m.netId = GetU32Var(r);
+    m.reason = r.str(200);
+    return Done(r) && m.netId != 0;
+}
+
 void Encode(Writer& w, const ClientLog& m) {
     w.u8(uint8_t(Msg::ClientLog));
     const size_t n = std::min(m.lines.size(), kMaxLogLines);
@@ -614,7 +651,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Resync)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::ContainerClose)) return std::nullopt;
     return Msg(t);
 }
 

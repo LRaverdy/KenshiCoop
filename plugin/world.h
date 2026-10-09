@@ -71,6 +71,15 @@ public:
     void ApplyProgress(const kc::Handle& h, const std::vector<float>& stats, uint16_t modes, uint8_t style) override;
     bool ReadMoney(int32_t& money) override { return kenshi::ReadPlayerMoney(money); }
     void ReadSquads(std::vector<WorldSquad>& out) override;
+    bool FindContainer(const std::string& sid, const kc::Vec3& pos, kc::Handle& out) override;
+    bool ContainerKind(const kc::Handle& container, std::string& sid) override;
+    float DistanceTo(const kc::Handle& who, const kc::Vec3& pos) override;
+    int TheftCheck(const kc::Handle& thief, const kc::Handle& container, const kc::ItemState& item) override;
+    void TakeContainerRequests(std::vector<ContainerRequest>& out) override;
+    bool OpenContainerWindow(const kc::Handle& looter, const kc::Handle& container) override;
+    bool ContainerWindowOpen() override { return kenshi::OpenInventoryWindows() > 0; }
+    void CloseContainerWindows() override { kenshi::CloseInventoryWindows(); }
+    void QueueContainerRequest(kenshi::Character* looter, void* container);   // hooks: a right click on a container
     void TakeEditedCharacters(std::vector<kc::Handle>& out) override;
     bool ReadAppearance(const kc::Handle& h, kc::AppearanceMsg& out) override;
     void ApplyAppearance(const kc::Handle& h, const kc::AppearanceMsg& m) override;
@@ -263,6 +272,8 @@ private:   // first few lifecycle events (tests)
     std::unordered_map<kc::Handle, kc::Handle, kc::HandleHash> groundAlias_;   // client: host item -> our copy
     std::vector<std::pair<kenshi::Character*, kc::ItemState>> localDrops_;   // client, under groundMutex_
     std::vector<kenshi::Character*> edited_;   // characters whose looks the editor just changed
+    std::vector<ContainerRequest> containerReqs_;   // client: right clicks on containers, for the host
+    void* InventoryHolder(const kc::Handle& h);       // a character, or a container
     double pauseSeenAt_ = -1;   // client: when the host's pause arrived (we pause a little later)
     std::unordered_map<kc::Handle, double, kc::HandleHash> taskDropAt_;   // client: when its local tasks were last dropped
     float syncMaxErr_ = 0;      // client: largest correction since the last report

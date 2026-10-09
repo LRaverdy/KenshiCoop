@@ -154,6 +154,10 @@ void Session::Leave() {
     editingSent_ = false;
     logOut_.clear();
     logDropped_ = 0;
+    walkingToContainers_.clear();
+    containerAsks_.clear();
+    pendingWindow_ = 0;
+    windowOpenedAt_ = -1;
     dialogReplies_.clear();
     holdForEditor_ = false;
     pendingAnswers_.clear();
@@ -216,6 +220,7 @@ void Session::HostTick(double now, bool live) {
     pendingInvOps_.clear();
     for (const auto& a : pendingAnswers_) world_.DialogAnswer(a.dialogId, a.index);
     pendingAnswers_.clear();
+    HostContainers(now);
     // A player's new looks: applied here, then shown to everyone else.
     for (auto& [from, m] : pendingLooks_) {
         auto it = entities_.find(m.netId);
@@ -607,6 +612,14 @@ void Session::UpdateInterest() {
 
     for (auto it = entities_.begin(); it != entities_.end();) {
         if (it->second.keep) { ++it; continue; }
+        if (it->second.container) {   // only the players who have it open know it
+            const bool walking = std::any_of(walkingToContainers_.begin(), walkingToContainers_.end(), [&](const PendingContainer& p) { return p.netId == it->first; });
+            if (!it->second.openBy.empty() || walking) { ++it; continue; }
+            byHandle_.erase(it->second.handle);
+            for (auto& [pid, s] : sync_) s.sent.erase(it->first);
+            it = entities_.erase(it);
+            continue;
+        }
         Writer w;
         Encode(w, Unbind{it->first});
         BroadcastReliable(w, true);
@@ -805,6 +818,116 @@ size_t Session::RequestResync(uint8_t playerId) {
     return n;
 }
 
+// A player looks into a container: their character walks there (like a loot order), then the
+// container gets a netId and its items go to that player; it closes when they close it.
+void Session::HostContainers(double now) {
+    constexpr float kReach = 25.0f;
+    for (auto& [from, ask] : containerAsks_) {
+        auto pl = players_.find(from);
+        auto looter = entities_.find(ask.looterNetId);
+        if (pl == players_.end() || looter == entities_.end() || !looter->second.squad || looter->second.owner != from) continue;
+        Handle h;
+        if (!world_.FindContainer(ask.sid, ask.pos, h)) {
+            log_("[" + pl->second.name + "] container " + world_.TemplateName(ask.sid) + " not found here");
+            continue;
+        }
+        uint32_t id = 0;
+        if (auto b = byHandle_.find(h); b != byHandle_.end()) id = b->second;
+        else {
+            Entity e;
+            e.netId = nextNetId_++;
+            e.handle = h;
+            e.container = true;
+            e.containerPos = ask.pos;
+            e.keep = true;
+            id = e.netId;
+            byHandle_[h] = id;
+            entities_[id] = std::move(e);
+        }
+        log_("[" + pl->second.name + "] goes to look into " + world_.TemplateName(ask.sid));
+        if (world_.DistanceTo(looter->second.handle, ask.pos) > kReach) {
+            Command c;
+            c.kind = CommandKind::MoveTo;
+            c.pos = ask.pos;
+            world_.Order(looter->second.handle, c);
+        }
+        walkingToContainers_.push_back({from, ask.looterNetId, id, now + 30.0});
+    }
+    containerAsks_.clear();
+    for (auto it = walkingToContainers_.begin(); it != walkingToContainers_.end();) {
+        auto pl = players_.find(it->player);
+        auto looter = entities_.find(it->looter);
+        auto cont = entities_.find(it->netId);
+        if (pl == players_.end() || looter == entities_.end() || cont == entities_.end() || now > it->until) { it = walkingToContainers_.erase(it); continue; }
+        if (world_.DistanceTo(looter->second.handle, cont->second.containerPos) > kReach) { ++it; continue; }
+        cont->second.openBy.insert(it->player);
+        cont->second.invHash = 0;   // its items go out now
+        ContainerOpened m;
+        m.netId = it->netId;
+        m.looterNetId = it->looter;
+        world_.ContainerKind(cont->second.handle, m.sid);
+        m.pos = cont->second.containerPos;
+        Writer w;
+        Encode(w, m);
+        SendReliable(pl->second.peer, w);
+        log_("[" + pl->second.name + "] opens " + world_.TemplateName(m.sid));
+        it = walkingToContainers_.erase(it);
+    }
+    // a looter that walked away: the window closes
+    for (auto& [id, e] : entities_) {
+        if (!e.container) continue;
+        for (auto o = e.openBy.begin(); o != e.openBy.end();) {
+            bool near = false;
+            for (auto& [lid, le] : entities_)
+                if (le.squad && le.owner == *o && world_.DistanceTo(le.handle, e.containerPos) <= kReach * 2) { near = true; break; }
+            if (near) { ++o; continue; }
+            if (auto pl = players_.find(*o); pl != players_.end()) {
+                Writer w;
+                Encode(w, ContainerClose{id, "trop loin"});
+                SendReliable(pl->second.peer, w);
+            }
+            o = e.openBy.erase(o);
+        }
+    }
+}
+
+void Session::ClientContainers(double now) {
+    world_.TakeContainerRequests(scratchContainerReqs_);
+    for (const auto& r : scratchContainerReqs_) {
+        Entity* e = entityByHandle(r.looter);
+        if (!e || !e->squad || e->owner != localId_) continue;
+        ContainerOpen m;
+        m.looterNetId = e->netId;
+        m.sid = r.sid;
+        m.pos = r.pos;
+        Writer w;
+        Encode(w, m);
+        SendReliable(net_.serverPeer(), w);
+    }
+    scratchContainerReqs_.clear();
+    // the window opens once the container holds the host's items
+    if (pendingWindow_) {
+        auto it = entities_.find(pendingWindow_);
+        if (it == entities_.end()) pendingWindow_ = 0;
+        else if (it->second.haveInv && !it->second.invDirty) {
+            auto looter = entities_.find(it->second.looter);
+            if (looter != entities_.end() && world_.OpenContainerWindow(looter->second.handle, it->second.handle)) windowOpenedAt_ = now;
+            pendingWindow_ = 0;
+        }
+    }
+    // the player closed it: the host forgets it for us
+    if (windowOpenedAt_ > 0 && now - windowOpenedAt_ > 1.5 && !world_.ContainerWindowOpen()) {
+        windowOpenedAt_ = -1;
+        for (auto it = entities_.begin(); it != entities_.end();) {
+            if (!it->second.container) { ++it; continue; }
+            Writer w;
+            Encode(w, ContainerClose{it->first, {}});
+            SendReliable(net_.serverPeer(), w);
+            it = entities_.erase(it);
+        }
+    }
+}
+
 void Session::QueueLog(std::string line) {
     if (!isClient()) return;
     if (logOut_.size() >= 512) { ++logDropped_; return; }
@@ -978,6 +1101,21 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         if (pl->inGame && Decode(r, c) && pendingCommands_.size() < 1024) pendingCommands_.emplace_back(pl->id, c);
         break;
     }
+    case Msg::ContainerOpen: {
+        ContainerOpen m;
+        if (!pl->inGame || !Decode(r, m)) break;
+        if (containerAsks_.size() < 16) containerAsks_.emplace_back(pl->id, std::move(m));
+        break;
+    }
+    case Msg::ContainerClose: {
+        ContainerClose m;
+        if (!Decode(r, m)) break;
+        if (auto it = entities_.find(m.netId); it != entities_.end() && it->second.container) {
+            it->second.openBy.erase(pl->id);
+            log_("[" + pl->name + "] closes the container");
+        }
+        break;
+    }
     case Msg::Appearance: {
         AppearanceMsg m;
         if (!pl->inGame || !Decode(r, m)) break;
@@ -1060,6 +1198,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
 void Session::SendInventories(double now, bool force, PeerId onlyTo) {
     (void)now;
     for (auto& [id, e] : entities_) {
+        if (e.container && e.openBy.empty()) continue;
         std::vector<ItemState> items;
         if (!world_.ReadInventory(e.handle, items)) continue;
         const uint64_t h = InventoryHash(items);
@@ -1069,6 +1208,12 @@ void Session::SendInventories(double now, bool force, PeerId onlyTo) {
         m.items = std::move(items);
         Writer w(1024);
         Encode(w, m);
+        if (e.container) {   // only to the players who have it open
+            e.invHash = h;
+            for (uint8_t pid : e.openBy)
+                if (auto pl = players_.find(pid); pl != players_.end()) SendReliable(pl->second.peer, w);
+            continue;
+        }
         if (onlyTo != kNoPeer) {
             SendReliable(onlyTo, w);
         } else {
@@ -1088,14 +1233,35 @@ void Session::HostInvOp(uint8_t from, const InvOp& op) {
     EntityVitals v;
     const bool srcDown = (world_.Read(src->second.handle, st) && (st.flags & (kFlagDown | kFlagDead)) != 0) ||
                          (world_.ReadVitals(src->second.handle, v) && (v.flags & (kVitUnconscious | kVitDead)) != 0);
-    const bool srcOk = (src->second.squad && src->second.owner == from) || (!src->second.squad && srcDown);
+    const bool srcOpen = src->second.container && src->second.openBy.count(from);
+    const bool srcOk = (src->second.squad && src->second.owner == from) || (!src->second.squad && !src->second.container && srcDown) || srcOpen;
     if (op.kind == InvOpKind::Drop) {
         if (src->second.owner == from) world_.ExecuteInvOp(src->second.handle, src->second.handle, op);
         src->second.invHash = 0;
         return;
     }
     auto dst = entities_.find(op.toNetId);
-    if (dst == entities_.end() || !srcOk || !dst->second.squad || dst->second.owner != from) {
+    const bool dstOk = dst != entities_.end() && ((dst->second.squad && dst->second.owner == from) || (dst->second.container && dst->second.openBy.count(from)));
+    // Taking from a container that is not ours is stealing: the game decides, on the host, like it
+    // does for its own player (crime, the owners may notice).
+    if (dstOk && srcOk && src->second.container && !dst->second.container) {
+        const int theft = world_.TheftCheck(dst->second.handle, src->second.handle, op.item);
+        const std::string who = players_.count(from) ? players_[from].name : "?";
+        if (theft == 2) {
+            log_("[" + who + "] caught stealing " + world_.TemplateName(op.item.templateSid));
+            src->second.openBy.erase(from);
+            if (auto pl = players_.find(from); pl != players_.end()) {
+                Writer w;
+                Encode(w, ContainerClose{op.fromNetId, "Pris en train de voler !"});
+                SendReliable(pl->second.peer, w);
+            }
+            src->second.invHash = 0;
+            dst->second.invHash = 0;
+            return;
+        }
+        if (theft == 1) log_("[" + who + "] steals " + world_.TemplateName(op.item.templateSid) + " (unseen)");
+    }
+    if (!dstOk || !srcOk) {
         log_("refused an inventory move from player " + std::to_string(from));
         src->second.invHash = 0;   // resend the true state so the client's prediction is undone
         if (dst != entities_.end()) dst->second.invHash = 0;
@@ -1302,6 +1468,7 @@ void Session::ClientTick(double now, bool live) {
     if (fullCheck) nextPresenceCheck_ = now + kPresenceInterval;
     uint32_t missing = 0;
     for (auto& [id, e] : entities_) {
+        if (e.container) continue;   // furniture: found by kind and place when opened
         if (fullCheck || !e.checked) {
             e.present = world_.Exists(e.handle);
             e.checked = true;
@@ -1458,6 +1625,7 @@ void Session::ClientTick(double now, bool live) {
         }
     }
     SendEditedAppearances();
+    ClientContainers(now);
     // Squads: split our characters as the host does (again now and then: stand-ins, late arrivals).
     if (haveSquads_ && now - squadsAt_ > 2.0) {
         squadsAt_ = now;
@@ -1673,6 +1841,34 @@ void Session::ClientPacket(Msg type, Reader& r) {
         AppearanceMsg m;
         if (state_ != SessionState::Connected || !Decode(r, m)) break;
         if (auto it = entities_.find(m.netId); it != entities_.end() && it->second.present) world_.ApplyAppearance(it->second.handle, m);
+        break;
+    }
+    case Msg::ContainerOpened: {
+        ContainerOpened m;
+        if (state_ != SessionState::Connected || !Decode(r, m)) break;
+        Handle local;
+        if (!world_.FindContainer(m.sid, m.pos, local)) { AddChat("* Ce contenant n'est pas trouvable ici."); break; }
+        Entity e;
+        e.netId = m.netId;
+        e.handle = local;
+        e.container = true;
+        e.present = true;
+        e.checked = true;
+        e.containerPos = m.pos;
+        e.looter = m.looterNetId;
+        entities_[m.netId] = std::move(e);
+        pendingWindow_ = m.netId;
+        break;
+    }
+    case Msg::ContainerClose: {
+        ContainerClose m;
+        if (state_ != SessionState::Connected || !Decode(r, m)) break;
+        if (auto it = entities_.find(m.netId); it != entities_.end() && it->second.container) {
+            entities_.erase(it);
+            world_.CloseContainerWindows();
+            windowOpenedAt_ = -1;
+            if (!m.reason.empty()) AddChat("* " + m.reason);
+        }
         break;
     }
     case Msg::Resync:

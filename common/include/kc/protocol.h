@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 26;
+constexpr uint16_t kProtocolVersion = 27;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -68,6 +68,9 @@ enum class Msg : uint8_t {
     ClientLog = 33,   // C->S  the client's log lines: the host's log shows what happens on every machine
     ClientReport = 34, // C->S  how well the client's game follows the host's (every few seconds)
     Resync = 35,      // S->C  reload the host's world now (the host's cure for any desync)
+    ContainerOpen = 36,   // C->S  my character wants to look into this container (chest, shelf...)
+    ContainerOpened = 37, // S->C  it is there: here is the container's netId (its items follow as an Inventory)
+    ContainerClose = 38,  // both  the window is closed (client) / must close (host: caught stealing, too far)
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -579,6 +582,30 @@ void Encode(Writer& w, const EditCharacter& m);
 void Encode(Writer& w, const EditState& m);
 const char* TaskLabel(int task);   // a player order's name, for logs ("?" when unknown)
 const char* StandingOrderLabel(int order);   // a squad bar toggle's name, for logs
+// Containers (chests, shelves, safes...) are furniture: other handles on every machine, so they
+// are named by kind and place. The host gives an open one a netId; its items then travel like a
+// character's (Inventory messages, InvOp moves).
+struct ContainerOpen {
+    uint32_t looterNetId = 0;
+    std::string sid;
+    Vec3 pos;
+};
+struct ContainerOpened {
+    uint32_t netId = 0;
+    uint32_t looterNetId = 0;
+    std::string sid;
+    Vec3 pos;
+};
+struct ContainerClose {
+    uint32_t netId = 0;
+    std::string reason;   // host: why it closes (empty: none)
+};
+void Encode(Writer& w, const ContainerOpen& m);
+bool Decode(Reader& r, ContainerOpen& m);
+void Encode(Writer& w, const ContainerOpened& m);
+bool Decode(Reader& r, ContainerOpened& m);
+void Encode(Writer& w, const ContainerClose& m);
+bool Decode(Reader& r, ContainerClose& m);
 void EncodeResync(Writer& w);
 void Encode(Writer& w, const ClientLog& m);
 bool Decode(Reader& r, ClientLog& m);

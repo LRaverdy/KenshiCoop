@@ -289,6 +289,14 @@ bool ReadGameString(const void* p, std::string& out) {
     return size == 0 || SafeCopy(out.data(), chars, size_t(size));
 }
 
+using FnThisPtr = void* (*)(void*);
+void* CallNoArgPtrOn(void* fn, void* self) {
+    __try {
+        return reinterpret_cast<FnThisPtr>(fn)(self);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
 using FnNoArgPtr = void* (*)();
 void* CallNoArgPtr(void* fn) {
     __try {
@@ -475,8 +483,8 @@ bool CallShowTrade(void* fn, void* gui, const void* a, const void* b, int type) 
 }
 } // namespace
 
-bool OpenLootWindow(Character* looter, Character* target) {
-    if (!IsCharacter(looter) || !IsCharacter(target)) return false;
+bool OpenLootWindow(Character* looter, void* target) {
+    if (!IsCharacter(looter) || !target) return false;
     // The game stores the request; its GUI opens the window on its next update.
     const auto* a = reinterpret_cast<const uint8_t*>(looter) + off::RO_handle;
     const auto* b = reinterpret_cast<const uint8_t*>(target) + off::RO_handle;
@@ -1707,9 +1715,17 @@ constexpr uintptr_t CH_inventory = 0x2E8;           // Inventory*
 constexpr uintptr_t INV_allItems = 0x10;            // lektor<Item*>
 constexpr uintptr_t IT_manufacturer = 0xC0, IT_material = 0xC8, IT_pos = 0xDC, IT_section = 0xE8, IT_charges = 0x118,
                     IT_quality = 0x11C, IT_equipped = 0x129, IT_quantity = 0x12C;
-void* InventoryOf(const Character* c) {
+using FnGetInv = void* (*)(const void*);
+void* VirtualInventorySeh(void* fn, const void* obj) {
+    __try { return reinterpret_cast<FnGetInv>(fn)(obj); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+// A character's inventory, or a building's (containers: getInventory, vtable +0x160).
+void* InventoryOf(const void* obj) {
     void* inv = nullptr;
-    return IsCharacter(c) && Rd(c, CH_inventory, inv) ? inv : nullptr;
+    if (!obj) return nullptr;
+    if (IsCharacter(obj)) return Rd(obj, CH_inventory, inv) ? inv : nullptr;
+    void* fn = VSlot(obj, 0x160);
+    return fn ? VirtualInventorySeh(fn, obj) : nullptr;
 }
 } // namespace
 
@@ -1911,7 +1927,7 @@ void* CreateItemFromState(const kc::ItemState& s, std::string* why = nullptr) {
 }
 } // namespace
 
-bool RebuildInventory(Character* c, const std::vector<kc::ItemState>& items, std::string* err) {
+bool RebuildInventory(void* c, const std::vector<kc::ItemState>& items, std::string* err) {
     void* inv = InventoryOf(c);
     if (!inv) { if (err) *err = "no inventory"; return false; }
     // Keep every local item that already is exactly what the host has; only the rest changes.
@@ -1926,7 +1942,7 @@ bool RebuildInventory(Character* c, const std::vector<kc::ItemState>& items, std
         extra.push_back(it);
         extraEquipped |= s.equipped;
     }
-    if (extraEquipped) EndCombat(c);   // it may be holding the weapon that goes away
+    if (extraEquipped && IsCharacter(c)) EndCombat(static_cast<Character*>(c));   // it may be holding the weapon that goes away
     for (void* it : extra) {
         int q = 1;
         Rd(it, IT_quantity, q);
@@ -1942,7 +1958,7 @@ bool RebuildInventory(Character* c, const std::vector<kc::ItemState>& items, std
     return ok;
 }
 
-bool MoveInventoryItem(Character* from, Character* to, const kc::InvOp& op, std::string* err) {
+bool MoveInventoryItem(void* from, void* to, const kc::InvOp& op, std::string* err) {
     void* src = InventoryOf(from);
     void* dst = InventoryOf(to);
     if (!src || !dst) { if (err) *err = "no inventory"; return false; }
@@ -1986,7 +2002,72 @@ bool MoveInventoryItem(Character* from, Character* to, const kc::InvOp& op, std:
     return false;
 }
 
-bool ReadInventory(Character* c, std::vector<kc::ItemState>& out) {
+namespace {
+using FnShowFlag = int (*)(void*);
+using FnCallbackChar = void* (*)(void*);
+using FnStealNotice = bool (*)(void*, void*, void*);
+using FnTheftFrom = void (*)(void*, void*);
+using FnSetCrimeSig = bool (*)(void*, int, void*, const void*);
+int NumWindowsSeh() {
+    __try { return reinterpret_cast<FnShowFlag>(Addr(0x6E2DF0))(reinterpret_cast<void*>(Addr(rva::TradeGui))); } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+bool CloseAllSeh() {
+    __try { reinterpret_cast<void (*)(void*)>(Addr(0x6E5740))(reinterpret_cast<void*>(Addr(rva::TradeGui))); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* CallbackCharSeh(void* inv) {
+    __try { return reinterpret_cast<FnCallbackChar>(Addr(0x70CEF0))(inv); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+bool NoticeSeh(void* fn, void* thief, void* from, void* item, bool& caught) {
+    __try { caught = reinterpret_cast<FnStealNotice>(fn)(thief, from, item); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool TheftFromSeh(void* fn, void* item, void* owner) {
+    __try { reinterpret_cast<FnTheftFrom>(fn)(item, owner); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool SetCrimeSeh(void* bm, int crime, void* faction, const void* hand) {
+    __try { return reinterpret_cast<FnSetCrimeSig>(FnAddr(FnSetCrime))(bm, crime, faction, hand); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+int OpenInventoryWindows() { return NumWindowsSeh(); }
+bool CloseInventoryWindows() { return CloseAllSeh(); }
+
+void* FindItemIn(void* container, const kc::ItemState& want) {
+    void* inv = InventoryOf(container);
+    if (!inv) return nullptr;
+    void* best = nullptr;
+    for (void* it : InventoryItems(inv)) {
+        kc::ItemState s;
+        if (!ReadItemState(it, s) || !s.sameKind(want)) continue;
+        if (s.section == want.section && s.x == want.x && s.y == want.y) return it;
+        if (!best) best = it;
+    }
+    return best;
+}
+
+int StealCheck(Character* thief, void* container, void* item) {
+    void* inv = InventoryOf(container);
+    if (!IsCharacter(thief) || !inv || !item) return 0;
+    // the victim: the container's owner (for furniture, its building's resident squad leader)
+    void* victim = CallbackCharSeh(inv);
+    if (!IsCharacter(victim)) return 0;
+    void* faction = nullptr;
+    if (void* fn = VSlot(victim, 0x58)) faction = CallNoArgPtrOn(fn, victim);   // getFaction
+    void* ourFaction = nullptr;
+    if (PlayerInterface* pi = Player()) Rd(pi, 0x2A0, ourFaction);
+    if (!faction || faction == ourFaction) return 0;
+    uint8_t notReal = 0;
+    if (Rd(faction, 0x1D0, notReal) && notReal) return 0;   // Faction::notARealFaction
+    // the game's own steps, as its loot window does them: the crime, then the roll to be seen
+    SetCrimeSeh(reinterpret_cast<uint8_t*>(thief) + 0xF0, 3, faction, reinterpret_cast<uint8_t*>(victim) + off::RO_handle);   // THEFT
+    bool caught = false;
+    if (void* fn = VSlot(thief, 0x298); fn && NoticeSeh(fn, thief, container, item, caught) && caught) return 2;   // ImStealingDoYouNotice
+    void* owner = nullptr;
+    Rd(inv, 0x88, owner);   // Inventory::owner
+    if (void* fn = VSlot(item, 0x348)) TheftFromSeh(fn, item, owner);   // Item::notifyTheftFrom
+    return 1;
+}
+
+bool ReadInventory(const void* c, std::vector<kc::ItemState>& out) {
     out.clear();
     void* inv = InventoryOf(c);
     if (!inv) return false;

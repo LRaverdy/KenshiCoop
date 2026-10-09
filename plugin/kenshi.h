@@ -289,7 +289,13 @@ bool ObjectHandle(const void* rootObject, kc::Handle& out);   // any RootObject 
 void* ResolveObject(const kc::Handle& h);                    // any RootObject, or null
 void MakeHand(const kc::Handle& h, void* out);               // writes a game `hand` (off::HandSize bytes)
 // Opens the game's loot window between two characters (what reaching a body with a loot order does).
-bool OpenLootWindow(Character* looter, Character* target);
+bool OpenLootWindow(Character* looter, void* target);   // a character or a container
+bool CloseInventoryWindows();                           // every inventory window of the game
+int OpenInventoryWindows();                             // how many are open
+// Theft from a container by `thief`: 0 not theft (ours, nobody's, a camp), 1 theft unseen (the crime
+// is set, the item now belongs to us), 2 caught (the owners react; the move must not happen).
+int StealCheck(Character* thief, void* container, void* item);
+void* FindItemIn(void* container, const kc::ItemState& s);   // the stack in its inventory
 // tests: the order a right-click on `subject` gives to the nearest selected character
 bool CallAddTaskNearest(int task, Character* subject);
 bool CallAddTaskNearestObject(int task, void* subject, const kc::Vec3& at);   // tests: the same on any object
@@ -383,11 +389,11 @@ Character* CreateCharacter(const kc::SpawnInfo& info, const kc::Vec3& pos, std::
 bool DestroyObject(void* obj);
 
 // Inventories (read side).
-bool ReadInventory(Character* c, std::vector<kc::ItemState>& out);   // canonical order
+bool ReadInventory(const void* obj, std::vector<kc::ItemState>& out);   // canonical order (character or container)
 // Replace the whole content with these items, laid out like a save load does.
-bool RebuildInventory(Character* c, const std::vector<kc::ItemState>& items, std::string* err);
+bool RebuildInventory(void* obj, const std::vector<kc::ItemState>& items, std::string* err);
 // Host: replay a client's item movement (from -> to, or a drop to the ground).
-bool MoveInventoryItem(Character* from, Character* to, const kc::InvOp& op, std::string* err);
+bool MoveInventoryItem(void* from, void* to, const kc::InvOp& op, std::string* err);
 
 // Melee combat.
 bool ReadCombat(Character* c, kc::Handle& target);          // true when in combat mode with a target

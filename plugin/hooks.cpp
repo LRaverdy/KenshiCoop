@@ -290,8 +290,33 @@ bool ClientLoot(int task, kenshi::Character* target) {
     return true;
 }
 
+// A right click on a container (chest, shelf, safe) on a client: the nearest of our selected
+// characters goes there through the host, and the game's loot window opens here once it arrived.
+bool ClientLootContainer(int task, void* subject) {
+    auto v = KenshiWorld::View();
+    if (g_hostCall || !v->active || !v->client || task != kTaskLootTarget || !subject || kenshi::IsCharacter(subject)) return false;
+    std::vector<kc::ItemState> items;
+    if (!kenshi::ReadInventory(subject, items)) return false;   // not a container
+    KenshiWorld* w = TheWorld();
+    if (!w) return false;
+    const SelectionInfo s = ClassifySelection(*v);
+    if (s.mine.empty()) { if (s.foreign) ToastForeign(); return true; }
+    kc::Vec3 at, p;
+    kenshi::ObjectPosition(subject, at);
+    kenshi::Character* best = nullptr;
+    float bestD = 1e30f;
+    for (const auto& h : s.mine)
+        if (kenshi::Character* c = w->FindSquad(h); c && kenshi::GetPosition(c, p)) {
+            const float d = (p.x - at.x) * (p.x - at.x) + (p.z - at.z) * (p.z - at.z);
+            if (d < bestD) { bestD = d; best = c; }
+        }
+    if (best) w->QueueContainerRequest(best, subject);
+    return true;
+}
+
 void hk_addOrder(void* pi, void* building, int task, void* subject, bool shift, bool addDontClear, const float* loc) {
     if (ClientLoot(task, kenshi::IsCharacter(subject) ? static_cast<kenshi::Character*>(subject) : nullptr)) return;
+    if (ClientLootContainer(task, subject)) return;
     if (RouteOrder(kc::TaskVia::AddOrder, task, subject, nullptr, building, loc, shift, addDontClear))
         o_addOrder(pi, building, task, subject, shift, addDontClear, loc);
 }
@@ -299,12 +324,14 @@ void hk_newTask(void* pi, int task, const void* targetHand, void* building, cons
     kc::Handle th;
     const bool haveTarget = kenshi::HandleFromHand(targetHand, th);
     if (ClientLoot(task, haveTarget ? kenshi::Resolve(th) : nullptr)) return;
+    if (haveTarget && ClientLootContainer(task, kenshi::ResolveObject(th))) return;
     if (RouteOrder(kc::TaskVia::NewTask, task, nullptr, haveTarget ? &th : nullptr, building, clickPos, false, addDontClear))
         o_newTask(pi, task, targetHand, building, clickPos, addDontClear);
 }
 // The right-click "loot" on a body goes through this one (the nearest selected character acts).
 void hk_addTaskNearest(void* pi, void* building, int task, void* subject, bool shift, const float* loc, bool noAnimals) {
     if (ClientLoot(task, kenshi::IsCharacter(subject) ? static_cast<kenshi::Character*>(subject) : nullptr)) return;
+    if (ClientLootContainer(task, subject)) return;
     if (RouteOrder(kc::TaskVia::TaskNearest, task, subject, nullptr, building, loc, shift, noAnimals))
         o_addTaskNearest(pi, building, task, subject, shift, loc, noAnimals);
 }

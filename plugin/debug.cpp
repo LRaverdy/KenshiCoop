@@ -690,6 +690,75 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         return o.str();
     }
+    if (cmd == "containerreq" || cmd == "contake") {
+        // containerreq <selectIndex> <name part>: right click on the nearest container with that name (loot order)
+        // contake <selectIndex> <name part>: in the open window, take its first item into that member's bag
+        size_t sel = 0;
+        std::string part;
+        in >> sel >> part;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kc::Vec3 p, op;
+        if (!kenshi::GetPosition(me, p)) return "err";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(p, 1500, objs);
+        void* best = nullptr;
+        float bestD = 1e30f;
+        std::string bestName;
+        for (void* o : objs) {
+            std::string sid, name;
+            std::vector<kc::ItemState> items;
+            if (!kenshi::ObjectTemplate(o, sid) || !kenshi::TemplateDisplayName(sid, name) || (part != "any" && name.find(part) == std::string::npos) ||
+                !kenshi::ObjectPosition(o, op) || !kenshi::ReadInventory(o, items) || items.empty())
+                continue;
+            const float d = (op.x - p.x) * (op.x - p.x) + (op.z - p.z) * (op.z - p.z);
+            if (d < bestD) { bestD = d; best = o; bestName = name; }
+        }
+        if (!best) return "err no container called " + part;
+        kenshi::ObjectPosition(best, op);
+        if (cmd == "containerreq") {
+            bool ok = false;
+            kenshi::WithSelection(me, [&] { ok = kenshi::CallAddTaskNearestObject(26, best, op); });
+            return (ok ? "ok " : "err ") + bestName + " at " + std::to_string(int(std::sqrt(bestD)));
+        }
+        std::vector<kc::ItemState> items;
+        kenshi::ReadInventory(best, items);
+        if (items.empty()) return "err the container is empty";
+        kc::InvOp mv;
+        mv.kind = kc::InvOpKind::Move;
+        mv.item = items[0];
+        mv.toSection = "main";
+        mv.toX = -1;
+        mv.toY = -1;
+        std::string why;
+        HostCallScope scope;   // the window's own move (the client's diff then asks the host)
+        const bool ok = kenshi::MoveInventoryItem(best, me, mv, &why);
+        return (ok ? "ok took " : "err ") + items[0].templateSid + (ok ? "" : " " + why) + " from " + bestName + " (" + std::to_string(items.size()) + " stacks)";
+    }
+    if (cmd == "contcount") {   // contcount <name part>: stacks in the nearest container with that name (around squad member 0)
+        std::string part;
+        in >> part;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        kc::Vec3 p, op;
+        if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), p)) return "err";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(p, 1500, objs);
+        int best = -1;
+        float bestD = 1e30f;
+        for (void* o : objs) {
+            std::string sid, name;
+            std::vector<kc::ItemState> items;
+            if (!kenshi::ObjectTemplate(o, sid) || !kenshi::TemplateDisplayName(sid, name) || (part != "any" && name.find(part) == std::string::npos) ||
+                !kenshi::ObjectPosition(o, op) || !kenshi::ReadInventory(o, items) || items.empty())
+                continue;
+            const float d = (op.x - p.x) * (op.x - p.x) + (op.z - p.z) * (op.z - p.z);
+            if (d < bestD) { bestD = d; best = int(items.size()); }
+        }
+        return "ok " + std::to_string(best) + " windows=" + std::to_string(kenshi::OpenInventoryWindows());
+    }
     if (cmd == "insomething") {   // insomething <squadIndex>: 0 nothing, 1 in bed, 2 in a cage
         size_t idx = 0;
         in >> idx;

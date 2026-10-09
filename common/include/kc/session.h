@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -159,6 +160,19 @@ public:
     virtual void TakeSyncStats(float& maxErr, uint16_t& farOff) { maxErr = 0; farOff = 0; }
     // A readable name for a game object template (string id), for the log.
     virtual std::string TemplateName(const std::string& sid) { return sid; }
+    // Containers. Either side: the container of that kind at that place (handles differ between
+    // machines). Host: walking distance check, theft (0 not theft, 1 theft unseen, 2 caught).
+    // Client: the player right-clicked one (which of our characters, what, where); open the game's
+    // window between our character and it; whether that window is still open.
+    virtual bool FindContainer(const std::string& sid, const Vec3& pos, Handle& out) { (void)sid; (void)pos; (void)out; return false; }
+    virtual float DistanceTo(const Handle& who, const Vec3& pos) { (void)who; (void)pos; return 1e9f; }
+    virtual bool ContainerKind(const Handle& container, std::string& sid) { (void)container; sid.clear(); return false; }
+    virtual int TheftCheck(const Handle& thief, const Handle& container, const ItemState& item) { (void)thief; (void)container; (void)item; return 0; }
+    struct ContainerRequest { Handle looter; std::string sid; Vec3 pos; };
+    virtual void TakeContainerRequests(std::vector<ContainerRequest>& out) { out.clear(); }
+    virtual bool OpenContainerWindow(const Handle& looter, const Handle& container) { (void)looter; (void)container; return false; }
+    virtual bool ContainerWindowOpen() { return false; }
+    virtual void CloseContainerWindows() {}
     // Client: items the local player dropped from a character (asked of the host, not done locally).
     virtual void TakeLocalDrops(std::vector<std::pair<Handle, ItemState>>& out) { out.clear(); }
 
@@ -329,6 +343,10 @@ private:
         double missingSince = -1;            // client: when it was last found missing locally
         // host
         bool keep = false;                   // scratch flag for interest updates
+        bool container = false;              // a container a player has open (no character)
+        std::set<uint8_t> openBy;            // host: players who have it open
+        Vec3 containerPos;                   // where it is
+        uint32_t looter = 0;                 // client: our character looking into it
         uint64_t identity = 0;               // IWorld::Identity when bound
     };
     struct Sent {                            // host: what a player last received for an entity
@@ -422,6 +440,14 @@ private:
     std::unordered_map<uint32_t, uint8_t> dialogOwner_;   // host: conversation -> the player it was sent to
     std::vector<IWorld::WorldDialog> scratchDialogs_;
     std::vector<DialogReply> pendingAnswers_;   // host
+    struct PendingContainer { uint8_t player; uint32_t looter; uint32_t netId; double until; };
+    std::vector<PendingContainer> walkingToContainers_;   // host: looters on their way
+    std::vector<std::pair<uint8_t, ContainerOpen>> containerAsks_;   // host: requests to handle on a live tick
+    uint32_t pendingWindow_ = 0;           // client: open the window once this container's items are in
+    double windowOpenedAt_ = -1;           // client: when our container window opened
+    std::vector<IWorld::ContainerRequest> scratchContainerReqs_;
+    void HostContainers(double now);
+    void ClientContainers(double now);
     std::vector<std::pair<uint8_t, AppearanceMsg>> pendingLooks_;   // host: from players, applied on the next live tick
     uint32_t editRequest_ = 0;             // client: the host asked us to make our new character
     bool editingSent_ = false;             // client: what we last told the host about our editor
