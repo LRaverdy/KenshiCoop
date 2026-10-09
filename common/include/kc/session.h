@@ -109,9 +109,9 @@ public:
     virtual void TakeAnimEvents(std::vector<std::pair<Handle, AnimEvent>>& out, bool state) { out.clear(); (void)state; }
     virtual void ApplyAnim(const Handle& h, const AnimEvent& e) { (void)h; (void)e; }
     // Host: every animation the character is playing; false when it is not worth sending (far away).
-    virtual bool ReadAnimFrame(const Handle& h, std::vector<AnimEntry>& out) { (void)h; out.clear(); return false; }
+    virtual bool ReadAnimFrame(const Handle& h, AnimFrame& out) { (void)h; out = AnimFrame{}; return false; }
     // Client: impose them (ageSeconds: how long ago the host sampled them).
-    virtual void ApplyAnimFrame(const Handle& h, const std::vector<AnimEntry>& anims, double ageSeconds) { (void)h; (void)anims; (void)ageSeconds; }
+    virtual void ApplyAnimFrame(const Handle& h, const AnimFrame& f, double ageSeconds) { (void)h; (void)f; (void)ageSeconds; }
 
     // Inventories. Host: read; execute a client's item movement (false = refused/impossible).
     virtual bool ReadInventory(const Handle& h, std::vector<ItemState>& out) = 0;

@@ -100,6 +100,9 @@ enum Fn : int {
     FnAnimGuardUpper,           // void AnimationClass::setCombatModeUpperIdle(bool)
     FnSingleAnimUpdate,         // void AnimationClassBase::SingleAnimation::update(float masterTime, float frameTime, bool sounds)
     FnRunAnimationLayer,        // void AnimationClass::runAnimation(AnimationData*, float speed, AnimationLayerEnum, float blend)
+    FnCreateScreenLabel,        // ScreenLabel* ForgottenGUI::createScreenLabel(const std::string&, const Colour&, LabelSize, RisingSpeed)
+    FnLabelSetTracking,         // void ScreenLabel::setTracking(const hand&, const Vector3& offset)
+    FnLabelSetColor,            // void ScreenLabel::setColor(const Colour&)
     FnReassessCollapse,         // void MedicalSystem::reassessCollapseMode(bool medic, bool agony)   (decides a collapse)
     FnAnimationSelection,       // void AnimationClass::animationSelection(float time)   (picks what to play each frame)
     FnTrackAnimationMovement,   // void CharMovement::trackAnimationMovement(bool)   (animations move the character)
@@ -347,10 +350,12 @@ struct PlayingAnim {
     std::string anim;       // Ogre animation name
     std::string data;       // its AnimationData name ("" for combat techniques)
     float time = 0, time01 = 0, weight = 0, desired = 0, speed = 0;
-    bool looped = false, fadingOut = false;
+    bool looped = false, fadingOut = false, synched = false;
     void* single = nullptr;
 };
 bool ReadPlayingAnims(const Character* c, std::vector<PlayingAnim>& out);
+bool ReadAnimMaster(const Character* c, float& time, float& speed);   // AnimationClassBase master clock
+bool WriteAnimMaster(void* animationClass, float time, float speed);
 void* SingleAnimOwner(const void* single);           // its AnimationClass
 bool SingleAnimName(const void* single, std::string& out);
 void WriteSingleAnim(void* single, float time, float speed, float weight, float desired);
@@ -367,6 +372,11 @@ bool CallStopActionNamed(Character* c, const std::string& name);
 bool CallStartStumble(Character* c, void* animData);
 bool CallSetCombatMode(Character* c, bool on);
 bool CallSetGuard(Character* c, bool legs, bool on);
+// Damage numbers ("floaters"): the game shows them from MedicalSystem::addWound.
+inline constexpr uintptr_t kAddWoundBegin = 0x6508D0, kAddWoundEnd = 0x651FF1;
+Character* CharacterOfHand(const void* hand);
+void* ShowFloater(Character* c, const std::string& text, const float colour[4], int size, int speed);   // returns the label
+bool SetLabelColor(void* label, const float colour[4]);
 bool CallSetCarryMode(Character* c, bool carried, bool left, bool right);
 std::string ItemTemplate(const void* item);                                        // its game data id
 bool CallDrawWeapon(Character* c, const std::string& itemSid, const std::string& section);   // the matching item it carries

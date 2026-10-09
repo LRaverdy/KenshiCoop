@@ -27,6 +27,7 @@ struct HookView {
     std::unordered_map<const void*, kc::Vec3> facing;   // client: CharMovement -> where the host's character faces
     struct AnimTarget {
         std::vector<kc::AnimEntry> anims;
+        float masterTime = 0, masterSpeed = 0;
         double sampledAt = 0;   // NowSeconds() when the host sampled them
     };
     std::unordered_map<const void*, std::shared_ptr<const AnimTarget>> anims;   // client: AnimationClass -> host's animations
@@ -71,8 +72,8 @@ public:
     void ApplyWeather(const std::vector<kc::RegionWeather>& regions) override;
     void ReadEffects(kc::EffectsMsg& out, bool full) override;
     void TakeAnimEvents(std::vector<std::pair<kc::Handle, kc::AnimEvent>>& out, bool state) override;
-    bool ReadAnimFrame(const kc::Handle& h, std::vector<kc::AnimEntry>& out) override;
-    void ApplyAnimFrame(const kc::Handle& h, const std::vector<kc::AnimEntry>& anims, double ageSeconds) override;
+    bool ReadAnimFrame(const kc::Handle& h, kc::AnimFrame& out) override;
+    void ApplyAnimFrame(const kc::Handle& h, const kc::AnimFrame& f, double ageSeconds) override;
     void ApplyAnim(const kc::Handle& h, const kc::AnimEvent& e) override;
     // Host: an animation hook saw one of our characters start/stop something (any game thread).
     void NoteAnim(kenshi::Character* c, kc::AnimEvent e);
@@ -215,7 +216,8 @@ private:   // first few lifecycle events (tests)
     std::vector<kc::Vec3> animCenters_;                                     // host: players' characters, for relevance
     double animCentersAt_ = -1e9;
     std::unordered_map<kenshi::Character*, std::shared_ptr<const HookView::AnimTarget>> animTargets_;   // client
-    std::unordered_map<std::string, double> animCreateTried_;               // client: "<char>|<anim>" -> last attempt
+    std::unordered_map<std::string, double> animCreateTried_;
+    std::unordered_map<kenshi::Character*, void*> lastFloater_;             // client: last damage number shown on each               // client: "<char>|<anim>" -> last attempt
     std::mutex toastMutex_;
     std::vector<std::string> toasts_;
 

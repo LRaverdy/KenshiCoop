@@ -255,8 +255,9 @@ void Session::HostTick(double now, bool live) {
         m.hostTime = now;
         for (auto& [id, e] : entities_) {
             AnimFrame f;
+            if (!world_.ReadAnimFrame(e.handle, f)) continue;
             f.netId = id;
-            if (world_.ReadAnimFrame(e.handle, f.anims)) m.chars.push_back(std::move(f));
+            m.chars.push_back(std::move(f));
         }
         if (!m.chars.empty()) {
             const auto pkts = EncodeAnimFrames(m);
@@ -1161,7 +1162,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
         const double age = std::max(0.0, clock_() + offset_ - m.hostTime);
         for (const auto& f : m.chars) {
             auto it = entities_.find(f.netId);
-            if (it != entities_.end()) world_.ApplyAnimFrame(it->second.handle, f.anims, age);
+            if (it != entities_.end()) world_.ApplyAnimFrame(it->second.handle, f, age);
         }
         break;
     }

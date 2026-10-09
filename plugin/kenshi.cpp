@@ -64,6 +64,9 @@ const FunctionSig kFunctions[FnCount] = {
     {"AnimationClass::setCombatModeUpperIdle", 0x51C940, {0x38, 0x91, 0x4D, 0x02, 0x00, 0x00, 0x88, 0x91, 0x4D, 0x02, 0x00, 0x00}},
     {"SingleAnimation::update", 0x5B1700, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x50, 0x0F, 0x29}},
     {"AnimationClass::runAnimation(AnimationData*, layer)", 0x5B7AC0, {0x48, 0x89, 0x6C, 0x24, 0x20, 0x56, 0x48, 0x83, 0xEC, 0x70, 0x48, 0x83}},
+    {"ForgottenGUI::createScreenLabel", 0x73FAF0, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x40, 0x48, 0xC7, 0x44, 0x24, 0x30, 0xFE}},
+    {"ScreenLabel::setTracking", 0x6E25F0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0x42, 0x08, 0x48, 0x8B, 0xD9}},
+    {"ScreenLabel::setColor", 0x6E2670, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48}},
     {"MedicalSystem::reassessCollapseMode", 0x649320, {0x48, 0x8B, 0xC4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
     {"AnimationClass::animationSelection", 0x520500, {0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x7C, 0x24, 0x20, 0x41, 0x54}},
     {"CharMovement::trackAnimationMovement", 0x65E240, {0x48, 0x83, 0xEC, 0x28, 0x38, 0x91, 0x7C, 0x03, 0x00, 0x00, 0x74, 0x17}},
@@ -1674,6 +1677,9 @@ bool ReadPlayingAnims(const Character* c, std::vector<PlayingAnim>& out) {
                     !Rd(sa, SA_desired, a.desired) || !Rd(sa, SA_time, a.time) || !Rd(sa, SA_time01, a.time01) || !Rd(sa, SA_looped, looped))
                     continue;
                 if (Rd(sa, SA_data, data) && data) a.data = AnimDataName(data);
+                uint8_t synched = 0;
+                Rd(sa, 0x5E, synched);
+                a.synched = synched != 0;
                 a.layer = uint8_t(li);
                 a.looped = looped != 0;
                 a.fadingOut = list == 1;
@@ -1683,6 +1689,17 @@ bool ReadPlayingAnims(const Character* c, std::vector<PlayingAnim>& out) {
         }
     }
     return true;
+}
+
+bool ReadAnimMaster(const Character* c, float& time, float& speed) {
+    constexpr uintptr_t AC_masterTime = 0xC8, AC_masterSpeed = 0xCC;
+    void* ac = AnimationOf(c);
+    return ac && Rd(ac, AC_masterTime, time) && Rd(ac, AC_masterSpeed, speed) && std::isfinite(time) && std::isfinite(speed);
+}
+
+bool WriteAnimMaster(void* ac, float time, float speed) {
+    constexpr uintptr_t AC_masterTime = 0xC8, AC_masterSpeed = 0xCC;
+    return ac && std::isfinite(time) && std::isfinite(speed) && Wr(ac, AC_masterTime, time) && Wr(ac, AC_masterSpeed, speed);
 }
 
 void* SingleAnimOwner(const void* single) {
@@ -1790,6 +1807,40 @@ bool CallSetGuard(Character* c, bool legs, bool on) {
     void* ac = AnimationOf(c);
     return ac && CallBoolArg(FnAddr(legs ? FnAnimGuardLegs : FnAnimGuardUpper), ac, on);
 }
+
+Character* CharacterOfHand(const void* hand) {
+    void* fn = FnAddr(FnHandleResolve);
+    void* table = reinterpret_cast<void*>(Addr(rva::HandleTable));
+    void* obj = hand ? CallResolve(fn, table, hand) : nullptr;
+    return IsCharacter(obj) ? static_cast<Character*>(obj) : nullptr;
+}
+
+namespace {
+using FnCreateLabel = void* (*)(void* gui, const void* text, const float* colour, int size, int speed);
+using FnLabelTrack = void (*)(void* label, const void* hand, const float* offset);
+using FnLabelColor = void (*)(void* label, const float* colour);
+void* SehCreateLabel(void* fn, void* gui, const void* t, const float* c, int sz, int sp) {
+    __try { return reinterpret_cast<FnCreateLabel>(fn)(gui, t, c, sz, sp); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+bool SehLabelTrack(void* fn, void* l, const void* h, const float* o) {
+    __try { reinterpret_cast<FnLabelTrack>(fn)(l, h, o); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool SehLabelColor(void* fn, void* l, const float* c) {
+    __try { reinterpret_cast<FnLabelColor>(fn)(l, c); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+void* ShowFloater(Character* c, const std::string& text, const float colour[4], int size, int speed) {
+    GameString s;
+    if (!IsCharacter(c) || !MakeGameString(text.substr(0, 15), s)) return nullptr;
+    void* label = SehCreateLabel(FnAddr(FnCreateScreenLabel), reinterpret_cast<void*>(Addr(rva::TradeGui)), &s, colour, size, speed);
+    if (!label) return nullptr;
+    const float offset[3] = {0.0f, 15.0f, 0.0f};   // as addWound places it
+    SehLabelTrack(FnAddr(FnLabelSetTracking), label, reinterpret_cast<const uint8_t*>(c) + off::RO_handle, offset);
+    return label;
+}
+
+bool SetLabelColor(void* label, const float colour[4]) { return label && SehLabelColor(FnAddr(FnLabelSetColor), label, colour); }
 
 bool CallSetCarryMode(Character* c, bool carried, bool left, bool right) {
     void* ac = AnimationOf(c);

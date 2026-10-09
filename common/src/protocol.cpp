@@ -546,7 +546,7 @@ bool Decode(Reader& r, AnimMsg& m) {
     for (auto& e : m.events) {
         e.netId = GetU32Var(r);
         const uint8_t k = r.u8();
-        if (k < uint8_t(AnimKind::Combat) || k > uint8_t(AnimKind::GuardUpper)) return false;
+        if (k < uint8_t(AnimKind::Combat) || k > uint8_t(AnimKind::FloaterColor)) return false;
         e.kind = AnimKind(k);
         e.name = r.str(kMaxAnimNameLen); e.a = r.f32(); e.b = r.f32(); e.flags = r.u8();
         if (!r.ok() || e.netId == 0) return false;
@@ -574,6 +574,8 @@ std::vector<std::vector<uint8_t>> EncodeAnimFrames(const AnimFrameMsg& m, size_t
             const size_t tableBefore = table.size();
             Writer one(256);
             one.varint(f.netId);
+            one.f32(f.masterTime);
+            one.f32(f.masterSpeed);
             const size_t na = std::min<size_t>(f.anims.size(), kMaxAnimsPerChar);
             one.u8(uint8_t(na));
             for (size_t a = 0; a < na; ++a) {
@@ -616,6 +618,8 @@ bool Decode(Reader& r, AnimFrameMsg& m) {
     m.chars.resize(n);
     for (auto& f : m.chars) {
         f.netId = GetU32Var(r);
+        f.masterTime = r.f32();
+        f.masterSpeed = r.f32();
         const uint8_t na = r.u8();
         if (na > kMaxAnimsPerChar) return false;
         f.anims.resize(na);

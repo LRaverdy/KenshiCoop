@@ -58,6 +58,16 @@ MedDamageFn o_medDamage = nullptr;
 MedKnockoutFn o_medKnockout = nullptr;
 using CollapseFn = void (*)(void* med, bool medic, bool agony);
 CollapseFn o_collapse = nullptr;
+using CreateLabelFn = void* (*)(void* gui, const void* text, const float* colour, int size, int speed);
+using LabelTrackFn = void (*)(void* label, const void* hand, const float* offset);
+using LabelColorFn = void (*)(void* label, const float* colour);
+CreateLabelFn o_createLabel = nullptr;
+LabelTrackFn o_labelTrack = nullptr;
+LabelColorFn o_labelColor = nullptr;
+// host: the damage number addWound is building (created, then tracked, then coloured)
+thread_local void* t_floaterLabel = nullptr;
+thread_local kc::AnimEvent t_floater;
+thread_local kenshi::Character* t_floaterChar = nullptr;
 DeclareDeadFn o_declareDead = nullptr;
 using RagdollModeFn = void (*)(void*, bool, int);
 RagdollModeFn o_ragdollMode = nullptr;
@@ -280,6 +290,46 @@ void hk_medKnockout(void* med, float skill01) {
 void hk_collapse(void* med, bool medic, bool agony) {
     if (KenshiWorld::ClientActive() && !g_hostCall) return;
     o_collapse(med, medic, agony);
+}
+std::string ColourHex(const float* c) {
+    char b[16];
+    auto u = [](float f) { return unsigned(std::lround(std::fmin(1.0f, std::fmax(0.0f, f)) * 255)); };
+    snprintf(b, sizeof(b), "%02X%02X%02X%02X", u(c[0]), u(c[1]), u(c[2]), u(c[3]));
+    return b;
+}
+// Damage numbers are made by addWound, which clients never run: the host's are shown on clients.
+void* hk_createLabel(void* gui, const void* text, const float* colour, int size, int speed) {
+    void* label = o_createLabel(gui, text, colour, size, speed);
+    const uintptr_t from = reinterpret_cast<uintptr_t>(_ReturnAddress()) - kenshi::Base();
+    if (label && colour && from >= kenshi::kAddWoundBegin && from < kenshi::kAddWoundEnd && !KenshiWorld::ClientActive() &&
+        KenshiWorld::View()->active) {
+        std::string s;
+        if (text) kenshi::ReadStdString(text, s);
+        t_floaterLabel = label;
+        t_floaterChar = nullptr;
+        t_floater = kc::AnimEvent{};
+        t_floater.kind = kc::AnimKind::Floater;
+        t_floater.name = ColourHex(colour) + "|" + s;
+        t_floater.flags = uint8_t((size & 0xF) | ((speed & 0xF) << 4));
+    }
+    return label;
+}
+void hk_labelTrack(void* label, const void* hand, const float* offset) {
+    o_labelTrack(label, hand, offset);
+    if (label && label == t_floaterLabel) {
+        t_floaterChar = kenshi::CharacterOfHand(hand);
+        if (t_floaterChar)
+            if (KenshiWorld* w = TheWorld()) w->NoteAnim(t_floaterChar, t_floater);
+    }
+}
+void hk_labelColor(void* label, const float* colour) {
+    o_labelColor(label, colour);
+    if (label && colour && label == t_floaterLabel && t_floaterChar) {
+        kc::AnimEvent e;
+        e.kind = kc::AnimKind::FloaterColor;
+        e.name = ColourHex(colour);
+        if (KenshiWorld* w = TheWorld()) w->NoteAnim(t_floaterChar, e);
+    }
 }
 void hk_declareDead(void* chr) {
     if (KenshiWorld::ClientActive() && !g_hostCall) return;
@@ -588,6 +638,9 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnMedKnockout, reinterpret_cast<void*>(&hk_medKnockout), reinterpret_cast<void**>(&o_medKnockout)},
         {kenshi::FnDeclareDead, reinterpret_cast<void*>(&hk_declareDead), reinterpret_cast<void**>(&o_declareDead)},
         {kenshi::FnReassessCollapse, reinterpret_cast<void*>(&hk_collapse), reinterpret_cast<void**>(&o_collapse)},
+        {kenshi::FnCreateScreenLabel, reinterpret_cast<void*>(&hk_createLabel), reinterpret_cast<void**>(&o_createLabel)},
+        {kenshi::FnLabelSetTracking, reinterpret_cast<void*>(&hk_labelTrack), reinterpret_cast<void**>(&o_labelTrack)},
+        {kenshi::FnLabelSetColor, reinterpret_cast<void*>(&hk_labelColor), reinterpret_cast<void**>(&o_labelColor)},
         {kenshi::FnRagdollMode, reinterpret_cast<void*>(&hk_ragdollMode), reinterpret_cast<void**>(&o_ragdollMode)},
         {kenshi::FnCreateRandomCharacter, reinterpret_cast<void*>(&hk_createRandomCharacter), reinterpret_cast<void**>(&o_createChar)},
         {kenshi::FnRegionUpdateBT, reinterpret_cast<void*>(&hk_regionUpdateBT), reinterpret_cast<void**>(&o_regionUpdateBT)},

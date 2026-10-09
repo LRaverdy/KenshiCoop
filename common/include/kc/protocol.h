@@ -336,6 +336,8 @@ enum class AnimKind : uint8_t {
     WeaponState = 13, // periodic: name "<item>\t<section>" in its hands, "" = hands empty
     GuardLegs = 14,   // flags 1: legs in combat idle (guard stance)
     GuardUpper = 15,  // flags 1: upper body in combat idle
+    Floater = 16,     // a damage number over it: name "RRGGBBAA|text", flags: size | speed << 4
+    FloaterColor = 17,// the last floater's colour changed: name "RRGGBBAA"
 };
 struct AnimEvent {
     uint32_t netId = 0;
@@ -360,6 +362,7 @@ struct AnimEntry {
 };
 struct AnimFrame {
     uint32_t netId = 0;
+    float masterTime = 0, masterSpeed = 0;   // the clock synchronised animations (walk, run cycles) follow
     std::vector<AnimEntry> anims;
 };
 struct AnimFrameMsg {

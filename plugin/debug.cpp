@@ -252,10 +252,12 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         for (const auto& h : SortedSquad(w)) {
             std::vector<kenshi::PlayingAnim> v;
             kenshi::ReadPlayingAnims(w.FindSquad(h), v);
-            o << "char " << Key(h) << " n=" << v.size() << '\n';
+            float mt = 0, ms = 0;
+            kenshi::ReadAnimMaster(w.FindSquad(h), mt, ms);
+            o << "char " << Key(h) << " n=" << v.size() << " master=" << mt << " mspeed=" << ms << '\n';
             for (const auto& a : v)
                 o << "  L" << int(a.layer) << (a.fadingOut ? " out " : " in  ") << a.anim << " | " << a.data << " t=" << a.time << " t01=" << a.time01
-                  << " w=" << a.weight << " dw=" << a.desired << " sp=" << a.speed << " loop=" << a.looped << '\n';
+                  << " w=" << a.weight << " dw=" << a.desired << " sp=" << a.speed << " loop=" << a.looped << " synch=" << a.synched << '\n';
         }
         return "ok";
     }

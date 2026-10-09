@@ -102,7 +102,11 @@ void KenshiWorld::EndFrame() {
     if (active_ && client_) {
         for (auto it = animTargets_.begin(); it != animTargets_.end();) {
             if (nowView - it->second->sampledAt > 1.0 || !v->replicated.count(it->first)) { it = animTargets_.erase(it); continue; }
-            if (void* ac = kenshi::AnimationOf(it->first)) v->anims[ac] = it->second;
+            if (void* ac = kenshi::AnimationOf(it->first)) {
+                v->anims[ac] = it->second;
+                const auto& tg = *it->second;
+                kenshi::WriteAnimMaster(ac, tg.masterTime + tg.masterSpeed * float(nowView - tg.sampledAt) * v->gameSpeed, tg.masterSpeed);
+            }
             ++it;
         }
     } else {
@@ -877,8 +881,9 @@ void KenshiWorld::TakeAnimEvents(std::vector<std::pair<kc::Handle, kc::AnimEvent
     }
 }
 
-bool KenshiWorld::ReadAnimFrame(const kc::Handle& h, std::vector<kc::AnimEntry>& out) {
-    out.clear();
+bool KenshiWorld::ReadAnimFrame(const kc::Handle& h, kc::AnimFrame& frame) {
+    frame = kc::AnimFrame{};
+    std::vector<kc::AnimEntry>& out = frame.anims;
     if (client_) return false;
     const double now = NowSeconds();
     if (now - animCentersAt_ > 0.25) {
@@ -898,6 +903,7 @@ bool KenshiWorld::ReadAnimFrame(const kc::Handle& h, std::vector<kc::AnimEntry>&
     if (!closeBy) return false;
     std::vector<kenshi::PlayingAnim> playing;
     if (!kenshi::ReadPlayingAnims(c, playing)) return false;
+    kenshi::ReadAnimMaster(c, frame.masterTime, frame.masterSpeed);
     for (const auto& a : playing) {
         if (a.weight < 0.002f && a.desired < 0.002f) continue;   // idle entries the blender keeps around
         kc::AnimEntry e;
@@ -909,12 +915,15 @@ bool KenshiWorld::ReadAnimFrame(const kc::Handle& h, std::vector<kc::AnimEntry>&
     return true;
 }
 
-void KenshiWorld::ApplyAnimFrame(const kc::Handle& h, const std::vector<kc::AnimEntry>& anims, double ageSeconds) {
+void KenshiWorld::ApplyAnimFrame(const kc::Handle& h, const kc::AnimFrame& frame, double ageSeconds) {
+    const std::vector<kc::AnimEntry>& anims = frame.anims;
     kenshi::Character* c = Find(h);
     if (!c || !client_ || kenshi::IsDead(c)) return;
     const double now = NowSeconds();
     auto t = std::make_shared<HookView::AnimTarget>();
     t->anims = anims;
+    t->masterTime = frame.masterTime;
+    t->masterSpeed = frame.masterSpeed;
     t->sampledAt = now - ageSeconds;
     animTargets_[c] = t;
     // what the host plays and we do not: start it (the update hook then sets its time and weight)
@@ -995,6 +1004,19 @@ void KenshiWorld::ApplyAnim(const kc::Handle& h, const kc::AnimEvent& e) {
     case kc::AnimKind::EndStumble: kenshi::CallAnimVoid(kenshi::FnAddr(kenshi::FnAnimEndStumble), c); break;
     case kc::AnimKind::CombatMode: kenshi::CallSetCombatMode(c, (e.flags & 1) != 0); break;
     case kc::AnimKind::Carry: kenshi::CallSetCarryMode(c, (e.flags & 1) != 0, (e.flags & 2) != 0, (e.flags & 4) != 0); break;
+    case kc::AnimKind::Floater:
+    case kc::AnimKind::FloaterColor: {
+        float col[4] = {1, 1, 1, 1};
+        const std::string hex = e.name.substr(0, 8);
+        for (int i = 0; i < 4 && hex.size() == 8; ++i) col[i] = float(std::strtoul(hex.substr(size_t(i) * 2, 2).c_str(), nullptr, 16)) / 255.0f;
+        if (e.kind == kc::AnimKind::Floater) {
+            const size_t bar = e.name.find('|');
+            lastFloater_[c] = kenshi::ShowFloater(c, bar == std::string::npos ? "" : e.name.substr(bar + 1), col, e.flags & 0xF, e.flags >> 4);
+        } else if (auto it = lastFloater_.find(c); it != lastFloater_.end()) {
+            kenshi::SetLabelColor(it->second, col);
+        }
+        break;
+    }
     case kc::AnimKind::GuardLegs: kenshi::CallSetGuard(c, true, (e.flags & 1) != 0); break;
     case kc::AnimKind::GuardUpper: kenshi::CallSetGuard(c, false, (e.flags & 1) != 0); break;
     case kc::AnimKind::DrawWeapon: {
