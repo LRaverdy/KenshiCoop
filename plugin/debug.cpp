@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -485,6 +486,22 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
     if (cmd == "editdone") {   // editdone: what the editor's confirm button does at the end
         reinterpret_cast<void (*)(void*)>(kenshi::FnAddr(kenshi::FnCloseCharacterEditor))(reinterpret_cast<void*>(kenshi::Addr(0x21337B0)));
         return "ok";
+    }
+    if (cmd == "objnear") {   // objnear <squadIndex> <radius>: objects around that squad member: template x count
+        size_t idx = 0;
+        float r = 100;
+        in >> idx >> r;
+        auto squad = SortedSquad(w);
+        kc::Vec3 p;
+        if (idx >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[idx]), p)) return "err";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(p, r, objs);
+        std::map<std::string, int> kinds;
+        for (void* o : objs) { std::string sid; kenshi::ObjectTemplate(o, sid); ++kinds[sid.empty() ? "?" : sid]; }
+        std::ostringstream o;
+        o << "ok " << objs.size();
+        for (auto& [k, n] : kinds) o << " " << k << "x" << n;
+        return o.str();
     }
     if (cmd == "squads") {   // squads: the player's squads as this machine has them: "name: member,member | ..."
         std::vector<kc::IWorld::WorldSquad> ws;

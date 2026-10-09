@@ -17,6 +17,7 @@
 #include "kc/session.h"
 #include "kenshi.h"
 #include "overlay.h"
+#include "host_console.h"
 #include "steam_link.h"
 #include "util.h"
 #include "world.h"
@@ -72,7 +73,7 @@ struct Hotkey {
     int vk;
     bool down = false;
 };
-Hotkey g_hkHost{'H'}, g_hkJoin{'J'}, g_hkLeave{'L'}, g_hkGive{'G'}, g_hkOverlay{'O'}, g_hkDiag{'D'}, g_hkMultiplayer{'M'},
+Hotkey g_hkHost{'H'}, g_hkJoin{'J'}, g_hkLeave{'L'}, g_hkGive{'G'}, g_hkOverlay{'O'}, g_hkDiag{'D'}, g_hkMultiplayer{'M'}, g_hkConsoleWindow{'W'},
     g_hkConsole{'K'};
 
 bool Pressed(Hotkey& k, bool modifiers) {
@@ -155,6 +156,7 @@ void HandleHotkeys() {
     }
     if (Pressed(g_hkGive, mods)) GiveSelectedToNextPlayer();
     if (Pressed(g_hkDiag, mods)) { DumpDiagnostics("hotkey"); Toast("Diagnostics written to KenshiCoop.log"); }
+    if (Pressed(g_hkConsoleWindow, mods)) HostConsoleShow(!HostConsoleVisible());
 }
 
 // ---- the Multijoueur window and the console (French: what the players read)
@@ -237,6 +239,7 @@ void ConsoleCommand(const std::string& line) {
     const bool client = g_session->isClient();
     if (cmd == "help") {
         out("help                 cette aide");
+        out("fenetre              ouvrir / fermer la console hors du jeu (aussi Ctrl+Shift+W)");
         out("players              joueurs : id, nom, ping, personnages");
         out("status               état de la session et de la synchro");
         if (!client) {
@@ -245,7 +248,13 @@ void ConsoleCommand(const std::string& line) {
             out("save                 sauvegarder la partie");
             out("pause [0|1]          mettre en pause / reprendre");
             out("speed <x>            vitesse du jeu (1, 2, 3...)");
+            out("tp <id> [vers <id>]  téléporter les persos du joueur <id> près de ton perso sélectionné (ou d'un autre joueur)");
         }
+        return;
+    }
+    if (cmd == "fenetre" || cmd == "window") {
+        HostConsoleShow(!HostConsoleVisible());
+        out(HostConsoleVisible() ? "console externe ouverte" : "console externe fermee");
         return;
     }
     if (cmd == "players") {
@@ -289,6 +298,35 @@ void ConsoleCommand(const std::string& line) {
         return;
     }
     if (!g_world->Ready()) { out("aucune partie chargée"); return; }
+    if (cmd == "tp") {   // tp <id> [<toId>]: unstick a player's characters next to my selection (or another player's)
+        int id = -1, to = -1;
+        in >> id >> to;
+        if (!host || id < 0 || id > 255) { out("usage : tp <id> [vers <id>]  (tape players pour les numéros)"); return; }
+        std::vector<kc::Handle> squad, who;
+        g_world->PlayerCharacters(squad);
+        for (const auto& h : squad) if (g_session->ownerOf(h) == id) who.push_back(h);
+        if (who.empty()) { out("ce joueur n'a pas de personnage"); return; }
+        kc::Vec3 dest;
+        bool have = false;
+        if (to >= 0) {
+            for (const auto& h : squad)
+                if (g_session->ownerOf(h) == to)
+                    if (kenshi::Character* c = g_world->FindSquad(h); c && kenshi::GetPosition(c, dest)) { have = true; break; }
+        } else {
+            std::vector<kc::Handle> sel;
+            kenshi::SelectedHandles(sel);
+            for (const auto& h : sel)
+                if (kenshi::Character* c = g_world->FindSquad(h); c && kenshi::GetPosition(c, dest)) { have = true; break; }
+            for (const auto& h : squad)
+                if (!have && g_session->ownerOf(h) == g_session->localId())
+                    if (kenshi::Character* c = g_world->FindSquad(h); c && kenshi::GetPosition(c, dest)) have = true;
+        }
+        if (!have) { out("destination introuvable : sélectionne un de tes persos"); return; }
+        const int n = g_world->TeleportCharacters(who, dest);
+        out(std::to_string(n) + " personnage(s) du joueur " + std::to_string(id) + " téléporté(s)");
+        Toast(std::to_string(n) + " personnage(s) téléporté(s).");
+        return;
+    }
     if (cmd == "save") {
         char name[64];
         const std::time_t t = std::time(nullptr);
@@ -447,6 +485,65 @@ void SteamUpkeep() {
     }
 }
 
+// Client: every new line of our log goes to the host's log too (what goes wrong on each machine is
+// then in one place, live). Host: the console window shows the session and runs its commands.
+uint64_t g_forwardedSeq = 0;
+bool g_consoleAutoOpened = false;
+void LogAndConsoleUpkeep() {
+    uint64_t seq = 0;
+    RecentLog(0, &seq);
+    if (g_session->isClient() && seq > g_forwardedSeq) {
+        const auto lines = RecentLog(size_t(std::min<uint64_t>(seq - g_forwardedSeq, 200)), &seq);
+        for (const auto& l : lines) {
+            if (l.find("debug: ") != std::string::npos) continue;   // the test channel
+            g_session->QueueLog(l.size() > 10 ? l.substr(10) : l);   // without our clock: the host stamps it
+        }
+    }
+    g_forwardedSeq = seq;
+    if (g_session->isHost() && g_cfg.hostConsole && !g_consoleAutoOpened) {
+        g_consoleAutoOpened = true;
+        HostConsoleShow(true);
+    }
+    for (auto& cmd : HostConsoleTakeCommands()) ConsoleCommand(cmd);
+    static double nextPublish = 0;
+    const double now = NowSeconds();
+    if (!HostConsoleVisible() || now < nextPublish) return;
+    nextPublish = now + 0.5;
+    ConsoleModel m;
+    char status[256];
+    snprintf(status, sizeof(status), "%s   |   %zu entites, %zu PNJ   |   vitesse %.1f%s   |   %s", FrenchState(g_session->state()), g_session->entityCount(),
+             g_session->npcCount(), kenshi::GetFrameSpeed(), kenshi::GetPaused() ? " (PAUSE)" : "", g_cfg.name.c_str());
+    m.status = status;
+    if (g_session->isHost() || g_session->isClient()) {
+        ConsolePlayer me;
+        me.id = g_session->localId();
+        me.name = g_cfg.name + " (toi)";
+        me.characters = CharactersOf(me.id);
+        me.state = g_session->isHost() ? "hote" : "en jeu";
+        m.players.push_back(me);
+    }
+    for (auto& [id, p] : g_session->players()) {
+        ConsolePlayer cp;
+        cp.id = id;
+        cp.name = p.name;
+        cp.pingMs = p.rttMs;
+        cp.characters = CharactersOf(id);
+        cp.state = !p.inGame ? "arrive (telechargement)" : p.editing ? "cree son personnage" : "en jeu";
+        if (p.reportAt >= 0) {
+            const auto& r = p.report;
+            char b[200];
+            snprintf(b, sizeof(b), "%u suivis, %u PNJ en attente, %u escouade manquants, %u decales, corr. max %.1f, %u img/s (il y a %.0f s)",
+                     unsigned(r.entities), unsigned(r.missingNpcs), unsigned(r.missingSquad), unsigned(r.farOff), double(r.maxErr), unsigned(r.fps), now - p.reportAt);
+            cp.sync = b;
+            cp.warn = r.missingSquad > 0 || r.farOff > 3 || r.maxErr > 30.0f || (r.fps > 0 && r.fps < 15) || now - p.reportAt > 20.0;
+        } else {
+            cp.sync = "pas encore de rapport";
+        }
+        m.players.push_back(cp);
+    }
+    HostConsolePublish(std::move(m));
+}
+
 void Tick(bool live) {
     g_world->BeginFrame(live);
     for (auto& t : g_world->TakeToasts()) Toast(t);
@@ -469,6 +566,8 @@ void Tick(bool live) {
     if (live) g_menuWindowShown = true;
     if (g_cfg.debugCommands) DebugPoll(*g_session, *g_world, live);
     SteamUpkeep();
+    if (live) g_session->CountFrame();
+    LogAndConsoleUpkeep();
     g_session->Tick(live);
     if (live) g_world->EndFrame();
     PublishOverlay();
@@ -625,6 +724,7 @@ extern "C" __declspec(dllexport) void dllStartPlugin() {
 
 extern "C" __declspec(dllexport) void dllStopPlugin() {
     if (kcp::g_session) kcp::g_session->Leave();
+    kcp::HostConsoleShutdown();
     kcp::OverlayShutdown();
     kcp::RemoveHooks();
     kcp::Log("stopped");

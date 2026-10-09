@@ -66,6 +66,9 @@ public:
     virtual bool ReadCombat(const Handle& h, Handle& target) = 0;
     // Client: make the local copy fight `target` (host handle), or stop fighting.
     virtual void ApplyCombat(const Handle& h, bool fight, const Handle& target) = 0;
+    // Carrying a character on the shoulder. Host: who `h` carries. Client: carry that one / put it down.
+    virtual bool ReadCarry(const Handle& h, Handle& carried) { (void)h; (void)carried; return false; }
+    virtual void ApplyCarry(const Handle& h, bool carry, const Handle& carried) { (void)h; (void)carry; (void)carried; }
     // Host: what a client needs to recreate this character if its world lacks it.
     virtual bool ReadSpawnInfo(const Handle& h, SpawnInfo& out) = 0;
     // Host: a stable identity of the object at `h` (0 if none). Kenshi changes a character's handle
@@ -117,8 +120,10 @@ public:
     virtual void ApplyGround(const GroundEvent& e) { (void)e; }
     // Progression. Host: a character's skill levels (kStatCount values), the player faction's money.
     // Client: impose the host's.
-    virtual bool ReadProgress(const Handle& h, std::vector<float>& stats) { (void)h; stats.clear(); return false; }
-    virtual void ApplyProgress(const Handle& h, const std::vector<float>& stats) { (void)h; (void)stats; }
+    virtual bool ReadProgress(const Handle& h, std::vector<float>& stats, uint16_t& modes, uint8_t& style) {
+        (void)h; (void)modes; (void)style; stats.clear(); return false;
+    }
+    virtual void ApplyProgress(const Handle& h, const std::vector<float>& stats, uint16_t modes, uint8_t style) { (void)h; (void)stats; (void)modes; (void)style; }
     virtual bool ReadMoney(int32_t& money) { (void)money; return false; }
     virtual void ApplyMoney(int32_t money) { (void)money; }
     // Conversations. Host: lines said and conversation windows of other players' characters since the
@@ -148,6 +153,12 @@ public:
     virtual bool ReadAppearance(const Handle& h, AppearanceMsg& out) { (void)h; (void)out; return false; }
     virtual void ApplyAppearance(const Handle& h, const AppearanceMsg& m) { (void)h; (void)m; }
     virtual bool OpenCharacterEditor(const Handle& h) { (void)h; return false; }
+    virtual bool CharacterEditorOpen() { return false; }
+    // Client: the largest position correction since the last call, and how many characters stand
+    // more than 5 units off the host's position now.
+    virtual void TakeSyncStats(float& maxErr, uint16_t& farOff) { maxErr = 0; farOff = 0; }
+    // A readable name for a game object template (string id), for the log.
+    virtual std::string TemplateName(const std::string& sid) { return sid; }
     // Client: items the local player dropped from a character (asked of the host, not done locally).
     virtual void TakeLocalDrops(std::vector<std::pair<Handle, ItemState>>& out) { out.clear(); }
 
@@ -203,6 +214,11 @@ struct RemotePlayer {
     uint8_t id = 0;
     std::string name;
     uint64_t steamId = 0;    // host side: the Steam account the player joined with (0: unknown)
+    bool editing = false;    // host side: the player has the character editor open
+    double editingSince = 0;
+    ClientReport report;     // host side: the player's last report on their sync
+    double reportAt = -1;
+    double reportLoggedAt = -1e9;
     PeerId peer = kNoPeer;   // host side only
     uint32_t rttMs = 0;
     bool inGame = true;      // host side: finished loading the world
@@ -262,6 +278,10 @@ public:
         bool waiting = false;   // an answer was sent, the next line has not come yet
     };
     const DialogView& dialog() const { return dialog_; }
+    // Client: lines of our log for the host's log (sent a few times a second); frames counted for
+    // the sync reports.
+    void QueueLog(std::string line);
+    void CountFrame() { ++frames_; }
     // Client: open the game's character editor on our own character (its looks go to everyone).
     bool EditOwnCharacter();
     void AnswerDialog(int index);
@@ -281,11 +301,15 @@ private:
         bool vitalsDirty = false;
         EntityVitals vitals;
         std::vector<float> stats;            // client: the host's skill levels (empty = none yet)
+        uint16_t modes = 0;
+        uint8_t style = 0;
         bool statsDirty = false;
         bool hasSpawn = false;               // host sent how to recreate it
         SpawnInfo spawn;
         bool spawned = false;                // client created a stand-in for it
         uint32_t combatApplied = 0;          // client: combat target last imposed (netId)
+        uint32_t carryApplied = 0;           // client: who it was last made to carry (netId)
+        double carryReapply = 0;
         double combatReapply = 0;
         // inventories
         bool haveInv = false;                // client: host inventory received
@@ -309,6 +333,8 @@ private:
         EntityVitals vitals;
         double vitalsAt = -1e9;
         std::vector<float> stats;
+        uint16_t modes = 0xFFFF;
+        uint8_t style = 0xFF;
         double statsAt = -1e9;
     };
     struct PlayerSync {
@@ -394,6 +420,13 @@ private:
     std::vector<DialogReply> pendingAnswers_;   // host
     std::vector<std::pair<uint8_t, AppearanceMsg>> pendingLooks_;   // host: from players, applied on the next live tick
     uint32_t editRequest_ = 0;             // client: the host asked us to make our new character
+    bool editingSent_ = false;             // client: what we last told the host about our editor
+    bool holdForEditor_ = false;           // host: the world is held still while a player edits
+    std::vector<std::string> logOut_;      // client: log lines waiting to go to the host
+    size_t logDropped_ = 0;
+    double nextLogSend_ = 0, nextReport_ = 0, reportStart_ = 0;
+    uint32_t frames_ = 0;
+    std::unordered_map<uint32_t, std::vector<std::string>> dialogReplies_;   // host: last answers offered per conversation
     std::vector<Handle> scratchEdited_;
     bool haveMoney_ = false;               // client
     int32_t hostMoney_ = 0;

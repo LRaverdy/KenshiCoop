@@ -37,7 +37,7 @@ Quat Nlerp(Quat a, const Quat& b, float t) {
 
 bool StateChanged(const EntityState& a, const EntityState& b) {
     return Dist(a.pos, b.pos) > 0.02f || Dist(a.dest, b.dest) > 0.25f || a.flags != b.flags || QuatDot(a.rot, b.rot) < 0.99995f ||
-           a.combatTarget != b.combatTarget || a.gait != b.gait || std::fabs(a.pace - b.pace) > 0.1f;
+           a.combatTarget != b.combatTarget || a.gait != b.gait || std::fabs(a.pace - b.pace) > 0.1f || a.carrying != b.carrying;
 }
 uint64_t InventoryHash(const std::vector<ItemState>& items) {
     uint64_t h = 0xcbf29ce484222325ull;
@@ -151,6 +151,11 @@ void Session::Leave() {
     haveSquads_ = false;
     pendingLooks_.clear();
     editRequest_ = 0;
+    editingSent_ = false;
+    logOut_.clear();
+    logDropped_ = 0;
+    dialogReplies_.clear();
+    holdForEditor_ = false;
     pendingAnswers_.clear();
     missingSquad_ = 0;
     localId_ = 0;
@@ -352,6 +357,15 @@ void Session::HostJoinFlow(double now, bool live) {
     std::vector<uint8_t> joining;
     for (auto& [pid, p] : players_) if (!p.inGame && !sync_[pid].kicked) joining.push_back(pid);
 
+    // A player in the character editor: everyone waits for them (10 minutes at most).
+    bool editing = false;
+    for (auto& [pid, p] : players_) editing |= p.inGame && p.editing && now - p.editingSince < 600.0;
+    if (joining.empty() && editing) {
+        if (live && !holding_) { world_.HoldForJoin(true); holding_ = true; }
+        holdForEditor_ = true;
+        return;
+    }
+    holdForEditor_ = false;
     if (joining.empty()) {
         if (holding_ && live) { world_.HoldForJoin(false); holding_ = false; }
         if (exportReady_ || exporting_) {  // the next joiner gets a fresh save
@@ -413,6 +427,19 @@ void Session::HostJoinFlow(double now, bool live) {
                 for (auto& [pid, p] : players_) if (!p.inGame) Kick(p, RejectReason::HostSaveFailed);
                 return;
             }
+        }
+    }
+    // Someone arrived while that save was being made: it has no character of theirs. Save again
+    // (the ones already receiving the first save keep it).
+    if (exportReady_ && cfg_.characterPerPlayer && live && holding_) {
+        bool lateJoiner = false;
+        for (uint8_t id : joining) lateJoiner |= !sync_[id].worldSent && !sync_[id].ownChecked;
+        if (lateJoiner) {
+            log_("a player arrived while the world was being saved: saving it again with their character");
+            exportFiles_.clear();
+            exportFiles_.shrink_to_fit();
+            exportReady_ = false;
+            return;
         }
     }
     if (exportReady_) {
@@ -602,6 +629,11 @@ void Session::SendSnapshots(double now) {
             auto t = byHandle_.find(target);
             st.combatTarget = t != byHandle_.end() ? t->second : 0;
         }
+        Handle carried;
+        if (world_.ReadCarry(e.handle, carried)) {
+            auto t = byHandle_.find(carried);
+            st.carrying = t != byHandle_.end() ? t->second : 0;
+        }
         stateCache_[id] = st;
     }
     for (auto& [pid, p] : players_) {
@@ -674,6 +706,15 @@ void Session::SendDialogs() {
         if (!owner || owner == hostId_) continue;
         if (d.kind == DialogKind::Close) dialogOwner_.erase(d.dialogId);
         else dialogOwner_[d.dialogId] = owner;
+        const std::string who = players_.count(owner) ? players_[owner].name : "?";
+        if (d.kind == DialogKind::Open) log_("[" + who + "] conversation avec " + e.text);
+        if (d.kind == DialogKind::Text) {
+            std::string r;
+            for (size_t i = 0; i < e.replies.size(); ++i) r += (i ? " | " : "") + std::to_string(i + 1) + ". " + e.replies[i];
+            log_("[" + who + "] l'autre dit : \"" + e.text.substr(0, 160) + "\"" + (r.empty() ? "" : "  reponses : " + r));
+            dialogReplies_[d.dialogId] = e.replies;
+        }
+        if (d.kind == DialogKind::Close) { log_("[" + who + "] fin de la conversation"); dialogReplies_.erase(d.dialogId); }
         perPlayer[owner].events.push_back(std::move(e));
     }
     scratchDialogs_.clear();
@@ -750,6 +791,12 @@ bool Session::EditOwnCharacter() {
     return false;
 }
 
+void Session::QueueLog(std::string line) {
+    if (!isClient()) return;
+    if (logOut_.size() >= 512) { ++logDropped_; return; }
+    logOut_.push_back(std::move(line));
+}
+
 void Session::AnswerDialog(int index) {
     if (state_ != SessionState::Connected || !dialog_.open || dialog_.waiting || index < 0 || index >= int(dialog_.replies.size())) return;
     DialogReply r;
@@ -764,10 +811,11 @@ void Session::AnswerDialog(int index) {
 // Skill levels change slowly (a few thousandths per hit or per minute of training): what changed is
 // sent once a second, everything every 20 s; the money when it changes.
 void Session::SendProgress(double now) {
-    std::unordered_map<uint32_t, std::vector<float>> cur;
+    std::unordered_map<uint32_t, CharProgress> cur;
     for (auto& [id, e] : entities_) {
-        std::vector<float> s;
-        if (world_.ReadProgress(e.handle, s) && s.size() == kStatCount) cur[id] = std::move(s);
+        CharProgress p;
+        p.netId = id;
+        if (world_.ReadProgress(e.handle, p.stats, p.modes, p.style) && p.stats.size() == kStatCount) cur[id] = std::move(p);
     }
     int32_t money = 0;
     const bool haveMoney = world_.ReadMoney(money);
@@ -779,12 +827,14 @@ void Session::SendProgress(double now) {
         ProgressMsg m;
         m.hasMoney = haveMoney;
         m.money = money;
-        for (const auto& [id, s] : cur) {
+        for (const auto& [id, prog] : cur) {
             Sent& last = sent[id];
-            if (!StatsChanged(s, last.stats) && now - last.statsAt < 20.0) continue;
-            last.stats = s;
+            if (!StatsChanged(prog.stats, last.stats) && prog.modes == last.modes && prog.style == last.style && now - last.statsAt < 20.0) continue;
+            last.stats = prog.stats;
+            last.modes = prog.modes;
+            last.style = prog.style;
             last.statsAt = now;
-            m.chars.push_back({id, s});
+            m.chars.push_back(prog);
             if (m.chars.size() >= 64) {
                 Writer w;
                 Encode(w, m);
@@ -860,8 +910,16 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         // One Steam account, one player: a second connection from the same account (two games on
         // one PC) is told apart by its name only.
         bool steamTaken = h.steamId != 0 && h.steamId == cfg_.steamId;
-        for (auto& [pid, p] : players_) steamTaken |= h.steamId != 0 && p.steamId == h.steamId;
         if (steamTaken) h.steamId = 0;
+        // the same account still connected: a player who restarted the game before the old
+        // connection timed out. The old one goes; the player gets their character back.
+        for (auto it = players_.begin(); h.steamId && it != players_.end(); ++it) {
+            if (it->second.steamId != h.steamId) continue;
+            log_(it->second.name + " reconnected: the old connection is closed");
+            net_.Kick(it->second.peer);
+            OnDisconnect(it->second.peer);
+            break;
+        }
         pendingPeers_.erase(peer);
 
         Welcome wm;
@@ -912,12 +970,48 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         if (pendingLooks_.size() < 16) pendingLooks_.emplace_back(pl->id, std::move(m));
         break;
     }
+    case Msg::ClientLog: {
+        ClientLog m;
+        if (!Decode(r, m)) break;
+        for (const auto& l : m.lines) log_("[" + pl->name + "] " + l);
+        break;
+    }
+    case Msg::ClientReport: {
+        ClientReport m;
+        if (!Decode(r, m)) break;
+        pl->report = m;
+        const double now = clock_();
+        pl->reportAt = now;
+        const bool bad = m.missingSquad > 0 || m.farOff > 3 || m.maxErr > 30.0f || (m.fps > 0 && m.fps < 15);
+        if (now - pl->reportLoggedAt > (bad ? 15.0 : 60.0)) {
+            pl->reportLoggedAt = now;
+            char b[200];
+            snprintf(b, sizeof(b), "[%s] synchro%s : %u persos suivis, %u PNJ pas encore chez lui, %u de l'escouade manquants, %u decales, correction max %.1f, %u img/s",
+                     pl->name.c_str(), bad ? " A SURVEILLER" : "", unsigned(m.entities), unsigned(m.missingNpcs), unsigned(m.missingSquad),
+                     unsigned(m.farOff), double(m.maxErr), unsigned(m.fps));
+            log_(b);
+        }
+        break;
+    }
+    case Msg::EditState: {
+        EditState m;
+        if (!Decode(r, m)) break;
+        if (m.editing != pl->editing) {
+            pl->editing = m.editing;
+            pl->editingSince = clock_();
+            log_(pl->name + (m.editing ? " opened the character editor: the game waits for them" : " closed the character editor"));
+            if (m.editing) AddChat("* " + pl->name + " crée son personnage : partie en pause.");
+        }
+        break;
+    }
     case Msg::DialogReply: {
         DialogReply a;
         if (!pl->inGame || !Decode(r, a)) break;
         auto o = dialogOwner_.find(a.dialogId);
         if (o == dialogOwner_.end() || o->second != pl->id) { log_("ignored an answer to a conversation player " + std::to_string(pl->id) + " is not in"); break; }
         if (pendingAnswers_.size() < 64) pendingAnswers_.push_back(a);
+        if (auto rr = dialogReplies_.find(a.dialogId); rr != dialogReplies_.end() && a.index < int(rr->second.size()))
+            log_("[" + pl->name + "] repond : \"" + rr->second[size_t(a.index)] + "\"");
         break;
     }
     case Msg::InvOp: {
@@ -1108,13 +1202,23 @@ void Session::SendLocalDrops() {
 }
 
 void Session::ApplyCommand(uint8_t from, const Command& c) {
+    const std::string who = players_.count(from) ? players_[from].name : "joueur " + std::to_string(from);
     auto it = entities_.find(c.netId);
-    if (it == entities_.end()) return;
+    if (it == entities_.end()) { log_("[" + who + "] ordre pour un personnage inconnu (ignore)"); return; }
     if (!it->second.squad || it->second.owner != from) {
-        log_("ignored command for a character player " + std::to_string(from) + " does not own");
+        log_("[" + who + "] ordre refuse : ce personnage ne lui appartient pas");
         return;
     }
-    world_.Order(it->second.handle, c);
+    std::string what;
+    switch (c.kind) {
+    case CommandKind::MoveTo: what = "se deplacer"; break;
+    case CommandKind::Stop: what = "s'arreter"; break;
+    case CommandKind::PickUp: what = "ramasser " + world_.TemplateName(c.itemSid); break;
+    case CommandKind::Task: what = std::string("ordre \"") + TaskLabel(c.task) + "\" (" + std::to_string(c.task) + ")" + (c.itemSid.empty() ? "" : " sur " + world_.TemplateName(c.itemSid)); break;
+    case CommandKind::SquadMove: what = "changer d'escouade"; break;
+    }
+    const bool ok = world_.Order(it->second.handle, c);
+    if (c.kind != CommandKind::MoveTo || !ok) log_("[" + who + "] " + what + (ok ? " -> ok" : " -> ECHEC"));
 }
 
 // ============================== client ==============================
@@ -1259,6 +1363,15 @@ void Session::ClientTick(double now, bool live) {
                 e.combatApplied = want;
                 e.combatReapply = now + 2.0;
             }
+            // Carrying someone: the same body on the same shoulder as on the host.
+            const uint32_t carry = e.buf.back().s.carrying;
+            if (carry != e.carryApplied || now >= e.carryReapply) {
+                auto t = carry ? entities_.find(carry) : entities_.end();
+                if (!carry) world_.ApplyCarry(e.handle, false, Handle{});
+                else if (t != entities_.end() && t->second.present) world_.ApplyCarry(e.handle, true, t->second.handle);
+                e.carryApplied = carry;
+                e.carryReapply = now + 1.0;
+            }
         }
     }
     ClientInventoryDiff(now);
@@ -1285,10 +1398,41 @@ void Session::ClientTick(double now, bool live) {
     if (restats) nextStatsApply_ = now + 3.0;
     for (auto& [id, e] : entities_) {
         if (!e.present || e.stats.empty() || !(restats || e.statsDirty)) continue;
-        world_.ApplyProgress(e.handle, e.stats);
+        world_.ApplyProgress(e.handle, e.stats, e.modes, e.style);
         e.statsDirty = false;
     }
     if (restats && haveMoney_) world_.ApplyMoney(hostMoney_);
+    // Our log lines go to the host's log, and every 5 s a report on how well we follow.
+    if (now >= nextLogSend_ && (!logOut_.empty() || logDropped_)) {
+        nextLogSend_ = now + 0.5;
+        ClientLog m;
+        if (logDropped_) { m.lines.push_back("(" + std::to_string(logDropped_) + " lignes non transmises)"); logDropped_ = 0; }
+        while (!logOut_.empty() && m.lines.size() < kMaxLogLines) { m.lines.push_back(std::move(logOut_.front())); logOut_.erase(logOut_.begin()); }
+        Writer w;
+        Encode(w, m);
+        SendReliable(net_.serverPeer(), w);
+    }
+    if (now >= nextReport_) {
+        ClientReport rep;
+        world_.TakeSyncStats(rep.maxErr, rep.farOff);
+        rep.entities = uint16_t(std::min<size_t>(entities_.size(), 65535));
+        rep.missingNpcs = uint16_t(std::min<size_t>(missingNpcs(), 65535));
+        rep.missingSquad = uint16_t(std::min<uint32_t>(missingSquad_, 65535));
+        rep.fps = uint16_t(now > reportStart_ ? std::min<double>(frames_ / std::max(0.5, now - reportStart_), 999.0) : 0);
+        frames_ = 0;
+        reportStart_ = now;
+        nextReport_ = now + 5.0;
+        Writer w;
+        Encode(w, rep);
+        SendReliable(net_.serverPeer(), w);
+    }
+    // Tell the host whether our character editor is open: it holds the game meanwhile.
+    if (const bool open = world_.CharacterEditorOpen(); open != editingSent_) {
+        editingSent_ = open;
+        Writer w;
+        Encode(w, EditState{open});
+        SendReliable(net_.serverPeer(), w);
+    }
     if (editRequest_) {
         auto it = entities_.find(editRequest_);
         if (it != entities_.end() && it->second.present && world_.OpenCharacterEditor(it->second.handle)) {
@@ -1534,6 +1678,8 @@ void Session::ClientPacket(Msg type, Reader& r) {
             auto it = entities_.find(c.netId);
             if (it == entities_.end()) continue;
             it->second.stats = std::move(c.stats);
+            it->second.modes = c.modes;
+            it->second.style = c.style;
             it->second.statsDirty = true;
         }
         break;

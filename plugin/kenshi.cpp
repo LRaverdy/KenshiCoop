@@ -115,6 +115,12 @@ const FunctionSig kFunctions[FnCount] = {
     {"GameData vec3 map []", 0xB0D40, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x81, 0xEC, 0x90}},
     {"GameData quat map []", 0x2E6110, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x81, 0xEC, 0x90}},
     {"std::string::assign", 0x69BC0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
+    {"Character::addOrder", 0x5D20D0, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x41}},
+    {"Character::addJob", 0x5C8DA0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
+    {"Character::setStandingOrder", 0x5CAA50, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48}},
+    {"Character::pickupObject", 0x5CFF90, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x80, 0xB9}},
+    {"Character::dropCarriedObject", 0x5CE1E0, {0x48, 0x8B, 0xC4, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x83, 0xEC, 0x70}},
+    {"PlayerInterface::setCurrentPlatoon", 0x7F2800, {0x48, 0x83, 0xEC, 0x28, 0x48, 0x39, 0x91, 0xA8, 0x02, 0x00, 0x00, 0x74}},
 };
 
 namespace {
@@ -749,6 +755,22 @@ bool MoveToSquad(void* squad, Character* c, int index) {
     return squad && IsCharacter(c) && AddAtSeh(FnAddr(FnSquadAddCharacterAt), squad, c, index);
 }
 
+void* ShownSquad() {
+    PlayerInterface* pi = Player();
+    void* platoon = nullptr;
+    if (!pi || !Rd(pi, 0x2A8, platoon) || !platoon) return nullptr;
+    void* active = nullptr;
+    return Rd(platoon, 0x1D8, active) ? active : nullptr;   // Platoon::activePlatoon
+}
+
+void ShowSquad(void* squad) {
+    PlayerInterface* pi = Player();
+    void* platoon = nullptr;
+    if (!pi || !squad || !Rd(squad, AP_platoon, platoon) || !platoon) return;
+    using FnShow = bool (*)(void*, void*);
+    __try { reinterpret_cast<FnShow>(FnAddr(FnSetCurrentPlatoon))(pi, platoon); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
 void* NewSquad() {
     PlayerInterface* pi = Player();
     return pi ? NewSquadSeh(FnAddr(FnCreateSquad), pi) : nullptr;
@@ -914,6 +936,11 @@ bool OpenCharacterEditor(Character* c) {
     return ShowEditorSeh(&lk);
 }
 
+bool CharacterEditorOpen() {
+    void* ed = nullptr;
+    return Rd(reinterpret_cast<void*>(Addr(kTheGui)), GUI_editor, ed) && ed;
+}
+
 void EditorCharacters(std::vector<Character*>& out) {
     out.clear();
     void* ed = nullptr;
@@ -928,6 +955,110 @@ void EditorCharacters(std::vector<Character*>& out) {
     }
 }
 
+namespace {
+constexpr uintptr_t CH_stealth = 0xD4;                 // bool, set by the STEALTH_ON / OFF orders
+constexpr uintptr_t ST_defensive = 0x128, ST_ranged = 0x129, ST_taunt = 0x12A, ST_hold = 0x12B, ST_passive = 0x12C;   // CharStats
+constexpr uintptr_t AI_fightStyle = 0x2B8;             // int: 0 attack, 1 defend, 2 evade
+using FnStanding = void (*)(void*, int, bool);
+bool StandingSeh(void* c, int order, bool on) {
+    __try { reinterpret_cast<FnStanding>(FnAddr(FnSetStandingOrder))(c, order, on); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+namespace {
+constexpr uintptr_t CH_isCarrying = 0x348, CH_carrying = 0x380;   // bool, hand
+using FnPick = void (*)(void*, void*);
+using FnDrop = void (*)(void*, bool, bool);
+bool PickSeh(void* c, void* who) {
+    __try { reinterpret_cast<FnPick>(FnAddr(FnPickupCharacter))(c, who); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool DropSeh(void* c) {
+    __try { reinterpret_cast<FnDrop>(FnAddr(FnDropCarried))(c, true, false); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+bool ReadCarried(Character* c, kc::Handle& carried) {
+    uint8_t on = 0;
+    return IsCharacter(c) && Rd(c, CH_isCarrying, on) && on && ReadHandle(reinterpret_cast<uint8_t*>(c) + CH_carrying, carried) && carried.valid();
+}
+
+bool CarryCharacter(Character* carrier, Character* who) {
+    return IsCharacter(carrier) && IsCharacter(who) && PickSeh(carrier, who);
+}
+
+bool DropCarried(Character* carrier) {
+    return IsCharacter(carrier) && DropSeh(carrier);
+}
+
+uint16_t ReadModes(Character* c, uint8_t& style) {
+    style = 0;
+    if (!IsCharacter(c)) return 0;
+    uint16_t m = 0;
+    uint8_t b = 0;
+    if (Rd(c, CH_stealth, b) && b) m |= kc::kModeStealth;
+    if (void* st = StatsOf(c)) {
+        if (Rd(st, ST_defensive, b) && b) m |= kc::kModeDefensive;
+        if (Rd(st, ST_ranged, b) && b) m |= kc::kModeRanged;
+        if (Rd(st, ST_taunt, b) && b) m |= kc::kModeTaunt;
+        if (Rd(st, ST_hold, b) && b) m |= kc::kModeHold;
+        if (Rd(st, ST_passive, b) && b) m |= kc::kModePassive;
+    }
+    if (GetStandingOrder(c, 15)) m |= kc::kModeChase;
+    void* ai = nullptr;
+    int fs = 0;
+    if (Rd(c, off::CH_ai, ai) && ai && Rd(ai, AI_fightStyle, fs) && fs >= 0 && fs <= 2) style = uint8_t(fs);
+    return m;
+}
+
+bool GetStandingOrder(Character* c, int order) {
+    if (!IsCharacter(c)) return false;
+    uint8_t b = 0;
+    void* st = StatsOf(c);
+    switch (order) {
+    case 3: return Rd(c, CH_stealth, b) && b;   // STEALTH_ON
+    case 11: return st && Rd(st, ST_defensive, b) && b;
+    case 17: return st && Rd(st, ST_ranged, b) && b;
+    case 14: return st && Rd(st, ST_taunt, b) && b;
+    case 12: return st && Rd(st, ST_hold, b) && b;
+    case 13: return st && Rd(st, ST_passive, b) && b;
+    case 15: {   // CHASE: AI -> +0x20 -> +0x35
+        void* ai = nullptr;
+        void* x = nullptr;
+        return Rd(c, off::CH_ai, ai) && ai && Rd(ai, 0x20, x) && x && Rd(x, 0x35, b) && b;
+    }
+    default: return false;
+    }
+}
+
+void SetStandingOrder(Character* c, int order, bool on) {
+    if (IsCharacter(c)) StandingSeh(c, order, on);
+}
+
+void ObjectsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out) {
+    out.clear();
+    std::vector<void*> all;
+    AllObjectsNear(pos, radius, all);
+    for (void* o : all) if (!IsCharacter(o)) out.push_back(o);
+}
+
+bool ObjectPosition(void* obj, kc::Vec3& out) {
+    void* fn = obj ? VSlot(obj, slot::RO_getPosition) : nullptr;
+    float v[3] = {};
+    if (!fn || !CallGetVec3(fn, obj, v)) return false;
+    out = {v[0], v[1], v[2]};
+    return Finite(out);
+}
+
+bool TemplateDisplayName(const std::string& sid, std::string& out) {
+    void* gd = FindGameData(sid);
+    return gd && ReadGameString(reinterpret_cast<uint8_t*>(gd) + 0x28, out) && !out.empty();   // GameData::name
+}
+
+bool ObjectTemplate(const void* obj, std::string& sid) {
+    void* gd = nullptr;
+    return obj && Rd(obj, off::RO_data, gd) && gd && ReadGameString(reinterpret_cast<uint8_t*>(gd) + off::GD_stringID, sid) && !sid.empty();
+}
+
 bool IsStatOfCharacter(const void* statField) {
     // the stat functions get `this` + offset: walk back to a CharStats whose `me` points back at it
     const auto p = reinterpret_cast<uintptr_t>(statField);
@@ -940,11 +1071,25 @@ bool IsStatOfCharacter(const void* statField) {
     return false;
 }
 
+namespace {
+void ShowPlatoonSeh(void* pi, void* platoon) {
+    using FnShow = bool (*)(void*, void*);
+    __try { reinterpret_cast<FnShow>(FnAddr(FnSetCurrentPlatoon))(pi, platoon); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+} // namespace
+
 void WithSelection(Character* only, const std::function<void()>& fn) {
     PlayerInterface* pi = Player();
     if (!pi || !IsCharacter(only)) return;
+    // everything selecting a character changes: the selection, the squad the squad bar shows, the
+    // character whose details panel is open; all of it comes back exactly as it was
     std::vector<kc::Handle> before;
     SelectedHandles(before);
+    constexpr uintptr_t PI_selectedCharacter = 0xF0, PI_currentPlatoon = 0x2A8;
+    uint8_t savedHand[off::HandSize] = {};
+    void* savedPlatoon = nullptr;
+    SafeCopy(savedHand, reinterpret_cast<uint8_t*>(pi) + PI_selectedCharacter, sizeof(savedHand));
+    Rd(pi, PI_currentPlatoon, savedPlatoon);
     using FnSel = void (*)(void*, void*, bool);
     using FnClear = void (*)(void*);
     auto sel = reinterpret_cast<FnSel>(FnAddr(FnObjectSelected));
@@ -958,6 +1103,11 @@ void WithSelection(Character* only, const std::function<void()>& fn) {
         if (!o) o = ResolveItem(h);
         if (o) sel(pi, o, true);
     }
+    void* nowPlatoon = nullptr;
+    if (Rd(pi, PI_currentPlatoon, nowPlatoon) && nowPlatoon != savedPlatoon && savedPlatoon) {
+        ShowPlatoonSeh(pi, savedPlatoon);
+    }
+    for (size_t k = 0; k < sizeof(savedHand); ++k) Wr(reinterpret_cast<uint8_t*>(pi) + PI_selectedCharacter, k, savedHand[k]);
 }
 
 namespace {
@@ -2261,8 +2411,15 @@ bool SingleAnimName(const void* single, std::string& out) { return single && Rea
 
 bool ReadSingleAnimTime(const void* sa, float& time) { return sa && Rd(sa, SA_time, time) && std::isfinite(time); }
 
-float SyncedAnimTime(const void* sa, float mine, float want, bool looped) {
-    constexpr float kTolerance = 0.12f;   // closer than that, our own smooth progress stays
+bool ReadAnimMasterOf(const void* ac, float& time, float& speed) {
+    constexpr uintptr_t AC_masterTime = 0xC8, AC_masterSpeed = 0xCC;
+    return ac && Rd(ac, AC_masterTime, time) && Rd(ac, AC_masterSpeed, speed) && std::isfinite(time) && std::isfinite(speed);
+}
+
+float SyncedAnimTime(const void* sa, float mine, float want, bool looped, float gameSpeed) {
+    // closer than that, our own smooth progress stays (the host's samples arrive with network
+    // jitter, which the game speed multiplies)
+    const float kTolerance = std::min(0.4f, 0.12f * std::max(1.0f, gameSpeed));
     float d = want - mine;
     float t01 = 0;
     if (looped && Rd(sa, SA_time01, t01) && t01 > 0.02f && mine > 0.01f) {
@@ -2493,6 +2650,22 @@ bool SehGetObjects(void* grid, const float* pt, float r, GameLektor* lk) {
 } // namespace
 
 bool DescribeInventoryItem(void* item, kc::ItemState& s) { return item && ReadItemState(item, s); }
+
+void AllObjectsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out) {
+    out.clear();
+    void* zm = nullptr;
+    if (!Rd(reinterpret_cast<void*>(Addr(kZoneManagerPtr)), 0, zm) || !zm) return;
+    GameLektor lk{Addr(kLektorPtrVt), 0, 10, nullptr};
+    lk.data = static_cast<void**>(reinterpret_cast<FnNew>(Addr(kGameNew))(10 * sizeof(void*)));
+    if (!lk.data) return;
+    const float pt[3] = {pos.x, pos.y, pos.z};
+    if (SehGetObjects(reinterpret_cast<uint8_t*>(zm) + ZM_objectGrid, pt, radius, &lk))
+        for (uint32_t i = 0; i < lk.count && i < 100000; ++i) {
+            void* o = nullptr;
+            if (Rd(lk.data, i * sizeof(void*), o) && o) out.push_back(o);
+        }
+    if (lk.data) reinterpret_cast<FnDelete>(Addr(kGameDelete))(lk.data);
+}
 
 void GroundItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out) {
     out.clear();

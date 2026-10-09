@@ -39,9 +39,38 @@ std::wstring Widen(const std::string& s) {
 }
 } // namespace
 
+namespace {
+// The previous session's log is kept: moved into the KenshiCoop-logs folder under the time it was
+// last written (the 30 most recent are kept).
+void ArchivePreviousLog(const std::wstring& path) {
+    WIN32_FILE_ATTRIBUTE_DATA fa{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fa)) return;
+    FILETIME local{};
+    SYSTEMTIME st{};
+    FileTimeToLocalFileTime(&fa.ftLastWriteTime, &local);
+    FileTimeToSystemTime(&local, &st);
+    const size_t slash = path.find_last_of(L"\\/");
+    const std::wstring dir = (slash == std::wstring::npos ? std::wstring() : path.substr(0, slash + 1)) + L"KenshiCoop-logs";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    wchar_t name[64];
+    swprintf(name, 64, L"\\KenshiCoop-%04d-%02d-%02d_%02d-%02d-%02d.log", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    if (!MoveFileExW(path.c_str(), (dir + name).c_str(), MOVEFILE_REPLACE_EXISTING)) return;   // in use: another instance
+    // prune: the oldest beyond 30 go (names sort by date)
+    std::vector<std::wstring> files;
+    WIN32_FIND_DATAW fd{};
+    HANDLE h = FindFirstFileW((dir + L"\\KenshiCoop-*.log").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do files.push_back(fd.cFileName); while (FindNextFileW(h, &fd));
+    FindClose(h);
+    std::sort(files.begin(), files.end());
+    for (size_t i = 0; i + 30 < files.size(); ++i) DeleteFileW((dir + L"\\" + files[i]).c_str());
+}
+} // namespace
+
 void LogOpen(const std::wstring& path) {
     std::lock_guard<std::mutex> lk(g_logMutex);
     if (g_log) return;
+    ArchivePreviousLog(path);
     // A second Kenshi instance (local testing) gets its own log instead of interleaving lines.
     g_log = _wfsopen(path.c_str(), L"w", _SH_DENYWR);
     if (!g_log) {
@@ -146,6 +175,7 @@ Config LoadConfig(const std::wstring& ini) {
     c.overlay = num(L"ui", L"overlay", 1) != 0;
     c.debugCommands = num(L"debug", L"commands", 0) != 0;
     c.steamLoopback = num(L"debug", L"steam_loopback", 0) != 0;
+    c.hostConsole = num(L"ui", L"host_console", 1) != 0;
     c.characterPerPlayer = num(L"coop", L"own_character", 1) != 0;
     return c;
 }

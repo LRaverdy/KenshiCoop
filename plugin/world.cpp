@@ -86,9 +86,18 @@ void KenshiWorld::EndFrame() {
                 pauseSeenAt_ = now;
                 kenshi::CallSetFrameSpeed(kCrawl);
             }
-            if (now - pauseSeenAt_ >= kSettleBeforePause) kenshi::CallUserPause(true);
+            // the game may refuse a pause for a moment (an editor, a menu): ask again until it takes
+            if (now - pauseSeenAt_ >= kSettleBeforePause && now >= nextPauseTry_) {
+                kenshi::CallUserPause(true);
+                nextPauseTry_ = now + 0.5;
+                if (!kenshi::GetPaused() && now - pauseSeenAt_ > 3.0 && !pauseRefusedLogged_) {
+                    pauseRefusedLogged_ = true;
+                    Log("the host paused but this game refuses to pause (an editor or a menu open?)");
+                }
+            }
         } else if (!hostTime_.paused) {
             pauseSeenAt_ = -1;
+            pauseRefusedLogged_ = false;
             if (kenshi::GetPaused()) kenshi::CallUserPause(false);
             if (std::fabs(kenshi::GetFrameSpeed() - hostTime_.speed) > 1e-3f) kenshi::CallSetFrameSpeed(hostTime_.speed);
         }
@@ -120,7 +129,16 @@ void KenshiWorld::EndFrame() {
             if (void* ac = kenshi::AnimationOf(it->first)) {
                 v->anims[ac] = it->second;
                 const auto& tg = *it->second;
-                kenshi::WriteAnimMaster(ac, tg.masterTime + tg.masterSpeed * float(nowView - tg.sampledAt) * v->gameSpeed, tg.masterSpeed);
+                // the master clock is a phase (0..1, wrapping): corrected only when it is really off,
+                // otherwise it keeps advancing smoothly on its own (jumping it to every sample made
+                // walking characters shake, worse at higher game speeds)
+                float want = tg.masterTime + tg.masterSpeed * float(nowView - tg.sampledAt) * v->gameSpeed;
+                want -= std::floor(want);
+                float mine = 0, mineSpeed = 0;
+                float d = kenshi::ReadAnimMasterOf(ac, mine, mineSpeed) ? want - mine : 1.0f;
+                d -= std::round(d);
+                const float tolerance = std::min(0.25f, 0.06f * std::max(1.0f, v->gameSpeed));
+                kenshi::WriteAnimMaster(ac, std::fabs(d) > tolerance ? want : mine, tg.masterSpeed);
             }
             ++it;
         }
@@ -475,6 +493,9 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     }
 
     const float err = Dist(local, target.pos);
+    syncMaxErr_ = std::max(syncMaxErr_, err);
+    if (!(latest.flags & kc::kFlagMoving)) syncErr_[h] = err;
+    else syncErr_.erase(h);
     HostCallScope scope;
     // Far off (late join, lag spike, teleport on the host): snap straight to the host state.
     if (err > cfg_.snapDistance) {
@@ -495,12 +516,14 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         kenshi::Halt(c);   // the host stopped: stop walking, the correction below settles it exactly
         lastDest_.erase(h);
     }
-    // Standing still, it faces where the host's does (moving, the path turns it; in combat the
-    // combat movement hook imposes the host's facing).
-    if (!hostMoving || latest.combatTarget != 0) {
+    // It faces where the host's does: exactly when standing (in combat the combat movement hook
+    // imposes it too); walking, our own path turns it, unless that path goes another way than the
+    // host's (more than ~25 degrees off).
+    {
         kc::Vec3 mine;
         const kc::Vec3 want = kenshi::ForwardOf(target.rot);
-        if (kenshi::GetFacing(c, mine) && mine.x * want.x + mine.z * want.z < 0.999f) kenshi::FaceDirection(c, want);
+        const float limit = (!hostMoving || latest.combatTarget != 0) ? 0.999f : 0.9f;
+        if (kenshi::GetFacing(c, mine) && mine.x * want.x + mine.z * want.z < limit) kenshi::FaceDirection(c, want);
     }
     // The host paused: its characters stopped mid-stride. Put them exactly there while the game still
     // runs (at a crawl, see EndFrame): paused, it would not commit the position.
@@ -560,6 +583,19 @@ bool KenshiWorld::OpenCharacterEditor(const kc::Handle& h) {
     return ok;
 }
 
+void KenshiWorld::TakeSyncStats(float& maxErr, uint16_t& farOff) {
+    maxErr = syncMaxErr_;
+    syncMaxErr_ = 0;
+    farOff = 0;
+    for (auto& [h, e] : syncErr_) farOff += e > 5.0f;
+    syncErr_.clear();
+}
+
+std::string KenshiWorld::TemplateName(const std::string& sid) {
+    std::string name;
+    return kenshi::TemplateDisplayName(sid, name) ? name : sid;
+}
+
 void KenshiWorld::ReadSquads(std::vector<WorldSquad>& out) {
     out.clear();
     std::vector<kenshi::Character*> all;
@@ -586,6 +622,7 @@ void KenshiWorld::ReadSquads(std::vector<WorldSquad>& out) {
 // one), then every member goes there, in the host's order.
 void KenshiWorld::ApplySquads(const std::vector<WorldSquad>& squads) {
     std::vector<void*> taken;
+    int created = 0;
     HostCallScope scope;
     for (const auto& s : squads) {
         std::vector<kenshi::Character*> members;
@@ -599,8 +636,10 @@ void KenshiWorld::ApplySquads(const std::vector<WorldSquad>& squads) {
         for (auto& [sq, n] : count)
             if (n > best && std::find(taken.begin(), taken.end(), sq) == taken.end()) { best = n; target = sq; }
         if (!target) {
+            if (created >= 4) continue;   // never a flood of empty squads, whatever goes wrong
             target = kenshi::NewSquad();
             if (!target) continue;
+            ++created;
             Log("squads: a new squad for '%s'", s.name.c_str());
         }
         taken.push_back(target);
@@ -613,15 +652,73 @@ void KenshiWorld::ApplySquads(const std::vector<WorldSquad>& squads) {
         }
         kenshi::SetSquadName(target, s.name);
     }
+    // The squad bar shows one of our squads, not an empty one the game switched to.
+    std::vector<kenshi::Character*> shown;
+    kenshi::SquadMembers(kenshi::ShownSquad(), shown);
+    if (shown.empty())
+        for (const auto& h : controllable_)
+            if (kenshi::Character* c = FindSquad(h)) { kenshi::ShowSquad(kenshi::SquadOf(c)); break; }
 }
 
-bool KenshiWorld::ReadProgress(const kc::Handle& h, std::vector<float>& stats) {
+bool KenshiWorld::ReadCarry(const kc::Handle& h, kc::Handle& carried) {
     kenshi::Character* c = Find(h);
-    return c && kenshi::ReadStats(c, stats);
+    if (!c || !kenshi::ReadCarried(c, carried)) return false;
+    carried = HostHandleOf(carried);
+    return true;
 }
 
-void KenshiWorld::ApplyProgress(const kc::Handle& h, const std::vector<float>& stats) {
-    if (kenshi::Character* c = Find(h)) kenshi::WriteStats(c, stats);
+void KenshiWorld::ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& carried) {
+    kenshi::Character* c = Find(h);
+    if (!c) return;
+    kc::Handle local;
+    const bool carrying = kenshi::ReadCarried(c, local);
+    kenshi::Character* who = carry ? Find(carried) : nullptr;
+    HostCallScope scope;
+    if (carrying && (!carry || !who || kenshi::Resolve(local) != who)) {
+        kenshi::DropCarried(c);
+        Log("carry: %s puts a body down as on the host", carry ? "swaps and" : "");
+    }
+    if (carry && who && (!carrying || kenshi::Resolve(local) != who)) {
+        const bool ok = kenshi::CarryCharacter(c, who);
+        Log("carry: a body goes on the shoulder as on the host (%s)", ok ? "ok" : "failed");
+    }
+}
+
+int KenshiWorld::TeleportCharacters(const std::vector<kc::Handle>& who, const kc::Vec3& to) {
+    int n = 0;
+    HostCallScope scope;
+    for (const auto& h : who) {
+        kenshi::Character* c = FindSquad(h);
+        kc::Quat rot;
+        if (!c || !kenshi::GetRotation(c, rot)) continue;
+        const kc::Vec3 p{to.x + 6.0f * float(n + 1), to.y + 2.0f, to.z + 4.0f};
+        if (kenshi::Teleport(c, p, rot)) ++n;
+    }
+    return n;
+}
+
+bool KenshiWorld::ReadProgress(const kc::Handle& h, std::vector<float>& stats, uint16_t& modes, uint8_t& style) {
+    kenshi::Character* c = Find(h);
+    if (!c || !kenshi::ReadStats(c, stats)) return false;
+    modes = kenshi::ReadModes(c, style);
+    return true;
+}
+
+// Skill levels as values; standing orders (stealth, hold position, passive...) through the game's
+// own function, so that walking crouched and the squad bar's toggles follow.
+void KenshiWorld::ApplyProgress(const kc::Handle& h, const std::vector<float>& stats, uint16_t modes, uint8_t style) {
+    kenshi::Character* c = Find(h);
+    if (!c) return;
+    kenshi::WriteStats(c, stats);
+    uint8_t localStyle = 0;
+    const uint16_t local = kenshi::ReadModes(c, localStyle);
+    HostCallScope scope;
+    if ((local ^ modes) & kc::kModeStealth) kenshi::SetStandingOrder(c, (modes & kc::kModeStealth) ? 3 : 4, true);
+    struct Toggle { uint16_t bit; int order; };
+    static const Toggle toggles[] = {{kc::kModeDefensive, 11}, {kc::kModeRanged, 17}, {kc::kModeTaunt, 14}, {kc::kModeHold, 12}, {kc::kModePassive, 13}, {kc::kModeChase, 15}};
+    for (const auto& t : toggles)
+        if ((local ^ modes) & t.bit) kenshi::SetStandingOrder(c, t.order, (modes & t.bit) != 0);
+    if (localStyle != style && style <= 2) kenshi::SetStandingOrder(c, 5 + style, true);   // AGG, DEF, EVADE
 }
 
 void KenshiWorld::ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) {
@@ -691,6 +788,21 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
     case kc::CommandKind::Task: {
         void* subject = kenshi::ResolveObject(cmd.subject);
         void* building = kenshi::ResolveObject(cmd.building);
+        if (cmd.subject.valid() && !subject && !cmd.itemSid.empty()) {
+            // town furniture and machines get other handles on every machine: the same kind of
+            // object at the same place
+            std::vector<void*> around;
+            kenshi::ObjectsNear(cmd.subjectPos, 60.0f, around);
+            float best = 40.0f;
+            for (void* o : around) {
+                std::string sid;
+                kc::Vec3 p;
+                if (!kenshi::ObjectTemplate(o, sid) || sid != cmd.itemSid || !kenshi::ObjectPosition(o, p)) continue;
+                const float d = Dist(p, cmd.subjectPos);
+                if (d < best) { best = d; subject = o; }
+            }
+            Log("client task %d: subject %s found by kind and place (%zu objects around)", cmd.task, subject ? "" : "NOT", around.size());
+        }
         if (cmd.subject.valid() && !subject) Log("client task %d: its subject is not in the host's world", cmd.task);
         const bool ok = RunPlayerTask(c, cmd, subject, building);
         Log("client task %d (via %d) run for a character: %s", cmd.task, int(cmd.via), ok ? "ok" : "failed");
@@ -1348,7 +1460,8 @@ void KenshiWorld::ApplyAnimFrame(const kc::Handle& h, const kc::AnimFrame& frame
             continue;
         }
         const float want = match->time + match->speed * float(ageSeconds) * kenshi::GetFrameSpeed();
-        kenshi::WriteSingleAnim(m.single, kenshi::SyncedAnimTime(m.single, m.time, want, match->looped), match->speed, match->weight, match->desired);
+        kenshi::WriteSingleAnim(m.single, kenshi::SyncedAnimTime(m.single, m.time, want, match->looped, kenshi::GetFrameSpeed()), match->speed, match->weight,
+                                match->desired);
     }
 }
 

@@ -147,6 +147,12 @@ enum Fn : int {
     FnSetAppearanceData,        // void Character::setAppearanceData(GameDataCopyStandalone*)
     FnMapBool, FnMapString, FnMapInt, FnMapFloat, FnMapVec3, FnMapQuat,   // GameData value maps: operator[](const std::string&) -> pair*
     FnStringAssign,             // std::string& std::string::assign(const std::string&, size_t pos, size_t n)
+    FnCharAddOrder,             // void Character::addOrder(Building* dest, TaskType, RootObject* subject, bool shift, bool clear, const Vector3&)
+    FnCharAddJob,               // void Character::addJob(TaskType, RootObject* subject, bool shift, bool add, const Vector3&)
+    FnSetStandingOrder,         // void Character::setStandingOrder(StandingOrder, bool on)
+    FnPickupCharacter,          // void Character::pickupObject(Character* who)   (puts a body on the shoulder)
+    FnDropCarried,              // void Character::dropCarriedObject(bool ragdollHim, bool removeOnly)
+    FnSetCurrentPlatoon,        // bool PlayerInterface::setCurrentPlatoon(Platoon*)   (the squad the squad bar shows)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -306,6 +312,19 @@ bool IsStatOfCharacter(const void* statField);
 bool GainExperience(Character* c, size_t statIndex, float amount);   // tests: increaseStat on that stat
 bool CallSay(Character* c, const std::string& text);
 bool FocusCamera(Character* c);   // tests: the camera goes to that character
+// Carrying a body on the shoulder.
+bool ReadCarried(Character* c, kc::Handle& carried);   // false: carries nothing
+bool CarryCharacter(Character* carrier, Character* who);
+bool DropCarried(Character* carrier);
+// Standing orders (the squad bar's toggles) and fight style of one character.
+uint16_t ReadModes(Character* c, uint8_t& style);
+void SetStandingOrder(Character* c, int order, bool on);   // through the game's own function
+bool GetStandingOrder(Character* c, int order);
+// Objects near a point (any RootObject of the zone grid, characters excluded); what an object is.
+void ObjectsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out);
+bool ObjectPosition(void* obj, kc::Vec3& out);
+bool ObjectTemplate(const void* obj, std::string& sid);
+bool TemplateDisplayName(const std::string& sid, std::string& out);   // the name players see
 // Squads (ActivePlatoon) of the player faction.
 void* SquadOf(Character* c);                                   // Character::platoon
 int SquadMemberIndex(Character* c);                            // its place in its squad
@@ -314,12 +333,15 @@ void SetSquadName(void* squad, const std::string& name);
 void SquadMembers(void* squad, std::vector<Character*>& out);   // the player characters in it
 bool MoveToSquad(void* squad, Character* c, int index);          // what dropping a portrait on a squad does
 void* NewSquad();                                              // what the "new squad" button does
+void* ShownSquad();                                            // the squad the squad bar shows
+void ShowSquad(void* squad);                                   // show that one
 // Appearance: the character's appearance GameData, read whole / written back (then the game
 // rebuilds the body), plus its name. And the game's character editor, opened on one character.
 bool ReadAppearance(Character* c, kc::AppearanceMsg& out);
 bool WriteAppearance(Character* c, const kc::AppearanceMsg& m);
 bool OpenCharacterEditor(Character* c);
 void EditorCharacters(std::vector<Character*>& out);           // who the open editor works on
+bool CharacterEditorOpen();
 bool CallStartPlayerConversation(Character* npc, Character* pc);   // tests: npc talks to pc (its default conversation)                // tests: Dialogue::say through the hooks   // the float lies inside a live character's CharStats
 // Conversations (Dialogue, Character+0x280).
 void* CharacterDialogue(Character* c);
@@ -442,7 +464,8 @@ bool SingleAnimName(const void* single, std::string& out);
 void WriteSingleAnim(void* single, float time, float speed, float weight, float desired);
 bool ReadSingleAnimTime(const void* single, float& time);
 // The time to give an animation playing at `mine` so it matches `want` (looped ones by phase).
-float SyncedAnimTime(const void* single, float mine, float want, bool looped);
+float SyncedAnimTime(const void* single, float mine, float want, bool looped, float gameSpeed = 1.0f);
+bool ReadAnimMasterOf(const void* ac, float& time, float& speed);
 bool CallRunAnimation(Character* c, void* animData, float speed, int layer, float blend);
 std::string CurrentStumbleName(const Character* c);     // the stumble it is playing ("-" none)
 bool WeaponInHands(const Character* c, std::string& itemSid, std::string& fromSection);   // false: hands empty
@@ -463,7 +486,8 @@ bool DescribeGroundItem(void* item, kc::Handle& h, kc::ItemState& s, kc::Vec3& p
 void* ResolveItem(const kc::Handle& h);                    // the item with that handle here, if any
 void* CreateGroundItem(const kc::ItemState& s, const kc::Vec3& pos, kc::Handle& localHandle, std::string* why);
 bool DestroyItem(void* item);
-void GroundItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out);   // items lying within radius
+void GroundItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out);
+void AllObjectsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out);   // items lying within radius
 void* FirstLooseItem(Character* c);                        // tests: an unequipped item it carries
 bool CallDropItem(Character* c, void* item);               // tests: the character drops it (the game's own drop)
 bool CallGiveItem(Character* c, void* item);               // tests: the character takes it

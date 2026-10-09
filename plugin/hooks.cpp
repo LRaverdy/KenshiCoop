@@ -232,6 +232,12 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
     if (loc) c.pos = {loc[0], loc[1], loc[2]};
     if (subjectHandle) c.subject = *subjectHandle;
     else if (subject) kenshi::ObjectHandle(subject, c.subject);
+    // what and where the subject is: the host finds it by that when its handle differs there
+    void* subj = subject ? subject : (subjectHandle ? kenshi::ResolveObject(*subjectHandle) : nullptr);
+    if (subj && !kenshi::IsCharacter(subj)) {
+        kenshi::ObjectTemplate(subj, c.itemSid);
+        kenshi::ObjectPosition(subj, c.subjectPos);
+    }
     if (building) kenshi::ObjectHandle(building, c.building);
     std::vector<kc::Handle> who = s.mine;
     if (via == kc::TaskVia::TaskNearest && loc && who.size() > 1) {   // the game picks the nearest one
@@ -356,7 +362,6 @@ void hk_medKnockout(void* med, float skill01) {
 // speech bubbles and conversation windows are replayed. The task system itself keeps running: it
 // is what walks a character to the destination the host's state gives it (refusing it leaves
 // characters sliding, facing nowhere); what a task could decide is refused one hook at a time.
-bool IsLiveThread() { return GetCurrentThreadId() == g_liveThread.load(); }
 bool ClientRefuses() { return KenshiWorld::ClientActive() && !g_hostCall; }
 
 using SayFn = void (*)(void* d, const void* text, void* line);
@@ -373,8 +378,11 @@ using DialogBoolFn = void (*)(void* d, bool on);
 DialogBoolFn o_setInDialog = nullptr;
 void hk_setInDialog(void* d, bool on) {
     auto v = KenshiWorld::View();
+    // Clients never show the game's own conversation window (a conversation from the save, or one
+    // the local game starts): conversations are the host's, shown in our window.
+    if (v->active && v->client && on && !g_hostCall) return;
     // another player's conversation: it opens on their screen, not on the host's
-    if (v->active && !v->client && IsLiveThread()) {
+    if (v->active && !v->client) {   // any thread: the game prepares conversations on worker threads too
         if (KenshiWorld* w = TheWorld(); w && w->NoteDialogWindow(d, on)) return;
     }
     o_setInDialog(d, on);
@@ -383,14 +391,14 @@ using DialogFn = void (*)(void* d);
 DialogFn o_setResponses = nullptr, o_setReplyText = nullptr;
 void hk_setResponses(void* d) {
     auto v = KenshiWorld::View();
-    if (v->active && !v->client && IsLiveThread()) {
+    if (v->active && !v->client) {
         if (KenshiWorld* w = TheWorld(); w && w->NoteDialogText(d)) return;
     }
     o_setResponses(d);
 }
 void hk_setReplyText(void* d) {
     auto v = KenshiWorld::View();
-    if (v->active && !v->client && IsLiveThread()) {
+    if (v->active && !v->client) {
         if (KenshiWorld* w = TheWorld(); w && w->NoteDialogText(d)) return;
     }
     o_setReplyText(d);
@@ -473,6 +481,23 @@ void hk_closeEditor(void* gui) {
     o_closeEditor(gui);
     if (KenshiWorld* w = TheWorld(); w && KenshiWorld::View()->active)
         for (kenshi::Character* c : chars) w->NoteEdited(c);
+}
+
+// Picking a body up on a client happens only when the host's character does (see ApplyCarry).
+using PickFn = void (*)(void* c, void* who);
+PickFn o_pickChar = nullptr;
+void hk_pickChar(void* c, void* who) {
+    if (KenshiWorld::ClientActive() && !g_hostCall) return;
+    o_pickChar(c, who);
+}
+
+// Standing orders (stealth, hold, passive...) of the host's characters are the host's: on clients the
+// local game may not flip them (it did, now and then, put a character in stealth by itself).
+using StandingFn = void (*)(void* c, int order, bool on);
+StandingFn o_standing = nullptr;
+void hk_standing(void* c, int order, bool on) {
+    if (KenshiWorld::ClientActive() && !g_hostCall && KenshiWorld::View()->replicated.count(c)) return;
+    o_standing(c, order, on);
 }
 
 // Experience is the host's too: every gain (combat, training, walking, first aid...) ends in
@@ -788,7 +813,7 @@ void hk_singleAnimUpdate(void* single, float masterTime, float frameTime, bool s
                     float mine = want;
                     kenshi::ReadSingleAnimTime(single, mine);
                     // keep our own smooth progress unless it drifted: jumping the time every frame jitters
-                    const float t = kenshi::SyncedAnimTime(single, mine, want, match->looped);
+                    const float t = kenshi::SyncedAnimTime(single, mine, want, match->looped, v->gameSpeed);
                     kenshi::WriteSingleAnim(single, t, match->speed, match->weight, match->desired);
                 } else {
                     g_animHookSilenced.fetch_add(1, std::memory_order_relaxed);
@@ -904,6 +929,8 @@ bool CallReplyClicked(void* dialogue, int index) {
 }
 
 namespace {
+// The game's own "order the selected characters" functions, with only that character selected: the
+// order goes through every check and special case the game has (carrying, beds, shops, speed groups).
 bool CallTaskSeh(void* pi, const kc::Command& cmd, void* subject, void* building, const float* loc, const void* hand) {
     __try {
         switch (cmd.via) {
@@ -920,12 +947,16 @@ bool CallTaskSeh(void* pi, const kc::Command& cmd, void* subject, void* building
 }
 } // namespace
 
+// Host: a client's order, given to that character alone; the host player's selection, squad bar and
+// details panel are left exactly as they were.
 bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, void* building) {
     void* pi = kenshi::Player();
     if (!pi || !kenshi::IsCharacter(c)) return false;
     const float loc[3] = {cmd.pos.x, cmd.pos.y, cmd.pos.z};
     alignas(8) uint8_t hand[kenshi::off::HandSize];
-    kenshi::MakeHand(cmd.subject, hand);
+    kc::Handle target = cmd.subject;
+    if (subject) kenshi::ObjectHandle(subject, target);   // found by kind and place: its handle here
+    kenshi::MakeHand(target, hand);
     bool ok = false;
     kenshi::WithSelection(c, [&] {
         HostCallScope scope;
@@ -963,6 +994,8 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnIncreaseStat, reinterpret_cast<void*>(&hk_increaseStat), reinterpret_cast<void**>(&o_increaseStat)},
         {kenshi::FnSquadAddCharacterAt, reinterpret_cast<void*>(&hk_addAt), reinterpret_cast<void**>(&o_addAt)},
         {kenshi::FnCloseCharacterEditor, reinterpret_cast<void*>(&hk_closeEditor), reinterpret_cast<void**>(&o_closeEditor)},
+        {kenshi::FnSetStandingOrder, reinterpret_cast<void*>(&hk_standing), reinterpret_cast<void**>(&o_standing)},
+        {kenshi::FnPickupCharacter, reinterpret_cast<void*>(&hk_pickChar), reinterpret_cast<void**>(&o_pickChar)},
         {kenshi::FnDialogueSay, reinterpret_cast<void*>(&hk_say), reinterpret_cast<void**>(&o_say)},
         {kenshi::FnDialogueSetInDialog, reinterpret_cast<void*>(&hk_setInDialog), reinterpret_cast<void**>(&o_setInDialog)},
         {kenshi::FnDialogueSetResponses, reinterpret_cast<void*>(&hk_setResponses), reinterpret_cast<void**>(&o_setResponses)},

@@ -251,10 +251,11 @@ void DrawMultiplayer(const OverlayModel& m, float w, float h) {
             ImGui::TextDisabled("ou ce code dans leur fenêtre Multijoueur.");
             ImGui::Separator();
         }
-        if (ImGui::BeginTable("players", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
+        if (ImGui::BeginTable("players", m.hosting ? 4 : 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
             ImGui::TableSetupColumn("Joueur");
             ImGui::TableSetupColumn("Ping", ImGuiTableColumnFlags_WidthFixed, 70.0f);
             ImGui::TableSetupColumn("Persos", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+            if (m.hosting) ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 110.0f);
             ImGui::TableHeadersRow();
             for (const auto& p : m.players) {
                 ImGui::TableNextRow();
@@ -265,6 +266,15 @@ void DrawMultiplayer(const OverlayModel& m, float w, float h) {
                 else ImGui::Text("%u ms", p.pingMs);
                 ImGui::TableNextColumn();
                 ImGui::Text("%zu", p.characters);
+                if (m.hosting) {
+                    ImGui::TableNextColumn();
+                    if (!p.you && p.characters > 0) {
+                        ImGui::PushID(int(p.id));
+                        if (ImGui::SmallButton("TP vers moi")) PushAction({OverlayAction::Kind::Command, {}, {}, "tp " + std::to_string(p.id), 0});
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Amène ses personnages près de ton personnage sélectionné (pour le débloquer).");
+                        ImGui::PopID();
+                    }
+                }
             }
             ImGui::EndTable();
         }

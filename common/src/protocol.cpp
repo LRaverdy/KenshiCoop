@@ -54,8 +54,9 @@ void PutEntity(Writer& w, const EntityState& e) {
     w.varint(e.combatTarget);
     w.u8(e.gait);
     w.u16(uint16_t(std::lround(std::clamp(e.pace, 0.0f, 6553.5f) * 10.0f)));
+    w.varint(e.carrying);
 }
-constexpr size_t kMinEntityBytes = 1 + 12 + 4 + 12 + 1 + 1 + 3;
+constexpr size_t kMinEntityBytes = 1 + 12 + 4 + 12 + 1 + 1 + 3 + 1;
 
 } // namespace
 
@@ -193,6 +194,7 @@ bool Decode(Reader& r, Snapshot& m) {
         e.combatTarget = GetU32Var(r);
         e.gait = r.u8();
         e.pace = float(r.u16()) / 10.0f;
+        e.carrying = GetU32Var(r);
         if (!r.ok() || e.netId == 0) return false;
     }
     return Done(r);
@@ -217,6 +219,8 @@ void Encode(Writer& w, const Command& m) {
         w.boolean(m.add);
         PutHandle(w, m.subject);
         PutHandle(w, m.building);
+        PutVec(w, m.subjectPos);
+        w.str(m.itemSid);
     }
 }
 bool Decode(Reader& r, Command& m) {
@@ -242,6 +246,8 @@ bool Decode(Reader& r, Command& m) {
         m.add = r.boolean();
         m.subject = GetHandle(r);
         m.building = GetHandle(r);
+        m.subjectPos = GetVec(r);
+        m.itemSid = r.str(kMaxSidLen);
         if (m.task < -1000 || m.task > 1000) return false;
     }
     return Done(r) && m.netId != 0;
@@ -325,12 +331,14 @@ void Encode(Writer& w, const ProgressMsg& m) {
     for (const auto& c : m.chars) {
         w.varint(c.netId);
         for (size_t i = 0; i < kStatCount; ++i) w.f32(i < c.stats.size() ? c.stats[i] : 0.0f);
+        w.u16(c.modes);
+        w.u8(c.style);
     }
 }
 bool Decode(Reader& r, ProgressMsg& m) {
     m.hasMoney = r.boolean();
     if (m.hasMoney) m.money = r.i32();
-    const uint32_t n = r.count(kMaxEntitiesPerMsg, 1 + 4 * kStatCount);
+    const uint32_t n = r.count(kMaxEntitiesPerMsg, 1 + 4 * kStatCount + 3);
     m.chars.resize(n);
     for (auto& c : m.chars) {
         c.netId = GetU32Var(r);
@@ -339,6 +347,8 @@ bool Decode(Reader& r, ProgressMsg& m) {
             s = r.f32();
             if (!std::isfinite(s) || s < 0.0f || s > 1000.0f) return false;
         }
+        c.modes = r.u16();
+        c.style = r.u8();
         if (!r.ok() || c.netId == 0) return false;
     }
     return Done(r);
@@ -464,6 +474,107 @@ void Encode(Writer& w, const EditCharacter& m) {
     w.u8(uint8_t(Msg::EditCharacter));
     w.varint(m.netId);
 }
+const char* TaskLabel(int task) {
+    switch (task) {
+    case 2: return "construire";
+    case 3: return "ramasser";
+    case 4: case 5: return "attaquer";
+    case 6: return "equiper une arme";
+    case 7: return "ranger son arme";
+    case 12: return "parler";
+    case 25: return "premiers soins";
+    case 26: return "piller";
+    case 27: return "s'accroupir";
+    case 28: return "se relever";
+    case 29: return "aller a";
+    case 30: return "tenir la position";
+    case 44: return "suivre";
+    case 54: return "se reposer";
+    case 55: return "recruter";
+    case 57: return "reparer un robot";
+    case 58: return "soigner (metier)";
+    case 60: case 61: return "premiers soins (robot)";
+    case 68: case 225: return "porter quelqu'un";
+    case 69: return "poser";
+    case 70: return "poser dans un lit";
+    case 72: return "ouvrir une porte";
+    case 73: return "fermer une porte";
+    case 76: return "crocheter";
+    case 77: return "verrouiller";
+    case 78: return "deverrouiller";
+    case 81: case 226: return "enfoncer une porte";
+    case 87: return "utiliser une machine";
+    case 95: return "reparer";
+    case 96: return "demonter";
+    case 97: return "s'entrainer";
+    case 98: case 258: return "dormir";
+    case 99: return "coucher quelqu'un";
+    case 107: return "entrer dans une cage";
+    case 108: return "mettre en cage";
+    case 110: return "liberer un prisonnier";
+    case 116: case 257: return "sortir du lit";
+    case 118: case 119: return "commercer";
+    case 124: return "ouvrir un rangement";
+    case 126: return "parler (au plus proche)";
+    case 146: case 149: case 234: return "utiliser une tourelle";
+    case 152: return "utiliser une machine automatique";
+    case 228: return "assommer en douce";
+    case 229: return "tuer en douce";
+    case 231: return "manger des cultures";
+    case 235: case 262: case 263: return "tirer";
+    case 244: return "prendre a manger";
+    case 246: return "kidnapper";
+    case 249: case 250: return "poser une attelle";
+    case 255: return "s'asseoir sur le trone";
+    case 259: return "manger";
+    case 269: return "soigner ses jambes";
+    case 284: return "piller un contenant";
+    case 285: return "couper un cadenas";
+    case 286: return "forcer une serrure";
+    case 290: return "enfoncer un portail";
+    default: return task < 0 ? "mode" : "?";
+    }
+}
+
+void Encode(Writer& w, const ClientLog& m) {
+    w.u8(uint8_t(Msg::ClientLog));
+    const size_t n = std::min(m.lines.size(), kMaxLogLines);
+    w.varint(n);
+    for (size_t i = 0; i < n; ++i) w.str(m.lines[i].size() > kMaxLogLine ? m.lines[i].substr(0, kMaxLogLine) : m.lines[i]);
+}
+bool Decode(Reader& r, ClientLog& m) {
+    const uint32_t n = r.count(kMaxLogLines, 1);
+    m.lines.resize(n);
+    for (auto& l : m.lines) l = r.str(kMaxLogLine);
+    return Done(r);
+}
+void Encode(Writer& w, const ClientReport& m) {
+    w.u8(uint8_t(Msg::ClientReport));
+    w.u16(m.entities);
+    w.u16(m.missingNpcs);
+    w.u16(m.missingSquad);
+    w.u16(m.farOff);
+    w.f32(m.maxErr);
+    w.u16(m.fps);
+}
+bool Decode(Reader& r, ClientReport& m) {
+    m.entities = r.u16();
+    m.missingNpcs = r.u16();
+    m.missingSquad = r.u16();
+    m.farOff = r.u16();
+    m.maxErr = r.f32();
+    m.fps = r.u16();
+    return Done(r) && std::isfinite(m.maxErr);
+}
+
+void Encode(Writer& w, const EditState& m) {
+    w.u8(uint8_t(Msg::EditState));
+    w.boolean(m.editing);
+}
+bool Decode(Reader& r, EditState& m) {
+    m.editing = r.boolean();
+    return Done(r);
+}
 bool Decode(Reader& r, EditCharacter& m) {
     m.netId = GetU32Var(r);
     return Done(r) && m.netId != 0;
@@ -474,7 +585,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::EditCharacter)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::ClientReport)) return std::nullopt;
     return Msg(t);
 }
 

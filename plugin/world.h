@@ -63,14 +63,21 @@ public:
                    std::vector<kc::Handle>& adopted) override;
     void Apply(const kc::Handle& h, const kc::EntityState& target, const kc::EntityState& latest) override;
     void ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) override;
-    bool ReadProgress(const kc::Handle& h, std::vector<float>& stats) override;
-    void ApplyProgress(const kc::Handle& h, const std::vector<float>& stats) override;
+    bool ReadProgress(const kc::Handle& h, std::vector<float>& stats, uint16_t& modes, uint8_t& style) override;
+    bool ReadCarry(const kc::Handle& h, kc::Handle& carried) override;
+    void ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& carried) override;
+    // Host: put every character of a player next to that point (unsticks them). Returns how many.
+    int TeleportCharacters(const std::vector<kc::Handle>& who, const kc::Vec3& to);
+    void ApplyProgress(const kc::Handle& h, const std::vector<float>& stats, uint16_t modes, uint8_t style) override;
     bool ReadMoney(int32_t& money) override { return kenshi::ReadPlayerMoney(money); }
     void ReadSquads(std::vector<WorldSquad>& out) override;
     void TakeEditedCharacters(std::vector<kc::Handle>& out) override;
     bool ReadAppearance(const kc::Handle& h, kc::AppearanceMsg& out) override;
     void ApplyAppearance(const kc::Handle& h, const kc::AppearanceMsg& m) override;
     bool OpenCharacterEditor(const kc::Handle& h) override;
+    bool CharacterEditorOpen() override { return kenshi::CharacterEditorOpen(); }
+    void TakeSyncStats(float& maxErr, uint16_t& farOff) override;
+    std::string TemplateName(const std::string& sid) override;
     void NoteEdited(kenshi::Character* c);   // hooks: the character editor was confirmed for it
     void ApplySquads(const std::vector<WorldSquad>& squads) override;
     void ApplyMoney(int32_t money) override { kenshi::WritePlayerMoney(money); }
@@ -257,6 +264,10 @@ private:   // first few lifecycle events (tests)
     std::vector<std::pair<kenshi::Character*, kc::ItemState>> localDrops_;   // client, under groundMutex_
     std::vector<kenshi::Character*> edited_;   // characters whose looks the editor just changed
     double pauseSeenAt_ = -1;   // client: when the host's pause arrived (we pause a little later)
+    float syncMaxErr_ = 0;      // client: largest correction since the last report
+    std::unordered_map<kc::Handle, float, kc::HandleHash> syncErr_;   // client: last error per standing character
+    double nextPauseTry_ = 0;
+    bool pauseRefusedLogged_ = false;
     std::mutex dialogMutex_;
     std::vector<WorldDialog> dialogEvents_;                 // host, under dialogMutex_
     std::unordered_map<void*, uint32_t> remoteDialogs_;    // host: Dialogue* shown to another player -> id

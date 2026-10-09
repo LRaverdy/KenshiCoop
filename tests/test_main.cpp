@@ -505,6 +505,20 @@ static void TestWire() {
         AppearanceMsg look2; CHECK(Decode(ar2, look2));
         CHECK(look2.netId == 7 && look2.name == "Nassim" && look2.fields.size() == 4 && look2.fields[0] == f1 && look2.fields[1] == f2 && look2.fields[2] == f3 && look2.fields[3] == f4);
     }
+    {   // client log lines, sync reports, editor state
+        ClientLog cl; cl.lines = {"une ligne", std::string(1000, 'x')};
+        Writer lw; Encode(lw, cl);
+        Reader lr(lw.data(), lw.size()); CHECK(PeekType(lr) == Msg::ClientLog);
+        ClientLog cl2; CHECK(Decode(lr, cl2) && cl2.lines.size() == 2 && cl2.lines[0] == "une ligne" && cl2.lines[1].size() == kMaxLogLine);
+        ClientReport rep; rep.entities = 96; rep.missingNpcs = 3; rep.farOff = 1; rep.maxErr = 2.5f; rep.fps = 58;
+        Writer rw2; Encode(rw2, rep);
+        Reader rr2(rw2.data(), rw2.size()); CHECK(PeekType(rr2) == Msg::ClientReport);
+        ClientReport rep2; CHECK(Decode(rr2, rep2) && rep2.entities == 96 && rep2.missingNpcs == 3 && rep2.farOff == 1 && rep2.maxErr == 2.5f && rep2.fps == 58);
+        Writer ew; Encode(ew, EditState{true});
+        Reader er(ew.data(), ew.size()); CHECK(PeekType(er) == Msg::EditState);
+        EditState es; CHECK(Decode(er, es) && es.editing);
+        CHECK(std::string(TaskLabel(258)) == "dormir" && std::string(TaskLabel(9999)) == "?");
+    }
     {   // hunger travels with the vitals
         VitalsMsg vm; vm.entities.resize(1); vm.entities[0].netId = 2; vm.entities[0].hunger = 250.5f;
         auto pk = EncodeVitals(vm)[0];
@@ -605,6 +619,9 @@ static void TestFuzz() {
         case Msg::Dialog: { DialogMsg m; Decode(r, m); break; }
         case Msg::Appearance: { AppearanceMsg m; Decode(r, m); break; }
         case Msg::Squads: { SquadsMsg m; Decode(r, m); break; }
+        case Msg::ClientLog: { ClientLog m; Decode(r, m); break; }
+        case Msg::ClientReport: { ClientReport m; Decode(r, m); break; }
+        case Msg::EditState: { EditState m; Decode(r, m); break; }
         case Msg::DialogReply: { DialogReply m; Decode(r, m); break; }
         }
     };

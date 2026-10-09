@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 20;
+constexpr uint16_t kProtocolVersion = 24;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -64,6 +64,9 @@ enum class Msg : uint8_t {
     Squads = 29,      // S->C  how the player faction's characters are split into squads
     Appearance = 30,  // both  a character's looks and name, made in the game's character editor
     EditCharacter = 31, // S->C  open the character editor on your new character
+    EditState = 32,   // C->S  the character editor is open / closed here (the host waits meanwhile)
+    ClientLog = 33,   // C->S  the client's log lines: the host's log shows what happens on every machine
+    ClientReport = 34, // C->S  how well the client's game follows the host's (every few seconds)
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -182,6 +185,7 @@ struct EntityState {
     uint32_t combatTarget = 0;   // netId of the character it fights, 0 = not in melee combat
     uint8_t gait = 0;            // movement speed order (Kenshi's MoveSpeed: walk, jog, run...)
     float pace = 0;              // desired speed, units/s (the game's "flat out" is 999): picks walk or run animations
+    uint32_t carrying = 0;       // netId of the character it carries on its shoulder, 0 = none
 };
 
 struct Snapshot {
@@ -218,6 +222,8 @@ struct Command {
     bool shift = false, add = false;
     Handle subject;        // the object the order is about (character, item, building), as the host knows it
     Handle building;       // the building the character goes into, if any
+    Vec3 subjectPos;       // where the subject is (objects of towns have other handles on every machine:
+                           // the host finds the same kind of object there, see itemSid)
 };
 
 struct TimeState {
@@ -248,9 +254,16 @@ struct VitalsMsg {
 
 // Skill levels: the integer part is the level, the fraction the progress to the next one.
 constexpr size_t kStatCount = 34;   // every stat with a field of its own (see kenshi.cpp kStatOffsets)
+// Standing orders a character keeps (the squad bar's toggles): bit per order.
+enum ModeBits : uint16_t {
+    kModeStealth = 1 << 0, kModeDefensive = 1 << 1, kModeRanged = 1 << 2, kModeTaunt = 1 << 3, kModeHold = 1 << 4,
+    kModePassive = 1 << 5, kModeChase = 1 << 6,
+};
 struct CharProgress {
     uint32_t netId = 0;
     std::vector<float> stats;   // kStatCount values
+    uint16_t modes = 0;         // ModeBits
+    uint8_t style = 0;          // fight style: 0 attack, 1 defend, 2 evade (AGG/DEF/EVADE orders)
 };
 struct ProgressMsg {
     bool hasMoney = false;
@@ -317,6 +330,21 @@ struct AppearanceMsg {
 };
 struct EditCharacter {
     uint32_t netId = 0;
+};
+struct EditState {
+    bool editing = false;
+};
+constexpr size_t kMaxLogLines = 64, kMaxLogLine = 400;
+struct ClientLog {
+    std::vector<std::string> lines;
+};
+struct ClientReport {
+    uint16_t entities = 0;       // host characters known here
+    uint16_t missingNpcs = 0;    // ... not in the local world yet
+    uint16_t missingSquad = 0;
+    uint16_t farOff = 0;         // characters more than 5 units off the host's position (standing ones)
+    float maxErr = 0;            // largest correction applied since the last report (units)
+    uint16_t fps = 0;
 };
 
 struct Ping {
@@ -545,6 +573,13 @@ void Encode(Writer& w, const SquadsMsg& m);
 void Encode(Writer& w, const AppearanceMsg& m);
 bool Decode(Reader& r, AppearanceMsg& m);
 void Encode(Writer& w, const EditCharacter& m);
+void Encode(Writer& w, const EditState& m);
+const char* TaskLabel(int task);   // a player order's name, for logs ("?" when unknown)
+void Encode(Writer& w, const ClientLog& m);
+bool Decode(Reader& r, ClientLog& m);
+void Encode(Writer& w, const ClientReport& m);
+bool Decode(Reader& r, ClientReport& m);
+bool Decode(Reader& r, EditState& m);
 bool Decode(Reader& r, EditCharacter& m);
 bool Decode(Reader& r, SquadsMsg& m);
 void Encode(Writer& w, const DialogMsg& m);
