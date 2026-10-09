@@ -195,6 +195,7 @@ enum Fn : int {
     FnCalculateSaleValue,       // int Building::calculateSaleValue()   (price of a building for sale)
     // ---- admin console
     FnHealCompletely,           // void Character::healCompletely()   (every wound, blood, KO)
+    FnShowInventoryBuilding,    // InventoryGUI* ForgottenGUI::showInventoryBuilding(const hand& owner)   (a building's own inventory panel)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];

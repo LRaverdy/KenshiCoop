@@ -753,11 +753,12 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
     }
     if (cmd == "furnparent") {   // furnparent <name part>: what the nearest object with that name is furniture of (tests)
         std::string part;
-        in >> part;
+        size_t around = 0;
+        in >> part >> around;   // optional: around that squad member instead of member 0
         std::replace(part.begin(), part.end(), '_', ' ');
         auto squad = SortedSquad(w);
         kc::Vec3 p, op;
-        if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), p)) return "err";
+        if (around >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[around]), p)) return "err";
         std::vector<void*> objs;
         kenshi::ObjectsNear(p, 1500, objs);
         std::ostringstream o;
@@ -799,7 +800,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             std::string sid, name;
             std::vector<kc::ItemState> items;
             if (!kenshi::ObjectTemplate(o, sid) || !kenshi::TemplateDisplayName(sid, name) || (part != "any" && name.find(part) == std::string::npos) ||
-                !kenshi::ObjectPosition(o, op) || !kenshi::ReadInventory(o, items) || items.empty())
+                !kenshi::ObjectPosition(o, op) || !kenshi::ReadInventory(o, items) || (cmd == "contake" && items.empty()))
                 continue;
             const float d = (op.x - p.x) * (op.x - p.x) + (op.z - p.z) * (op.z - p.z);
             if (d < bestD) { bestD = d; best = o; bestName = name; }

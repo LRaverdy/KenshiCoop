@@ -564,6 +564,34 @@ void hk_slaveState(void* sbd, int state) {
     o_slaveState(sbd, state);
 }
 
+// A building's own inventory panel (click on a mine, a farm, a machine): on a client its local copy
+// holds nothing the host produced. The panel still opens, and the player's nearest character goes to
+// it through the host, which then sends the real contents (the container path).
+using ShowInvBuildingFn = void* (*)(void* gui, const void* owner);
+ShowInvBuildingFn o_showInvBuilding = nullptr;
+void* hk_showInvBuilding(void* gui, const void* owner) {
+    void* r = o_showInvBuilding(gui, owner);
+    auto v = KenshiWorld::View();
+    kc::Handle h;
+    if (g_hostCall || !v->active || !v->client || !owner || !kenshi::HandleFromHand(owner, h)) return r;
+    void* obj = kenshi::ResolveObject(h);
+    std::vector<kc::ItemState> items;
+    if (!obj || kenshi::IsCharacter(obj) || !kenshi::ReadInventory(obj, items)) return r;
+    KenshiWorld* w = TheWorld();
+    const SelectionInfo s = ClassifySelection(*v);
+    kc::Vec3 at, p;
+    kenshi::ObjectPosition(obj, at);
+    kenshi::Character* best = nullptr;
+    float bestD = 1e30f;
+    for (const auto& sh : s.mine)
+        if (kenshi::Character* c = w ? w->FindSquad(sh) : nullptr; c && kenshi::GetPosition(c, p)) {
+            const float d = (p.x - at.x) * (p.x - at.x) + (p.z - at.z) * (p.z - at.z);
+            if (d < bestD) { bestD = d; best = c; }
+        }
+    if (best) w->QueueContainerRequest(best, obj);
+    return r;
+}
+
 // Picking a body up on a client happens only when the host's character does (see ApplyCarry).
 using PickFn = void (*)(void* c, void* who);
 PickFn o_pickChar = nullptr;
@@ -1186,6 +1214,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnSetStandingOrder, reinterpret_cast<void*>(&hk_standing), reinterpret_cast<void**>(&o_standing)},
         {kenshi::FnPickupCharacter, reinterpret_cast<void*>(&hk_pickChar), reinterpret_cast<void**>(&o_pickChar)},
         {kenshi::FnShowTradeWindow, reinterpret_cast<void*>(&hk_showTrade), reinterpret_cast<void**>(&o_showTrade)},
+        {kenshi::FnShowInventoryBuilding, reinterpret_cast<void*>(&hk_showInvBuilding), reinterpret_cast<void**>(&o_showInvBuilding)},
         // ---- lot D: prisons
         {kenshi::FnSetPrisonMode, reinterpret_cast<void*>(&hk_prisonMode), reinterpret_cast<void**>(&o_prisonMode)},
         {kenshi::FnSetChainedMode, reinterpret_cast<void*>(&hk_chainedMode), reinterpret_cast<void**>(&o_chainedMode)},

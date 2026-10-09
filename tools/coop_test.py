@@ -1054,6 +1054,44 @@ def exp_admin(host, cli):
     summary()
 
 
+def exp_mine(host, cli):
+    """A client mines iron (its order runs on the host), then looks into the ore node and takes ore."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    log("objects around (host):", cmd(host, f"objnear {own} 3000")[1][:400])
+    cmd(host, "console xp all 80")   # a fast miner: ore within the test's time
+    time.sleep(2)
+    r = cmd(cli, f"objreq {own} 87 Ressource_Fer")
+    log("client orders mining:", r)
+    check("mine : ordre de minage du client", r[0], r[1])
+    time.sleep(40)   # it walks there
+    before = cmd(host, f"contcount Ressource_Fer {own}")[1]
+    for _ in range(60):
+        time.sleep(3)
+        now = cmd(host, f"contcount Ressource_Fer {own}")[1]
+        if now != before:
+            break
+    log("host node:", before, "->", now)
+    check("mine : du minerai s'accumule chez l'hote", now != before, f"{before} -> {now}")
+    r = cmd(cli, f"containerreq {own} Ressource_Fer")
+    log("client opens the node:", r)
+    opened = False
+    for _ in range(40):
+        time.sleep(1)
+        if "windows=0" not in cmd(cli, "tradestate")[1]:
+            opened = True
+            break
+    check("mine : le client ouvre le minerai", opened, cmd(cli, "tradestate")[1])
+    if opened:
+        t = cmd(cli, f"contake {own} Ressource_Fer")
+        time.sleep(4)
+        rep = compare(dump(host, "h_mine"), dump(cli, "c_mine"), "mine")
+        check("mine : le client prend le minerai, meme inventaire partout", t[0] and rep["inventory_mismatch"] == 0, f"{t[1]} | {rep['inventory_mismatch_sample']}")
+    summary()
+
+
 def exp_trade(host, cli, merchant="Marchand"):
     """Trading with a merchant: the host's game asks for a trade window for the client's character; it
     opens on the client with the shop's stock. A purchase and a sale, the game's own way (right click),
@@ -1991,6 +2029,9 @@ def main():
     bd = sub.add_parser("build", help="lot E: buildings placed, built, dismantled and bought by everyone")
     bd.add_argument("--save", default="kctest_base")
     bd.add_argument("--keep", action="store_true")
+    mi = sub.add_parser("mine")
+    mi.add_argument("--save", default="kctest_mine")
+    mi.add_argument("--keep", action="store_true")
     ad = sub.add_parser("admin")
     ad.add_argument("--save", default="kctest_base")
     ad.add_argument("--keep", action="store_true")
@@ -2124,6 +2165,8 @@ def main():
             exp_prison(host, cli)
         elif a.what == "build":
             exp_build(host, cli)
+        elif a.what == "mine":
+            exp_mine(host, cli)
         elif a.what == "admin":
             exp_admin(host, cli)
         elif a.what == "trade":

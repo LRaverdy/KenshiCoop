@@ -836,7 +836,7 @@ size_t Session::RequestResync(uint8_t playerId) {
 // A player looks into a container: their character walks there (like a loot order), then the
 // container gets a netId and its items go to that player; it closes when they close it.
 void Session::HostContainers(double now) {
-    constexpr float kReach = 25.0f;
+    constexpr float kReach = 80.0f;   // big buildings (mines, farms): one cannot stand on their centre
     for (auto& [from, ask] : containerAsks_) {
         auto pl = players_.find(from);
         auto looter = entities_.find(ask.looterNetId);
