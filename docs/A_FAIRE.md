@@ -62,3 +62,7 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   journal : l'ordre « ramasser » part bien à l'hôte, qui doit retrouver le même objet par type et endroit
   (à 15 unités près). Pistes : l'objet de la sauvegarde a un autre handle chez lui et n'est pas retrouvé,
   ou le vol (objet d'un magasin, d'une faction) n'est pas traité comme tel côté hôte.
+  Journal : « [nass4] pick up Bol en Bois -> FAILED » (puis Cuivre, Matériaux Construction), tous refusés
+  chez l'hôte : l'hôte ne retrouve pas l'objet visé (même type à moins de 15 unités). Probablement le
+  décalage de position de nass4 (rapports « max offset » de 450 unités) : son jeu voit les objets à un
+  autre endroit que l'hôte.
