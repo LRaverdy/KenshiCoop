@@ -6,6 +6,8 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+- **Porter un corps vu par un client** : le corps est bien sur l'épaule (et plus debout sur la tête),
+  et à la pose il tombe où l'hôte l'a posé sans s'envoler ; test en jeu `coop_test.py carry`.
 - **Robustesse (lot F)** : un PNJ bloqué chez un client (mur, porte, étage) est replacé où l'hôte
   l'a après 1 s sans progrès ; les PNJ lointains sont replacés sur la position de l'hôte ; la TP
   admin déplace aussi un personnage à terre ou porté ; un perso dans un lit ou une cage n'est plus

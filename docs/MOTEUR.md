@@ -638,6 +638,9 @@ Tâches par défaut d'un clic droit sur un meuble, selon la recherche :
 - **Pendant la pause, le jeu n'enregistre aucune position écrite** sur un personnage.
 
 **Ragdolls**
+- `pickupObject` (0x5CFF90) ne fait rien si le porteur est en ragdoll, porte déjà, ou si le corps a
+  son drapeau ragdoll (+0x3d4) ; son étape d'attache (0x5CED90) remet ce drapeau à 1 sur le corps porté
+  (un corps porté se lit donc « ragdoll »).
 - Téléporter juste avant le début d'un ragdoll projette le corps : la vitesse vient des écarts
   entre les dernières poses.
 - Une téléportation ne déplace pas un ragdoll actif.

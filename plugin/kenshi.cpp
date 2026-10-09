@@ -1030,8 +1030,14 @@ bool ReadCarried(Character* c, kc::Handle& carried) {
     return IsCharacter(c) && Rd(c, CH_isCarrying, on) && on && ReadHandle(reinterpret_cast<uint8_t*>(c) + CH_carrying, carried) && carried.valid();
 }
 
+// pickupObject (0x5CFF90) silently refuses a body whose ragdoll flag (+0x3d4) is set, and its attach
+// step (0x5CED90) sets that flag again on the carried body. A client keeps knocked-out bodies in
+// ragdoll (posture sync), so the ragdoll goes first. True only when the body really is on the shoulder.
 bool CarryCharacter(Character* carrier, Character* who) {
-    return IsCharacter(carrier) && IsCharacter(who) && PickSeh(carrier, who);
+    if (!IsCharacter(carrier) || !IsCharacter(who)) return false;
+    if (IsRagdoll(who)) SetRagdoll(who, false);
+    kc::Handle got;
+    return PickSeh(carrier, who) && ReadCarried(carrier, got) && Resolve(got) == who;
 }
 
 bool DropCarried(Character* carrier) {

@@ -175,7 +175,7 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
 ### Porter un corps ✅
 - **Le joueur** voit le même corps sur la même épaule partout. Un client ne peut pas ramasser un
   corps lui-même : c'est l'hôte qui exécute l'ordre « porter ».
-- Vérifié par la suite (« porter »).
+- Vérifié par la suite (« porter ») et par `coop_test.py carry` (épaule, puis pose sans projection).
 - **Limite** : le mod n'ajoute aucun garde-fou propre, par exemple contre le fait de porter
   quelqu'un qui en porte un autre (signalé par les amis). Ce sont les règles du jeu de l'hôte qui
   s'appliquent. À vérifier en jeu.

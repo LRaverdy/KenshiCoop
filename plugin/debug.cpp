@@ -667,6 +667,18 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         kenshi::WithSelection(w.FindSquad(squad[sel]), [&] { ok = kenshi::CallAddTaskNearest(225, w.FindSquad(squad[tgt])); });   // LIFT_PERSON_PLAYER_ORDER
         return ok ? "ok" : "err";
     }
+    if (cmd == "carrynpc" || cmd == "carrydrop") {   // carrynpc|carrydrop <squadIndex>: (host) that member picks up the last spawned NPC / puts its body down
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err";
+        kenshi::Character* me = w.FindSquad(squad[idx]);
+        HostCallScope scope;
+        if (cmd == "carrydrop") return kenshi::DropCarried(me) ? "ok" : "err";
+        kenshi::Character* body = w.Find(lastSpawned_);
+        if (!body) return "err no spawned NPC";
+        return kenshi::CarryCharacter(me, body) ? "ok " + Key(lastSpawned_) : "err refused";
+    }
     if (cmd == "carrying") {   // carrying <squadIndex>: who that member carries (host handle key) or none
         size_t idx = 0;
         in >> idx;

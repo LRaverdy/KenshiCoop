@@ -1991,6 +1991,41 @@ def exp_dead(host, cli):
     log("inventory_mismatch", r["inventory_mismatch"], "down_bodies", r["down_bodies_worst"])
 
 
+def exp_carry(host, cli):
+    """The host carries a knocked out NPC, walks, puts it down: the client shows it on the shoulder,
+    then lying where the host's landed, without throwing it."""
+    def pos(pid, k):
+        ok, t = cmd(pid, f"where {k}")
+        return tuple(map(float, t.split()[1].split(","))) if ok and t.startswith("ok") else None
+    def dist(a, b):
+        return sum((x - y) ** 2 for x, y in zip(a, b)) ** 0.5 if a and b else 1e9
+    time.sleep(6)
+    ok, text = cmd(host, "spawnnpc 12 4")
+    key = text.split()[1] if ok and text.startswith("ok") else "?"
+    time.sleep(4)
+    log("ko", cmd(host, "ko"))
+    time.sleep(6)
+    log("carrynpc", cmd(host, "carrynpc 0"))
+    time.sleep(3)
+    hc, cc = cmd(host, "carrying 0")[1], cmd(cli, "carrying 0")[1]
+    check("porter PNJ : l'hote le porte", hc == f"ok {key}", hc)
+    check("porter PNJ : le client le voit porte par le meme perso", cc == hc, f"hote {hc} / client {cc}")
+    cmd(host, "moverel 0 30 0")
+    time.sleep(5)
+    me, body = pos(cli, "0"), pos(cli, "npc")
+    up = body[1] - me[1] if me and body else None
+    check("porter PNJ : chez le client le corps est a l'epaule (pas sur la tete)",
+          up is not None and 5 < up < 25 and dist((me[0], 0, me[2]), (body[0], 0, body[2])) < 10, f"porteur {me} corps {body}")
+    log("carrydrop", cmd(host, "carrydrop 0"))
+    time.sleep(4)
+    h1, c1 = pos(host, "npc"), pos(cli, "npc")
+    time.sleep(3)
+    c2 = pos(cli, "npc")
+    check("poser PNJ : le corps est la ou celui de l'hote est tombe", dist(h1, c1) < 5, f"hote {h1} / client {c1}")
+    check("poser PNJ : pas projete (immobile apres la chute)", dist(c1, c2) < 2, f"{c1} -> {c2}")
+    check("poser PNJ : plus porte chez le client", cmd(cli, "carrying 0")[1] == "ok none")
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="what", required=True)
@@ -1998,6 +2033,8 @@ def main():
     r.add_argument("--save", default="kctest_base")
     r.add_argument("--keep", action="store_true", help="leave the instances running")
     r.add_argument("--quick", action="store_true")
+    ca = sub.add_parser("carry")
+    ca.add_argument("--save", default="kctest_base")
     dd = sub.add_parser("dead")
     dd.add_argument("--save", default="kctest_base")
     it = sub.add_parser("items")
@@ -2206,6 +2243,8 @@ def main():
             exp_lootui(host, cli)
         elif a.what == "items":
             exp_items(host, cli)
+        elif a.what == "carry":
+            exp_carry(host, cli)
         elif a.what == "dead":
             exp_dead(host, cli)
         else:
