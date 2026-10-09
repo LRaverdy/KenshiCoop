@@ -730,6 +730,20 @@ static void TestRejections() {
         CHECK(cli.lastError().find(ToString(RejectReason::BadName)) != std::string::npos);
     }
     {
+        // the host removes a player: the player is told why, the host forgets them
+        FakeWorld hw, cw; SetupHost(hw); AtMenu(cw);
+        SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+        Session host(hw, hc, Now, Quiet("host")); Session cli(cw, cc, Now, Quiet("cli"));
+        std::string err; host.Host(&err);
+        CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+        CHECK(!host.KickPlayer(99));
+        CHECK(host.KickPlayer(host.players().begin()->first));
+        Run({{&host, &hw}, {&cli, &cw}}, 5.0, [&] { return cli.state() == SessionState::Failed && host.players().empty(); });
+        CHECK(cli.state() == SessionState::Failed && cli.lastError().find(ToString(RejectReason::Kicked)) != std::string::npos);
+        CHECK(host.players().empty());
+        CHECK(!cli.KickPlayer(1));
+    }
+    {
         // names identify each player's own character: a player with the host's name is renamed
         FakeWorld hw, cw; SetupHost(hw); AtMenu(cw);
         SessionConfig hc; hc.name = "Same"; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "Same";

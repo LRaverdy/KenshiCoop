@@ -166,6 +166,8 @@ public:
     Session(IWorld& world, SessionConfig cfg, ClockFn clock, LogFn log);
     ~Session();
 
+    // Name and port used by the next Host/Join (false while a session is running).
+    bool Configure(const std::string& name, uint16_t port);
     bool Host(std::string* err);
     bool Join(const std::string& address, uint16_t port, std::string* err);
     void Leave();
@@ -175,6 +177,8 @@ public:
 
     // Host: hand a squad member to a player (host id = back to the host).
     void Assign(const Handle& h, uint8_t playerId);
+    // Host: remove a player from the session (false: no such player, or not hosting).
+    bool KickPlayer(uint8_t playerId);
     void SendChat(const std::string& text);
 
     SessionState state() const { return state_; }

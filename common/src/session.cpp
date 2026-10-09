@@ -381,6 +381,20 @@ void Session::FinishJoin(RemotePlayer& p) {
     AddChat("* " + p.name + " is in the world");
 }
 
+bool Session::Configure(const std::string& name, uint16_t port) {
+    if ((state_ != SessionState::Idle && state_ != SessionState::Failed) || !ValidName(name) || port == 0) return false;
+    cfg_.name = name;
+    cfg_.port = port;
+    return true;
+}
+
+bool Session::KickPlayer(uint8_t playerId) {
+    auto it = players_.find(playerId);
+    if (!isHost() || it == players_.end()) return false;
+    Kick(it->second, RejectReason::Kicked);
+    return true;
+}
+
 void Session::Kick(RemotePlayer& p, RejectReason why) {
     PlayerSync& s = sync_[p.id];
     if (s.kicked) return;   // already on its way out
