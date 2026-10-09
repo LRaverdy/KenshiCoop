@@ -61,7 +61,7 @@ Les signatures sont celles du commentaire du code.
 | 17 | `FnSaveManagerSave` | `SaveManager::save` | `0x47B920` | — | void SaveManager::save(const std::string& name, bool autosave) (différé) |
 | 18 | `FnSaveManagerLoad` | `SaveManager::load` | `0x47B480` | — | void SaveManager::load(const std::string& name) (différé) |
 | 19 | `FnCreateRandomCharacter` | `RootObjectFactory::createRandomCharacter` | `0x5836E0` | oui | RootObject* RootObjectFactory::createRandomCharacter(Faction*, Vector3, RootObjectContainer*, GameData*, Building*, float age) |
-| 20 | `FnWorldDestroy` | `GameWorld::destroy(RootObject*)` | `0x799AF0` | — | bool GameWorld::destroy(RootObject*, bool justUnloaded, const char* debugInfo) |
+| 20 | `FnWorldDestroy` | `GameWorld::destroy(RootObject*)` | `0x799AF0` | oui (lot E) | bool GameWorld::destroy(RootObject*, bool justUnloaded, const char* debugInfo) ; détourné chez l'hôte pour voir disparaître les bâtiments suivis |
 | 21 | `FnEndCombatMode` | `Character::endCombatMode` | `0x5C91C0` | — | void Character::endCombatMode() |
 | 22 | `FnRagdollMode` | `Character::ragdollMode` | `0x5CBD60` | oui | void Character::ragdollMode(bool on, RagdollPart::Enum part) |
 | 23 | `FnRegionUpdateBT` | `WeatherRegion::updateBT` | `0x9DDE50` | oui | void WeatherRegion::updateBT() (thread d'arrière-plan : fait avancer la météo) |
@@ -171,6 +171,14 @@ Les signatures sont celles du commentaire du code.
 | 118 | `FnSetSlaveState` | `StateBroadcastData::setSlaveState` | `0x5A4940` | oui | lot D : état d'esclave |
 | 116 | `FnGunShoot` | `GunClass::shoot` | `0x43A730` | oui | (lot C) void shoot(Character* me, RootObject* cible, StatsEnumerated stat, const Vector3& visée) : tire un projectile ; hôte : noté pour les clients ; client : seuls les tirs rejoués par le mod passent |
 | 117 | `FnProjectileGet` | réserve des projectiles `get` | `0x43A2F0` | oui | (lot C) Projectile* get(mesh, matériau), appelé par `shoot` seulement : attrape le projectile du tir |
+| 116 | `FnCreateFromPreviews` | <PreviewGroup>::createBuildings | `0x4D72A0` | oui | lot E : le mode construction bâtit les aperçus posés du groupe |
+| 117 | `FnCreateBuilding` | `RootObjectFactory::createBuilding` | `0x57CC70` | oui | lot E : la fabrique de bâtiments (16 arguments, voir section 10) |
+| 118 | `FnBuyMeCallback` | `Building::buyMeCallback` | `0x7AD6C0` | oui | lot E : achat confirmé (réponse 2) |
+| 119 | `FnConfirmDismantle` | `Building::confirmDismantle` | `0x54FEA0` | oui | lot E : démontage confirmé (réponse 2) |
+| 120 | `FnAddConstructionProgress` | `Building::addConstructionProgress` | `0x5595A0` | oui | lot E : un ouvrier construit (refusé chez les clients) |
+| 121 | `FnAddDismantleProgress` | `Building::addDismantleProgress` | `0x2A2860` | oui | lot E : un ouvrier démonte (refusé chez les clients) |
+| 122 | `FnClearUsageNodes` | `Building::clearUsageNodes` | `0x54C4D0` | — | lot E : ce que fait le mode construction à un bâtiment neuf |
+| 123 | `FnCalculateSaleValue` | `Building::calculateSaleValue` | `0x7AD300` | — | lot E : prix d'un bâtiment à vendre |
 
 L'ordre de la table doit suivre celui de l'énumération `Fn` : la vérification des prologues ne voit
 pas deux lignes inversées (chaque adresse correspond bien à ses octets). Deux lignes l'étaient
@@ -1051,3 +1059,39 @@ Changer l'orientation du nœud juste après `shoot` change donc toute la traject
   `0x16D5138`.
 - Tâches liées : `Task_RangedAttack`, `Task_UseTurret` (RTTI) ; `MAN_A_TURRET`, `USE_TURRET`,
   `SHOOT_AT_TARGET`, `RANGED_ATTACK…` dans `TaskType`.
+## 10. Recherche : bâtiments, construction, achat (lot E) [D]
+- **Mode construction** : les aperçus (`PreviewBuilding`, vtable `0x16E0C98`, 0x130 octets, Ogre
+  allocator ; sous-classes `_Resource` `0x16E0E18`, `_Ceiling` `0x16E1B68`, `_Snapping`
+  `0x16E1CB8`, `_Wall` `0x16D2EB8`) se rangent dans un groupe statique (`*(0x212DE48)`, 0xB0
+  octets, constructeur `0x4D4190`, lektor des aperçus à +8/+0x10).
+  - aperçu : +0x8 nœud Ogre, +0x50 bâtiment auquel il s'accroche, +0x90 ville, +0x98 étage,
+    +0x9C « dehors », +0xB8 bâtiment construit, +0xD0 parent (meuble de), +0xD8 bâtiment où il se
+    trouve, +0xF8 GameData, +0x10C position, +0x118 rotation (Ogre : w, x, y, z) ;
+  - `placeFinalPreviewBuilding` (vt 0xC0, `0x4D5130`) range l'aperçu dans le groupe ;
+    `placePreview` (vt 0xF0, `0x4D2770`) écrit position, rotation, étage ;
+  - `0x4D72A0(groupe)` construit tous les aperçus du groupe : position finale = nœud Ogre + décalage
+    du monde, hauteur moins `getTerrainWithWaterHeight` (ou relative au parent pour un meuble),
+    puis `createBuilding`, `setupMiningResourceLevel` (vt 0x2D8), `clearUsageNodes` (`0x54C4D0`),
+    enregistrement auprès de la ville et sélection du dernier bâtiment ; à la fin
+    `0x4D3750(groupe, aperçu)` retire chaque aperçu, `0x4D33A0(groupe)` vide le groupe.
+  - « is node » (GameData) : passe par `RootObjectFactory::create` (`0x583400`), pas par
+    `createBuilding`.
+  - échec de la fabrique (null) : message « Error: Failed to build … » via `0x6E1E00`, qui est un
+    simple `ret` dans cette version.
+- **`RootObjectFactory::createBuilding`** `0x57CC70` : (fabrique, GameData*, Vector3* position,
+  TownBase*, Faction*, Quaternion* rotation, rappel, Layout* meubleDe, Building* porteDe, état de
+  sauvegarde, Building* àLIntérieurDe, invisible, terminé, feuillage, étage, meubleExtérieur) ; en
+  mode construction le rappel est le `PlayerInterface` (ou, accroché, un objet de 0x18 octets
+  {vtable `0x16DFB00`, PlayerInterface, bâtiment accroché} alloué par `0xED650A`, libéré par
+  `0xED64F8`).
+- **Plans** : `Building+0x1F0` intérieur, intérieur+0x30 son `Layout` ; `Layout+0x90` le bâtiment ;
+  `Building+0x238` le plan dont il est un meuble.
+- **Chantier** : `ConstructionState` en ligne à `Building+0x160` (`getBuildState`, vt 0x228, rend
+  `this+0x160`) : +0 terminé, +1 en pause, +2 démonté, +4 avancement, +0x28 total.
+  `setConstructionProgress` (vt 0x238, `0x559AD0`) termine le bâtiment (vt 0x240
+  `notifyConstructionComplete`) quand l'avancement atteint le total. `addConstructionProgress`
+  `0x5595A0`, `addDismantleProgress` `0x2A2860`.
+- **Achat** : `buyMeAsk` (vt 0x280) ouvre la confirmation ; `buyMeCallback(int)` `0x7AD6C0`
+  achète si la réponse vaut 2 (prix `calculateSaleValue` `0x7AD300`, pris aux cats de la faction du
+  joueur) ; `isForSale` vt 0x2C0. Démontage : `confirmDismantle(int)` `0x54FEA0` (2 = oui).
+- `getFaction` est le slot 0x58 de tout `RootObjectBase` ; un bâtiment a un handle de type 0.

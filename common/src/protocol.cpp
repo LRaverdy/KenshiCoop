@@ -731,7 +731,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::Captives)) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || t > uint8_t(Msg::BuildAction)) return std::nullopt;
     return Msg(t);
 }
 
@@ -1159,6 +1159,100 @@ bool Decode(Reader& r, CaptivesMsg& m) {
         if (!c.netId || c.slaveState > 3) return false;
     }
     return Done(r);
+}
+// ---- lot E: buildings
+namespace {
+void PutQuatRaw(Writer& w, const Quat& q) { w.f32(q.w); w.f32(q.x); w.f32(q.y); w.f32(q.z); }
+Quat GetQuatRaw(Reader& r) { Quat q; q.w = r.f32(); q.x = r.f32(); q.y = r.f32(); q.z = r.f32(); return q; }
+} // namespace
+
+void Encode(Writer& w, const BuildPlace& m) {
+    w.u8(uint8_t(Msg::BuildPlace));
+    w.varint(m.netId);
+    w.str(m.sid);
+    PutVec(w, m.pos);
+    PutQuatRaw(w, m.rot);
+    w.i32(m.floor);
+    w.u8(m.flags);
+    w.str(m.parentSid);
+    PutVec(w, m.parentPos);
+    w.str(m.indoorsSid);
+    PutVec(w, m.indoorsPos);
+    w.str(m.snapSid);
+    PutVec(w, m.snapPos);
+    PutHandle(w, m.town);
+    PutVec(w, m.worldPos);
+}
+bool Decode(Reader& r, BuildPlace& m) {
+    m.netId = GetU32Var(r);
+    m.sid = r.str(kMaxSidLen);
+    m.pos = GetVec(r);
+    m.rot = GetQuatRaw(r);
+    m.floor = r.i32();
+    m.flags = r.u8();
+    m.parentSid = r.str(kMaxSidLen);
+    m.parentPos = GetVec(r);
+    m.indoorsSid = r.str(kMaxSidLen);
+    m.indoorsPos = GetVec(r);
+    m.snapSid = r.str(kMaxSidLen);
+    m.snapPos = GetVec(r);
+    m.town = GetHandle(r);
+    m.worldPos = GetVec(r);
+    return Done(r) && !m.sid.empty() && m.floor >= -64 && m.floor <= 64;
+}
+void Encode(Writer& w, const BuildStateMsg& m) {
+    w.u8(uint8_t(Msg::BuildState));
+    const size_t n = std::min<size_t>(m.entries.size(), kMaxBuildStates);
+    w.varint(n);
+    for (size_t i = 0; i < n; ++i) {
+        const auto& e = m.entries[i];
+        w.varint(e.netId);
+        w.str(e.sid);
+        PutVec(w, e.pos);
+        w.f32(e.progress);
+        w.u8(e.flags);
+    }
+}
+bool Decode(Reader& r, BuildStateMsg& m) {
+    const uint32_t n = r.count(kMaxBuildStates, 3);
+    m.entries.resize(n);
+    for (auto& e : m.entries) {
+        e.netId = GetU32Var(r);
+        e.sid = r.str(kMaxSidLen);
+        e.pos = GetVec(r);
+        e.progress = r.f32();
+        e.flags = r.u8();
+        if (!e.netId || e.sid.empty()) return false;
+    }
+    return Done(r);
+}
+void Encode(Writer& w, const BuildRemove& m) {
+    w.u8(uint8_t(Msg::BuildRemove));
+    w.varint(m.netId);
+    w.str(m.sid);
+    PutVec(w, m.pos);
+}
+bool Decode(Reader& r, BuildRemove& m) {
+    m.netId = GetU32Var(r);
+    m.sid = r.str(kMaxSidLen);
+    m.pos = GetVec(r);
+    return Done(r) && m.netId != 0;
+}
+void Encode(Writer& w, const BuildAction& m) {
+    w.u8(uint8_t(Msg::BuildAction));
+    w.u8(uint8_t(m.kind));
+    w.i32(m.arg);
+    w.str(m.sid);
+    PutVec(w, m.pos);
+}
+bool Decode(Reader& r, BuildAction& m) {
+    const uint8_t k = r.u8();
+    if (k < 1 || k > 2) return false;
+    m.kind = BuildActionKind(k);
+    m.arg = r.i32();
+    m.sid = r.str(kMaxSidLen);
+    m.pos = GetVec(r);
+    return Done(r) && !m.sid.empty();
 }
 
 } // namespace kc

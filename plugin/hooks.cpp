@@ -933,6 +933,86 @@ bool CallMoveOrderSEH(void* chr, const float* pos) {
     }
 }
 
+// ---- lot E: buildings. Build mode builds its placed previews through <PreviewGroup>::
+// createBuildings, which calls the factory once per building with the final values: a client builds
+// nothing (the host builds it, then everyone); the host's own placements are noted for everyone.
+// Buying and dismantling confirmed by a client are asked of the host; clients never build nor
+// dismantle by themselves (the host's progress is imposed).
+thread_local int g_buildCapture = 0;   // >0 inside build mode's createBuildings (not our own calls)
+using CreateFromPreviewsFn = void (*)(void* group);
+CreateFromPreviewsFn o_createFromPreviews = nullptr;
+void hk_createFromPreviews(void* group) {
+    if (g_hostCall || !KenshiWorld::View()->active) return o_createFromPreviews(group);
+    ++g_buildCapture;
+    o_createFromPreviews(group);
+    --g_buildCapture;
+}
+using CreateBuildingFn = void* (*)(void* factory, void* data, const float* pos, void* town, void* faction, const float* rot, void* cb, void* layout,
+                                   void* doorOf, void* save, void* indoors, bool invisible, bool completed, bool foliage, int floor, bool outside);
+CreateBuildingFn o_createBuilding = nullptr;
+void* hk_createBuilding(void* factory, void* data, const float* pos, void* town, void* faction, const float* rot, void* cb, void* layout,
+                        void* doorOf, void* save, void* indoors, bool invisible, bool completed, bool foliage, int floor, bool outside) {
+    KenshiWorld* w = TheWorld();
+    if (g_buildCapture <= 0 || g_hostCall || !w || !data || !pos || !rot)
+        return o_createBuilding(factory, data, pos, town, faction, rot, cb, layout, doorOf, save, indoors, invisible, completed, foliage, floor, outside);
+    KenshiWorld::BuildArgs a;
+    a.data = data;
+    a.pos = {pos[0], pos[1], pos[2]};
+    a.rot = {rot[0], rot[1], rot[2], rot[3]};
+    a.town = town;
+    a.callback = cb;
+    a.layout = layout;
+    a.indoors = indoors;
+    a.floor = floor;
+    a.outside = outside;
+    if (KenshiWorld::ClientActive()) {   // the host builds it (build mode copes with nothing built)
+        w->NoteBuildCapture(a, nullptr);
+        return nullptr;
+    }
+    void* b = o_createBuilding(factory, data, pos, town, faction, rot, cb, layout, doorOf, save, indoors, invisible, completed, foliage, floor, outside);
+    if (b) w->NoteBuildCapture(a, b);
+    return b;
+}
+using BuildingAnswerFn = void (*)(void* building, int answer);
+BuildingAnswerFn o_buyMe = nullptr;
+BuildingAnswerFn o_confirmDismantle = nullptr;
+void hk_buyMe(void* building, int answer) {
+    auto v = KenshiWorld::View();
+    KenshiWorld* w = TheWorld();
+    if (g_hostCall || !v->active || !w) return o_buyMe(building, answer);
+    if (v->client) {
+        if (answer == 2) w->NoteLocalBuildAction(building, kc::BuildActionKind::Buy, answer);
+        return;
+    }
+    o_buyMe(building, answer);
+    if (answer == 2) w->NoteHostBought(building);
+}
+void hk_confirmDismantle(void* building, int answer) {
+    auto v = KenshiWorld::View();
+    KenshiWorld* w = TheWorld();
+    if (g_hostCall || !v->active || !v->client || !w) return o_confirmDismantle(building, answer);
+    if (answer == 2) w->NoteLocalBuildAction(building, kc::BuildActionKind::Dismantle, answer);
+}
+using BuildProgressFn = void (*)(void* building, float amount);
+BuildProgressFn o_addConstruction = nullptr;
+void hk_addConstruction(void* building, float amount) {
+    if (KenshiWorld::ClientActive() && !g_hostCall) return;
+    o_addConstruction(building, amount);
+}
+using DismantleProgressFn = bool (*)(void* building, float amount);
+DismantleProgressFn o_addDismantle = nullptr;
+bool hk_addDismantle(void* building, float amount) {
+    if (KenshiWorld::ClientActive() && !g_hostCall) return false;
+    return o_addDismantle(building, amount);
+}
+using WorldDestroyFn = bool (*)(void* world, void* obj, bool justUnloaded, const char* info);
+WorldDestroyFn o_worldDestroy = nullptr;
+bool hk_worldDestroy(void* world, void* obj, bool justUnloaded, const char* info) {
+    if (!justUnloaded && obj)
+        if (KenshiWorld* w = TheWorld()) w->NoteObjectDestroyed(obj);
+    return o_worldDestroy(world, obj, justUnloaded, info);
+}
+
 struct HookDef {
     kenshi::Fn fn;
     void* detour;
@@ -1166,6 +1246,14 @@ bool InstallHooks(TickFn tick, std::string* err) {
         // ---- lot C: ranged
         {kenshi::FnGunShoot, reinterpret_cast<void*>(&ranged::hk_gunShoot), reinterpret_cast<void**>(&ranged::o_gunShoot)},
         {kenshi::FnProjectileGet, reinterpret_cast<void*>(&ranged::hk_projectileGet), reinterpret_cast<void**>(&ranged::o_projectileGet)},
+        // ---- lot E: buildings
+        {kenshi::FnCreateFromPreviews, reinterpret_cast<void*>(&hk_createFromPreviews), reinterpret_cast<void**>(&o_createFromPreviews)},
+        {kenshi::FnCreateBuilding, reinterpret_cast<void*>(&hk_createBuilding), reinterpret_cast<void**>(&o_createBuilding)},
+        {kenshi::FnBuyMeCallback, reinterpret_cast<void*>(&hk_buyMe), reinterpret_cast<void**>(&o_buyMe)},
+        {kenshi::FnConfirmDismantle, reinterpret_cast<void*>(&hk_confirmDismantle), reinterpret_cast<void**>(&o_confirmDismantle)},
+        {kenshi::FnAddConstructionProgress, reinterpret_cast<void*>(&hk_addConstruction), reinterpret_cast<void**>(&o_addConstruction)},
+        {kenshi::FnAddDismantleProgress, reinterpret_cast<void*>(&hk_addDismantle), reinterpret_cast<void**>(&o_addDismantle)},
+        {kenshi::FnWorldDestroy, reinterpret_cast<void*>(&hk_worldDestroy), reinterpret_cast<void**>(&o_worldDestroy)},
     };
     const MH_STATUS init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {

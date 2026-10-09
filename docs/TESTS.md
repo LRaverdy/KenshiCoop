@@ -87,6 +87,7 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `talk` | un PNJ parle au personnage du client : la conversation tourne chez l'hôte, la fenêtre s'ouvre chez le client |
 | `factions` | lot B : mêmes relations au départ ; relation changée par l'hôte identique chez le client ; prime donnée puis levée par l'hôte visible chez le client ; une relation changée par le jeu du client revient à celle de l'hôte |
 | `ranged` (`--shooter <clé>`) | (lot C) 3 tirs d'un arbalétrier de l'hôte sur l'escouade sont refaits chez le client, sur la même trajectoire ; même point visé ; une tourelle proche tournée chez l'hôte tourne pareil chez le client ; santé et inventaires identiques ensuite |
+| `build` (lot E) | une pose du client bâtie par l'hôte puis par tous au même endroit, celle de l'hôte aussi ; avancement et fin du chantier ; démontage demandé par le client ; achat d'un bâtiment à vendre (avec `--save kctest_town`) |
 | `progress` | compétences, argent, bulles et ordres : l'hôte décide, le client suit |
 | `ground` / `clientpickup` | objets posés et ramassés ; ramassage demandé par un client |
 | `anim` / `animframe` / `gait` | animations de combat et d'action ; tout ce qui est à l'écran ; allure |
@@ -303,6 +304,19 @@ l'escouade triée par handle.
 | `turrets [rayon]` | tourelles près du membre 0, triées par endroit : `type@x,z>point visé` |
 | `turretaim <index> <x> <y> <z>` | (hôte) la tourelle n° index tourne vers ce point |
 | `rangedaim <personnage>` | état du combat à distance d'un personnage ici : mode, état, point visé, cible, arme |
+
+**Bâtiments (lot E)**
+
+| Commande | Rôle |
+|---|---|
+| `buildtypes <nom>` | modèles de bâtiments dont le nom contient ce texte (`sid=nom`) |
+| `buildplace <sid> <dx> <dz> [lacet°]` | une pose comme le mode construction, à côté du membre 0 (client : demandée à l'hôte ; hôte : bâtie et annoncée) |
+| `furnplace <sid> <nom du bâtiment> <dx> <dz>` | un meuble dans le bâtiment à nous le plus proche de ce nom (position relative au bâtiment) |
+| `buildlist [nom]` | bâtiments autour du membre 0 : `sid@x,y,z:avancement/drapeaux` (1 terminé, 2 en pause, 4 démontage) |
+| `buildcount` | bâtiments suivis par la session, et combien sont trouvés ici |
+| `buildprogress <nom> <quantité>` | (hôte) avancement d'ouvrier sur le chantier à nous le plus proche |
+| `builddismantle <nom>` / `buildbuy <nom>` | confirme le démontage / l'achat comme la fenêtre du bâtiment (un client le demande à l'hôte) |
+| `buildforsale [nom]` | le bâtiment à vendre le plus proche et son prix |
 
 **Météo**
 

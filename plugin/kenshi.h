@@ -184,6 +184,15 @@ enum Fn : int {
     // ---- lot C: ranged
     FnGunShoot,                 // void GunClass::shoot(Character* me, RootObject* target, StatsEnumerated stat, const Vector3& aimpos)   (fires one projectile)
     FnProjectileGet,            // Projectile* <projectile pool>::get(const std::string& mesh, const std::string& material)   (shoot's projectile)
+    // ---- lot E: buildings
+    FnCreateFromPreviews,       // void <PreviewGroup>::createBuildings()   (build mode: builds every placed preview of the group)
+    FnCreateBuilding,           // Building* RootObjectFactory::createBuilding(GameData*, Vector3, TownBase*, Faction*, Quaternion, FactoryCallbackInterface*, Layout* furnitureOf, Building* doorOf, GameSaveState*, Building* indoorsOf, bool invisible, bool completed, bool isFoliage, int floor, bool outsideFurniture)
+    FnBuyMeCallback,            // void Building::buyMeCallback(int answer)   (2: the player confirmed the purchase)
+    FnConfirmDismantle,         // void Building::confirmDismantle(int answer)   (2: the player confirmed)
+    FnAddConstructionProgress,  // void Building::addConstructionProgress(float amount)   (a worker builds)
+    FnAddDismantleProgress,     // bool Building::addDismantleProgress(float amount)   (a worker dismantles)
+    FnClearUsageNodes,          // void Building::clearUsageNodes()
+    FnCalculateSaleValue,       // int Building::calculateSaleValue()   (price of a building for sale)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -636,5 +645,13 @@ bool ProjectileOrientation(void* projectile, kc::Quat& out);
 bool SetProjectileOrientation(void* projectile, const kc::Quat& q);
 // Fires the gun as the game does (GunClass::shoot through its hook); the projectile it made, if any.
 bool FireGun(void* gun, Character* me, Character* target, int stat, const kc::Vec3& aimPos, void*& projectile);
+// ---- lot E: buildings (plugin/buildings.cpp uses these)
+bool ReadRaw(const void* obj, uintptr_t offset, void* out, size_t n);   // SEH-guarded
+bool WriteRaw(void* obj, uintptr_t offset, const void* in, size_t n);
+void* GameDataBySid(const std::string& sid);
+bool GameDataSidOf(const void* gd, std::string& out);
+// building templates (itemType BUILDING) whose players' name contains `part` ("sid name" each)
+void BuildingTemplates(const std::string& part, std::vector<std::pair<std::string, std::string>>& out, size_t max);
+bool DestroyAnyObject(void* obj);   // GameWorld::destroy for good (any RootObject)
 
 } // namespace kenshi

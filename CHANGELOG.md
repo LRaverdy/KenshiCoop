@@ -37,6 +37,11 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
   tourelles suivent. Le jeu du client ne tire plus de lui-même. Nouveaux messages `Shots` et
   `Ranged`, expérience `ranged`, commandes `rangedlist`, `shoot`, `shots`, `turrets`, `turretaim` et
   `rangedaim`.
+- **Lot E, bâtiments** (à vérifier en jeu) : poser un bâtiment ou un meuble en mode construction,
+  pour tout le monde ; chez un client rien n'est bâti localement, l'hôte bâtit puis chaque joueur
+  bâtit le même chantier au même endroit. Avancement, fin, pause et démontage des chantiers imposés
+  par l'hôte ; un bâtiment détruit chez l'hôte disparaît partout ; achat et démontage demandés par
+  un client exécutés par l'hôte, l'achat rejoué par chaque client. Expérience `build`.
 
 ## 9 octobre 2026 (soir)
 

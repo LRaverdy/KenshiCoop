@@ -1209,6 +1209,115 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         return describe(best);
     }
     if (cmd == "closewindows") return kenshi::CloseInventoryWindows() ? "ok" : "err";   // every inventory / trade window here
+    // ---- lot E: buildings
+    if (cmd == "buildtypes") {   // buildtypes <name part>: building templates ("sid=name" each, '_' for spaces)
+        std::string part;
+        in >> part;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        std::vector<std::pair<std::string, std::string>> found;
+        kenshi::BuildingTemplates(part, found, 20);
+        std::string out = "ok " + std::to_string(found.size());
+        for (auto& [sid, name] : found) {
+            std::replace(name.begin(), name.end(), ' ', '_');
+            out += " " + sid + "=" + name;
+        }
+        return out;
+    }
+    if (cmd == "buildplace" || cmd == "furnplace") {
+        // buildplace <sid> <dx> <dz> [yawDeg]: a placement as build mode makes it, next to squad member 0
+        //   (client: asked of the host; host: built and announced)
+        // furnplace <sid> <building name part> <dx> <dz>: a piece of furniture inside the nearest such
+        //   building of ours (position relative to that building)
+        std::string sid, part;
+        float dx = 0, dz = 0, yaw = 0;
+        if (cmd == "buildplace") in >> sid >> dx >> dz >> yaw;
+        else in >> sid >> part >> dx >> dz;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        kc::Vec3 me;
+        if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), me)) return "err no squad";
+        if (!kenshi::GameDataBySid(sid)) return "err unknown template " + sid;
+        kc::BuildPlace p;
+        p.sid = sid;
+        const float a = yaw * 3.14159265f / 180.0f;
+        p.rot = {std::cos(a / 2), 0, std::sin(a / 2), 0};
+        if (cmd == "buildplace") {
+            p.pos = {me.x + dx, 0.0f, me.z + dz};   // height: above the terrain, as build mode gives it
+        } else {
+            void* parent = w.NearestBuilding(me, part, 2000.0f, 2);
+            std::string psid;
+            kc::Vec3 ppos;
+            if (!parent || !kenshi::ObjectTemplate(parent, psid) || !kenshi::ObjectPosition(parent, ppos)) return "err no building of ours named " + part;
+            p.pos = {dx, 0.0f, dz};
+            p.parentSid = psid;
+            p.parentPos = ppos;
+            p.indoorsSid = psid;
+            p.indoorsPos = ppos;
+        }
+        return w.DebugPlace(p) ? "ok " + sid + (s.isHost() ? " built" : " asked") : "err placement failed";
+    }
+    if (cmd == "buildlist") {   // buildlist [name part]: buildings around squad member 0 ("sid@x,y,z:progress/flags" each)
+        std::string part = "any";
+        in >> part;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        kc::Vec3 me;
+        if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), me)) return "err no squad";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(me, 300.0f, objs);
+        std::string out;
+        int n = 0;
+        for (void* o : objs) {
+            kc::Handle h;
+            std::string sid, name;
+            kc::Vec3 p;
+            float progress = 0;
+            uint8_t flags = 0;
+            if (kenshi::IsCharacter(o) || !kenshi::ObjectHandle(o, h) || h.type != 0 || !kenshi::ObjectTemplate(o, sid) || !kenshi::ObjectPosition(o, p)) continue;
+            if (!kenshi::TemplateDisplayName(sid, name)) name = sid;
+            if (part != "any" && name.find(part) == std::string::npos && sid.find(part) == std::string::npos) continue;
+            if (!w.ReadBuildState(h, progress, flags)) continue;
+            char b[200];
+            snprintf(b, sizeof(b), " %s@%.1f,%.1f,%.1f:%.1f/%u", sid.c_str(), p.x, p.y, p.z, progress, unsigned(flags));
+            out += b;
+            if (++n >= 40) break;
+        }
+        return "ok " + std::to_string(n) + out;
+    }
+    if (cmd == "buildcount") return "ok followed=" + std::to_string(s.buildingCount()) + " found=" + std::to_string(s.buildingsResolved());
+    if (cmd == "buildprogress" || cmd == "buildbuy" || cmd == "builddismantle" || cmd == "buildforsale") {
+        // buildprogress <name part> <amount>: (host) workers' progress on the nearest unfinished building of ours
+        // buildbuy <name part>: confirm buying the nearest building for sale (as its window does)
+        // builddismantle <name part>: confirm dismantling the nearest building of ours (as its window does)
+        // buildforsale [name part]: the nearest building for sale and its price
+        std::string part = "any";
+        float amount = 0;
+        in >> part >> amount;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        kc::Vec3 me;
+        if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), me)) return "err no squad";
+        const int want = cmd == "buildprogress" ? 3 : (cmd == "builddismantle" ? 2 : 1);
+        void* b = w.NearestBuilding(me, part, 3000.0f, want);
+        std::string sid;
+        kc::Vec3 p;
+        if (!b || !kenshi::ObjectTemplate(b, sid) || !kenshi::ObjectPosition(b, p)) return "err no such building";
+        char where[160];
+        snprintf(where, sizeof(where), "%s@%.1f,%.1f,%.1f", sid.c_str(), p.x, p.y, p.z);
+        using AmountFn = void (*)(void*, float);
+        using AnswerFn = void (*)(void*, int);
+        using PriceFn = int (*)(void*);
+        if (cmd == "buildprogress") {
+            if (!s.isHost()) return "err host only";
+            HostCallScope scope;
+            reinterpret_cast<AmountFn>(kenshi::FnAddr(kenshi::FnAddConstructionProgress))(b, amount);
+            return std::string("ok ") + where;
+        }
+        if (cmd == "buildforsale") return "ok " + std::string(where) + " price=" + std::to_string(reinterpret_cast<PriceFn>(kenshi::FnAddr(kenshi::FnCalculateSaleValue))(b));
+        // no HostCallScope: exactly what the building's window does (a client asks the host)
+        reinterpret_cast<AnswerFn>(kenshi::FnAddr(cmd == "buildbuy" ? kenshi::FnBuyMeCallback : kenshi::FnConfirmDismantle))(b, 2);
+        return std::string("ok ") + where;
+    }
     // ---- lot D: prisons
     if (cmd == "cage" || cmd == "chain" || cmd == "enslave" || cmd == "captive") {
         // cage <squadIndex> [off]: (host) into the nearest cage (BF_CAGE) within 300 m, or out of it

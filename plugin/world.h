@@ -111,6 +111,43 @@ public:
     // the host's own trade window (to show it again when another player changed the stock).
     void QueueTradeRequest(const kc::Handle& looter, const kc::Handle& trader);
     void NoteHostTradeWindow(const kc::Handle& looter, const kc::Handle& trader);
+    // ---- lot E: buildings (plugin/buildings.cpp)
+    void TakeLocalPlacements(std::vector<LocalPlacement>& out) override;
+    bool ExecutePlacement(const kc::BuildPlace& p, kc::Handle& created, kc::Vec3& worldPos) override;
+    bool FindBuilding(const std::string& sid, const kc::Vec3& pos, kc::Handle& out) override;
+    bool BuildingIdentity(const kc::Handle& h, std::string& sid, kc::Vec3& pos) override;
+    bool ReadBuildState(const kc::Handle& h, float& progress, uint8_t& flags) override;
+    void ApplyBuildState(const kc::Handle& h, float progress, uint8_t flags) override;
+    void ConstructionSitesNear(const std::vector<kc::Vec3>& centers, float radius, std::vector<kc::Handle>& out) override;
+    void TrackBuilding(const kc::Handle& h) override;
+    void TakeBuildingRemovals(std::vector<kc::Handle>& out) override;
+    bool RemoveBuilding(const kc::Handle& h) override;
+    void TakeLocalBuildActions(std::vector<kc::BuildAction>& out) override;
+    bool ExecuteBuildAction(const kc::BuildAction& a, std::string& refused) override;
+    // What RootObjectFactory::createBuilding gets in build mode.
+    struct BuildArgs {
+        void* data = nullptr;
+        kc::Vec3 pos;
+        kc::Quat rot;
+        void* town = nullptr;
+        void* callback = nullptr;
+        void* layout = nullptr;
+        void* indoors = nullptr;
+        int floor = 0;
+        bool outside = false;
+    };
+    // Hooks: build mode placed something here (client: nothing was built; host: `created`); a
+    // purchase / dismantling confirmed in the game's window (client: asked of the host); the host's
+    // own purchase went through; the game destroyed an object for good.
+    void NoteBuildCapture(const BuildArgs& a, void* created);
+    void NoteLocalBuildAction(void* building, kc::BuildActionKind kind, int answer);
+    void NoteHostBought(void* building);
+    void NoteObjectDestroyed(void* obj);
+    // tests: a placement as build mode would make it (client: asked of the host; host: built and
+    // announced); the building of that kind and place, or the nearest whose name contains `part`
+    bool DebugPlace(const kc::BuildPlace& p);
+    void* BuildingAt(const std::string& sid, const kc::Vec3& pos);
+    void* NearestBuilding(const kc::Vec3& from, const std::string& part, float radius, int want);   // want: 0 any, 1 for sale, 2 ours, 3 ours unfinished
     void TakeEditedCharacters(std::vector<kc::Handle>& out) override;
     bool ReadAppearance(const kc::Handle& h, kc::AppearanceMsg& out) override;
     void ApplyAppearance(const kc::Handle& h, const kc::AppearanceMsg& m) override;
@@ -332,6 +369,13 @@ private:   // first few lifecycle events (tests)
     std::mutex tradeMutex_;
     std::vector<TradeRequest> tradeReqs_;            // host, under tradeMutex_
     kc::Handle hostTradeLooter_, hostTradeTrader_;   // host: our own last trade window (under tradeMutex_)
+    // ---- lot E: buildings (under buildMutex_)
+    std::mutex buildMutex_;
+    std::vector<LocalPlacement> localPlacements_;
+    std::vector<kc::BuildAction> localBuildActions_;
+    std::unordered_map<const void*, kc::Handle> trackedBuildings_;   // host: followed buildings
+    std::vector<kc::Handle> removedBuildings_;                      // host: destroyed since the last call
+    bool DescribeBuildArgs(const BuildArgs& a, kc::BuildPlace& out);
     void* InventoryHolder(const kc::Handle& h);       // a character, or a container
     double pauseSeenAt_ = -1;   // client: when the host's pause arrived (we pause a little later)
     std::unordered_map<kc::Handle, double, kc::HandleHash> taskDropAt_;   // client: when its local tasks were last dropped

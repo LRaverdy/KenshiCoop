@@ -326,6 +326,80 @@ struct FakeWorld : IWorld {
     bool OpenTradeWindow(const Handle&, const Handle&) override { tradeWindow = true; ++tradeWindowOpens; return true; }
     bool ContainerWindowOpen() override { return tradeWindow; }
     void CloseContainerWindows() override { tradeWindow = false; }
+    // ---- lot E: buildings (handle type 0, serials from bldgSerial: they differ between machines)
+    struct FakeBldg { std::string sid; Vec3 pos; float progress = 0; uint8_t flags = 0; bool forSale = false, ours = true; };
+    std::map<uint32_t, FakeBldg> bldgs;
+    uint32_t bldgSerial = 20000;
+    std::vector<LocalPlacement> placements;     // build mode here
+    std::vector<BuildAction> bldgActions;       // windows here (client: asked of the host)
+    std::vector<Handle> bldgRemoved;            // host: destroyed by the game
+    std::set<uint32_t> tracked;
+    int placementsBuilt = 0;
+    static Handle Bh(uint32_t serial) { Handle h; h.type = 0; h.index = serial; h.serial = serial; return h; }
+    void TakeLocalPlacements(std::vector<LocalPlacement>& out) override { out.swap(placements); placements.clear(); }
+    bool ExecutePlacement(const BuildPlace& p, Handle& created, Vec3& worldPos) override {
+        if (p.sid.empty() || p.sid == "refused") return false;
+        FakeBldg b;
+        b.sid = p.sid;
+        b.pos = {p.pos.x, p.pos.y + 100.0f, p.pos.z};   // world height: terrain + the placement's
+        const uint32_t s = bldgSerial++;
+        bldgs[s] = b;
+        created = Bh(s);
+        worldPos = b.pos;
+        ++placementsBuilt;
+        return true;
+    }
+    bool FindBuilding(const std::string& sid, const Vec3& pos, Handle& out) override {
+        for (auto& [s, b] : bldgs)
+            if (b.sid == sid && Dist(b.pos, pos) < 5) { out = Bh(s); return true; }
+        return false;
+    }
+    bool BuildingIdentity(const Handle& h, std::string& sid, Vec3& pos) override {
+        auto it = bldgs.find(h.serial);
+        if (h.type != 0 || it == bldgs.end()) return false;
+        sid = it->second.sid;
+        pos = it->second.pos;
+        return true;
+    }
+    bool ReadBuildState(const Handle& h, float& progress, uint8_t& flags) override {
+        auto it = bldgs.find(h.serial);
+        if (h.type != 0 || it == bldgs.end()) return false;
+        progress = it->second.progress;
+        flags = it->second.flags;
+        return true;
+    }
+    void ApplyBuildState(const Handle& h, float progress, uint8_t flags) override {
+        auto it = bldgs.find(h.serial);
+        if (it != bldgs.end()) { it->second.progress = progress; it->second.flags = flags; }
+    }
+    void ConstructionSitesNear(const std::vector<Vec3>& centers, float radius, std::vector<Handle>& out) override {
+        out.clear();
+        for (auto& [s, b] : bldgs) {
+            if (!b.ours || ((b.flags & kSiteComplete) && !(b.flags & kSiteDismantling))) continue;
+            for (auto& c : centers) if (Dist(c, b.pos) <= radius) { out.push_back(Bh(s)); break; }
+        }
+    }
+    void TrackBuilding(const Handle& h) override { tracked.insert(h.serial); }
+    void TakeBuildingRemovals(std::vector<Handle>& out) override { out.swap(bldgRemoved); bldgRemoved.clear(); }
+    bool RemoveBuilding(const Handle& h) override { return bldgs.erase(h.serial) != 0; }
+    void TakeLocalBuildActions(std::vector<BuildAction>& out) override { out.swap(bldgActions); bldgActions.clear(); }
+    bool ExecuteBuildAction(const BuildAction& a, std::string& refused) override {
+        refused.clear();
+        Handle h;
+        if (!FindBuilding(a.sid, a.pos, h)) return false;
+        FakeBldg& b = bldgs[h.serial];
+        if (a.kind == BuildActionKind::Buy) {
+            if (!b.forSale) { refused = "plus a vendre"; return b.ours; }
+            if (money < 100) { refused = "pas assez"; return false; }
+            money -= 100;
+            b.forSale = false;
+            b.ours = true;
+            return true;
+        }
+        if (!b.ours) return false;
+        b.flags |= kSiteDismantling;
+        return true;
+    }
     // ---- lot D: prisons
     bool ReadCaptive(const Handle& h, CaptiveState& out) override {
         auto it = chars.find(h.serial);
@@ -779,6 +853,34 @@ static void TestWire() {
         Reader rr2(rw2.data(), rw2.size()); PeekType(rr2);
         RangedMsg rm3; CHECK(!Decode(rr2, rm3));
     }
+    {   // lot E: buildings
+        BuildPlace bp; bp.netId = 0; bp.sid = "123-gamedata.base"; bp.pos = {1, 2, 3}; bp.rot = {0.5f, 0, 0.5f, 0}; bp.floor = 2;
+        bp.flags = kBuildOutside | kBuildFloorLayout; bp.parentSid = "house"; bp.parentPos = {4, 5, 6}; bp.indoorsSid = "house";
+        bp.snapSid = "wall"; bp.snapPos = {7, 8, 9}; bp.town.index = 12; bp.town.serial = 34; bp.worldPos = {10, 11, 12};
+        Writer bw; Encode(bw, bp);
+        Reader br(bw.data(), bw.size()); CHECK(PeekType(br) == Msg::BuildPlace);
+        BuildPlace bp2; CHECK(Decode(br, bp2));
+        CHECK(bp2.sid == bp.sid && bp2.pos.z == 3 && bp2.rot.w == 0.5f && bp2.rot.y == 0.5f && bp2.floor == 2 && bp2.flags == bp.flags &&
+              bp2.parentSid == "house" && bp2.parentPos.y == 5 && bp2.indoorsSid == "house" && bp2.snapSid == "wall" && bp2.snapPos.z == 9 &&
+              bp2.town.serial == 34 && bp2.worldPos.x == 10);
+        bp.floor = 1000;   // nonsense floors are refused
+        Writer bw2; Encode(bw2, bp);
+        Reader br2(bw2.data(), bw2.size()); PeekType(br2);
+        BuildPlace bp3; CHECK(!Decode(br2, bp3));
+        BuildStateMsg bs; bs.entries = {{7, "hut", {1, 2, 3}, 42.5f, kSiteComplete | kSitePaused}, {8, "wall", {4, 5, 6}, 0, kSiteDismantling}};
+        Writer sw; Encode(sw, bs);
+        Reader sr(sw.data(), sw.size()); CHECK(PeekType(sr) == Msg::BuildState);
+        BuildStateMsg bs2; CHECK(Decode(sr, bs2));
+        CHECK(bs2.entries.size() == 2 && bs2.entries[0].progress == 42.5f && bs2.entries[0].flags == (kSiteComplete | kSitePaused) &&
+              bs2.entries[1].sid == "wall" && bs2.entries[1].pos.y == 5);
+        Writer rw; Encode(rw, BuildRemove{9, "hut", {1, 2, 3}});
+        Reader rr(rw.data(), rw.size()); CHECK(PeekType(rr) == Msg::BuildRemove);
+        BuildRemove rm; CHECK(Decode(rr, rm) && rm.netId == 9 && rm.sid == "hut" && rm.pos.x == 1);
+        BuildAction ba; ba.kind = BuildActionKind::Dismantle; ba.arg = 2; ba.sid = "hut"; ba.pos = {1, 2, 3};
+        Writer baw; Encode(baw, ba);
+        Reader bar(baw.data(), baw.size()); CHECK(PeekType(bar) == Msg::BuildAction);
+        BuildAction ba2; CHECK(Decode(bar, ba2) && ba2.kind == BuildActionKind::Dismantle && ba2.arg == 2 && ba2.pos.z == 3);
+    }
     {   // hunger travels with the vitals
         VitalsMsg vm; vm.entities.resize(1); vm.entities[0].netId = 2; vm.entities[0].hunger = 250.5f;
         auto pk = EncodeVitals(vm)[0];
@@ -857,6 +959,10 @@ static void TestFuzz() {
     add([](Writer& w) { DoorsMsg m; DoorState d; d.sid = "door"; d.flags = kDoorHasLock; d.lockLevel = 3; m.doors = {d, d}; Encode(w, m); });   // lot A
     add([](Writer& w) { DoorRequest m; m.sid = "door"; Encode(w, m); });   // lot A
     add([](Writer& w) { InvOp m; m.fromNetId = 5; m.toNetId = 2; m.item.templateSid = "x"; m.traderNetId = 4; m.price = 12; Encode(w, m); });
+    add([](Writer& w) { BuildPlace m; m.netId = 3; m.sid = "hut"; m.parentSid = "house"; Encode(w, m); });
+    add([](Writer& w) { BuildStateMsg m; m.entries = {{1, "hut", {1, 2, 3}, 5, 1}}; Encode(w, m); });
+    add([](Writer& w) { Encode(w, BuildRemove{4, "hut", {}}); });
+    add([](Writer& w) { BuildAction m; m.sid = "shop"; Encode(w, m); });
     add([](Writer& w) {   // lot B
         FactionsMsg m; FactionRelationEntry e; e.factionSid = "f"; e.hasOurs = true; e.ours.relation = 5; m.factions = {e, e}; Encode(w, m);
     });
@@ -906,6 +1012,10 @@ static void TestFuzz() {
         case Msg::ContainerOpened: { ContainerOpened m; Decode(r, m); break; }
         case Msg::ContainerClose: { ContainerClose m; Decode(r, m); break; }
         case Msg::TradeOpen: { TradeOpen m; Decode(r, m); break; }
+        case Msg::BuildPlace: { BuildPlace m; Decode(r, m); break; }
+        case Msg::BuildState: { BuildStateMsg m; Decode(r, m); break; }
+        case Msg::BuildRemove: { BuildRemove m; Decode(r, m); break; }
+        case Msg::BuildAction: { BuildAction m; Decode(r, m); break; }
         case Msg::Shots: { ShotsMsg m; Decode(r, m); break; }      // lot C
         case Msg::Ranged: { RangedMsg m; Decode(r, m); break; }
         case Msg::Captives: { CaptivesMsg m; Decode(r, m); break; }
@@ -921,7 +1031,7 @@ static void TestFuzz() {
         if (i % 2) {
             p.resize(rng() % 64);
             for (auto& b : p) b = uint8_t(rng());
-            if (!p.empty()) p[0] = uint8_t(1 + rng() % 49);
+            if (!p.empty()) p[0] = uint8_t(1 + rng() % 55);
         } else {
             p = seeds[rng() % seeds.size()];
             const int muts = 1 + rng() % 4;
@@ -1536,6 +1646,76 @@ static void TestTrade() {
     CHECK(!cli.tradeView().open && !cli.tradeView().pending && host.hostTrades() == 0);
 }
 
+static void TestBuildings() {
+    std::printf("session: buildings placed by a client or the host are built by everyone; progress, dismantling, removal, purchase\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    hw.money = 1000;
+    // a building for sale, in both worlds (from the save), with other handles on each machine
+    FakeWorld::FakeBldg shop; shop.sid = "shop"; shop.pos = {5, 100, -15}; shop.forSale = true; shop.ours = false; shop.flags = kSiteComplete;
+    hw.bldgs[19000] = shop;
+    AtMenu(cw);
+    cw.bldgs[29000] = shop;
+    cw.bldgSerial = 30000;
+    SessionConfig hc; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 4));
+    auto findSid = [](FakeWorld& w, const std::string& sid) -> FakeWorld::FakeBldg* {
+        for (auto& [s, b] : w.bldgs) if (b.sid == sid) return &b;
+        return nullptr;
+    };
+    // the client's build mode places a hut: nothing built here, the host builds it, then the client
+    BuildPlace hut; hut.sid = "hut"; hut.pos = {30, 0, -20}; hut.rot = {1, 0, 0, 0};
+    cw.placements.push_back({hut, Handle{}});
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return findSid(hw, "hut") && findSid(cw, "hut"); });
+    CHECK(findSid(hw, "hut") && findSid(cw, "hut"));
+    CHECK(hw.placementsBuilt == 1 && cw.placementsBuilt == 1);
+    if (findSid(hw, "hut") && findSid(cw, "hut")) CHECK(Dist(findSid(hw, "hut")->pos, findSid(cw, "hut")->pos) < 0.01f);
+    CHECK(host.buildingCount() == 1);
+    // the host's workers build: the client sees the progress, then the end
+    if (auto* b = findSid(hw, "hut")) b->progress = 40;
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { auto* c = findSid(cw, "hut"); return c && c->progress == 40; });
+    CHECK(findSid(cw, "hut") && findSid(cw, "hut")->progress == 40);
+    if (auto* b = findSid(hw, "hut")) { b->progress = 100; b->flags = kSiteComplete; }
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { auto* c = findSid(cw, "hut"); return c && c->flags == kSiteComplete; });
+    CHECK(findSid(cw, "hut") && findSid(cw, "hut")->flags == kSiteComplete && findSid(cw, "hut")->progress == 100);
+    // the host places a wall itself: the client builds it too
+    BuildPlace wall; wall.sid = "wall"; wall.pos = {-30, 0, -20};
+    Handle wallH;
+    Vec3 wallAt;
+    CHECK(hw.ExecutePlacement(wall, wallH, wallAt));
+    hw.placements.push_back({wall, wallH});
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return findSid(cw, "wall") != nullptr; });
+    CHECK(findSid(cw, "wall") && Dist(findSid(cw, "wall")->pos, wallAt) < 0.01f && cw.placementsBuilt == 2);
+    // a placement the host's game refuses: nothing anywhere
+    BuildPlace bad; bad.sid = "refused";
+    cw.placements.push_back({bad, Handle{}});
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0);
+    CHECK(!findSid(hw, "refused") && !findSid(cw, "refused") && hw.placementsBuilt == 2);
+    // the client dismantles the hut: the host's game does it, the client sees it being dismantled
+    {
+        auto* c = findSid(cw, "hut");
+        BuildAction d; d.kind = BuildActionKind::Dismantle; d.arg = 2; d.sid = "hut"; d.pos = c ? c->pos : Vec3{};
+        cw.bldgActions.push_back(d);
+    }
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { auto* c = findSid(cw, "hut"); return c && (c->flags & kSiteDismantling); });
+    CHECK(findSid(hw, "hut") && (findSid(hw, "hut")->flags & kSiteDismantling));
+    CHECK(findSid(cw, "hut") && (findSid(cw, "hut")->flags & kSiteDismantling));
+    // dismantled for good on the host: gone on the client
+    for (auto it = hw.bldgs.begin(); it != hw.bldgs.end(); ++it)
+        if (it->second.sid == "hut") { hw.bldgRemoved.push_back(FakeWorld::Bh(it->first)); hw.bldgs.erase(it); break; }
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return findSid(cw, "hut") == nullptr; });
+    CHECK(!findSid(cw, "hut") && host.buildingCount() == 1);
+    // the client buys the shop: the host buys it, every client replays the purchase
+    cw.bldgActions.push_back({BuildActionKind::Buy, 2, "shop", shop.pos});
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { auto* c = findSid(cw, "shop"); return c && c->ours; });
+    CHECK(findSid(hw, "shop") && findSid(hw, "shop")->ours && !findSid(hw, "shop")->forSale && hw.money == 900);
+    CHECK(findSid(cw, "shop") && findSid(cw, "shop")->ours && !findSid(cw, "shop")->forSale);
+}
+
 // ---- lot B
 static void TestFactions() {
     std::printf("session: faction relations and bounties are the host's, everywhere\n");
@@ -1731,6 +1911,7 @@ int main() {
     TestSpawnReplication();
     TestInventories();
     TestTrade();
+    TestBuildings();
     TestRanged();   // lot C
     TestCaptives();
     TestFactions();

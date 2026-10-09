@@ -159,6 +159,7 @@ void Session::Leave() {
     pendingWindow_ = 0;
     windowOpenedAt_ = -1;
     trades_.clear();
+    ResetBuildings();
     trade_ = ClientTrade{};
     ResetFactions();
     ResetDoors();   // lot A
@@ -233,6 +234,7 @@ void Session::HostTick(double now, bool live) {
     HostDoors(now);   // lot A
     HostCaptives(now);   // lot D: prisons
     HostRanged(now);   // lot C
+    HostBuildings(now);
     // A player's new looks: applied here, then shown to everyone else.
     for (auto& [from, m] : pendingLooks_) {
         auto it = entities_.find(m.netId);
@@ -1387,6 +1389,10 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
             log_("[" + pl->name + "] answers: \"" + rr->second[size_t(a.index)] + "\"");
         break;
     }
+    case Msg::BuildPlace:
+    case Msg::BuildAction:
+        HostBuildingPacket(*pl, type, r);   // lot E
+        break;
     case Msg::InvOp: {
         InvOp op;
         if (pl->inGame && Decode(r, op) && pendingInvOps_.size() < 256) pendingInvOps_.emplace_back(pl->id, op);
@@ -2025,6 +2031,7 @@ void Session::ClientTick(double now, bool live) {
     ClientDoors(now);   // lot A
     ClientCaptives(now);   // lot D: prisons
     ClientRanged(now);   // lot C
+    ClientBuildings(now);
     // Squads: split our characters as the host does (again now and then: stand-ins, late arrivals).
     if (haveSquads_ && now - squadsAt_ > 2.0) {
         squadsAt_ = now;
@@ -2278,6 +2285,12 @@ void Session::ClientPacket(Msg type, Reader& r) {
         break;
     }
     case Msg::Captives: OnCaptives(r); break;   // lot D: prisons
+    case Msg::BuildPlace:
+    case Msg::BuildState:
+    case Msg::BuildRemove:
+    case Msg::BuildAction:
+        if (state_ == SessionState::Connected) ClientBuildingPacket(type, r);   // lot E
+        break;
     case Msg::TradeOpen: {
         TradeOpen m;
         if (state_ != SessionState::Connected || !Decode(r, m)) break;
