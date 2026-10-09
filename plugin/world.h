@@ -178,6 +178,23 @@ public:
     void Toast(const std::string& msg);
     std::vector<std::string> TakeToasts();
 
+    // ---- lot C: ranged combat (plugin/ranged.cpp)
+    void TakeShots(std::vector<WorldShot>& out) override;
+    bool ReplayShot(const WorldShot& s) override;
+    bool ReadRangedAim(const kc::Handle& h, WorldAim& out) override;
+    void ApplyRangedAim(const kc::Handle& h, bool ranged, const WorldAim& a) override;
+    void ReadTurrets(const std::vector<kc::Vec3>& centers, float radius, std::vector<kc::TurretAim>& out) override;
+    void ApplyTurret(const kc::TurretAim& t) override;
+    // Host (shoot hook, any thread): a projectile the game just fired.
+    void NoteShot(void* gun, kenshi::Character* me, void* target, int stat, const float* aimPos, void* projectile);
+    void* FindTurret(const std::string& sid, const kc::Vec3& pos);   // the local turret of that kind at that place
+    struct RangedCounters { uint64_t noted = 0, replayed = 0, noGun = 0, noTurret = 0, oriented = 0; };
+    RangedCounters rangedCounters;                                     // tests
+private:
+    std::mutex shotsMutex_;
+    std::vector<WorldShot> shotsOut_;                                  // host, under shotsMutex_
+    std::unordered_map<std::string, kc::Handle> turretCache_;          // client: "sid@x,z" -> local turret
+public:
     static std::shared_ptr<const HookView> View() { return view_.load(std::memory_order_acquire); }
     // Cheap check for very hot hooks (AI and damage run for every character every frame).
     static bool ClientActive() { return clientActive_.load(std::memory_order_relaxed); }

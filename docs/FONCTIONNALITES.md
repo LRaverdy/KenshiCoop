@@ -374,10 +374,36 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   porte un joueur devrait donc suivre, mais il n'est pas vérifié.
 - **Emprisonner** : ❌ (voir prisons).
 
-### Dégâts à distance : arcs, arbalètes, tourelles ❌
-- Les dégâts eux-mêmes viennent de l'hôte (santé synchronisée) et les animations sont reproduites.
-- Les projectiles, l'utilisation des tourelles par un client et les animations propres au tir ne
-  sont ni traités ni vérifiés.
+### Combat à distance : arcs, arbalètes, harpons, tourelles 🟡 (implémenté, à vérifier en jeu)
+- **Le joueur** voit chaque tir de l'hôte chez lui : le tireur lâche son carreau au même moment,
+  et le projectile part de la même arme **sur la même trajectoire** que chez l'hôte (y compris
+  sa déviation aléatoire). Les blessures restent celles de l'hôte (santé synchronisée) : chez le
+  client, ce que touche le projectile ne fait aucun dégât.
+- **Fonctionnement** :
+  - le jeu tire avec `GunClass::shoot`, qui prend un projectile dans la réserve du jeu, le place
+    au bout de l'arme et l'oriente vers le point visé, avec une déviation au hasard. Le
+    projectile vole ensuite dans le sens de son orientation ;
+  - chez l'hôte, un hook sur `shoot` note chaque tir : le tireur, sa cible, le point visé,
+    l'orientation exacte du projectile au départ, et la tourelle s'il s'agit d'une tourelle ;
+  - le message `Shots` part aussitôt aux clients ;
+  - chez un client, le même hook refuse les tirs que son jeu déciderait seul. KenshiCoop tire celui
+    de l'hôte avec la même arme, puis remet le projectile sur la trajectoire de l'hôte ;
+  - le point visé par chaque personnage en combat à distance part 5 fois par seconde quand il
+    change (message `Ranged`). Le client l'impose à chaque image, pour que le haut du corps vise
+    le même endroit ;
+  - les tourelles proches des joueurs envoient le point vers lequel elles tournent. Le client
+    tourne la sienne avec la fonction de visée du jeu.
+- **Tourelles** : un client peut ordonner à son personnage de prendre une tourelle. L'ordre part
+  à l'hôte comme les autres ordres sur un meuble, la tourelle étant retrouvée par type et endroit.
+  Ses tirs et sa visée arrivent ensuite comme ci-dessus.
+- **Limites, à vérifier en jeu** :
+  - le client tire avec l'arme que son personnage a en main localement. S'il n'en a pas (arme pas
+    encore prête dans le jeu du client), le tir n'est pas montré ; il est compté dans `shots`
+    (`nogun`) ;
+  - le rechargement montre les animations de l'hôte. Les munitions consommées localement
+    reviennent à l'état de l'hôte par la synchro des inventaires ;
+  - la visée imposée et le canon des tourelles (son pointeur, cherché au premier usage) restent
+    à confirmer en jeu.
 
 ### Factions, relations, primes ❌
 - Chez les clients, le jeu n'a pas le droit de modifier les relations ni les primes : les hooks

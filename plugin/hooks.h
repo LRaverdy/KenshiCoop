@@ -18,6 +18,8 @@ void RemoveHooks();
 void RunTick(bool live);
 double LastLiveTick();   // NowSeconds() of the last main-loop tick
 
+bool InHostCall();   // a HostCallScope is alive on this thread (hooks in other files)
+
 // Our own calls into the game pass through the order-blocking hooks while this is alive.
 struct HostCallScope {
     HostCallScope();

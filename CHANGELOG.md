@@ -10,6 +10,12 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
   crochetage, factions et primes, combat à distance et tourelles, prisons et capture, bâtiments et
   construction, désynchro de combat et PNJ lointains. Ils seront fusionnés puis testés en jeu
   ensemble.
+- **Lot C, combat à distance** (implémenté, à vérifier en jeu) : chaque tir d'arbalète, d'arc, de
+  harpon ou de tourelle de l'hôte est refait chez les clients avec la même arme et **sur la même
+  trajectoire** (les dégâts restent ceux de l'hôte). Le point visé des tireurs et l'orientation des
+  tourelles suivent. Le jeu du client ne tire plus de lui-même. Nouveaux messages `Shots` et
+  `Ranged`, expérience `ranged`, commandes `rangedlist`, `shoot`, `shots`, `turrets`, `turretaim` et
+  `rangedaim`.
 
 ## 9 octobre 2026 (soir)
 

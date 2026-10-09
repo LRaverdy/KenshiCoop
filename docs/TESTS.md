@@ -80,6 +80,7 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `far` | le personnage du client à environ 5 km de l'escouade de l'hôte : l'hôte simule-t-il bien sa zone, et le client voit-il la même chose ? |
 | `squads` | nouvelles escouades et déplacements entre escouades, depuis l'hôte et depuis le client |
 | `talk` | un PNJ parle au personnage du client : la conversation tourne chez l'hôte, la fenêtre s'ouvre chez le client |
+| `ranged` (`--shooter <clé>`) | (lot C) 3 tirs d'un arbalétrier de l'hôte sur l'escouade sont refaits chez le client, sur la même trajectoire ; même point visé ; une tourelle proche tournée chez l'hôte tourne pareil chez le client ; santé et inventaires identiques ensuite |
 | `progress` | compétences, argent, bulles et ordres : l'hôte décide, le client suit |
 | `ground` / `clientpickup` | objets posés et ramassés ; ramassage demandé par un client |
 | `anim` / `animframe` / `gait` | animations de combat et d'action ; tout ce qui est à l'écran ; allure |
@@ -256,6 +257,17 @@ l'escouade triée par handle.
 | `contake <sélection> <nom>` | dans la fenêtre ouverte, prend le premier objet |
 | `contcount <nom\|any>` | piles dans le contenant le plus proche de ce nom |
 | `tradegui` | type de fenêtre de commerce en attente dans l'interface (0 = aucune) |
+
+**Combat à distance (lot C)**
+
+| Commande | Rôle |
+|---|---|
+| `rangedlist [rayon]` | personnages ayant une arme à distance prête près du membre 0 : `nom\|clé\|combat\|distance` |
+| `shoot <tireur> <cible>` | (hôte) le tireur (index d'escouade ou clé de handle) tire une fois sur la cible ; réponse : projectile créé et son orientation |
+| `shots` | compteurs : tirs envoyés (hôte), refaits / échoués (client), visées et tourelles imposées, `nogun` / `noturret` / `oriented` |
+| `turrets [rayon]` | tourelles près du membre 0, triées par endroit : `type@x,z>point visé` |
+| `turretaim <index> <x> <y> <z>` | (hôte) la tourelle n° index tourne vers ce point |
+| `rangedaim <personnage>` | état du combat à distance d'un personnage ici : mode, état, point visé, cible, arme |
 
 **Météo**
 

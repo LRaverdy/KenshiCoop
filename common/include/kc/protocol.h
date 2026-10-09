@@ -72,6 +72,9 @@ enum class Msg : uint8_t {
     ContainerOpened = 37, // S->C  it is there: here is the container's netId (its items follow as an Inventory)
     ContainerClose = 38,  // both  the window is closed (client) / must close (host: caught stealing, too far)
     TradeOpen = 39,       // S->C  trade with a merchant: its shop counters (their items follow), its cats
+    // ---- lot C: ranged combat
+    Shots = 46,           // S->C  projectiles the host's characters and turrets fired (clients fire the same, visual only)
+    Ranged = 47,          // S->C  aim of characters in ranged combat and of turrets near the players
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -678,6 +681,46 @@ std::string SanitizeChat(const std::string& s);
 // Smallest-three quaternion packing into 32 bits (~0.001 precision per component).
 uint32_t PackQuat(const Quat& q);
 Quat UnpackQuat(uint32_t v);
+
+// ---- lot C: ranged combat (bows, crossbows, harpoons, turrets) ----
+// A shot as the host's game fired it. Clients fire the same projectile from the same weapon along the
+// same path; on their side it is only seen (damage and its effects are the host's, through vitals).
+struct ShotEvent {
+    uint32_t shooterNetId = 0;   // who fired (a turret's shot: its operator)
+    uint32_t targetNetId = 0;    // what it was fired at (0: nothing the client knows)
+    uint8_t stat = 0;            // the skill the shot used (StatsEnumerated)
+    Vec3 aimPos;                 // where the shooter aimed
+    Quat dir;                    // the projectile's orientation as it left the weapon: its flight path
+    std::string turretSid;       // a turret's shot: that turret (kind and place); empty: a personal weapon
+    Vec3 turretPos;
+};
+struct ShotsMsg {
+    std::vector<ShotEvent> shots;
+};
+constexpr uint32_t kMaxShotsPerMsg = 64;
+// Where characters in ranged combat aim, and turrets near the players (sent when it changes).
+struct RangedAim {
+    uint32_t netId = 0;
+    uint8_t state = 0;           // RangedCombatClass::RangedState (0 shooting, 1 moving, 2 reloading, 3 waiting, 4 thinking)
+    Vec3 aimPos;
+    uint32_t targetNetId = 0;
+};
+struct TurretAim {
+    std::string sid;             // the turret, by kind and place (handles differ between machines)
+    Vec3 pos;
+    Vec3 target;                 // the point it turns toward
+};
+struct RangedMsg {
+    std::vector<RangedAim> aims;
+    std::vector<TurretAim> turrets;
+    std::vector<uint32_t> stopped;   // characters out of ranged combat since the last message
+};
+constexpr uint32_t kMaxRangedAims = 256;
+constexpr uint32_t kMaxTurretAims = 64;
+void Encode(Writer& w, const ShotsMsg& m);
+bool Decode(Reader& r, ShotsMsg& m);
+void Encode(Writer& w, const RangedMsg& m);
+bool Decode(Reader& r, RangedMsg& m);
 
 // FNV-1a 64, used for mod list / world fingerprints.
 uint64_t Fnv1a64(const void* data, size_t n, uint64_t seed = 0xcbf29ce484222325ull);

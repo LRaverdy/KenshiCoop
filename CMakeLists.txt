@@ -34,7 +34,8 @@ target_include_directories(minhook PUBLIC third_party/minhook/include)
 target_compile_options(minhook PRIVATE /W0)
 
 # ---- common (game-agnostic multiplayer core) ----
-add_library(kc_common STATIC common/src/protocol.cpp common/src/net.cpp common/src/session.cpp)
+add_library(kc_common STATIC common/src/protocol.cpp common/src/net.cpp common/src/session.cpp
+    common/src/protocol_ranged.cpp common/src/session_ranged.cpp)
 target_include_directories(kc_common PUBLIC common/include)
 target_link_libraries(kc_common PUBLIC enet)
 target_compile_options(kc_common PRIVATE /W4 /WX /permissive-)

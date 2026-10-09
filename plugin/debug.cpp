@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "hooks.h"
+#include "ranged.h"
 #include "steam_link.h"
 #include "kenshi.h"
 
@@ -979,6 +980,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         std::memcpy(&type, reinterpret_cast<const void*>(kenshi::Addr(kenshi::rva::TradeGui) + 0x58), 4);
         return "ok " + std::to_string(type);
     }
+    if (std::string out; RangedDebugCommand(s, w, in, cmd, out)) return out;   // lot C: rangedlist, shoot, shots, turrets, turretaim, rangedaim
     if (cmd == "trace") {   // trace <handle> <frames>: log the client's position corrections of a character
         std::string k;
         in >> k >> w.traceFrames;

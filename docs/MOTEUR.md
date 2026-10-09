@@ -158,6 +158,8 @@ Les signatures sont celles du commentaire du code.
 | 113 | `FnGetNpcTrader` | `InventoryGUI::getNPCTrader` | `0x70E2D0` | — | static Character* getNPCTrader() : le marchand de la fenêtre de commerce ouverte (null si moins de 2 fenêtres) |
 | 114 | `FnCharTakeMoney` | `Character::takeMoney` | `0x7965F0` | — | bool Character::takeMoney(int) : `getOwnerships()->takeMoney` ; négatif = donner ; false si pas assez |
 | 115 | `FnRClickAutoTrade` | `InventoryGUI::RClickAutoTrade` | `0x713D20` | — | TradeResult* RClickAutoTrade(TradeResult* out, const std::string& section, int x, int y, InventoryGUI* vers, bool vol, bool premier) : clic droit, une unité passe de l'autre côté (achat / vente du jeu) ; tests seulement |
+| 116 | `FnGunShoot` | `GunClass::shoot` | `0x43A730` | oui | (lot C) void shoot(Character* me, RootObject* cible, StatsEnumerated stat, const Vector3& visée) : tire un projectile ; hôte : noté pour les clients ; client : seuls les tirs rejoués par le mod passent |
+| 117 | `FnProjectileGet` | réserve des projectiles `get` | `0x43A2F0` | oui | (lot C) Projectile* get(mesh, matériau), appelé par `shoot` seulement : attrape le projectile du tir |
 
 L'ordre de la table doit suivre celui de l'énumération `Fn` : la vérification des prologues ne voit
 pas deux lignes inversées (chaque adresse correspond bien à ses octets). Deux lignes l'étaient
@@ -887,3 +889,54 @@ Recherche faite le 9 octobre 2026 pour le commerce. Fiabilité de chaque fait :
   - Avec `inSomething` = 2, `animationSelection` joue l'animation de K.-O. du meuble.
 - **Occupation d'un meuble** : `tryOperate(hand)` (vt 0x4F8, `0xF8030`) et `stopOperating(hand)`
   (`0x2ACA90`).
+
+## 10. Combat à distance (lot C) [D]
+
+Adresses de la version 1.0.68 vérifiées par désassemblage. KenshiLib 1.0.65 décale cette zone de
++0x780.
+
+**Fonctions**
+
+| RVA | Fonction | Usage |
+|---|---|---|
+| `0x43A730` | `GunClass::shoot(Character* me, RootObject* cible, StatsEnumerated stat, const Vector3& visée)` | tire un projectile ; un seul appelant (`0x43AFAC`, dans la mise à jour de `RangedCombatClass`) ; hooké |
+| `0x43A2F0` | réserve des projectiles (`*(0x212F1E0)`) : `get(mesh, matériau)` | renvoie un projectile de 0x90 octets ; appelé seulement par `shoot` ; hooké pour attraper le projectile d'un tir |
+| `0x43AFE0` | mise à jour de la réserve (depuis `mainLoop_GPUSensitiveStuff`) | fait voler chaque projectile (`0x4380E0`) |
+| `0x440260` | `TurretBuilding::aimAt(const Vector3&)` | écrit le point visé à `TurretBuilding+0x4A8` |
+| `0x435100` | `GunClassTurret::aimAt` (vt 0x28) | écrit `tourelle+0x4A8` et `canon+0x118` ; `GunClass::aimAt` des armes personnelles (`0x4350F0`) ne fait rien |
+| `0x4366B0` | `Character::isInRangedCombatMode` | lit `Character+0x2F0` → `+0x36` |
+
+**Ce que fait `shoot`**
+1. Il prend un projectile dans la réserve avec le mesh de munition de l'arme (`GunClass+0xB8`).
+2. Il copie dans le projectile le `hand` de la cible (+0x8…) et celui du tireur (+0x28…).
+3. Il place le nœud Ogre du projectile (+0x58) au bout de l'arme (vt 0x48 `getBarrelPos`), puis
+   l'oriente avec `setDirection` vers `getAimDir(visée)` (vt 0x60), dévié au hasard
+   (`Vector3::randomDeviant`, angle tiré de la compétence et de `GunClass+0x10`).
+4. Il remplit le projectile : +0x40 portée, +0x44 vitesse, +0x48, +0x4C dégâts, +0x70 état = 1
+   (en vol). Il décrémente `GunClass+0x20` (coups chargés) et joue le son.
+
+**Projectile** (sans RTTI ; KenshiLib l'appelle `Harpoon`) :
+- +0x58 nœud Ogre : le projectile avance le long de **son orientation** (`Node::translate` local) ;
+- +0x68 objet de trace : la trace entre l'ancienne et la nouvelle position détecte ce qui est
+  touché ;
+- +0x70 état : 0 fini, 1 en vol, 2 planté dans un personnage, 3 planté ailleurs.
+
+Changer l'orientation du nœud juste après `shoot` change donc toute la trajectoire. Le mod lit et
+écrit cette orientation avec les exports d'`OgreMain_x64.dll` :
+- `?getOrientation@Node@Ogre@@QEBA?AVQuaternion@2@XZ` (retour par pointeur caché) ;
+- `?setOrientation@Node@Ogre@@QEAAXMMMM@Z` (w, x, y, z).
+
+**Structures**
+- `Character+0x2F0` : `RangedCombatClass*`. Champs : +0x0 état (`RangedState`), +0x28
+  `GunClass*`, +0x30 compétence, +0x35 « tirer maintenant », +0x36 mode combat à distance, +0x38
+  point visé, +0x48 `hand` de la cible, +0x68 le personnage, +0x70 minuterie de visée.
+- `GunClass` : +0x8 portée, +0x10 déviation de base, +0x18 vitesse du tir, +0x1C/+0x20 coups
+  max/chargés, +0x58 type de munition, +0x68 `GameData` de l'arme, +0xB8 mesh de munition.
+- `GunClassTurret+0x128` : son `TurretBuilding`.
+- `TurretBuilding` : +0x4A8 point visé. Le pointeur vers son `GunClassTurret` est dans
+  +0x400…+0x520 (+0x440 dans KenshiLib) : le mod le cherche une fois, par la vtable et le
+  pointeur retour.
+- Vtables : `TurretBuilding` `0x16D3F78`, `GunClassTurret` `0x16D5258`, `GunClassPersonal`
+  `0x16D5138`.
+- Tâches liées : `Task_RangedAttack`, `Task_UseTurret` (RTTI) ; `MAN_A_TURRET`, `USE_TURRET`,
+  `SHOOT_AT_TARGET`, `RANGED_ATTACK…` dans `TaskType`.

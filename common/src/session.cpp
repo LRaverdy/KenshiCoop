@@ -162,6 +162,7 @@ void Session::Leave() {
     trade_ = ClientTrade{};
     haveMoneyBase_ = false;
     unsentSpend_ = 0;
+    ResetRanged();   // lot C
     dialogReplies_.clear();
     holdForEditor_ = false;
     pendingAnswers_.clear();
@@ -226,6 +227,7 @@ void Session::HostTick(double now, bool live) {
     pendingAnswers_.clear();
     HostContainers(now);
     HostTrades(now);
+    HostRanged(now);   // lot C
     // A player's new looks: applied here, then shown to everyone else.
     for (auto& [from, m] : pendingLooks_) {
         auto it = entities_.find(m.netId);
@@ -1981,6 +1983,7 @@ void Session::ClientTick(double now, bool live) {
     }
     SendEditedAppearances();
     ClientContainers(now);
+    ClientRanged(now);   // lot C
     // Squads: split our characters as the host does (again now and then: stand-ins, late arrivals).
     if (haveSquads_ && now - squadsAt_ > 2.0) {
         squadsAt_ = now;
@@ -2373,6 +2376,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
         it->second.invFailures = 0;
         break;
     }
+    case Msg::Shots: case Msg::Ranged: ClientRangedPacket(type, r); break;   // lot C
     case Msg::Pong: break;
     default: break;
     }

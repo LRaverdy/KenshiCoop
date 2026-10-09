@@ -291,6 +291,8 @@ format, et une version différente est refusée à la connexion.
 | 36 | ContainerOpen | C→H | mon personnage veut regarder dans ce contenant (type, endroit) |
 | 37 | ContainerOpened | H→C | il y est : netId du contenant (son contenu suit en `Inventory`) |
 | 38 | ContainerClose | ⇄ | fenêtre fermée (client) ou à fermer (hôte : vol repéré, trop loin) |
+| 46 | Shots | H→C | (lot C) projectiles tirés par les personnages et tourelles de l'hôte : tireur, cible, point visé, orientation de départ, tourelle |
+| 47 | Ranged | H→C | (lot C) point visé des personnages en combat à distance, tourelles proches des joueurs, fins de combat à distance |
 
 ## Les flux, système par système
 
@@ -390,6 +392,24 @@ format, et une version différente est refusée à la connexion.
    du jeu (`showTradeWindow`, type 2).
 5. La fermeture vient du client (fenêtre fermée), ou de l'hôte : vol repéré, ou personnage à plus
    de 50 unités.
+
+### Combat à distance (`session_ranged.cpp`, `plugin/ranged.cpp`, lot C)
+1. Chez l'hôte, le hook de `GunClass::shoot` note chaque tir après coup (sur le fil qui tire) :
+   - le tireur et sa cible ;
+   - le point visé ;
+   - l'orientation du projectile, attrapé par le hook de la réserve de projectiles ;
+   - la tourelle, par type et endroit.
+2. `HostRanged` envoie les tirs dont le tireur est une entité suivie (`Shots`, fiable). Toutes les
+   0,2 s, il envoie aussi ce qui a changé (tout, toutes les 2 s) :
+   - le point visé des personnages en combat à distance ;
+   - les fins de combat à distance ;
+   - les tourelles à moins de 400 unités d'un joueur.
+3. Chez le client, `ClientRanged` traite les tirs à l'image suivante. `ReplayShot` prend l'arme du
+   personnage, ou celle de la tourelle locale retrouvée par type et endroit, et appelle `shoot`
+   dans une `HostCallScope`. Il remet ensuite le nouveau projectile sur l'orientation de l'hôte.
+4. Les points visés sont réimposés à chaque image, et les tourelles tournées avec `aimAt`.
+5. Le hook de `shoot` refuse chez les clients tout tir qui ne vient pas de KenshiCoop. Les
+   dégâts des projectiles du client sont refusés comme tous les autres (`applyDamage`).
 
 ### Objets au sol (`Ground`, `PickUp`)
 - L'hôte rapporte chaque objet posé (type, endroit) et ramassé.

@@ -11,6 +11,7 @@
 #include <mutex>
 #include <vector>
 
+#include "ranged.h"
 #include "util.h"
 #include "world.h"
 
@@ -940,6 +941,8 @@ std::string AnimHookStats() {
     return b;
 }
 
+bool InHostCall() { return g_hostCall > 0; }
+
 HostCallScope::HostCallScope() { ++g_hostCall; }
 HostCallScope::~HostCallScope() { --g_hostCall; }
 AnimReplayScope::AnimReplayScope() { ++g_animReplay; ++g_hostCall; }
@@ -1110,6 +1113,9 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnTrackAnimationMovement, reinterpret_cast<void*>(&hk_trackAnimMove), reinterpret_cast<void**>(&o_trackAnimMove)},
         {kenshi::FnSingleAnimUpdate, reinterpret_cast<void*>(&hk_singleAnimUpdate), reinterpret_cast<void**>(&o_singleAnimUpdate)},
         {kenshi::FnCombatMovementUpdate, reinterpret_cast<void*>(&hk_combatMove), reinterpret_cast<void**>(&o_combatMove)},
+        // ---- lot C: ranged
+        {kenshi::FnGunShoot, reinterpret_cast<void*>(&ranged::hk_gunShoot), reinterpret_cast<void**>(&ranged::o_gunShoot)},
+        {kenshi::FnProjectileGet, reinterpret_cast<void*>(&ranged::hk_projectileGet), reinterpret_cast<void**>(&ranged::o_projectileGet)},
     };
     const MH_STATUS init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
