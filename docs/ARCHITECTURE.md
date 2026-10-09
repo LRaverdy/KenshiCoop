@@ -291,6 +291,10 @@ format, et une version différente est refusée à la connexion.
 | 36 | ContainerOpen | C→H | mon personnage veut regarder dans ce contenant (type, endroit) |
 | 37 | ContainerOpened | H→C | il y est : netId du contenant (son contenu suit en `Inventory`) |
 | 38 | ContainerClose | ⇄ | fenêtre fermée (client) ou à fermer (hôte : vol repéré, trop loin) |
+| 52 | BuildPlace | ⇄ | lot E : une pose du mode construction (client : demande à l'hôte, netId 0 ; hôte : à bâtir par tous, avec son netId) |
+| 53 | BuildState | H→C | lot E : avancement des chantiers suivis (terminé, en pause, en démontage), avec type et endroit |
+| 54 | BuildRemove | H→C | lot E : un bâtiment suivi a été détruit pour de bon chez l'hôte |
+| 55 | BuildAction | ⇄ | lot E : acheter / démonter (client : demande ; hôte : rejeu d'un achat chez tous) |
 
 ## Les flux, système par système
 
@@ -390,6 +394,24 @@ format, et une version différente est refusée à la connexion.
    du jeu (`showTradeWindow`, type 2).
 5. La fermeture vient du client (fenêtre fermée), ou de l'hôte : vol repéré, ou personnage à plus
    de 50 unités.
+
+### Bâtiments (lot E : `session_buildings.cpp`, `plugin/buildings.cpp`)
+1. Mode construction : `<PreviewGroup>::createBuildings` (`0x4D72A0`) appelle
+   `RootObjectFactory::createBuilding` (`0x57CC70`) pour chaque bâtiment posé. Les hooks captent
+   les arguments (`BuildArgs`) ; chez un client, la fabrique renvoie null (rien n'est bâti, le mode
+   construction le supporte : son message d'erreur est une fonction vide en version finale).
+2. Les arguments deviennent un `BuildPlace` : pointeurs remplacés par type + endroit (bâtiment
+   parent du plan, bâtiment où il se trouve, bâtiment auquel il s'accroche) et handle de la ville.
+3. Client → `BuildPlace` (netId 0) ; l'hôte bâtit (`ExecutePlacement` : même fabrique, puis
+   `setupMiningResourceLevel` et `clearUsageNodes` comme le mode construction), donne un netId et
+   renvoie le `BuildPlace` à tous ; chaque client bâtit pareil et associe netId → handle local.
+4. L'hôte suit ces bâtiments et les chantiers proches des joueurs (toutes les 3 s) ; `BuildState`
+   part chaque seconde pour ce qui change, toutes les 10 s pour tout, et en entier à un joueur qui
+   arrive. Le client impose l'avancement (`setConstructionProgress`, vt 0x238), la fin
+   (`notifyConstructionComplete`), la pause et le démontage.
+5. Hook de `GameWorld::destroy` chez l'hôte : un bâtiment suivi détruit pour de bon → `BuildRemove`.
+6. Achat / démontage confirmés chez un client (hooks de `buyMeCallback` / `confirmDismantle`) →
+   `BuildAction` ; l'hôte exécute ; un achat réussi est rejoué par chaque client.
 
 ### Objets au sol (`Ground`, `PickUp`)
 - L'hôte rapporte chaque objet posé (type, endroit) et ramassé.

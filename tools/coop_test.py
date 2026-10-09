@@ -872,6 +872,76 @@ def exp_trade(host, cli, merchant="Marchand"):
     summary()
 
 
+def exp_build(host, cli, kinds=("Feu", "Lit", "Coffre", "Tente", "Mur")):
+    """Lot E, buildings: a client's placement is built by the host then by everyone (same place), the
+    host's too; construction progress and dismantling follow; a purchase is done by the host and
+    replayed by the client."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    sid = None
+    for k in kinds:
+        t = cmd(host, f"buildtypes {k}")[1]
+        log("building templates", k, ":", t[:300])
+        parts = t.split()
+        if t.startswith("ok") and len(parts) > 2:
+            sid = parts[2].split("=")[0]
+            break
+    check("batiments : un modele de batiment trouve", sid is not None, sid)
+    if not sid:
+        summary()
+        return
+    def built(pid):
+        t = cmd(pid, f"buildlist {sid}")[1]
+        return [e for e in t.split()[2:] if e.startswith(sid + "@")]
+    before_h, before_c = len(built(host)), len(built(cli))
+    # 1. placed by the client: built by the host, then by the client, at the same place
+    log("client places", sid, cmd(cli, f"buildplace {sid} 40 0 0"))
+    for _ in range(20):
+        time.sleep(0.5)
+        if len(built(host)) > before_h and len(built(cli)) > before_c:
+            break
+    bh, bc = built(host), built(cli)
+    log("host has", bh, "client has", bc)
+    check("batiments : placement du client construit chez l'hote", len(bh) > before_h, bh)
+    check("batiments : et chez le client", len(bc) > before_c, bc)
+    def pos(e):
+        return tuple(map(float, e.split("@")[1].split(":")[0].split(",")))
+    same = bool(bh) and bool(bc) and min(dist(pos(a), pos(b)) for a in bh for b in bc) < 0.5
+    check("batiments : au meme endroit partout", same, f"{bh} / {bc}")
+    # 2. construction progress on the host: the client follows
+    log("host builds", cmd(host, f"buildprogress {sid} 50"))
+    time.sleep(3)
+    ph, pc = built(host), built(cli)
+    prog = lambda l: sorted(e.split(":")[-1] for e in l)
+    check("batiments : avancement du chantier identique", prog(ph) == prog(pc), f"{ph} / {pc}")
+    log("host finishes it", cmd(host, f"buildprogress {sid} 100000"))
+    time.sleep(3)
+    ph, pc = built(host), built(cli)
+    check("batiments : chantier termine partout", prog(ph) == prog(pc), f"{ph} / {pc}")
+    # 3. placed by the host: the client builds it too
+    n_c = len(built(cli))
+    log("host places", sid, cmd(host, f"buildplace {sid} -40 0 90"))
+    time.sleep(4)
+    check("batiments : placement de l'hote construit chez le client", len(built(cli)) > n_c, built(cli))
+    # 4. the client dismantles one: the host's game starts dismantling it, the client sees it
+    log("client dismantles", cmd(cli, f"builddismantle {sid}"))
+    time.sleep(4)
+    ph, pc = built(host), built(cli)
+    check("batiments : demontage demande par le client, vu partout", any(int(e.split("/")[-1]) & 4 for e in ph) and prog(ph) == prog(pc), f"{ph} / {pc}")
+    log("followed buildings: host", cmd(host, "buildcount")[1], "client", cmd(cli, "buildcount")[1])
+    # 5. a building for sale (towns only): bought by the host for the client, replayed by the client
+    sale = cmd(cli, "buildforsale")
+    log("for sale near the client:", sale)
+    if sale[0]:
+        cats0 = cmd(host, "money")[1]
+        log("client buys", cmd(cli, "buildbuy"))
+        time.sleep(4)
+        check("batiments : achat demande par le client paye chez l'hote", cmd(host, "money")[1] != cats0, f"{cats0} -> {cmd(host, 'money')[1]}")
+        check("batiments : le batiment n'est plus a vendre chez le client", cmd(cli, "buildforsale")[1] != sale[1], cmd(cli, "buildforsale")[1])
+    summary()
+
+
 def exp_facing(host, cli):
     """A host character runs in several directions: on the client it must really run (speed), facing the same way."""
     import math
@@ -1513,6 +1583,9 @@ def main():
     cp = sub.add_parser("clientpickup")
     cp.add_argument("--save", default="kctest_base")
     cp.add_argument("--keep", action="store_true")
+    bd = sub.add_parser("build", help="lot E: buildings placed, built, dismantled and bought by everyone")
+    bd.add_argument("--save", default="kctest_base")
+    bd.add_argument("--keep", action="store_true")
     td = sub.add_parser("trade", help="a client trades with a merchant: purchase, sale, stock everywhere")
     td.add_argument("--save", default="kctest_town")
     td.add_argument("--keep", action="store_true")
@@ -1614,6 +1687,8 @@ def main():
             exp_facing(host, cli)
         elif a.what == "talk":
             exp_talk(host, cli)
+        elif a.what == "build":
+            exp_build(host, cli)
         elif a.what == "trade":
             exp_trade(host, cli, a.merchant)
         elif a.what == "progress":

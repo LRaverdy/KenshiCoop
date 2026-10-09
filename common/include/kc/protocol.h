@@ -72,6 +72,11 @@ enum class Msg : uint8_t {
     ContainerOpened = 37, // S->C  it is there: here is the container's netId (its items follow as an Inventory)
     ContainerClose = 38,  // both  the window is closed (client) / must close (host: caught stealing, too far)
     TradeOpen = 39,       // S->C  trade with a merchant: its shop counters (their items follow), its cats
+    // ---- lot E: buildings
+    BuildPlace = 52,      // both  a building placed in build mode (client: asks the host; host: everyone builds it)
+    BuildState = 53,      // S->C  construction progress of player buildings (complete, paused, dismantling)
+    BuildRemove = 54,     // S->C  a player building is gone (dismantled, destroyed)
+    BuildAction = 55,     // both  buy / dismantle a building (client: asks the host; host: replay of a purchase)
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -620,6 +625,60 @@ struct TradeOpen {
     std::string note;              // no counters: why the trade cannot open (shown to the player)
 };
 constexpr uint32_t kMaxTradeCounters = 32;
+// ---- lot E: buildings. Buildings and furniture get other handles on every machine: they are
+// named by kind (template) and place, plus a netId the host gives to the ones it follows.
+// A placement carries exactly what the game's factory (RootObjectFactory::createBuilding) gets in
+// build mode, so every machine builds the same thing at the same place.
+struct BuildPlace {
+    uint32_t netId = 0;          // 0: a client's request; else the host's building, built by everyone
+    std::string sid;             // building template
+    Vec3 pos;                    // as the factory takes it (relative to the parent building / terrain)
+    Quat rot;
+    int32_t floor = 0;
+    uint8_t flags = 0;           // kBuildOutside | kBuildFloorLayout
+    std::string parentSid;       // the building it is furniture of (empty: none)
+    Vec3 parentPos;
+    std::string indoorsSid;      // the building it stands inside (empty: none)
+    Vec3 indoorsPos;
+    std::string snapSid;         // the building it snaps to (walls, gates; empty: none)
+    Vec3 snapPos;
+    Handle town;                 // the town it belongs to (invalid: none)
+    Vec3 worldPos;               // host: where the new building stands (to find it by kind and place)
+};
+constexpr uint8_t kBuildOutside = 1, kBuildFloorLayout = 2;
+struct BuildStateEntry {
+    uint32_t netId = 0;
+    std::string sid;
+    Vec3 pos;                    // world position (kind-and-place lookup)
+    float progress = 0;          // construction progress (the game's units)
+    uint8_t flags = 0;           // kSiteComplete | kSitePaused | kSiteDismantling
+};
+constexpr uint8_t kSiteComplete = 1, kSitePaused = 2, kSiteDismantling = 4;
+struct BuildStateMsg {
+    std::vector<BuildStateEntry> entries;
+};
+constexpr uint32_t kMaxBuildStates = 256;
+struct BuildRemove {
+    uint32_t netId = 0;
+    std::string sid;
+    Vec3 pos;
+};
+enum class BuildActionKind : uint8_t { Buy = 1, Dismantle = 2 };
+struct BuildAction {
+    BuildActionKind kind = BuildActionKind::Buy;
+    int32_t arg = 0;             // the confirmation dialog's answer
+    std::string sid;
+    Vec3 pos;
+};
+void Encode(Writer& w, const BuildPlace& m);
+bool Decode(Reader& r, BuildPlace& m);
+void Encode(Writer& w, const BuildStateMsg& m);
+bool Decode(Reader& r, BuildStateMsg& m);
+void Encode(Writer& w, const BuildRemove& m);
+bool Decode(Reader& r, BuildRemove& m);
+void Encode(Writer& w, const BuildAction& m);
+bool Decode(Reader& r, BuildAction& m);
+
 void Encode(Writer& w, const TradeOpen& m);
 bool Decode(Reader& r, TradeOpen& m);
 void Encode(Writer& w, const ContainerOpen& m);

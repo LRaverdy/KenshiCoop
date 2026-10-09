@@ -128,6 +128,15 @@ const FunctionSig kFunctions[FnCount] = {
     {"InventoryGUI::getNPCTrader", 0x70E2D0, {0x48, 0x83, 0xEC, 0x28, 0x48, 0x83, 0x3D, 0x14, 0x49, 0xA2, 0x01, 0x02}},
     {"Character::takeMoney", 0x7965F0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0xDA, 0xE8, 0xB6, 0x56, 0x8B}},
     {"InventoryGUI::RClickAutoTrade", 0x713D20, {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41}},
+    // ---- lot E: buildings
+    {"<PreviewGroup>::createBuildings", 0x4D72A0, {0x48, 0x8B, 0xC4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
+    {"RootObjectFactory::createBuilding", 0x57CC70, {0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56}},
+    {"Building::buyMeCallback", 0x7AD6C0, {0x83, 0xFA, 0x02, 0x0F, 0x85, 0x8A, 0x07, 0x00, 0x00, 0x48, 0x8B, 0xC4}},
+    {"Building::confirmDismantle", 0x54FEA0, {0x83, 0xFA, 0x02, 0x0F, 0x85, 0x73, 0x01, 0x00, 0x00, 0x57, 0x48, 0x83}},
+    {"Building::addConstructionProgress", 0x5595A0, {0x48, 0x8B, 0xC4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x48, 0x8D, 0xA8, 0xE8}},
+    {"Building::addDismantleProgress", 0x2A2860, {0x48, 0x8B, 0xC4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
+    {"Building::clearUsageNodes", 0x54C4D0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
+    {"Building::calculateSaleValue", 0x7AD300, {0x40, 0x53, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00, 0x48, 0xC7, 0x44}},
 };
 
 namespace {
@@ -3129,6 +3138,37 @@ bool CallTogglePause(bool paused) {
 bool CallUserPause(bool paused) {
     GameWorld* w = World();
     return w && CallBoolArg(FnAddr(FnUserPause), w, paused);
+}
+
+// ---- lot E: buildings
+bool ReadRaw(const void* obj, uintptr_t offset, void* out, size_t n) {
+    return obj && SafeCopy(out, reinterpret_cast<const uint8_t*>(obj) + offset, n);
+}
+
+bool WriteRaw(void* obj, uintptr_t offset, const void* in, size_t n) {
+    return obj && SafeCopy(reinterpret_cast<uint8_t*>(obj) + offset, in, n);
+}
+
+void* GameDataBySid(const std::string& sid) { return FindGameData(sid); }
+
+bool GameDataSidOf(const void* gd, std::string& out) { return GameDataSid(gd, out); }
+
+void BuildingTemplates(const std::string& part, std::vector<std::pair<std::string, std::string>>& out, size_t max) {
+    out.clear();
+    if (!g_gameDataBuilt) BuildGameDataIndex();
+    for (const auto& [sid, gd] : g_gameDataBySid) {
+        int type = -1;
+        std::string name;
+        if (!Rd(gd, off::GD_type, type) || type != 0 || !TemplateDisplayName(sid, name)) continue;   // itemType BUILDING
+        if (!part.empty() && name.find(part) == std::string::npos && sid.find(part) == std::string::npos) continue;
+        out.emplace_back(sid, name);
+        if (out.size() >= max) break;
+    }
+}
+
+bool DestroyAnyObject(void* obj) {
+    GameWorld* w = World();
+    return w && obj && CallDestroy(FnAddr(FnWorldDestroy), w, obj);
 }
 
 } // namespace kenshi

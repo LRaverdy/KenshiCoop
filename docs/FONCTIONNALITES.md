@@ -350,15 +350,37 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   5. L'hôte vérifie, déplace l'objet et l'argent, puis envoie le nouveau stock à tous les joueurs
      qui ont ouvert ce marchand.
 
-### Achat de bâtiments ❌
-
-### Construction et meubles ❌
-- **Demande** : tout le monde, clients compris, peut construire et placer des meubles.
-- **État** :
-  - l'ordre « construire » d'un client part bien à l'hôte, mais l'avancement du chantier n'est
-    pas synchronisé ;
-  - la pose d'un bâtiment n'est pas interceptée : un bâtiment posé par un client n'existerait a
-    priori que chez lui (non testé, à éviter pour l'instant).
+### Construction, meubles, achat et démontage de bâtiments 🟡 (implémenté, à vérifier en jeu)
+- **Le joueur** (hôte comme client) construit comme d'habitude : mode construction, il pose un
+  bâtiment ou un meuble (lit, coffre, machine, table…) dans une maison à nous. Chez un client,
+  **rien n'est construit par son jeu** : la pose part à l'hôte, dont le jeu bâtit le chantier, puis
+  chaque joueur (celui qui l'a posé compris) bâtit le même chantier au même endroit. Ce que l'hôte
+  pose part de la même façon chez tout le monde.
+- **Avancement** : les ouvriers construisent chez l'hôte ; l'avancement du chantier, sa fin, la
+  pause et le démontage sont imposés aux clients (chaque seconde ce qui change, tout toutes les
+  10 s). Le jeu d'un client ne fait jamais avancer ni démonter un chantier de lui-même. L'ordre
+  « construire » d'un client part à l'hôte comme les autres ordres (le chantier y est retrouvé par
+  type et endroit).
+- **Démontage** : un client qui confirme « démonter » le demande à l'hôte, dont le jeu le fait ;
+  un bâtiment détruit pour de bon chez l'hôte (démonté, détruit) disparaît chez tout le monde.
+- **Achat** : un client qui confirme l'achat d'un bâtiment à vendre le demande à l'hôte, qui vérifie
+  l'argent et achète ; ensuite chaque client rejoue l'achat avec la fonction du jeu (le bâtiment
+  devient à nous, portes comprises). Un achat fait par l'hôte est rejoué de même.
+- **Fonctionnement** : le mode construction finit par appeler `RootObjectFactory::createBuilding`
+  avec les valeurs finales (modèle, position relative au terrain ou au bâtiment parent, rotation,
+  ville, plan du bâtiment dont c'est un meuble, bâtiment où il se trouve, étage). Le mod capte ces
+  valeurs et chaque machine appelle la même fonction avec les mêmes valeurs, puis ce que le mode
+  construction fait à un bâtiment neuf. Les bâtiments ont un autre handle sur chaque machine : ils
+  sont nommés par type et endroit, plus un netId donné par l'hôte.
+- **Arrivée en cours de partie** : les bâtiments posés avant sont dans la sauvegarde envoyée ;
+  l'hôte envoie aussitôt l'état de tous ceux qu'il suit.
+- **Limites, à vérifier en jeu** :
+  - les objets « is node » (posés par une autre fabrique du jeu) ne passent pas par ce chemin ;
+  - le chemin des meubles posés à un étage (« plan d'étage ») n'est qu'en partie compris ;
+  - la ville d'un bâtiment est retrouvée par son handle : si elle ne se résout pas, le bâtiment est
+    construit sans ville ;
+  - après la pose, l'hôte ne refait pas l'enregistrement de navigation des murs que fait le mode
+    construction (les murs posés par un client peuvent gêner les PNJ autrement chez l'hôte).
 
 ### Portes, serrures, crochetage ❌
 - Les ordres (ouvrir, fermer, crocheter, verrouiller, forcer) partent à l'hôte et y sont exécutés.

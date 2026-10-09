@@ -80,6 +80,7 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `far` | le personnage du client à environ 5 km de l'escouade de l'hôte : l'hôte simule-t-il bien sa zone, et le client voit-il la même chose ? |
 | `squads` | nouvelles escouades et déplacements entre escouades, depuis l'hôte et depuis le client |
 | `talk` | un PNJ parle au personnage du client : la conversation tourne chez l'hôte, la fenêtre s'ouvre chez le client |
+| `build` (lot E) | une pose du client bâtie par l'hôte puis par tous au même endroit, celle de l'hôte aussi ; avancement et fin du chantier ; démontage demandé par le client ; achat d'un bâtiment à vendre (avec `--save kctest_town`) |
 | `progress` | compétences, argent, bulles et ordres : l'hôte décide, le client suit |
 | `ground` / `clientpickup` | objets posés et ramassés ; ramassage demandé par un client |
 | `anim` / `animframe` / `gait` | animations de combat et d'action ; tout ce qui est à l'écran ; allure |
@@ -256,6 +257,19 @@ l'escouade triée par handle.
 | `contake <sélection> <nom>` | dans la fenêtre ouverte, prend le premier objet |
 | `contcount <nom\|any>` | piles dans le contenant le plus proche de ce nom |
 | `tradegui` | type de fenêtre de commerce en attente dans l'interface (0 = aucune) |
+
+**Bâtiments (lot E)**
+
+| Commande | Rôle |
+|---|---|
+| `buildtypes <nom>` | modèles de bâtiments dont le nom contient ce texte (`sid=nom`) |
+| `buildplace <sid> <dx> <dz> [lacet°]` | une pose comme le mode construction, à côté du membre 0 (client : demandée à l'hôte ; hôte : bâtie et annoncée) |
+| `furnplace <sid> <nom du bâtiment> <dx> <dz>` | un meuble dans le bâtiment à nous le plus proche de ce nom (position relative au bâtiment) |
+| `buildlist [nom]` | bâtiments autour du membre 0 : `sid@x,y,z:avancement/drapeaux` (1 terminé, 2 en pause, 4 démontage) |
+| `buildcount` | bâtiments suivis par la session, et combien sont trouvés ici |
+| `buildprogress <nom> <quantité>` | (hôte) avancement d'ouvrier sur le chantier à nous le plus proche |
+| `builddismantle <nom>` / `buildbuy <nom>` | confirme le démontage / l'achat comme la fenêtre du bâtiment (un client le demande à l'hôte) |
+| `buildforsale [nom]` | le bâtiment à vendre le plus proche et son prix |
 
 **Météo**
 

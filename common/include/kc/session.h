@@ -192,6 +192,26 @@ public:
     virtual bool TradeWindowBusy() { return false; }   // client: an item is on the mouse (do not reopen the window now)
     virtual void SetMoneyOf(const Handle& who, int32_t money) { (void)who; (void)money; }
     virtual std::string CharacterNameOf(const Handle& h) { (void)h; return {}; }
+    // ---- lot E: buildings. Placements made in build mode here (client: not built, asked of the
+    // host; host: built, `created` is the new building). Build a placement (the host's, or a
+    // client's on the host). Find a building by kind and place; its kind and place. Construction
+    // state: read (host) and impose (client). Player buildings being built or dismantled near
+    // these points (host). Buildings the game destroyed for good (host, of those tracked). Remove
+    // one (client). Buy / dismantle asked in the game's windows here (client), and executed.
+    struct LocalPlacement { BuildPlace place; Handle created; };
+    virtual void TakeLocalPlacements(std::vector<LocalPlacement>& out) { out.clear(); }
+    virtual bool ExecutePlacement(const BuildPlace& p, Handle& created, Vec3& worldPos) { (void)p; (void)created; (void)worldPos; return false; }
+    virtual bool FindBuilding(const std::string& sid, const Vec3& pos, Handle& out) { (void)sid; (void)pos; (void)out; return false; }
+    virtual bool BuildingIdentity(const Handle& h, std::string& sid, Vec3& pos) { (void)h; (void)sid; (void)pos; return false; }
+    virtual bool ReadBuildState(const Handle& h, float& progress, uint8_t& flags) { (void)h; (void)progress; (void)flags; return false; }
+    virtual void ApplyBuildState(const Handle& h, float progress, uint8_t flags) { (void)h; (void)progress; (void)flags; }
+    virtual void ConstructionSitesNear(const std::vector<Vec3>& centers, float radius, std::vector<Handle>& out) { (void)centers; (void)radius; out.clear(); }
+    virtual void TrackBuilding(const Handle& h) { (void)h; }
+    virtual void TakeBuildingRemovals(std::vector<Handle>& out) { out.clear(); }
+    virtual bool RemoveBuilding(const Handle& h) { (void)h; return false; }
+    virtual void TakeLocalBuildActions(std::vector<BuildAction>& out) { out.clear(); }
+    // ok: done; refused: why not (French, for the player)
+    virtual bool ExecuteBuildAction(const BuildAction& a, std::string& refused) { (void)a; refused.clear(); return false; }
 
     // Inventories. Host: read; execute a client's item movement (false = refused/impossible).
     virtual bool ReadInventory(const Handle& h, std::vector<ItemState>& out) = 0;
@@ -331,6 +351,10 @@ public:
         return {trade_.pending, trade_.open, trade_.trader, trade_.counters.size(), unsentSpend_};
     }
     size_t hostTrades() const { return trades_.size(); }   // host: trade windows open by players
+    // lot E: buildings followed (host: placed in the session or under construction near players;
+    // client: those the host told us about), and how many are found here.
+    size_t buildingCount() const { return buildings_.size(); }
+    size_t buildingsResolved() const;
 
 private:
     struct Sample { double t; EntityState s; };
@@ -477,6 +501,41 @@ private:
     std::vector<IWorld::ContainerRequest> scratchContainerReqs_;
     void HostContainers(double now);
     void ClientContainers(double now);
+    // ---- lot E: buildings
+    struct BuildingRec {
+        Handle handle;                       // in this world (client: found by kind and place)
+        std::string sid;
+        Vec3 pos;                            // world position
+        bool resolved = false;               // client: found here
+        double tryAt = 0;                    // client: next attempt to find it
+        float progress = -1;                 // last sent (host) / applied (client)
+        uint8_t flags = 0xFF;
+        double sentAt = -1e9;                // host
+        bool placed = false;                 // host: placed during the session (kept until removed)
+        double seenBuilding = 0;             // host: last time it was under construction
+        bool haveWant = false;               // client: the host's state of it
+        float wantProgress = 0;
+        uint8_t wantFlags = 0;
+    };
+    std::map<uint32_t, BuildingRec> buildings_;
+    std::vector<std::pair<uint8_t, BuildPlace>> pendingPlaces_;          // host: clients' placements
+    std::vector<std::pair<uint8_t, BuildAction>> pendingBuildActions_;   // host: clients' buy / dismantle
+    std::vector<BuildPlace> hostPlaces_;     // client: the host's buildings to build here
+    std::vector<BuildAction> hostActions_;   // client: purchases to replay
+    std::vector<BuildStateEntry> hostStates_;   // client: to apply on the next live tick
+    std::vector<BuildRemove> hostRemoves_;
+    std::set<uint8_t> buildSyncedPlayers_;   // host: players who got every followed building once
+    double nextBuildStates_ = 0, nextSiteScan_ = 0, nextBuildFull_ = 0;
+    std::vector<IWorld::LocalPlacement> scratchPlacements_;
+    std::vector<BuildAction> scratchBuildActions_;
+    std::vector<Handle> scratchRemoved_;
+    void HostBuildings(double now);
+    void ClientBuildings(double now);
+    void HostBuildingPacket(RemotePlayer& from, Msg type, Reader& r);
+    void ClientBuildingPacket(Msg type, Reader& r);
+    uint32_t TrackBuilding(const Handle& h, const std::string& sid, const Vec3& pos, bool placed);
+    void SendBuildStates(double now, bool full, PeerId onlyTo);
+    void ResetBuildings();
     // Trade windows. Host: what each player has open (the merchant, their character, the shop's
     // counters); a merchant's cats last sent to them.
     struct HostTrade {
