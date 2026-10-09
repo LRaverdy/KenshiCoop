@@ -1196,6 +1196,32 @@ def exp_factions(host, cli):
     check("factions : le client ne garde pas ses propres relations", rh == rc and "ours=50.0" not in rc, f"hote {rh} / client {rc} | {before} -> {after}")
     fh, fc = cmd(host, "factions")[1], cmd(cli, "factions")[1]
     check("factions : memes relations a la fin", fh == fc, f"hote {fh} / client {fc}")
+def exp_buildstate(host, cli):
+    """Construction state of the buildings already there (save, towns, the bought one in kctest_mine):
+    every building both games see near the squad has the same state (finished or site, progress)."""
+    time.sleep(20)
+    def states(pid):
+        t = cmd(pid, "buildlist any")[1]
+        out = {}
+        for e in t.split()[2:]:
+            try:
+                sid, rest = e.split("@", 1)
+                xyz, st = rest.split(":", 1)
+                x, y, z = (float(v) for v in xyz.split(","))
+                prog, flags = st.split("/")
+                out[(sid, round(x / 10), round(z / 10))] = (float(prog), int(flags))
+            except ValueError:
+                pass
+        return out
+    hs, cs = states(host), states(cli)
+    log("build states: host", len(hs), "client", len(cs))
+    common = [k for k in hs if k in cs]
+    bad = [(k, hs[k], cs[k]) for k in common if (hs[k][1] & 1) != (cs[k][1] & 1) or abs(hs[k][0] - cs[k][0]) > 1.0]
+    check("batiments existants : vus des deux cotes", len(common) > 0, f"{len(common)} en commun")
+    check("batiments existants : meme etat de construction", not bad, str(bad[:5]))
+    log("followed:", cmd(host, "buildcount")[1], "/ client:", cmd(cli, "buildcount")[1])
+
+
 def exp_build(host, cli, kinds=("Feu", "Lit", "Coffre", "Tente", "Mur")):
     """Lot E, buildings: a client's placement is built by the host then by everyone (same place), the
     host's too; construction progress and dismantling follow; a purchase is done by the host and
@@ -2032,6 +2058,9 @@ def main():
     bd = sub.add_parser("build", help="lot E: buildings placed, built, dismantled and bought by everyone")
     bd.add_argument("--save", default="kctest_base")
     bd.add_argument("--keep", action="store_true")
+    bs = sub.add_parser("buildstate", help="construction state of save/town buildings is the host's")
+    bs.add_argument("--save", default="kctest_mine")
+    bs.add_argument("--keep", action="store_true")
     mi = sub.add_parser("mine")
     mi.add_argument("--save", default="kctest_mine")
     mi.add_argument("--keep", action="store_true")
@@ -2168,6 +2197,8 @@ def main():
             exp_prison(host, cli)
         elif a.what == "build":
             exp_build(host, cli)
+        elif a.what == "buildstate":
+            exp_buildstate(host, cli)
         elif a.what == "mine":
             exp_mine(host, cli)
         elif a.what == "admin":

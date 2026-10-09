@@ -149,6 +149,7 @@ public:
     // announced); the building of that kind and place, or the nearest whose name contains `part`
     bool DebugPlace(const kc::BuildPlace& p);
     void* BuildingAt(const std::string& sid, const kc::Vec3& pos);
+    static bool IsPlayerBuilding(void* b);
     void* NearestBuilding(const kc::Vec3& from, const std::string& part, float radius, int want);   // want: 0 any, 1 for sale, 2 ours, 3 ours unfinished
     void TakeEditedCharacters(std::vector<kc::Handle>& out) override;
     bool ReadAppearance(const kc::Handle& h, kc::AppearanceMsg& out) override;

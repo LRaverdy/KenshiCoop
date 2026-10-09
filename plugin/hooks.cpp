@@ -1030,7 +1030,9 @@ void hk_confirmDismantle(void* building, int answer) {
 using BuildProgressFn = void (*)(void* building, float amount);
 BuildProgressFn o_addConstruction = nullptr;
 void hk_addConstruction(void* building, float amount) {
-    if (KenshiWorld::ClientActive() && !g_hostCall) return;
+    // A client refused all of it once, so a town only it had loaded stayed in red sticks: the game
+    // raises a town's buildings this way when its zone loads. Only the players' own wait for the host.
+    if (KenshiWorld::ClientActive() && !g_hostCall && KenshiWorld::IsPlayerBuilding(building)) return;
     o_addConstruction(building, amount);
 }
 using DismantleProgressFn = bool (*)(void* building, float amount);
