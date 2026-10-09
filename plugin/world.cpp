@@ -470,6 +470,7 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     last = target;
     last.flags = latest.flags;
     const double now = NowSeconds();
+    if (CaptiveHold(h, c)) { lastDest_.erase(h); return; }   // lot D: the host keeps it in a cage
     // A ragdoll that is being set up must not be touched: moving the character then throws the
     // body across the map. Leave it alone while it falls.
     if (auto fell = fellAt_.find(h); fell != fellAt_.end()) {
@@ -878,6 +879,7 @@ void KenshiWorld::ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) {
     // where the host's character collapsed.
     const bool dies = (v.flags & kc::kVitDead) && !kenshi::IsDead(c);
     const bool faints = !dies && (v.flags & kc::kVitUnconscious) && !kenshi::IsUnconscious(c) && !kenshi::IsDead(c);
+    if (faints && CaptiveHold(h, c)) { kenshi::SetUnconscious(c, true); return; }   // lot D: in its cage, no fall
     // Already on the ground: only the state is missing. Sleep, hunger and blood loss knock out
     // without a timer, and what keeps them going on the host (its AI tasks) does not run here, so
     // the local medical update would wake them at once: impose the host's state.

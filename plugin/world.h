@@ -89,6 +89,10 @@ public:
     bool TradeWindowBusy() override { return kenshi::MouseHoldsItem(); }
     void SetMoneyOf(const kc::Handle& who, int32_t money) override;
     std::string CharacterNameOf(const kc::Handle& h) override;
+    // ---- lot D: prisons (plugin/prisons.cpp)
+    bool ReadCaptive(const kc::Handle& h, kc::CaptiveState& out) override;
+    void ApplyCaptive(const kc::Handle& h, const kc::CaptiveState& s) override;
+    bool CaptiveHold(const kc::Handle& h, kenshi::Character* c);   // client: the host keeps it in a cage here
     // Hooks (host): the game asked for a trade window for another player's character (any thread);
     // the host's own trade window (to show it again when another player changed the stock).
     void QueueTradeRequest(const kc::Handle& looter, const kc::Handle& trader);
@@ -286,6 +290,9 @@ private:   // first few lifecycle events (tests)
     std::vector<std::pair<kenshi::Character*, kc::ItemState>> localDrops_;   // client, under groundMutex_
     std::vector<kenshi::Character*> edited_;   // characters whose looks the editor just changed
     std::vector<ContainerRequest> containerReqs_;   // client: right clicks on containers, for the host
+    // ---- lot D: prisons
+    std::unordered_set<kc::Handle, kc::HandleHash> captiveHold_;      // client: caged on the host (no position corrections)
+    std::unordered_set<kc::Handle, kc::HandleHash> captiveMissing_;   // client: cage not found here (logged once)
     std::mutex tradeMutex_;
     std::vector<TradeRequest> tradeReqs_;            // host, under tradeMutex_
     kc::Handle hostTradeLooter_, hostTradeTrader_;   // host: our own last trade window (under tradeMutex_)

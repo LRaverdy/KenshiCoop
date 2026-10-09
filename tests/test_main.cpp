@@ -45,6 +45,7 @@ struct FakeChar {
     EntityVitals vit;   // netId unused
     uint32_t fights = 0;   // serial of the character it fights
     std::vector<ItemState> items;
+    CaptiveState cap;      // lot D: cage, shackles, slavery (netId unused)
 };
 
 struct FakeWorld : IWorld {
@@ -323,6 +324,21 @@ struct FakeWorld : IWorld {
     bool OpenTradeWindow(const Handle&, const Handle&) override { tradeWindow = true; ++tradeWindowOpens; return true; }
     bool ContainerWindowOpen() override { return tradeWindow; }
     void CloseContainerWindows() override { tradeWindow = false; }
+    // ---- lot D: prisons
+    bool ReadCaptive(const Handle& h, CaptiveState& out) override {
+        auto it = chars.find(h.serial);
+        if (it == chars.end()) return false;
+        out = it->second.cap;
+        return true;
+    }
+    int captiveApplies = 0;
+    void ApplyCaptive(const Handle& h, const CaptiveState& s) override {
+        auto it = chars.find(h.serial);
+        if (it == chars.end()) return;
+        it->second.cap = s;
+        it->second.cap.netId = 0;
+        ++captiveApplies;
+    }
     std::vector<RegionWeather> weather;
     void ReadWeather(std::vector<RegionWeather>& out) override { out = weather; }
     void ApplyWeather(const std::vector<RegionWeather>& r) override { weather = r; }
@@ -595,6 +611,22 @@ static void TestWire() {
         Reader sr(sw.data(), sw.size()); PeekType(sr);
         InvOp sell; CHECK(Decode(sr, sell) && sell.price == -25);
     }
+    {   // lot D: captive characters (a caged one with shackles and a sentence, a freed one)
+        CaptivesMsg cm;
+        CaptiveState a; a.netId = 7; a.caged = true; a.cageSid = "cage-1"; a.cagePos = {1, 2, 3}; a.chained = true;
+        a.slaveOwner.type = 1; a.slaveOwner.index = 4; a.slaveOwner.serial = 9; a.slaveState = 1; a.slaveOf = "slavers"; a.kidnapped = true;
+        a.sentenceBegan = 0x4041000000000000ull; a.sentence = 12.5f;
+        CaptiveState b; b.netId = 8;
+        cm.chars = {a, b};
+        Writer cw; Encode(cw, cm);
+        Reader cr(cw.data(), cw.size()); CHECK(PeekType(cr) == Msg::Captives);
+        CaptivesMsg cm2; CHECK(Decode(cr, cm2));
+        CHECK(cm2.chars.size() == 2 && cm2.chars[0] == a && cm2.chars[1] == b && cm2.chars[1].free() && !cm2.chars[0].free());
+        cm.chars[1].slaveState = 7;   // no such slave state
+        Writer cw2; Encode(cw2, cm);
+        Reader cr2(cw2.data(), cw2.size()); PeekType(cr2);
+        CaptivesMsg cm3; CHECK(!Decode(cr2, cm3));
+    }
     {   // hunger travels with the vitals
         VitalsMsg vm; vm.entities.resize(1); vm.entities[0].netId = 2; vm.entities[0].hunger = 250.5f;
         auto pk = EncodeVitals(vm)[0];
@@ -661,6 +693,10 @@ static void TestFuzz() {
     { ProgressMsg pm; pm.hasMoney = true; CharProgress cp; cp.netId = 1; cp.stats.assign(kStatCount, 1.0f); pm.chars = {cp}; add([&](Writer& w) { Encode(w, pm); }); }
     { VitalsMsg v; v.entities.resize(2); for (auto& e : v.entities) { e.netId = 4; e.parts.resize(3); } seeds.push_back(EncodeVitals(v)[0]); }
     add([](Writer& w) { ContainerOpen m; m.looterNetId = 2; m.sid = "chest"; Encode(w, m); });
+    add([](Writer& w) {
+        CaptivesMsg m; CaptiveState c; c.netId = 3; c.caged = true; c.cageSid = "cage"; c.chained = true; c.slaveOf = "f"; c.sentence = 2;
+        m.chars = {c}; Encode(w, m);
+    });
     add([](Writer& w) { ContainerOpened m; m.netId = 9; m.looterNetId = 2; m.sid = "chest"; Encode(w, m); });
     add([](Writer& w) { Encode(w, ContainerClose{9, "trop loin"}); });
     add([](Writer& w) { TradeOpen m; m.traderNetId = 4; m.looterNetId = 2; m.counters = {{5, "box", {1, 2, 3}}}; Encode(w, m); });
@@ -708,6 +744,7 @@ static void TestFuzz() {
         case Msg::ContainerOpened: { ContainerOpened m; Decode(r, m); break; }
         case Msg::ContainerClose: { ContainerClose m; Decode(r, m); break; }
         case Msg::TradeOpen: { TradeOpen m; Decode(r, m); break; }
+        case Msg::Captives: { CaptivesMsg m; Decode(r, m); break; }
         default: break;
         }
     };
@@ -716,7 +753,7 @@ static void TestFuzz() {
         if (i % 2) {
             p.resize(rng() % 64);
             for (auto& b : p) b = uint8_t(rng());
-            if (!p.empty()) p[0] = uint8_t(1 + rng() % 39);
+            if (!p.empty()) p[0] = uint8_t(1 + rng() % 51);
         } else {
             p = seeds[rng() % seeds.size()];
             const int muts = 1 + rng() % 4;
@@ -1276,6 +1313,53 @@ static void TestTrade() {
     CHECK(!cli.tradeView().open && !cli.tradeView().pending && host.hostTrades() == 0);
 }
 
+// lot D: prisons
+static void TestCaptives() {
+    std::printf("session: captive characters (cage, shackles, slavery, sentence) follow the host, and their release\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    FakeChar npc; npc.squad = false; npc.pos = {130, 0, 0}; npc.dest = npc.pos;
+    hw.chars[20] = npc;
+    AtMenu(cw);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 4));
+    // a hostile NPC locks squad member 2 in a cage, with shackles, as a slave serving a sentence
+    CaptiveState s; s.caged = true; s.cageSid = "cage-a"; s.cagePos = {205, 0, 3}; s.chained = true; s.slaveState = 1; s.slaveOf = "slavers";
+    s.slaveOwner = FakeWorld::H(20); s.sentenceBegan = 77; s.sentence = 24;
+    hw.chars[2].cap = s;
+    // and an NPC prisoner in another cage
+    CaptiveState p; p.caged = true; p.cageSid = "cage-b"; p.cagePos = {131, 0, 0};
+    hw.chars[20].cap = p;
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cw.chars[2].cap == s && cw.chars[20].cap == p; });
+    CHECK(cw.chars[2].cap == s);
+    CHECK(cw.chars[20].cap == p);
+    CHECK(host.captiveCount() == 2 && cli.captiveCount() == 2);
+    CHECK(cw.chars[1].cap.free() && cw.chars[3].cap.free());
+    // our copy drifting (the local game would have let it out): imposed again
+    cw.chars[2].cap = CaptiveState{};
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return cw.chars[2].cap == s; });
+    CHECK(cw.chars[2].cap == s);
+    // the lock is picked: out of the cage, shackles still on
+    hw.chars[2].cap.caged = false; hw.chars[2].cap.cageSid.clear(); hw.chars[2].cap.cagePos = {};
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return !cw.chars[2].cap.caged; });
+    CHECK(!cw.chars[2].cap.caged && cw.chars[2].cap.chained && cw.chars[2].cap.slaveState == 1);
+    // set free: everything cleared on the client too, and forgotten on both sides
+    hw.chars[2].cap = CaptiveState{};
+    hw.chars[20].cap = CaptiveState{};
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cw.chars[2].cap.free() && cw.chars[20].cap.free(); });
+    CHECK(cw.chars[2].cap.free() && cw.chars[20].cap.free());
+    Run({{&host, &hw}, {&cli, &cw}}, 0.6);
+    CHECK(host.captiveCount() == 0 && cli.captiveCount() == 0);
+    // nothing is resent for characters that stay free
+    const int applies = cw.captiveApplies;
+    Run({{&host, &hw}, {&cli, &cw}}, 2.5);
+    CHECK(cw.captiveApplies == applies);
+}
+
 static void TestManyPlayers() {
     std::printf("session: 1 host + 4 clients joining at once, 120 characters\n");
     FakeWorld hw;
@@ -1337,6 +1421,7 @@ int main() {
     TestSpawnReplication();
     TestInventories();
     TestTrade();
+    TestCaptives();
     TestManyPlayers();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

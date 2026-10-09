@@ -72,6 +72,8 @@ enum class Msg : uint8_t {
     ContainerOpened = 37, // S->C  it is there: here is the container's netId (its items follow as an Inventory)
     ContainerClose = 38,  // both  the window is closed (client) / must close (host: caught stealing, too far)
     TradeOpen = 39,       // S->C  trade with a merchant: its shop counters (their items follow), its cats
+    // ---- lot D: prisons (49-51)
+    Captives = 49,        // S->C  characters in a cage, in shackles, enslaved or serving a sentence (and freed ones)
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -622,6 +624,41 @@ struct TradeOpen {
 constexpr uint32_t kMaxTradeCounters = 32;
 void Encode(Writer& w, const TradeOpen& m);
 bool Decode(Reader& r, TradeOpen& m);
+
+// ---- lot D: prisons
+// What holds a character captive, as the host's game has it: a cage or prison furniture (found on
+// clients by kind and place), shackles, slavery (owner, faction), escape / kidnapping flags and the
+// prison sentence. A character set free is sent once with everything cleared.
+struct CaptiveState {
+    uint32_t netId = 0;
+    bool caged = false;            // Character::inSomething == IN_PRISON
+    std::string cageSid;           // the cage's kind and place
+    Vec3 cagePos;
+    bool chained = false;          // Character::isChained (shackles on)
+    Handle slaveOwner;             // Character::slaveOwner (the host's handle; invalid: none)
+    uint8_t slaveState = 0;        // SlaveStateEnum: 0 not, 1 slave, 2 escaping, 3 ex-slave
+    std::string slaveOf;           // the faction it is a slave of (game data id, may be empty)
+    bool escaped = false;          // an escaped prisoner (wanted)
+    bool kidnapped = false;
+    uint64_t sentenceBegan = 0;    // BountyManager prison sentence: when it began (raw TimeOfDay)
+    float sentence = 0;            // hours to serve
+    bool free() const {
+        return !caged && !chained && slaveState == 0 && slaveOf.empty() && !escaped && !kidnapped && sentence <= 0.0f;
+    }
+    bool operator==(const CaptiveState& o) const {
+        return netId == o.netId && caged == o.caged && cageSid == o.cageSid && cagePos.x == o.cagePos.x && cagePos.y == o.cagePos.y &&
+               cagePos.z == o.cagePos.z && chained == o.chained && slaveOwner == o.slaveOwner && slaveState == o.slaveState &&
+               slaveOf == o.slaveOf && escaped == o.escaped && kidnapped == o.kidnapped && sentenceBegan == o.sentenceBegan &&
+               sentence == o.sentence;
+    }
+    bool operator!=(const CaptiveState& o) const { return !(*this == o); }
+};
+struct CaptivesMsg {
+    std::vector<CaptiveState> chars;
+};
+constexpr uint32_t kMaxCaptivesPerMsg = 256;
+void Encode(Writer& w, const CaptivesMsg& m);
+bool Decode(Reader& r, CaptivesMsg& m);
 void Encode(Writer& w, const ContainerOpen& m);
 bool Decode(Reader& r, ContainerOpen& m);
 void Encode(Writer& w, const ContainerOpened& m);

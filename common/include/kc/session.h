@@ -192,6 +192,11 @@ public:
     virtual bool TradeWindowBusy() { return false; }   // client: an item is on the mouse (do not reopen the window now)
     virtual void SetMoneyOf(const Handle& who, int32_t money) { (void)who; (void)money; }
     virtual std::string CharacterNameOf(const Handle& h) { (void)h; return {}; }
+    // ---- lot D: prisons. Host: what holds a character captive (cage, shackles, slavery,
+    // sentence); its netId is left 0. Client: impose it (the same local cage, the same flags), and
+    // keep a caged character where the cage holds it.
+    virtual bool ReadCaptive(const Handle& h, CaptiveState& out) { (void)h; (void)out; return false; }
+    virtual void ApplyCaptive(const Handle& h, const CaptiveState& s) { (void)h; (void)s; }
 
     // Inventories. Host: read; execute a client's item movement (false = refused/impossible).
     virtual bool ReadInventory(const Handle& h, std::vector<ItemState>& out) = 0;
@@ -331,6 +336,8 @@ public:
         return {trade_.pending, trade_.open, trade_.trader, trade_.counters.size(), unsentSpend_};
     }
     size_t hostTrades() const { return trades_.size(); }   // host: trade windows open by players
+    // ---- lot D: prisons (tests): captive characters this side knows of (host: sent; client: received)
+    size_t captiveCount() const;
 
 private:
     struct Sample { double t; EntityState s; };
@@ -506,6 +513,15 @@ private:
     int32_t unsentSpend_ = 0;              // client: cats our trade window took (gave: negative), not sent yet
     void CaptureLocalSpend();
     void ApplyHostMoney(int32_t money);
+    // ---- lot D: prisons (session_prisons.cpp)
+    std::unordered_map<uint32_t, CaptiveState> captiveSent_;   // host: last state sent per character
+    double nextCaptives_ = 0, captivesFullAt_ = 0;
+    std::unordered_map<uint32_t, CaptiveState> captives_;      // client: the host's state per character
+    std::unordered_set<uint32_t> captivesDirty_;               // client: to impose now
+    double captivesReapplyAt_ = 0;
+    void HostCaptives(double now);
+    void ClientCaptives(double now);
+    void OnCaptives(Reader& r);
     std::vector<std::pair<uint8_t, AppearanceMsg>> pendingLooks_;   // host: from players, applied on the next live tick
     uint32_t editRequest_ = 0;             // client: the host asked us to make our new character
     bool editingSent_ = false;             // client: what we last told the host about our editor

@@ -158,6 +158,9 @@ Les signatures sont celles du commentaire du code.
 | 113 | `FnGetNpcTrader` | `InventoryGUI::getNPCTrader` | `0x70E2D0` | — | static Character* getNPCTrader() : le marchand de la fenêtre de commerce ouverte (null si moins de 2 fenêtres) |
 | 114 | `FnCharTakeMoney` | `Character::takeMoney` | `0x7965F0` | — | bool Character::takeMoney(int) : `getOwnerships()->takeMoney` ; négatif = donner ; false si pas assez |
 | 115 | `FnRClickAutoTrade` | `InventoryGUI::RClickAutoTrade` | `0x713D20` | — | TradeResult* RClickAutoTrade(TradeResult* out, const std::string& section, int x, int y, InventoryGUI* vers, bool vol, bool premier) : clic droit, une unité passe de l'autre côté (achat / vente du jeu) ; tests seulement |
+| 116 | `FnSetPrisonMode` | `Character::setPrisonMode` | `0x330600` | oui | lot D : met dans une cage / en sort (voir section 10) |
+| 117 | `FnSetChainedMode` | `Character::setChainedMode` | `0x32E590` | oui | lot D : menottes (crée l'objet si besoin) |
+| 118 | `FnSetSlaveState` | `StateBroadcastData::setSlaveState` | `0x5A4940` | oui | lot D : état d'esclave |
 
 L'ordre de la table doit suivre celui de l'énumération `Fn` : la vérification des prologues ne voit
 pas deux lignes inversées (chaque adresse correspond bien à ses octets). Deux lignes l'étaient
@@ -887,3 +890,29 @@ Recherche faite le 9 octobre 2026 pour le commerce. Fiabilité de chaque fait :
   - Avec `inSomething` = 2, `animationSelection` joue l'animation de K.-O. du meuble.
 - **Occupation d'un meuble** : `tryOperate(hand)` (vt 0x4F8, `0xF8030`) et `stopOperating(hand)`
   (`0x2ACA90`).
+
+## 10. Prisons, cages, chaînes, esclavage (lot D)
+
+Adresses 1.0.68, traduites depuis KenshiLib 1.0.65 (`translate.py`, encadrées par des ancres) puis
+lues au désassembleur.
+
+| RVA | Fonction | Ce qu'elle fait |
+|---|---|---|
+| `0x330600` | `Character::setPrisonMode(bool on, UseableStuff* cage)` [D] | `on` : `inSomething` = 2, `inWhat` = hand de la cage, `tryOperate` (vt 0x4F8) de la cage, place le personnage à la position de la cage (mouvement vt 0xB8), remet `isEscapedPrisoner` (`StateBroadcastData`+0xE8) à 0, choisit un objectif d'IA (4 ou 0x10 selon un drapeau de la cage). `off` (cage nulle acceptée) : `inSomething` = 0, `inWhat` = hand vide (type 0xB), objectifs d'IA d'origine, ordres permanents « tenir » et « passif » réappliqués. |
+| `0x32E590` | `Character::setChainedMode(bool on, const hand& propriétaire)` [D] | écrit `isChained` (+0x320), passe l'état d'esclave à 1 (`setSlaveState`), copie le propriétaire dans `slaveOwner` (+0x328) s'il n'est pas vide (type 1 ou 0x22 : aussi la faction de l'esclave à `StateBroadcastData`+0xE0), puis **cherche des menottes dans l'inventaire (fonction d'objet 9) et en crée si besoin** : à ne pas appeler chez un client (l'inventaire vient de l'hôte). |
+| `0x32DF60` | `Character::isChainedMode` | lit l'octet +0x320 |
+| `0x5C8A10` | `Character::getChainedModeShackles` | l'objet de fonction 9 (sinon 5) de l'inventaire |
+| `0x5C8AA0` | `Character::isSlave` | `getStateBroadcast()` (vt 0x70) → premier entier |
+| `0x32E430` | `Character::changeSlaveOwner(const hand&)` | — |
+| `0x5A4940` | `StateBroadcastData::setSlaveState(SlaveStateEnum)` [D] | passage à « esclave » d'un perso du joueur : message ; état 2 : minuteur ; prévient le personnage (`0x34C07`) ; écrit l'état à +0 |
+
+Champs (`Character`) :
+- +0x2F8 `inSomething` (0 rien, 1 lit, 2 prison / cage), +0x300 `inWhat` (hand du meuble) ;
+- +0x320 `isChained` (octet), +0x328 `slaveOwner` (hand ; type 0xB = personne) ;
+- +0x1A0 `StateBroadcastData*` : +0 `_slaveState` (0 non, 1 esclave, 2 en fuite, 3 ancien
+  esclave), +0x8 date du changement, +0xE0 `isSlaveOf` (`Faction*`), +0xE8 `isEscapedPrisoner`,
+  +0xE9 `isKidnapped` ;
+- +0xF0 `BountyManager` (intégré) : +0x98 début de la peine de prison (`TimeOfDay`, 8 octets),
+  +0xA0 heures à purger [U : déduit des champs voisins vérifiés +0x58, +0x70, +0x90].
+- Fonction de bâtiment `BF_CAGE` = 8 (`getSpecialFunction`, vt 0x2F0).
+

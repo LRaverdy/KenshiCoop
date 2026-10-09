@@ -160,6 +160,7 @@ void Session::Leave() {
     windowOpenedAt_ = -1;
     trades_.clear();
     trade_ = ClientTrade{};
+    captiveSent_.clear(); captives_.clear(); captivesDirty_.clear();   // lot D: prisons
     haveMoneyBase_ = false;
     unsentSpend_ = 0;
     dialogReplies_.clear();
@@ -226,6 +227,7 @@ void Session::HostTick(double now, bool live) {
     pendingAnswers_.clear();
     HostContainers(now);
     HostTrades(now);
+    HostCaptives(now);   // lot D: prisons
     // A player's new looks: applied here, then shown to everyone else.
     for (auto& [from, m] : pendingLooks_) {
         auto it = entities_.find(m.netId);
@@ -1981,6 +1983,7 @@ void Session::ClientTick(double now, bool live) {
     }
     SendEditedAppearances();
     ClientContainers(now);
+    ClientCaptives(now);   // lot D: prisons
     // Squads: split our characters as the host does (again now and then: stand-ins, late arrivals).
     if (haveSquads_ && now - squadsAt_ > 2.0) {
         squadsAt_ = now;
@@ -2232,6 +2235,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
         }
         break;
     }
+    case Msg::Captives: OnCaptives(r); break;   // lot D: prisons
     case Msg::TradeOpen: {
         TradeOpen m;
         if (state_ != SessionState::Connected || !Decode(r, m)) break;

@@ -291,6 +291,7 @@ format, et une version différente est refusée à la connexion.
 | 36 | ContainerOpen | C→H | mon personnage veut regarder dans ce contenant (type, endroit) |
 | 37 | ContainerOpened | H→C | il y est : netId du contenant (son contenu suit en `Inventory`) |
 | 38 | ContainerClose | ⇄ | fenêtre fermée (client) ou à fermer (hôte : vol repéré, trop loin) |
+| 49 | Captives | H→C | lot D : personnages en cage, enchaînés, esclaves, évadés, enlevés, en peine de prison (et ceux libérés, une fois) |
 
 ## Les flux, système par système
 
@@ -390,6 +391,20 @@ format, et une version différente est refusée à la connexion.
    du jeu (`showTradeWindow`, type 2).
 5. La fermeture vient du client (fenêtre fermée), ou de l'hôte : vol repéré, ou personnage à plus
    de 50 unités.
+
+### Captivité (lot D : `HostCaptives`, `ClientCaptives`, `plugin/prisons.cpp`)
+1. L'hôte relit toutes les 0,5 s la captivité de chaque entité (`KenshiWorld::ReadCaptive` :
+   cage par type et endroit, menottes, propriétaire, état d'esclave, faction maître, évadé,
+   enlevé, peine) et envoie ce qui a changé ; un personnage libéré part une fois « vide », puis
+   est oublié. Toutes les 5 s, tous les captifs repartent.
+2. Le client garde l'état de l'hôte par netId, l'impose dès réception puis toutes les 2 s
+   (`ApplyCaptive`) : `setPrisonMode` sur la même cage locale, puis les champs.
+3. Hooks : `setPrisonMode`, `setChainedMode` (personnages répliqués) et `setSlaveState` sont
+   refusés chez un client hors `HostCallScope`.
+4. `KenshiWorld::Apply` saute les corrections de position d'un personnage que l'hôte tient en
+   cage ; `ApplyVitals` le met inconscient sans le faire tomber.
+5. Les évasions, crochetages et libérations sont des ordres : chemin habituel (`RouteOrder` →
+   hôte).
 
 ### Objets au sol (`Ground`, `PickUp`)
 - L'hôte rapporte chaque objet posé (type, endroit) et ramassé.

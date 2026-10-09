@@ -809,6 +809,55 @@ def exp_talk(host, cli):
             return
 
 
+def exp_prison(host, cli):
+    """Lot D (prisons): the host puts the client player's character in the nearest cage, shackles it,
+    enslaves it, then frees it. The client must show each state like the host, keep the character in
+    its cage (no position fight), and clear everything at the release. Needs a cage (BF_CAGE) within
+    300 m of the squad: use --save with a prison, slaver camp or cage nearby."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    def fields(t):
+        return dict(kv.split("=", 1) for kv in t.split()[1:] if "=" in kv)
+    def both():
+        return fields(cmd(host, f"captive {own}")[1]), fields(cmd(cli, f"captive {own}")[1])
+    def pos(f):
+        return tuple(map(float, f.get("pos", "0,0,0").split(",")))
+    caged = cmd(host, f"cage {own}")
+    log("host cages the client's character:", caged)
+    if not caged[0]:
+        check("prison : une cage pres de l'escouade", False, caged[1] + " (prendre une sauvegarde avec une cage proche)")
+        summary()
+        return
+    time.sleep(3)
+    h, c = both()
+    log("host", h, "/ client", c)
+    check("prison : en cage chez l'hote", h.get("in") == "2", h)
+    check("prison : en cage chez le client, meme cage", c.get("in") == "2" and c.get("cage") == h.get("cage"), c)
+    check("prison : meme position dans la cage", dist(pos(h), pos(c)) < 2.0, f"{dist(pos(h), pos(c)):.2f}")
+    time.sleep(5)
+    h2, c2 = both()
+    check("prison : le client le garde dans la cage (pas de correction de position)", c2.get("in") == "2" and dist(pos(c), pos(c2)) < 1.0,
+          f"in={c2.get('in')} bouge de {dist(pos(c), pos(c2)):.2f}")
+    log("host shackles it:", cmd(host, f"chain {own}"))
+    log("host enslaves it:", cmd(host, f"enslave {own} 1"))
+    time.sleep(3)
+    h, c = both()
+    check("prison : enchaine chez les deux", h.get("chained") == "1" and c.get("chained") == "1", f"hote {h.get('chained')} / client {c.get('chained')}")
+    check("prison : esclave chez les deux", h.get("slave") == "1" and c.get("slave") == "1", f"hote {h.get('slave')} / client {c.get('slave')}")
+    check("prison : meme faction maitre", h.get("slaveof") == c.get("slaveof"), f"hote {h.get('slaveof')} / client {c.get('slaveof')}")
+    log("host frees it:", cmd(host, f"cage {own} off"), cmd(host, f"chain {own} off"), cmd(host, f"enslave {own} 0"))
+    time.sleep(3)
+    h, c = both()
+    check("prison : libere chez l'hote", h.get("in") == "0" and h.get("chained") == "0" and h.get("slave") == "0", h)
+    check("prison : libere chez le client", c.get("in") == "0" and c.get("chained") == "0" and c.get("slave") == "0", c)
+    check("prison : plus aucun captif suivi", h.get("captives") == "0" and c.get("captives") == "0", f"hote {h.get('captives')} / client {c.get('captives')}")
+    rep = compare(dump(host, "h_prison"), dump(cli, "c_prison"), "prison")
+    check("prison : inventaires identiques (menottes comprises)", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    summary()
+
+
 def exp_trade(host, cli, merchant="Marchand"):
     """Trading with a merchant: the host's game asks for a trade window for the client's character; it
     opens on the client with the shop's stock. A purchase and a sale, the game's own way (right click),
@@ -1513,6 +1562,9 @@ def main():
     cp = sub.add_parser("clientpickup")
     cp.add_argument("--save", default="kctest_base")
     cp.add_argument("--keep", action="store_true")
+    pr = sub.add_parser("prison", help="lot D: cage, shackles, slavery and release of the client's character")
+    pr.add_argument("--save", default="kctest_base")
+    pr.add_argument("--keep", action="store_true")
     td = sub.add_parser("trade", help="a client trades with a merchant: purchase, sale, stock everywhere")
     td.add_argument("--save", default="kctest_town")
     td.add_argument("--keep", action="store_true")
@@ -1614,6 +1666,8 @@ def main():
             exp_facing(host, cli)
         elif a.what == "talk":
             exp_talk(host, cli)
+        elif a.what == "prison":
+            exp_prison(host, cli)
         elif a.what == "trade":
             exp_trade(host, cli, a.merchant)
         elif a.what == "progress":

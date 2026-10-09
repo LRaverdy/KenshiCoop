@@ -10,6 +10,11 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
   crochetage, factions et primes, combat à distance et tourelles, prisons et capture, bâtiments et
   construction, désynchro de combat et PNJ lointains. Ils seront fusionnés puis testés en jeu
   ensemble.
+- **Lot D, prisons** (à vérifier en jeu) : cages, menottes, esclavage, évasion et peine de prison
+  de l'hôte imposés à tous les clients (message `Captives`), pour les joueurs comme pour les PNJ ;
+  le personnage en cage reste dans la cage chez le client ; le jeu du client ne peut plus changer
+  ces états de lui-même. Commandes de test `cage`, `chain`, `enslave`, `captive`, expérience
+  `prison`.
 
 ## 9 octobre 2026 (soir)
 
