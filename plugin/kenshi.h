@@ -471,6 +471,9 @@ bool ReadInventory(const void* obj, std::vector<kc::ItemState>& out);   // canon
 // Replace the whole content with these items, laid out like a save load does.
 bool RebuildInventory(void* obj, const std::vector<kc::ItemState>& items, std::string* err);
 // Host: replay a client's item movement (from -> to, or a drop to the ground).
+// Two whole stacks trading places between `from` and `to` (a: from -> to, onto b's slot; b: to ->
+// from). Nothing moves on failure.
+bool SwapInventoryItems(void* from, void* to, const kc::InvOp& a, const kc::InvOp& b, std::string* err = nullptr);
 bool MoveInventoryItem(void* from, void* to, const kc::InvOp& op, std::string* err);
 
 // Melee combat.
@@ -580,6 +583,13 @@ void* ResolveItem(const kc::Handle& h);                    // the item with that
 void* CreateGroundItem(const kc::ItemState& s, const kc::Vec3& pos, kc::Handle& localHandle, std::string* why);
 bool DestroyItem(void* item);
 void GroundItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out);
+// Any item lying in the world, out of every inventory, even one the game keeps in an item group or
+// as a non-physical prop (shop goods, town clutter): what a player can still pick up or steal.
+bool ItemLoose(void* item);
+void LooseItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out);
+// The player's own "pick up" order (PlayerInterface::pickupItem) given to that character alone: it
+// walks there and the game takes the item, as a theft when it belongs to someone.
+bool OrderPickupItem(Character* c, void* item);
 void AllObjectsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out);   // items lying within radius
 void* FirstLooseItem(Character* c);                        // tests: an unequipped item it carries
 bool CallDropItem(Character* c, void* item);               // tests: the character drops it (the game's own drop)

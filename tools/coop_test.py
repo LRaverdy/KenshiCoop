@@ -1787,6 +1787,62 @@ def exp_clientpickup(host, cli):
             break
 
 
+def exp_lootswap(host, cli):
+    """fix G2: the client drops a knocked-out NPC's clothes on its own character already wearing some:
+    the game swaps them, the host must do the same swap (nothing refused, lost or doubled)."""
+    time.sleep(8)
+    ok, text = cmd(host, "spawnnpc 12 8")
+    log("spawn", ok, text)
+    if not ok:
+        return
+    key = text.split()[1]
+    time.sleep(5)
+    log("ko", cmd(host, "ko"))
+    time.sleep(5)
+    for sec in ("boots", "shirt", "pants", "body", "legs", "hat"):
+        ok, text = cmd(cli, f"invswap {key} squad0 {sec}")
+        log("client swap", sec, ok, text)
+        if ok:
+            break
+    else:
+        check("echange de vetements avec un corps", False, "aucun emplacement commun occupe des deux cotes")
+        return
+    time.sleep(5)
+    hs, cs = dump(host, "h_lootswap"), dump(cli, "c_lootswap")
+    log("loot swap (live)", compare(hs, cs, "loot swap (live)"))
+    refused = [l for l in host_log()[-200:] if "refused" in l and ("item move" in l or "inventory move" in l)]
+    check("echange de vetements : aucun refus chez l'hote", not refused, refused[-1] if refused else "")
+    check("echange de vetements : l'hote a fait l'echange", any("client item swap done" in l for l in host_log()[-200:]))
+
+
+def exp_groundpick(host, cli):
+    """fix G2: the client picks up items lying in town (save items, shop goods, clutter): the host finds
+    the same one and its character takes it."""
+    time.sleep(8)
+    ok, text = cmd(cli, "groundnear 600 loose")
+    items = text.split()[2:] if ok else []
+    log("loose items near the client's squad:", text.split()[1] if ok else text)
+    if not items:
+        check("ramassage par un client", False, "aucun objet par terre autour")
+        return
+    picked = 0
+    for it in items[:3]:
+        key, tpl, pos = it.split("|")
+        log("client asks squad0 to pick up", tpl, pos, cmd(cli, f"pickupreq 0 {tpl} {pos}"))
+        gone = False
+        for i in range(15):
+            time.sleep(2)
+            after = cmd(host, "groundnear 3000 loose")[1].split()[2:]
+            if not [x for x in after if x.split("|")[1] == tpl and dist(tuple(map(float, x.split("|")[2].split(","))), tuple(map(float, pos.split(",")))) < 40]:
+                gone = True
+                break
+        log("  gone from the host's ground:", gone)
+        picked += gone
+    failed = [l for l in host_log()[-300:] if "pick up" in l and "FAILED" in l]
+    check("ramassage par un client : l'objet est pris chez l'hote", picked > 0, f"{picked}/{min(3, len(items))}")
+    check("ramassage par un client : aucun ordre refuse", not failed, failed[-1] if failed else "")
+
+
 def exp_bodies(host, cli):
     """Where does a knocked-out body lie on each side, over time, for each body mode?"""
     time.sleep(6)
@@ -2042,9 +2098,9 @@ def main():
     td.add_argument("--save", default="kctest_town")
     td.add_argument("--keep", action="store_true")
     td.add_argument("--merchant", default="Marchand", help="part of the merchant's name ('_' for spaces)")
-    for name in ("stuck", "farnpc", "beds", "tpdown"):
+    for name in ("stuck", "farnpc", "beds", "tpdown", "lootswap", "groundpick"):
         e2 = sub.add_parser(name)
-        e2.add_argument("--save", default="kctest_town" if name == "beds" else "kctest_base")
+        e2.add_argument("--save", default="kctest_town" if name in ("beds", "groundpick") else "kctest_base")
         e2.add_argument("--keep", action="store_true")
     fa_ = sub.add_parser("factions", help="lot B: relations, bounties and crimes the host's everywhere")
     fa_.add_argument("--save", default="kctest_base")
@@ -2160,6 +2216,10 @@ def main():
             exp_beds(host, cli)
         elif a.what == "tpdown":
             exp_tpdown(host, cli)
+        elif a.what == "lootswap":
+            exp_lootswap(host, cli)
+        elif a.what == "groundpick":
+            exp_groundpick(host, cli)
         elif a.what == "factions":
             exp_factions(host, cli)
         elif a.what == "doors":

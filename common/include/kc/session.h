@@ -265,6 +265,12 @@ public:
     // Inventories. Host: read; execute a client's item movement (false = refused/impossible).
     virtual bool ReadInventory(const Handle& h, std::vector<ItemState>& out) = 0;
     virtual bool ExecuteInvOp(const Handle& from, const Handle& to, const InvOp& op) = 0;
+    // Two items trading places in one go (a, from `from`, goes where b was in `to`; b goes to a's
+    // place): what the game does when an item is dropped on an occupied slot. False: nothing moved.
+    virtual bool ExecuteInvSwap(const Handle& from, const Handle& to, const InvOp& a, const InvOp& b) {
+        (void)from; (void)to; (void)a; (void)b;
+        return false;
+    }
     // Client: make the local copy hold exactly these items (false = could not, retry later).
     virtual bool ApplyInventory(const Handle& h, const std::vector<ItemState>& items) = 0;
 
@@ -508,7 +514,8 @@ private:
     void SendInventories(double now, bool force, PeerId onlyTo);
     void ClientInventoryDiff(double now);
     void SendLocalDrops();
-    void HostInvOp(uint8_t from, const InvOp& op);
+    void HostInvOp(uint8_t from, const InvOp& op, const InvOp* swapWith = nullptr);
+    void HostInvOps();
     void HostTradeOp(uint8_t from, const InvOp& op);
     void SendReliable(PeerId to, const Writer& w);
     void BroadcastReliable(const Writer& w, bool inGameOnly, PeerId except = kNoPeer);

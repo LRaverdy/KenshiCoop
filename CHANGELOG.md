@@ -6,6 +6,10 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+- **Inventaires et objets au sol (fix G2)** : échanger un objet avec un corps (bottes sur des
+  bottes) marche sans refus ni duplication ; une pile lâchée sur une pile identique s'y ajoute chez
+  l'hôte ; on peut poser des objets sur un corps K.-O. ; un client peut ramasser ou voler les objets
+  posés en ville (marchandises, décor), avec l'ordre « ramasser » du jeu chez l'hôte.
 - **Robustesse (lot F)** : un PNJ bloqué chez un client (mur, porte, étage) est replacé où l'hôte
   l'a après 1 s sans progrès ; les PNJ lointains sont replacés sur la position de l'hôte ; la TP
   admin déplace aussi un personnage à terre ou porté ; un perso dans un lit ou une cage n'est plus
