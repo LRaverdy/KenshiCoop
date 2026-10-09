@@ -872,6 +872,47 @@ def exp_trade(host, cli, merchant="Marchand"):
     summary()
 
 
+def exp_factions(host, cli):
+    """Lot B: faction relations, bounties and crimes are the host's on every machine; the client's game
+    cannot keep its own."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    fh, fc = cmd(host, "factions")[1], cmd(cli, "factions")[1]
+    log("factions host:", fh, "/ client:", fc)
+    check("factions : memes relations au depart", fh.startswith("ok") and fh == fc, f"hote {fh} / client {fc}")
+    part = None
+    for p in ("Nation_Sainte", "Shek", "Ville", "Marchands", "Shinobi", "Bandit", "Gamedata"):
+        if cmd(host, f"relation {p}")[0]:
+            part = p
+            break
+    if part is None:
+        part = "a"
+    log("faction used:", part, cmd(host, f"relation {part}")[1])
+    log("host sets the relation:", cmd(host, f"setrelation {part} -90"))
+    time.sleep(3)
+    rh, rc = cmd(host, f"relation {part}")[1], cmd(cli, f"relation {part}")[1]
+    check("factions : relation changee chez l'hote, identique chez le client", "ours=-90.0" in rh and rh == rc, f"hote {rh} / client {rc}")
+    log("host gives a bounty:", cmd(host, f"givebounty {own} {part} 1500"))
+    time.sleep(3)
+    bh, bc = cmd(host, f"bounty {own}")[1], cmd(cli, f"bounty {own}")[1]
+    check("primes : prime de l'hote visible chez le client", ":1500" in bh and bh == bc, f"hote {bh} / client {bc}")
+    cmd(host, f"givebounty {own} {part} 0")
+    time.sleep(3)
+    bh, bc = cmd(host, f"bounty {own}")[1], cmd(cli, f"bounty {own}")[1]
+    check("primes : prime levee partout", ":1500" not in bc and bh == bc, f"hote {bh} / client {bc}")
+    before = cmd(cli, "factionsync")[1]
+    log("client changes its own copy:", cmd(cli, f"setrelation {part} 50"))
+    time.sleep(4)
+    rh, rc = cmd(host, f"relation {part}")[1], cmd(cli, f"relation {part}")[1]
+    after = cmd(cli, "factionsync")[1]
+    check("factions : le client ne garde pas ses propres relations", rh == rc and "ours=50.0" not in rc, f"hote {rh} / client {rc} | {before} -> {after}")
+    fh, fc = cmd(host, "factions")[1], cmd(cli, "factions")[1]
+    check("factions : memes relations a la fin", fh == fc, f"hote {fh} / client {fc}")
+    summary()
+
+
 def exp_facing(host, cli):
     """A host character runs in several directions: on the client it must really run (speed), facing the same way."""
     import math
@@ -1517,6 +1558,9 @@ def main():
     td.add_argument("--save", default="kctest_town")
     td.add_argument("--keep", action="store_true")
     td.add_argument("--merchant", default="Marchand", help="part of the merchant's name ('_' for spaces)")
+    fa_ = sub.add_parser("factions", help="lot B: relations, bounties and crimes the host's everywhere")
+    fa_.add_argument("--save", default="kctest_base")
+    fa_.add_argument("--keep", action="store_true")
     tk = sub.add_parser("talk")
     tk.add_argument("--save", default="kctest_base")
     tk.add_argument("--keep", action="store_true")
@@ -1614,6 +1658,8 @@ def main():
             exp_facing(host, cli)
         elif a.what == "talk":
             exp_talk(host, cli)
+        elif a.what == "factions":
+            exp_factions(host, cli)
         elif a.what == "trade":
             exp_trade(host, cli, a.merchant)
         elif a.what == "progress":

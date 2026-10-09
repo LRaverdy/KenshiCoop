@@ -323,6 +323,28 @@ struct FakeWorld : IWorld {
     bool OpenTradeWindow(const Handle&, const Handle&) override { tradeWindow = true; ++tradeWindowOpens; return true; }
     bool ContainerWindowOpen() override { return tradeWindow; }
     void CloseContainerWindows() override { tradeWindow = false; }
+    // ---- lot B: factions: the player faction's relations, bounties per character (serial)
+    FactionsMsg factions;
+    std::map<uint32_t, CharBounties> bounties;
+    bool ReadFactions(FactionsMsg& out) override { out = factions; return true; }
+    size_t ApplyFactions(const FactionsMsg& m) override {
+        if (m == factions) return 0;
+        factions = m;
+        return 1;
+    }
+    bool ReadBounties(const Handle& h, CharBounties& out) override {
+        if (!chars.count(h.serial)) return false;
+        out = bounties[h.serial];
+        out.netId = 0;
+        return true;
+    }
+    size_t ApplyBounties(const Handle& h, const CharBounties& b) override {
+        CharBounties want = b;
+        want.netId = 0;
+        if (bounties[h.serial] == want) return 0;
+        bounties[h.serial] = want;
+        return 1;
+    }
     std::vector<RegionWeather> weather;
     void ReadWeather(std::vector<RegionWeather>& out) override { out = weather; }
     void ApplyWeather(const std::vector<RegionWeather>& r) override { weather = r; }
@@ -595,6 +617,28 @@ static void TestWire() {
         Reader sr(sw.data(), sw.size()); PeekType(sr);
         InvOp sell; CHECK(Decode(sr, sell) && sell.price == -25);
     }
+    {   // lot B: relations both ways, bounties and crime state
+        FactionsMsg fm; fm.playerRank = 3; fm.reputationTrust = 1.5f; fm.reputationBadassery = -2;
+        FactionRelationEntry e; e.factionSid = "10-gamedata.base"; e.hasOurs = true; e.ours.relation = -80; e.ours.war = true;
+        e.hasTheirs = true; e.theirs.relation = -75.5f; e.theirs.alliance = false; e.theirs.coexists = true; e.theirs.trustNegatives = 4;
+        FactionRelationEntry e2; e2.factionSid = "11-gamedata.base"; e2.hasTheirs = true; e2.theirs.relation = 40; e2.theirs.alliance = true;
+        fm.factions = {e, e2};
+        Writer lw2; Encode(lw2, fm);
+        Reader lr2(lw2.data(), lw2.size()); CHECK(PeekType(lr2) == Msg::Factions);
+        FactionsMsg fm2; CHECK(Decode(lr2, fm2) && fm2 == fm);
+        BountiesMsg bm;
+        CharBounties cb; cb.netId = 7; cb.crime = 3; cb.crimeFactionSid = "10-gamedata.base"; cb.crimeExpiry = 2.5f; cb.prisonSentence = 12;
+        cb.prisonBegan = 123456789; cb.accessPassSid = "11-gamedata.base"; cb.accessPassUntil = 99;
+        cb.bounties = {{"10-gamedata.base", 1500, 8u, true, 777}};
+        bm.chars = {cb};
+        Writer bw; Encode(bw, bm);
+        Reader br(bw.data(), bw.size()); CHECK(PeekType(br) == Msg::Bounties);
+        BountiesMsg bm2; CHECK(Decode(br, bm2) && bm2 == bm);
+        std::vector<uint8_t> bad(bw.data(), bw.data() + bw.size());   // netId 0 is refused
+        bad[2] = 0;
+        Reader xr(bad.data(), bad.size()); PeekType(xr);
+        BountiesMsg bm3; CHECK(!Decode(xr, bm3));
+    }
     {   // hunger travels with the vitals
         VitalsMsg vm; vm.entities.resize(1); vm.entities[0].netId = 2; vm.entities[0].hunger = 250.5f;
         auto pk = EncodeVitals(vm)[0];
@@ -665,6 +709,12 @@ static void TestFuzz() {
     add([](Writer& w) { Encode(w, ContainerClose{9, "trop loin"}); });
     add([](Writer& w) { TradeOpen m; m.traderNetId = 4; m.looterNetId = 2; m.counters = {{5, "box", {1, 2, 3}}}; Encode(w, m); });
     add([](Writer& w) { InvOp m; m.fromNetId = 5; m.toNetId = 2; m.item.templateSid = "x"; m.traderNetId = 4; m.price = 12; Encode(w, m); });
+    add([](Writer& w) {   // lot B
+        FactionsMsg m; FactionRelationEntry e; e.factionSid = "f"; e.hasOurs = true; e.ours.relation = 5; m.factions = {e, e}; Encode(w, m);
+    });
+    add([](Writer& w) {
+        BountiesMsg m; CharBounties c; c.netId = 3; c.bounties = {{"f", 10, 1u, false, 2}}; m.chars = {c}; Encode(w, m);
+    });
     { Snapshot s; s.entities.resize(3); for (auto& e : s.entities) e.netId = 7; seeds.push_back(EncodeSnapshot(s)[0]); }
 
     auto decodeAll = [](const std::vector<uint8_t>& p) {
@@ -708,6 +758,8 @@ static void TestFuzz() {
         case Msg::ContainerOpened: { ContainerOpened m; Decode(r, m); break; }
         case Msg::ContainerClose: { ContainerClose m; Decode(r, m); break; }
         case Msg::TradeOpen: { TradeOpen m; Decode(r, m); break; }
+        case Msg::Factions: { FactionsMsg m; Decode(r, m); break; }
+        case Msg::Bounties: { BountiesMsg m; Decode(r, m); break; }
         default: break;
         }
     };
@@ -716,7 +768,7 @@ static void TestFuzz() {
         if (i % 2) {
             p.resize(rng() % 64);
             for (auto& b : p) b = uint8_t(rng());
-            if (!p.empty()) p[0] = uint8_t(1 + rng() % 39);
+            if (!p.empty()) p[0] = uint8_t(1 + rng() % 44);
         } else {
             p = seeds[rng() % seeds.size()];
             const int muts = 1 + rng() % 4;
@@ -1276,6 +1328,46 @@ static void TestTrade() {
     CHECK(!cli.tradeView().open && !cli.tradeView().pending && host.hostTrades() == 0);
 }
 
+// ---- lot B
+static void TestFactions() {
+    std::printf("session: faction relations and bounties are the host's, everywhere\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    FactionRelationEntry holy; holy.factionSid = "holy"; holy.hasOurs = holy.hasTheirs = true; holy.ours.relation = -10; holy.theirs.relation = -12;
+    FactionRelationEntry shek; shek.factionSid = "shek"; shek.hasOurs = true; shek.ours.relation = 30; shek.ours.alliance = true;
+    hw.factions.factions = {holy, shek};
+    hw.factions.playerRank = 2;
+    hw.bounties[1].bounties = {{"holy", 2000, 8u, false, 5}};
+    hw.bounties[1].crime = 3;
+    hw.bounties[1].crimeFactionSid = "holy";
+    AtMenu(cw);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port;
+    SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return cw.factions == hw.factions && cw.bounties[1] == hw.bounties[1]; });
+    CHECK(cw.factions == hw.factions);
+    CHECK(cw.bounties[1] == hw.bounties[1] && cw.bounties[1].bounties.size() == 1 && cw.bounties[1].bounties[0].amount == 2000);
+    CHECK(cli.factionsView().received >= 1 && cli.factionsView().bountiesReceived >= 1 && host.factionsView().sent >= 1);
+    // the host's game changes them (war declared, bounty paid off): everyone follows within a second or two
+    hw.factions.factions[0].ours.relation = -100;
+    hw.factions.factions[0].ours.war = true;
+    hw.bounties[1].bounties.clear();
+    hw.bounties[1].crime = 0;
+    hw.bounties[1].crimeFactionSid.clear();
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return cw.factions == hw.factions && cw.bounties[1] == hw.bounties[1]; });
+    CHECK(cw.factions.factions.size() == 2 && cw.factions.factions[0].ours.war && cw.factions.factions[0].ours.relation == -100);
+    CHECK(cw.bounties[1].bounties.empty() && cw.bounties[1].crime == 0);
+    // the client's game drifts by itself: put back to the host's values
+    cw.factions.factions[1].ours.relation = 99;
+    const size_t before = cli.factionsView().corrected;
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return cw.factions == hw.factions; });
+    CHECK(cw.factions == hw.factions && cli.factionsView().corrected > before);
+}
+
 static void TestManyPlayers() {
     std::printf("session: 1 host + 4 clients joining at once, 120 characters\n");
     FakeWorld hw;
@@ -1337,6 +1429,7 @@ int main() {
     TestSpawnReplication();
     TestInventories();
     TestTrade();
+    TestFactions();
     TestManyPlayers();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

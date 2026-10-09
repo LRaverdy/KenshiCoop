@@ -158,6 +158,8 @@ Les signatures sont celles du commentaire du code.
 | 113 | `FnGetNpcTrader` | `InventoryGUI::getNPCTrader` | `0x70E2D0` | — | static Character* getNPCTrader() : le marchand de la fenêtre de commerce ouverte (null si moins de 2 fenêtres) |
 | 114 | `FnCharTakeMoney` | `Character::takeMoney` | `0x7965F0` | — | bool Character::takeMoney(int) : `getOwnerships()->takeMoney` ; négatif = donner ; false si pas assez |
 | 115 | `FnRClickAutoTrade` | `InventoryGUI::RClickAutoTrade` | `0x713D20` | — | TradeResult* RClickAutoTrade(TradeResult* out, const std::string& section, int x, int y, InventoryGUI* vers, bool vol, bool premier) : clic droit, une unité passe de l'autre côté (achat / vente du jeu) ; tests seulement |
+| 116 | `FnGetRelationData` | `FactionRelations::getRelationData` | `0x6B4C60` | — | RelationData* getRelationData(Faction*) : trouve ou crée la relation (lot B) |
+| 117 | `FnBountyMapIndex` | `BountyManager bounties operator[]` | `0x5E7EE0` | — | paire `<Faction*, Bounty>` de la table des primes, créée si absente (lot B) |
 
 L'ordre de la table doit suivre celui de l'énumération `Fn` : la vérification des prologues ne voit
 pas deux lignes inversées (chaque adresse correspond bien à ses octets). Deux lignes l'étaient
@@ -561,6 +563,38 @@ Tâches par défaut d'un clic droit sur un meuble, selon la recherche :
 
 ### Types d'objets (`itemType`, valeurs utilisées)
 0 bâtiment ; 1 personnage ; 2 arme ; 7 race ; 0x5B personnage animal.
+
+### Factions, relations et primes (lot B, vérifié par désassemblage)
+- `Faction` : +0x78 `FactionRelations*`, +0x240 `GameData*` (identifiant de chaîne de la faction),
+  +0x1D0 `notARealFaction`, +0x250 `PlayerInterface*` (non nul : la faction du joueur, aussi à
+  `PlayerInterface+0x2A0`). Liste des factions : `GameWorld+0x4A8` → lektor `Faction*`.
+- `FactionRelations` : +0x10 `playerRank` (int), +0x14 `globalReputationTrust`, +0x18
+  `globalReputationForBadassery` (float), +0x20 `boost::unordered_map<Faction*, RelationData>`
+  (nombre de seaux +0x18, taille +0x20, seaux +0x38 de la table ; nœud : suivant +0, empreinte +8,
+  clé +0x10, valeur +0x18), +0x60 relation par défaut.
+- `RelationData` : `alliance`, `peaceTreaty`, `war`, `coexists` (octets 0 à 3), `relation` +4,
+  confiance positive +8, négative +0xC, force perçue +0x10.
+- `FactionRelations::getRelationData(Faction*)` `0x6B4C60` (vt 0x50) : trouve **ou crée** l'entrée
+  (valeur de départ : la relation par défaut +0x60) et renvoie la `RelationData*`.
+  `setRelation` `0x6B4D80`, `affectRelations` (montant `0x6B2EA0`, événement `0x6B2D20`) : déjà
+  bloqués chez les clients.
+- `BountyManager` = `Character+0xF0` :
+  - +0 `boost::unordered_map<Faction*, Bounty>` ; nœud de 0x30 octets : clé +0x10, `amount` +0x18,
+    `crimes` +0x1C (un bit par crime), `bountyHasBeenClaimedOnce` +0x20, heure du début +0x28
+    (`TimeOfDay`, 8 octets) ;
+  - +0x48 faction du laissez-passer, +0x50 son expiration ; +0x58 crime en cours (`CrimeEnum`),
+    +0x60 contre quelle faction, +0x70 `hand` de la victime, +0x90 expiration du crime ;
+    +0x98 début de la peine de prison (8 octets), +0xA0 heures de prison à faire (float) —
+    `notifyStartPrisonSentence` (`0x854950`) écrit ces deux derniers.
+- `operator[]` de la table des primes `0x5E7EE0` `(table*, Faction* const&)` : trouve ou crée le nœud
+  (`Bounty` construit à 0) et renvoie la paire (clé +0, montant +8, crimes +0xC, réclamée +0x10,
+  heure +0x18). C'est ce que `unfairAddToBounty` (`0x853E20`) appelle avant d'ajouter le montant.
+- `getTotalBounty` `0x853740` renvoie en fait la **plus grosse** prime (pas la somme).
+- `clearBounty` `0x8539F0` efface la prime de la faction **et** celle de la faction qui tient la
+  prison où est le personnage (ou de la ville où il se trouve) : le mod ne l'appelle pas, il met le
+  montant à 0.
+- Adresses de KenshiLib (1.0.65) pour `BountyManager` : décalage de +0x1590 dans cette zone
+  (`setCrime` 0x8516F0 → `0x852C80`).
 
 ## 6. Comportements observés
 

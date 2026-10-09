@@ -192,6 +192,13 @@ public:
     virtual bool TradeWindowBusy() { return false; }   // client: an item is on the mouse (do not reopen the window now)
     virtual void SetMoneyOf(const Handle& who, int32_t money) { (void)who; (void)money; }
     virtual std::string CharacterNameOf(const Handle& h) { (void)h; return {}; }
+    // ---- lot B: factions. Host: the player faction's relations with every faction (both ways) and
+    // a character's bounties and crime state. Client: impose the host's (the local game may not
+    // change them itself). Apply returns how many values had to change here.
+    virtual bool ReadFactions(FactionsMsg& out) { out = FactionsMsg{}; return false; }
+    virtual size_t ApplyFactions(const FactionsMsg& m) { (void)m; return 0; }
+    virtual bool ReadBounties(const Handle& h, CharBounties& out) { (void)h; out = CharBounties{}; return false; }
+    virtual size_t ApplyBounties(const Handle& h, const CharBounties& b) { (void)h; (void)b; return 0; }
 
     // Inventories. Host: read; execute a client's item movement (false = refused/impossible).
     virtual bool ReadInventory(const Handle& h, std::vector<ItemState>& out) = 0;
@@ -331,6 +338,9 @@ public:
         return {trade_.pending, trade_.open, trade_.trader, trade_.counters.size(), unsentSpend_};
     }
     size_t hostTrades() const { return trades_.size(); }   // host: trade windows open by players
+    // ---- lot B: factions (tests): messages received / values corrected here (client), sent (host)
+    struct FactionsView { size_t received = 0, bountiesReceived = 0, corrected = 0, sent = 0; };
+    FactionsView factionsView() const { return factionsView_; }
 
 private:
     struct Sample { double t; EntityState s; };
@@ -506,6 +516,18 @@ private:
     int32_t unsentSpend_ = 0;              // client: cats our trade window took (gave: negative), not sent yet
     void CaptureLocalSpend();
     void ApplyHostMoney(int32_t money);
+    // ---- lot B: factions, relations, bounties (session_factions.cpp)
+    void SendFactions(double now);                    // host: relations and bounties when they change
+    void ClientFactionsTick(double now);              // client: impose the host's, now and then
+    bool ClientFactionsPacket(Msg type, Reader& r);   // client: Factions / Bounties (true: handled)
+    void ResetFactions();
+    double nextFactions_ = 0, nextFactionsFull_ = 0, nextFactionsApply_ = 0;
+    uint64_t factionsHash_ = 0, bountiesHash_ = 0;
+    std::set<PeerId> factionsServed_;                  // host: players who got the full state
+    FactionsMsg hostFactions_;                         // client: the host's latest
+    BountiesMsg hostBounties_;
+    bool haveFactions_ = false, haveBounties_ = false, factionsDirty_ = false;
+    FactionsView factionsView_;
     std::vector<std::pair<uint8_t, AppearanceMsg>> pendingLooks_;   // host: from players, applied on the next live tick
     uint32_t editRequest_ = 0;             // client: the host asked us to make our new character
     bool editingSent_ = false;             // client: what we last told the host about our editor

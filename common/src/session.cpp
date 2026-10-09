@@ -160,6 +160,7 @@ void Session::Leave() {
     windowOpenedAt_ = -1;
     trades_.clear();
     trade_ = ClientTrade{};
+    ResetFactions();
     haveMoneyBase_ = false;
     unsentSpend_ = 0;
     dialogReplies_.clear();
@@ -269,6 +270,7 @@ void Session::HostTick(double now, bool live) {
         nextProgress_ = now + 1.0;
         SendProgress(now);
     }
+    if (anyInGame) SendFactions(now);   // lot B
     if (anyInGame && now >= nextWeather_) {
         nextWeather_ = now;
         std::vector<RegionWeather> w;
@@ -1981,6 +1983,7 @@ void Session::ClientTick(double now, bool live) {
     }
     SendEditedAppearances();
     ClientContainers(now);
+    ClientFactionsTick(now);   // lot B
     // Squads: split our characters as the host does (again now and then: stand-ins, late arrivals).
     if (haveSquads_ && now - squadsAt_ > 2.0) {
         squadsAt_ = now;
@@ -2021,6 +2024,7 @@ EntityState Session::Interpolate(const Entity& e, double rt) const {
 }
 
 void Session::ClientPacket(Msg type, Reader& r) {
+    if (ClientFactionsPacket(type, r)) return;   // lot B
     switch (type) {
     case Msg::Welcome: {
         Welcome m;

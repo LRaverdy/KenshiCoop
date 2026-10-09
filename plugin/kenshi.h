@@ -166,6 +166,9 @@ enum Fn : int {
     FnGetNpcTrader,             // static Character* InventoryGUI::getNPCTrader()   (the merchant of the open trade window)
     FnCharTakeMoney,            // bool Character::takeMoney(int)   (negative: gives)
     FnRClickAutoTrade,          // TradeResult* InventoryGUI::RClickAutoTrade(TradeResult*, const std::string& section, int x, int y, InventoryGUI* to, bool thievery, bool first)
+    // ---- lot B: factions
+    FnGetRelationData,          // RelationData* FactionRelations::getRelationData(Faction*)   (creates the entry if missing)
+    FnBountyMapIndex,           // pair<Faction* const, Bounty>* BountyManager's unordered_map<Faction*, Bounty>::operator[](Faction* const&)   (creates)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];

@@ -10,6 +10,11 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
   crochetage, factions et primes, combat à distance et tourelles, prisons et capture, bâtiments et
   construction, désynchro de combat et PNJ lointains. Ils seront fusionnés puis testés en jeu
   ensemble.
+- **Lot B, factions et primes** (implémenté, à vérifier en jeu) : les relations de la faction du
+  joueur avec chaque faction (dans les deux sens, rang et réputation), les primes, le crime en cours,
+  la peine de prison et le laissez-passer de chaque personnage de l'escouade sont ceux de l'hôte
+  chez tout le monde ; le jeu d'un client ne peut pas garder les siens (réimposés toutes les 2 s).
+  Messages `Factions` (43) et `Bounties` (44) ; expérience `python tools/coop_test.py factions`.
 
 ## 9 octobre 2026 (soir)
 

@@ -368,6 +368,92 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         snprintf(b, sizeof(b), "ok %.4f -> %.4f", before[stat], after[stat]);
         return b;
     }
+    // ---- lot B: factions
+    if (cmd == "factions" || cmd == "relation" || cmd == "setrelation") {
+        // factions: how many factions the player faction has relations with, and a fingerprint of them all
+        // relation <name part>: the player faction toward that faction and back ("ours" / "theirs")
+        // setrelation <name part> <value>: (host) both ways set to that value, as a faction event would
+        std::string part;
+        float value = 0;
+        in >> part >> value;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        kc::FactionsMsg m;
+        if (!w.ReadFactions(m)) return "err no player faction";
+        if (cmd == "factions") {
+            kc::Writer wr;
+            kc::Encode(wr, m);
+            uint64_t h = 1469598103934665603ull;
+            for (size_t i = 0; i < wr.size(); ++i) { h ^= wr.data()[i]; h *= 1099511628211ull; }
+            char b[96];
+            snprintf(b, sizeof(b), "ok n=%zu rank=%d hash=%016llx", m.factions.size(), m.playerRank, (unsigned long long)h);
+            return b;
+        }
+        for (auto& e : m.factions) {
+            std::string name;
+            kenshi::TemplateDisplayName(e.factionSid, name);
+            if (e.factionSid.find(part) == std::string::npos && name.find(part) == std::string::npos) continue;
+            if (cmd == "setrelation") {
+                e.ours.relation = value;
+                e.theirs.relation = value;
+                e.hasOurs = e.hasTheirs = true;
+                kc::FactionsMsg one = m;
+                one.factions = {e};
+                const size_t n = w.ApplyFactions(one);
+                return "ok " + name + " set (" + std::to_string(n) + " values)";
+            }
+            char b[200];
+            snprintf(b, sizeof(b), "ok %s ours=%.1f%s%s theirs=%.1f%s%s", name.c_str(), e.hasOurs ? double(e.ours.relation) : -999.0,
+                     e.ours.alliance ? ",ally" : "", e.ours.war ? ",war" : "", e.hasTheirs ? double(e.theirs.relation) : -999.0,
+                     e.theirs.alliance ? ",ally" : "", e.theirs.war ? ",war" : "");
+            return b;
+        }
+        return "err no such faction";
+    }
+    if (cmd == "bounty" || cmd == "givebounty") {
+        // bounty <squadIndex>: that member's bounties ("faction:amount"), crime being committed, prison hours
+        // givebounty <squadIndex> <faction name part> <amount>: (host) put that bounty on it
+        size_t idx = 0;
+        std::string part;
+        int amount = 0;
+        in >> idx >> part >> amount;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        kc::CharBounties b;
+        if (!w.ReadBounties(squad[idx], b)) return "err cannot read";
+        if (cmd == "givebounty") {
+            kc::FactionsMsg m;
+            w.ReadFactions(m);
+            std::string sid;
+            for (const auto& e : m.factions) {
+                std::string name;
+                kenshi::TemplateDisplayName(e.factionSid, name);
+                if (e.factionSid.find(part) != std::string::npos || name.find(part) != std::string::npos) { sid = e.factionSid; break; }
+            }
+            if (sid.empty()) return "err no such faction";
+            auto it = std::find_if(b.bounties.begin(), b.bounties.end(), [&](const kc::BountyEntry& e) { return e.factionSid == sid; });
+            if (it == b.bounties.end()) { b.bounties.push_back({}); it = b.bounties.end() - 1; it->factionSid = sid; }
+            it->amount = amount;
+            it->crimes |= 1u << 3;   // THEFT
+            return "ok " + std::to_string(w.ApplyBounties(squad[idx], b)) + " values";
+        }
+        std::string out = "ok";
+        int total = 0;
+        for (const auto& e : b.bounties) {
+            std::string name;
+            kenshi::TemplateDisplayName(e.factionSid, name);
+            out += " " + (name.empty() ? e.factionSid : name) + ":" + std::to_string(e.amount);
+            total += e.amount;
+        }
+        char tail[120];
+        snprintf(tail, sizeof(tail), " total=%d crime=%d prison=%.1f", total, b.crime, double(b.prisonSentence));
+        return out + tail;
+    }
+    if (cmd == "factionsync") {   // factionsync: relation/bounty messages received, values corrected (client), sent (host)
+        const auto v = s.factionsView();
+        return "ok received=" + std::to_string(v.received) + " bounties=" + std::to_string(v.bountiesReceived) + " corrected=" +
+               std::to_string(v.corrected) + " sent=" + std::to_string(v.sent);
+    }
     if (cmd == "money") {   // money [set]: the player faction's cats (host: set them)
         int32_t m = 0;
         std::string set;

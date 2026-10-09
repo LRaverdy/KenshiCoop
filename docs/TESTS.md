@@ -80,6 +80,7 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `far` | le personnage du client à environ 5 km de l'escouade de l'hôte : l'hôte simule-t-il bien sa zone, et le client voit-il la même chose ? |
 | `squads` | nouvelles escouades et déplacements entre escouades, depuis l'hôte et depuis le client |
 | `talk` | un PNJ parle au personnage du client : la conversation tourne chez l'hôte, la fenêtre s'ouvre chez le client |
+| `factions` | lot B : mêmes relations au départ ; relation changée par l'hôte identique chez le client ; prime donnée puis levée par l'hôte visible chez le client ; une relation changée par le jeu du client revient à celle de l'hôte |
 | `progress` | compétences, argent, bulles et ordres : l'hôte décide, le client suit |
 | `ground` / `clientpickup` | objets posés et ramassés ; ramassage demandé par un client |
 | `anim` / `animframe` / `gait` | animations de combat et d'action ; tout ce qui est à l'écran ; allure |
@@ -225,6 +226,12 @@ l'escouade triée par handle.
 | `stats <index>` | compétences |
 | `xp <index> <compétence> <quantité>` | gain d'expérience, comme le jeu le donne (refusé chez un client) |
 | `money [valeur]` | argent de la faction (l'hôte peut le fixer) |
+| `factions` | nombre de factions en relation avec la faction du joueur, rang, empreinte de toutes les relations (identique hôte / client = synchro) |
+| `relation <nom>` | relation de la faction du joueur avec cette faction (`ours`) et l'inverse (`theirs`), alliance, guerre |
+| `setrelation <nom> <valeur>` | fixe la relation dans les deux sens (chez l'hôte : comme un événement de faction ; chez un client : simule une dérive locale) |
+| `bounty <index>` | primes de ce membre de l'escouade (`faction:montant`), total, crime en cours, heures de prison |
+| `givebounty <index> <nom> <montant>` | (hôte) met cette prime sur ce membre |
+| `factionsync` | messages de relations / primes reçus et valeurs corrigées (client), envois (hôte) |
 | `look <nom>` / `lookset <nom> <clé> <valeur>` | résumé de l'apparence ; changer un curseur |
 | `editchar` / `editdone` | (client) ouvrir l'éditeur sur son personnage ; valider comme le bouton |
 

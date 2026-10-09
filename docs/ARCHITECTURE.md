@@ -291,6 +291,8 @@ format, et une version différente est refusée à la connexion.
 | 36 | ContainerOpen | C→H | mon personnage veut regarder dans ce contenant (type, endroit) |
 | 37 | ContainerOpened | H→C | il y est : netId du contenant (son contenu suit en `Inventory`) |
 | 38 | ContainerClose | ⇄ | fenêtre fermée (client) ou à fermer (hôte : vol repéré, trop loin) |
+| 43 | Factions | H→C | relations de la faction du joueur avec chaque faction, dans les deux sens ; rang et réputation |
+| 44 | Bounties | H→C | primes par faction, crime en cours, peine de prison et laissez-passer de chaque personnage de l'escouade |
 
 ## Les flux, système par système
 
@@ -379,6 +381,19 @@ format, et une version différente est refusée à la connexion.
 5. L'hôte vérifie les droits, fait passer le test de vol si l'objet sort d'un contenant vers un
    personnage, déplace l'objet (`MoveInventoryItem`), puis renvoie les deux inventaires.
 6. Un objet jeté par le client devient `InvOp Drop`.
+
+### Factions et primes (`common/src/session_factions.cpp`, `plugin/factions.cpp`)
+1. Chaque seconde, l'hôte lit les relations de la faction du joueur (`IWorld::ReadFactions`) et les
+   primes de chaque membre de l'escouade (`ReadBounties`), encode les deux messages et compare leur
+   empreinte à la dernière envoyée.
+2. Changement : envoi à tous les joueurs en jeu (et une ligne de journal par valeur qui a bougé).
+   Sinon : envoi aux seuls joueurs qui viennent d'arriver. Envoi complet toutes les 15 s.
+3. Le client garde la dernière version et l'impose (`ApplyFactions`, `ApplyBounties`) à son arrivée
+   puis toutes les 2 s. Les valeurs que le jeu local avait changées sont comptées
+   (`factionsync`), et notées au journal au plus toutes les 30 s.
+4. Les fonctions du jeu qui créent une entrée manquante : `FactionRelations::getRelationData`
+   (`0x6B4C60`) et l'`operator[]` de la table des primes (`0x5E7EE0`). Le reste est écrit
+   directement (voir [MOTEUR.md](MOTEUR.md), « Factions, relations et primes »).
 
 ### Contenants (`HostContainers`, `ClientContainers`)
 1. Clic droit chez le client : `ContainerOpen` avec le personnage, le type et l'endroit.
