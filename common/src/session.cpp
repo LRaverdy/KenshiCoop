@@ -1214,7 +1214,10 @@ void Session::ApplyCommand(uint8_t from, const Command& c) {
     case CommandKind::MoveTo: what = "se deplacer"; break;
     case CommandKind::Stop: what = "s'arreter"; break;
     case CommandKind::PickUp: what = "ramasser " + world_.TemplateName(c.itemSid); break;
-    case CommandKind::Task: what = std::string("ordre \"") + TaskLabel(c.task) + "\" (" + std::to_string(c.task) + ")" + (c.itemSid.empty() ? "" : " sur " + world_.TemplateName(c.itemSid)); break;
+    case CommandKind::Task:
+        if (c.via == TaskVia::SetOrder) what = std::string("mode \"") + StandingOrderLabel(c.task) + "\"";
+        else what = std::string("ordre \"") + TaskLabel(c.task) + "\" (" + std::to_string(c.task) + ")" + (c.itemSid.empty() ? "" : " sur " + world_.TemplateName(c.itemSid));
+        break;
     case CommandKind::SquadMove: what = "changer d'escouade"; break;
     }
     const bool ok = world_.Order(it->second.handle, c);

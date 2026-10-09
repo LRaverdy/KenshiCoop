@@ -536,6 +536,29 @@ const char* TaskLabel(int task) {
     }
 }
 
+const char* StandingOrderLabel(int order) {
+    switch (order) {
+    case 0: return "courir";
+    case 1: return "trottiner";
+    case 2: return "marcher";
+    case 3: return "furtif";
+    case 4: return "sortir du mode furtif";
+    case 5: return "combat : attaquer";
+    case 6: return "combat : defendre";
+    case 7: return "combat : esquiver";
+    case 8: return "de loin";
+    case 9: return "de pres";
+    case 11: return "bloquer";
+    case 12: return "tenir la position";
+    case 13: return "passif";
+    case 14: return "narguer";
+    case 15: return "poursuivre";
+    case 16: return "vitesse de groupe";
+    case 17: return "tir a distance";
+    default: return "?";
+    }
+}
+
 void Encode(Writer& w, const ClientLog& m) {
     w.u8(uint8_t(Msg::ClientLog));
     const size_t n = std::min(m.lines.size(), kMaxLogLines);

@@ -137,8 +137,15 @@ void KenshiWorld::EndFrame() {
                 float mine = 0, mineSpeed = 0;
                 float d = kenshi::ReadAnimMasterOf(ac, mine, mineSpeed) ? want - mine : 1.0f;
                 d -= std::round(d);
-                const float tolerance = std::min(0.25f, 0.06f * std::max(1.0f, v->gameSpeed));
-                kenshi::WriteAnimMaster(ac, std::fabs(d) > tolerance ? want : mine, tg.masterSpeed);
+                // far off: jump; a little off: ease a tenth of the way per frame (invisible); close: ours
+                const float jump = std::min(0.35f, 0.15f * std::max(1.0f, v->gameSpeed));
+                ++masterChecks;
+                masterCorrections += std::fabs(d) > jump;
+                float t = mine;
+                if (std::fabs(d) > jump) t = want;
+                else if (std::fabs(d) > 0.01f) t = mine + d * 0.1f;
+                t -= std::floor(t);
+                kenshi::WriteAnimMaster(ac, t, tg.masterSpeed);
             }
             ++it;
         }
@@ -584,10 +591,13 @@ bool KenshiWorld::OpenCharacterEditor(const kc::Handle& h) {
 }
 
 void KenshiWorld::TakeSyncStats(float& maxErr, uint16_t& farOff) {
-    maxErr = syncMaxErr_;
-    syncMaxErr_ = 0;
+    maxErr = 0;
     farOff = 0;
-    for (auto& [h, e] : syncErr_) farOff += e > 5.0f;
+    for (auto& [h, e] : syncErr_) {
+        farOff += e > 5.0f;
+        maxErr = std::max(maxErr, e);
+    }
+    syncMaxErr_ = 0;
     syncErr_.clear();
 }
 

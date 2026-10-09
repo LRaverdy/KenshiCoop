@@ -915,6 +915,177 @@ def exp_squads(host, cli):
     log("client: tries to move the host's Jurgen", cmd(cli, "squadmove Jurgen Player_2"))
     show("client tried to move a host character (must be refused)")
 
+RESULTS = []
+
+
+def check(name, ok, detail=""):
+    RESULTS.append((name, bool(ok), detail))
+    log(("REUSSI " if ok else "ECHEC  ") + name + ("   [" + str(detail) + "]" if detail != "" else ""))
+
+
+def summary():
+    log("=" * 70)
+    passed = sum(1 for _, ok, _ in RESULTS if ok)
+    log(f"BILAN : {passed}/{len(RESULTS)} reussis")
+    for name, ok, detail in RESULTS:
+        if not ok:
+            log("   ECHEC :", name, detail)
+
+
+def host_log():
+    with open(os.path.join(KENSHI, "KenshiCoop.log"), encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+def own_index(pid):
+    """The squad index of the client's own character (the one whose 'modes' answer differs is not
+    reliable: use the controllable info from the state dump)."""
+    d = dump(pid, "own_probe")
+    keys = sorted(d["squad"])
+    for i, k in enumerate(keys):
+        if d["entity"].get(k, {}).get("owner") == "2":
+            return i
+    return len(keys) - 1
+
+
+def exp_suite(host, cli):
+    """Every feature in one session: PASS / FAIL per point."""
+    time.sleep(6)
+    def vec(t):
+        return tuple(map(float, t.split()[1].split(",")))
+    # --- 1. joining: the editor opens on the new character, everyone waits meanwhile
+    hl = host_log()
+    check("arrivee : un personnage cree pour le joueur", "own character" in hl)
+    ok_editor = False
+    for _ in range(20):
+        if "editor opened" in open(os.path.join(KENSHI, f"KenshiCoop-{cli}.log"), encoding="utf-8", errors="replace").read():
+            ok_editor = True
+            break
+        time.sleep(0.5)
+    check("arrivee : l'editeur de personnage s'ouvre chez le client", ok_editor)
+    time.sleep(2)
+    check("creation de perso : l'hote est en pause pendant l'edition", cmd(host, "paused")[1].startswith("ok 1"), cmd(host, "paused")[1])
+    own = own_index(host)
+    name_c = None
+    cmd(cli, "editdone")
+    time.sleep(3)
+    check("creation de perso : la pause est levee a la validation", cmd(host, "paused")[1].startswith("ok 0"), cmd(host, "paused")[1])
+    # --- 2. skills, money, bubbles
+    cmd(host, "xp 0 1 5")
+    cmd(host, "money 4321")
+    before = cmd(cli, "says")[1]
+    cmd(host, "say 1 Test de bulle")
+    time.sleep(3)
+    check("XP : identique chez le client", cmd(host, "stats 0")[1].split()[1] == cmd(cli, "stats 0")[1].split()[1])
+    check("argent : identique chez le client", cmd(cli, "money")[1] == "ok 4321", cmd(cli, "money")[1])
+    check("bulles de dialogue : affichees chez le client", cmd(cli, "says")[1] != before, cmd(cli, "says")[1])
+    # --- 3. modes (stealth, hold) asked by the client for its own character
+    cmd(cli, f"orderreq {own} 3")    # stealth on
+    cmd(cli, f"orderreq {own} 12")   # hold position (toggle)
+    time.sleep(3)
+    hm, cm = cmd(host, f"modes {own}")[1], cmd(cli, f"modes {own}")[1]
+    check("modes : furtif + tenir la position chez l'hote", hm.startswith("ok") and int(hm.split()[1]) & 1 and int(hm.split()[1]) & 16, hm)
+    check("modes : identiques chez le client", hm == cm, f"hote {hm} / client {cm}")
+    cmd(cli, f"orderreq {own} 4")    # stealth off
+    cmd(cli, f"orderreq {own} 12")   # hold off
+    time.sleep(3)
+    hm, cm = cmd(host, f"modes {own}")[1], cmd(cli, f"modes {own}")[1]
+    check("modes : retires chez les deux", hm == cm and int(hm.split()[1]) & 17 == 0, f"hote {hm} / client {cm}")
+    # --- 4. carrying a knocked out squad member
+    cmd(host, "kosquad 1")
+    time.sleep(2)
+    cmd(cli, f"carryreq {own} 1")
+    carried_h = carried_c = "?"
+    for _ in range(30):
+        time.sleep(1)
+        carried_h = cmd(host, f"carrying {own}")[1]
+        if carried_h != "ok none":
+            break
+    time.sleep(2)
+    carried_c = cmd(cli, f"carrying {own}")[1]
+    check("porter : le client fait porter un corps a son perso (hote)", carried_h not in ("ok none", "?"), carried_h)
+    check("porter : le client voit le meme corps porte", carried_c == carried_h, f"hote {carried_h} / client {carried_c}")
+    # --- 5. squads
+    cmd(host, "squadmove Player_2 new")
+    time.sleep(4)
+    check("escouades : nouvelle escouade de l'hote visible chez le client", cmd(host, "squads")[1] == cmd(cli, "squads")[1], cmd(cli, "squads")[1])
+    cmd(cli, "squadmove Player_2 Truth")
+    time.sleep(4)
+    check("escouades : le client remet son perso, identique partout", cmd(host, "squads")[1] == cmd(cli, "squads")[1], cmd(cli, "squads")[1])
+    # --- 6. orientation and animations at speed 1 and 3
+    import math
+    def yaw(f):
+        x, _, z = map(float, f.split(","))
+        return math.degrees(math.atan2(x, z))
+    for speed in (1, 3):
+        cmd(host, f"speed {speed}")
+        time.sleep(1)
+        cmd(cli, "animstats")
+        worst, samples = 0.0, 0
+        for r in range(3):
+            idx = 2 + r % 2
+            cmd(host, f"moverel {idx} {300 * (1 if r % 2 == 0 else -1)} 250")
+            for _ in range(3):
+                time.sleep(0.8)
+                h, c = dump(host, "hs"), dump(cli, "cs")
+                k = sorted(h["squad"])[idx]
+                hv, cv = h["char"][k], c["char"][k]
+                if not (int(hv["flags"]) & 1) or int(hv["flags"]) & 4:
+                    continue
+                samples += 1
+                worst = max(worst, abs((yaw(hv["face"]) - yaw(cv["face"]) + 540) % 360 - 180))
+        st = cmd(cli, "animstats")[1].split()
+        corr, checks = int(st[1]), max(1, int(st[2]))
+        check(f"vitesse {speed} : orientation en marchant (pire ecart <= 30 deg)", samples > 0 and worst <= 30, f"{worst:.0f} deg sur {samples}")
+        check(f"vitesse {speed} : horloge d'animation sans saut (< 2% des images)", corr / checks < 0.02, f"{corr}/{checks}")
+    cmd(host, "speed 1")
+    # --- 7. pause mid-stride
+    cmd(host, "moverel 3 400 300")
+    time.sleep(2)
+    cmd(host, "pause 1")
+    time.sleep(2)
+    e = dist(vec(cmd(host, "where 3")[1]), vec(cmd(cli, "where 3")[1]))
+    check("pause en pleine course : meme position (< 0.1)", e < 0.1, f"{e:.3f}")
+    cmd(host, "pause 0")
+    # --- 8. admin teleport
+    cmd(host, "moverel 0 600 0")
+    time.sleep(16)   # until it got there
+    cmd(host, "tpplayer 2")
+    time.sleep(3)
+    p0, pc = vec(cmd(host, "where 0")[1]), vec(cmd(host, f"where {own}")[1])
+    pcc = vec(cmd(cli, f"where {own}")[1])
+    check("TP admin : le perso du joueur arrive pres de l'hote", dist(p0, pc) < 30, f"{dist(p0, pc):.1f}")
+    check("TP admin : le client le voit au meme endroit", dist(pc, pcc) < 2, f"{dist(pc, pcc):.2f}")
+    # --- 9. host console and logs from the client
+    cw = cmd(host, "consolewin")[1]
+    check("console externe : ouverte chez l'hote avec le journal", "window" in cw and int(cw.split("log=")[1]) > 100, cw)
+    time.sleep(6)
+    hl = host_log()
+    import re as _re
+    names = set(_re.findall(r"\* (.+?) is in the world", hl))
+    cname = sorted(names)[-1] if names else "Player 2"
+    check("journal : lignes du client relayees chez l'hote", f"[{cname}] connecting" in hl, cname)
+    check("journal : rapport de synchro du client", f"[{cname}] synchro" in hl)
+    check("journal : ordres du client en clair", f"[{cname}] mode \"furtif\"" in hl and f"[{cname}] ordre \"porter" in hl)
+    # --- 10. a full frozen comparison at the end
+    cmd(host, "pause 1")
+    time.sleep(3)
+    rep = compare(dump(host, "h_suite_end"), dump(cli, "c_suite_end"), "fin", pos_tol=0.1)
+    cmd(host, "pause 0")
+    sq_bad = [t for t in rep["squad"] if not isinstance(t[1], (int, float)) or t[1] > 0.1]
+    check("fin : escouade identique (positions)", not sq_bad, sq_bad)
+    check("fin : aucun etat vital different", rep["vital_flag_mismatch"] == 0, rep["vital_flag_mismatch"])
+    check("fin : aucun inventaire different", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    check("fin : personne ne manque chez le client", rep["missing_on_client"] == 0, rep["missing_sample"])
+    # --- 11. reconnect: same character back
+    cmd(cli, "leave")
+    time.sleep(4)
+    cmd(cli, "join")
+    wait_for(cli, lambda s: s.get("state") == "connected" and s.get("ready") == "1", 240, "rejoin")
+    time.sleep(3)
+    check("reconnexion : le joueur retrouve son personnage", "is back with their character" in host_log())
+    summary()
+
 
 def t_dist(a, b):
     return dist(a["pos"], b["pos"])
@@ -1206,6 +1377,9 @@ def main():
     tk = sub.add_parser("talk")
     tk.add_argument("--save", default="kctest_base")
     tk.add_argument("--keep", action="store_true")
+    su = sub.add_parser("suite", help="every feature, PASS / FAIL per point")
+    su.add_argument("--save", default="kctest_base")
+    su.add_argument("--keep", action="store_true")
     sq = sub.add_parser("squads")
     sq.add_argument("--save", default="kctest_base")
     sq.add_argument("--keep", action="store_true")
@@ -1280,7 +1454,9 @@ def main():
         log("ready: host", host, "client", cli)
         return
     try:
-        if a.what == "squads":
+        if a.what == "suite":
+            exp_suite(host, cli)
+        elif a.what == "squads":
             exp_squads(host, cli)
         elif a.what == "far":
             exp_far(host, cli)

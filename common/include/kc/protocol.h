@@ -575,6 +575,7 @@ bool Decode(Reader& r, AppearanceMsg& m);
 void Encode(Writer& w, const EditCharacter& m);
 void Encode(Writer& w, const EditState& m);
 const char* TaskLabel(int task);   // a player order's name, for logs ("?" when unknown)
+const char* StandingOrderLabel(int order);   // a squad bar toggle's name, for logs
 void Encode(Writer& w, const ClientLog& m);
 bool Decode(Reader& r, ClientLog& m);
 void Encode(Writer& w, const ClientReport& m);

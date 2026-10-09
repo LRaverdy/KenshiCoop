@@ -2430,7 +2430,10 @@ float SyncedAnimTime(const void* sa, float mine, float want, bool looped, float 
             if (d < -length * 0.5f) d += length;
         }
     }
-    return std::fabs(d) > kTolerance ? mine + d : mine;
+    // far off: jump to the host's; a little off: ease toward it (no visible step); close: ours
+    if (std::fabs(d) > kTolerance * 2.5f) return mine + d;
+    if (std::fabs(d) > kTolerance * 0.25f) return mine + d * 0.15f;
+    return mine;
 }
 
 void WriteSingleAnim(void* sa, float time, float speed, float weight, float desired) {

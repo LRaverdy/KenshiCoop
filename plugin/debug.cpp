@@ -545,6 +545,72 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         reinterpret_cast<FnAddAt>(kenshi::FnAddr(kenshi::FnSquadAddCharacterAt))(target, c, int(members.size()));
         return "ok";
     }
+    if (cmd == "orderreq") {   // orderreq <selectIndex> <standingOrder>: the squad bar's toggle for that member alone, as the UI does
+        size_t sel = 0;
+        int order = 0;
+        in >> sel >> order;
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err no such squad member";
+        kenshi::WithSelection(w.FindSquad(squad[sel]), [&] {
+            reinterpret_cast<void (*)(void*, int)>(kenshi::FnAddr(kenshi::FnSetOrderSelected))(kenshi::Player(), order);
+        });
+        return "ok";
+    }
+    if (cmd == "modes") {   // modes <squadIndex>: standing orders as bits (1 stealth, 2 defensive, 4 ranged, 8 taunt, 16 hold, 32 passive, 64 chase) and fight style
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err";
+        uint8_t style = 0;
+        const uint16_t m = kenshi::ReadModes(w.FindSquad(squad[idx]), style);
+        return "ok " + std::to_string(m) + " " + std::to_string(style);
+    }
+    if (cmd == "carryreq") {   // carryreq <selectIndex> <targetIndex>: that member alone is ordered to carry the other (as a right click does)
+        size_t sel = 0, tgt = 0;
+        in >> sel >> tgt;
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size() || tgt >= squad.size()) return "err";
+        bool ok = false;
+        kenshi::WithSelection(w.FindSquad(squad[sel]), [&] { ok = kenshi::CallAddTaskNearest(225, w.FindSquad(squad[tgt])); });   // LIFT_PERSON_PLAYER_ORDER
+        return ok ? "ok" : "err";
+    }
+    if (cmd == "carrying") {   // carrying <squadIndex>: who that member carries (host handle key) or none
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        kc::Handle c;
+        if (idx >= squad.size()) return "err";
+        if (!kenshi::ReadCarried(w.FindSquad(squad[idx]), c)) return "ok none";
+        return "ok " + Key(w.HostHandleOf(c));
+    }
+    if (cmd == "paused") return std::string("ok ") + (kenshi::GetPaused() ? "1" : "0") + " " + std::to_string(kenshi::GetFrameSpeed());
+    if (cmd == "animstats") {   // animstats: animation clock corrections since the last call (client)
+        char b[80];
+        snprintf(b, sizeof(b), "ok %llu %llu", static_cast<unsigned long long>(w.masterCorrections), static_cast<unsigned long long>(w.masterChecks));
+        w.masterCorrections = w.masterChecks = 0;
+        return b;
+    }
+    if (cmd == "tpplayer") {   // tpplayer <playerId>: (host) that player's characters next to squad member 0, as the admin teleport does
+        int id = -1;
+        in >> id;
+        auto squad = SortedSquad(w);
+        std::vector<kc::Handle> who;
+        for (const auto& h : squad) if (s.ownerOf(h) == id) who.push_back(h);
+        kc::Vec3 p;
+        if (who.empty() || squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), p)) return "err";
+        return "ok " + std::to_string(w.TeleportCharacters(who, p));
+    }
+    if (cmd == "consolewin") {   // consolewin: is the host console window there, and how much log does it show
+        HWND wnd = FindWindowA("KenshiCoopHostConsole", nullptr);
+        if (!wnd) return "ok none";
+        HWND edit = nullptr;
+        int longest = 0;
+        for (HWND c = GetWindow(wnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+            const int n = GetWindowTextLengthA(c);
+            if (n > longest) { longest = n; edit = c; }
+        }
+        return "ok window visible=" + std::to_string(IsWindowVisible(wnd) ? 1 : 0) + " log=" + std::to_string(longest);
+    }
     if (cmd == "camto") {   // camto <squadIndex>: the camera goes to that squad member
         size_t idx = 0;
         in >> idx;

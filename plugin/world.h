@@ -265,6 +265,9 @@ private:   // first few lifecycle events (tests)
     std::vector<kenshi::Character*> edited_;   // characters whose looks the editor just changed
     double pauseSeenAt_ = -1;   // client: when the host's pause arrived (we pause a little later)
     float syncMaxErr_ = 0;      // client: largest correction since the last report
+public:
+    uint64_t masterCorrections = 0, masterChecks = 0;   // tests: animation clock corrections on clients
+private:
     std::unordered_map<kc::Handle, float, kc::HandleHash> syncErr_;   // client: last error per standing character
     double nextPauseTry_ = 0;
     bool pauseRefusedLogged_ = false;
