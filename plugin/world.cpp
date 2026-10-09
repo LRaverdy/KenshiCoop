@@ -900,6 +900,19 @@ void KenshiWorld::ApplyGround(const kc::GroundEvent& e) {
         // the same item here (from the shared save), or the copy we made when the host dropped it
         auto a = groundAlias_.find(e.item);
         void* item = kenshi::ResolveItem(a != groundAlias_.end() ? a->second : e.item);
+        if (!item || !kenshi::ItemOnGround(item)) {   // an item from the save: same thing at the same spot
+            std::vector<void*> around;
+            kenshi::GroundItemsNear(e.pos, 30.0f, around);
+            float best = 15.0f;
+            for (void* it : around) {
+                kc::Handle ih;
+                kc::ItemState st;
+                kc::Vec3 p;
+                if (!kenshi::DescribeGroundItem(it, ih, st, p) || st.templateSid != e.state.templateSid) continue;
+                const float d = Dist(p, e.pos);
+                if (d < best) { best = d; item = it; }
+            }
+        }
         const bool onGround = item && kenshi::ItemOnGround(item);
         const bool gone = onGround && kenshi::DestroyItem(item);
         Log("host picked up item %u:%u: %s", e.item.index, e.item.serial,

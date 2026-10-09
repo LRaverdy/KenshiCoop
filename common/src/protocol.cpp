@@ -375,10 +375,8 @@ void Encode(Writer& w, const GroundMsg& m) {
     for (const auto& e : m.events) {
         w.u8(uint8_t(e.kind));
         PutHandle(w, e.item);
-        if (e.kind == GroundKind::Dropped) {
-            PutItem(w, e.state);
-            PutVec(w, e.pos);
-        }
+        PutItem(w, e.state);
+        PutVec(w, e.pos);
     }
 }
 bool Decode(Reader& r, GroundMsg& m) {
@@ -389,7 +387,8 @@ bool Decode(Reader& r, GroundMsg& m) {
         if (k != uint8_t(GroundKind::Dropped) && k != uint8_t(GroundKind::PickedUp)) return false;
         e.kind = GroundKind(k);
         e.item = GetHandle(r);
-        if (e.kind == GroundKind::Dropped && (!GetItem(r, e.state) || (e.pos = GetVec(r), false))) return false;
+        if (!GetItem(r, e.state)) return false;
+        e.pos = GetVec(r);
         if (!r.ok()) return false;
     }
     return Done(r);

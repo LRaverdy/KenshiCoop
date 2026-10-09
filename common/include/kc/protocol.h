@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 14;
+constexpr uint16_t kProtocolVersion = 15;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -378,8 +378,8 @@ enum class GroundKind : uint8_t { Dropped = 1, PickedUp = 2 };
 struct GroundEvent {
     GroundKind kind = GroundKind::Dropped;
     Handle item;          // the host's handle of the item
-    ItemState state;      // Dropped: what it is
-    Vec3 pos;             // Dropped: where it lies
+    ItemState state;      // what it is
+    Vec3 pos;             // where it lies (PickedUp: where it lay)
 };
 struct GroundMsg {
     std::vector<GroundEvent> events;

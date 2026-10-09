@@ -643,6 +643,18 @@ def exp_animframe(host, cli, rounds=10):
 def exp_ground(host, cli):
     """An item the host drops lies at the same spot on the client; once picked up, it is gone there too."""
     time.sleep(8)
+    ok, text = cmd(host, "groundnear 3000")
+    items = text.split()[2:]
+    log("items on the ground near the squad (host):", text.split()[1] if ok else text, items[:4])
+    ok2, text2 = cmd(cli, "groundnear 3000")
+    log("  (client):", text2.split()[1] if ok2 else text2)
+    if items:
+        key, tpl, pos = items[0].split("|")
+        log("  host pickup of a save item:", tpl, pos, cmd(host, f"pickup 0 {key}"))
+        time.sleep(1.5)
+        after = cmd(cli, "groundnear 3000")[1]
+        still = [x for x in after.split()[2:] if x.split("|")[1] == tpl and x.split("|")[2] == pos]
+        log("  client still has it at that spot:", bool(still), "| client count now", after.split()[1])
     for idx in (0, 1, 2):
         ok, text = cmd(host, f"drop {idx}")
         log("host drop", idx, ok, text)

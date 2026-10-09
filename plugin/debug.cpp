@@ -289,6 +289,27 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         if (idx >= squad.size() || !item) return "err no such squad member or item";
         return kenshi::CallGiveItem(w.FindSquad(squad[idx]), item) ? "ok" : "err giveItem refused";
     }
+    if (cmd == "groundnear") {   // groundnear <radius>: items lying around squad[0]: key template x,y,z;...
+        float radius = 500;
+        in >> radius;
+        auto squad = SortedSquad(w);
+        kc::Vec3 base;
+        if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), base)) return "err no squad";
+        std::vector<void*> items;
+        kenshi::GroundItemsNear(base, radius, items);
+        std::string out = "ok " + std::to_string(items.size());
+        for (void* it : items) {
+            kc::Handle ih;
+            kc::ItemState st;
+            kc::Vec3 p;
+            if (!kenshi::DescribeGroundItem(it, ih, st, p)) continue;
+            char b[160];
+            snprintf(b, sizeof(b), " %s|%s|%.1f,%.1f,%.1f", Key(ih).c_str(), st.templateSid.c_str(), p.x, p.y, p.z);
+            out += b;
+            if (out.size() > 3000) break;
+        }
+        return out;
+    }
     if (cmd == "ground") {   // ground <hostItemKey>: is (our copy of) that item lying on the ground here?
         std::string k;
         in >> k;

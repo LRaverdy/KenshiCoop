@@ -383,6 +383,7 @@ bool DescribeGroundItem(void* item, kc::Handle& h, kc::ItemState& s, kc::Vec3& p
 void* ResolveItem(const kc::Handle& h);                    // the item with that handle here, if any
 void* CreateGroundItem(const kc::ItemState& s, const kc::Vec3& pos, kc::Handle& localHandle, std::string* why);
 bool DestroyItem(void* item);
+void GroundItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out);   // items lying within radius
 void* FirstLooseItem(Character* c);                        // tests: an unequipped item it carries
 bool CallDropItem(Character* c, void* item);               // tests: the character drops it (the game's own drop)
 bool CallGiveItem(Character* c, void* item);               // tests: the character takes it

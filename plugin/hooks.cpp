@@ -305,9 +305,7 @@ bool hk_giveItem(void* chr, void* item, bool dropOnFail, bool destroyOnFail) {
     }
     kc::GroundEvent e;
     e.kind = kc::GroundKind::PickedUp;
-    kc::ItemState s;
-    kc::Vec3 pos;
-    const bool known = kenshi::DescribeGroundItem(item, e.item, s, pos);
+    const bool known = kenshi::DescribeGroundItem(item, e.item, e.state, e.pos);
     const bool ok = o_giveItem(chr, item, dropOnFail, destroyOnFail);
     if (ok && known && KenshiWorld::View()->active)
         if (KenshiWorld* w = TheWorld()) w->NoteGround(e);

@@ -439,6 +439,7 @@ static void TestWire() {
     {   // items on the ground: a pickup alone (short) and a drop (with the item)
         GroundMsg g;
         GroundEvent up; up.kind = GroundKind::PickedUp; up.item.index = 467; up.item.serial = 9;
+        up.state.templateSid = "209-gamedata.base"; up.state.quantity = 1; up.pos = {4, 5, 6};
         g.events = {up};
         Writer gw; Encode(gw, g);
         Reader gr(gw.data(), gw.size()); CHECK(PeekType(gr) == Msg::Ground);

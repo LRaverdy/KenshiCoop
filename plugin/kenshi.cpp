@@ -1925,6 +1925,43 @@ bool CallGiveItem(Character* c, void* item) {
     return IsCharacter(c) && item && reinterpret_cast<FnGive>(FnAddr(FnGiveItem))(c, item, false, false);
 }
 
+namespace {
+constexpr uintptr_t kZoneManagerPtr = 0x21349C0;   // GameWorld::zoneMgr, as AI::findFoodOnGround reads it
+constexpr uintptr_t ZM_objectGrid = 0x80;          // ZoneSpacialGrid of objects
+constexpr uintptr_t kFnGetObjects = 0x9FF210;      // ZoneSpacialGrid::getObjects(point, radius, filter, lektor&, max)
+constexpr uintptr_t kLektorPtrVt = 0x168BAF0;      // lektor<RootObject*> vtable
+constexpr uintptr_t kGameNew = 0xED6504, kGameDelete = 0xED64FE;   // the game's operator new / delete
+struct GameLektor {
+    uintptr_t vt;
+    uint32_t count, capacity;
+    void** data;
+};
+using FnGetObjects = int (*)(void* grid, const float* pt, float radius, int filter, GameLektor* out, int max);
+using FnNew = void* (*)(size_t);
+using FnDelete = void (*)(void*);
+bool SehGetObjects(void* grid, const float* pt, float r, GameLektor* lk) {
+    __try { reinterpret_cast<FnGetObjects>(Addr(kFnGetObjects))(grid, pt, r, 0, lk, 0x7FFFFFFF); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+void GroundItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out) {
+    out.clear();
+    void* zm = nullptr;
+    if (!Rd(reinterpret_cast<void*>(Addr(kZoneManagerPtr)), 0, zm) || !zm) return;
+    // a lektor exactly as the game builds one for this call (its storage from the game's heap)
+    GameLektor lk{Addr(kLektorPtrVt), 0, 10, nullptr};
+    lk.data = static_cast<void**>(reinterpret_cast<FnNew>(Addr(kGameNew))(10 * sizeof(void*)));
+    if (!lk.data) return;
+    const float pt[3] = {pos.x, pos.y, pos.z};
+    if (SehGetObjects(reinterpret_cast<uint8_t*>(zm) + ZM_objectGrid, pt, radius, &lk))
+        for (uint32_t i = 0; i < lk.count && i < 100000; ++i) {
+            void* o = nullptr;
+            if (Rd(lk.data, i * sizeof(void*), o) && o && !IsCharacter(o) && ItemOnGround(o)) out.push_back(o);
+        }
+    if (lk.data) reinterpret_cast<FnDelete>(Addr(kGameDelete))(lk.data);
+}
+
 bool DestroyItem(void* item) {
     constexpr uintptr_t IV_deactivate = 0x238;   // out of the world first, as a pickup does
     GameWorld* w = World();
