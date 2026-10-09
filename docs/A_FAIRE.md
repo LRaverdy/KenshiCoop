@@ -51,3 +51,8 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   du client est exécuté chez l'hôte en sélectionnant le perso du client ; si la sélection de l'hôte (son
   perso) est encore active à ce moment-là, l'ordre « attaquer » part aussi pour lui. Vérifier que pendant
   l'exécution seul le perso du client est sélectionné, et que le mode passif n'est pas retiré.
+- **Bâtiment acheté à réparer** (10/10) : chez l'hôte, le bâtiment acheté apparaît en chantier (à
+  réparer), mais pas chez le client, qui ne peut donc pas lancer la réparation. L'état de construction des
+  bâtiments déjà présents dans la sauvegarde (et non posés pendant la partie) n'est sans doute pas envoyé
+  aux clients, ou l'achat ne rejoue pas chez eux le passage en « à réparer ». Probablement lié aux villes
+  vues en « bâtons rouges » chez un client (état de construction des bâtiments existants mal synchronisé).
