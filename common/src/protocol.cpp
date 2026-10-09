@@ -17,6 +17,7 @@ const char* ToString(RejectReason r) {
     case RejectReason::NotReady: return "host has not loaded a world yet";
     case RejectReason::HostSaveFailed: return "the host could not save its world, try again";
     case RejectReason::Timeout: return "joining took too long";
+    case RejectReason::Kicked: return "removed by the host";
     }
     return "unknown";
 }
@@ -98,7 +99,7 @@ bool Decode(Reader& r, Welcome& m) {
 void Encode(Writer& w, const Reject& m) { w.u8(uint8_t(Msg::Reject)); w.u8(uint8_t(m.reason)); }
 bool Decode(Reader& r, Reject& m) {
     const uint8_t v = r.u8();
-    if (v < 1 || v > 9) return false;
+    if (v < 1 || v > 10) return false;
     m.reason = RejectReason(v);
     return Done(r);
 }

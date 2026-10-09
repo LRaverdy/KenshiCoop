@@ -1,11 +1,21 @@
-// Read-only status overlay drawn with Dear ImGui on top of Kenshi's D3D11 swap chain.
-// It takes no input (Kenshi reads input through DirectInput, which a window-message based UI
-// cannot intercept); all interaction goes through hotkeys.
+// Overlay drawn with Dear ImGui on top of Kenshi's D3D11 swap chain: a read-only status panel,
+// plus two windows the player can use with mouse and keyboard (the "Multijoueur" window and the
+// console). Kenshi reads input through DirectInput: while one of our windows has the mouse or a
+// text field, the game's DirectInput reads come back empty, so typing never drives the game.
 #pragma once
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace kcp {
+
+struct OverlayPlayer {
+    uint8_t id = 0;
+    std::string name;
+    uint32_t pingMs = 0;
+    size_t characters = 0;
+    bool you = false;
+};
 
 struct OverlayModel {
     bool visible = true;
@@ -13,10 +23,33 @@ struct OverlayModel {
     std::vector<std::string> lines;     // status block
     std::vector<std::string> chat;      // recent events
     std::vector<std::string> toasts;    // transient warnings (already filtered by age)
+    // "Multijoueur" window
+    bool worldLoaded = false;           // a game is loaded: hosting is possible
+    bool active = false;                // a session is running (hosting or joined)
+    bool hosting = false;
+    std::string stateText;              // where the session stands, in French
+    std::string errorText;              // why the last session ended, in French (empty: none)
+    float download = -1;                // 0..1 while the host's world is downloading
+    std::vector<OverlayPlayer> players; // everyone in the session, us included
+    std::string name, address;          // current settings
+    uint16_t port = 0;
+    bool fullConsole = false;           // host: every console command; client: read-only ones
 };
 
-bool OverlayInstall(std::string* err);      // hooks IDXGISwapChain::Present / ResizeBuffers
+// What the player did in our windows; carried out on the game thread.
+struct OverlayAction {
+    enum class Kind { Host, Join, Leave, Command } kind = Kind::Command;
+    std::string name, address, text;
+    uint16_t port = 0;
+};
+
+bool OverlayInstall(std::string* err);      // hooks IDXGISwapChain::Present / ResizeBuffers, DirectInput reads
 void OverlayPublish(OverlayModel model);    // game thread -> render thread
+std::vector<OverlayAction> OverlayTakeActions();
+void OverlayToggleMultiplayer();
+void OverlayToggleConsole();
+void OverlayOpenMultiplayer();
+bool OverlayTyping();                       // a text field of ours has the keyboard
 void OverlayShutdown();
 
 } // namespace kcp

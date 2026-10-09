@@ -1134,6 +1134,11 @@ void KenshiWorld::ForceWeather(const std::string& regionSid, const std::string& 
     forcedWeather_[regionSid] = {seasonSid, weatherSid};
 }
 
+size_t KenshiWorld::LiveEffects() {
+    std::lock_guard<std::mutex> lk(weatherMutex_);
+    return client_ ? clientFx_.size() : fxLive_.size();
+}
+
 std::string KenshiWorld::EffectsReport() {
     std::lock_guard<std::mutex> lk(weatherMutex_);
     char head[320];

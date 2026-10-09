@@ -84,6 +84,7 @@ public:
     size_t ExpireAllWeather();   // tests: every known region rolls a new weather
     std::string EffectsReport();  // tests: live weather effects per region
     size_t AnimTargetCount() const { return animTargets_.size(); }
+    size_t LiveEffects();         // weather effects the clients have (host) / placed for the host (client)
     std::string WeatherGroups();  // tests: each region's weather, effect groups and possible weathers
     size_t HurryEffects();        // tests: host groups place their next effect now
     void ForceWeather(const std::string& regionSid, const std::string& seasonSid, const std::string& weatherSid);   // tests (host)

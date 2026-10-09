@@ -2,6 +2,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace kcp {
 
@@ -10,6 +11,9 @@ namespace kcp {
 void LogOpen(const std::wstring& path);
 void LogClose();
 void Log(const char* fmt, ...);
+// The newest log lines (oldest first, at most `max`), for the in-game console. `seq` counts every
+// line ever logged, so a reader can tell whether anything new arrived.
+std::vector<std::string> RecentLog(size_t max, uint64_t* seq = nullptr);
 
 struct Config {
     std::string name = "Player";
@@ -23,6 +27,7 @@ struct Config {
     bool characterPerPlayer = true; // host: [coop] own_character=1 gives every joining player a character
 };
 Config LoadConfig(const std::wstring& iniPath);   // creates the file with defaults if missing
+bool SaveConnection(const std::wstring& iniPath, const std::string& name, const std::string& address, uint16_t port);
 
 std::wstring GameDir();                            // folder of kenshi_x64.exe, with trailing '\'
 bool Sha256File(const std::wstring& path, std::string& hexOut);

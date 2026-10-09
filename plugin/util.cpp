@@ -5,8 +5,10 @@
 
 #include <share.h>
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
+#include <deque>
 #include <mutex>
 #include <vector>
 
@@ -17,6 +19,9 @@ namespace kcp {
 namespace {
 std::mutex g_logMutex;
 FILE* g_log = nullptr;
+std::deque<std::string> g_recent;   // newest last
+uint64_t g_logSeq = 0;
+constexpr size_t kRecentLines = 500;
 
 std::string Narrow(const std::wstring& w) {
     if (w.empty()) return {};
@@ -61,9 +66,21 @@ void Log(const char* fmt, ...) {
     SYSTEMTIME st;
     GetLocalTime(&st);
     std::lock_guard<std::mutex> lk(g_logMutex);
+    char stamp[16];
+    snprintf(stamp, sizeof(stamp), "%02d:%02d:%02d  ", st.wHour, st.wMinute, st.wSecond);
+    g_recent.push_back(stamp + std::string(msg));
+    if (g_recent.size() > kRecentLines) g_recent.pop_front();
+    ++g_logSeq;
     if (!g_log) return;
     fprintf(g_log, "%02d:%02d:%02d.%03d  %s\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg);
     fflush(g_log);
+}
+
+std::vector<std::string> RecentLog(size_t max, uint64_t* seq) {
+    std::lock_guard<std::mutex> lk(g_logMutex);
+    if (seq) *seq = g_logSeq;
+    const size_t n = std::min(max, g_recent.size());
+    return std::vector<std::string>(g_recent.end() - ptrdiff_t(n), g_recent.end());
 }
 
 Config LoadConfig(const std::wstring& ini) {
@@ -130,6 +147,12 @@ Config LoadConfig(const std::wstring& ini) {
     c.debugCommands = num(L"debug", L"commands", 0) != 0;
     c.characterPerPlayer = num(L"coop", L"own_character", 1) != 0;
     return c;
+}
+
+bool SaveConnection(const std::wstring& ini, const std::string& name, const std::string& address, uint16_t port) {
+    return WritePrivateProfileStringW(L"player", L"name", Widen(name).c_str(), ini.c_str()) &&
+           WritePrivateProfileStringW(L"network", L"join_address", Widen(address).c_str(), ini.c_str()) &&
+           WritePrivateProfileStringW(L"network", L"port", std::to_wstring(port).c_str(), ini.c_str());
 }
 
 std::wstring GameDir() {

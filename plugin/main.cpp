@@ -2,10 +2,14 @@
 // dllStartPlugin while the engine starts, before any save is loaded.
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdio>
+#include <ctime>
 #include <deque>
 #include <memory>
+#include <sstream>
 #include <string>
 
 #include "debug.h"
@@ -23,11 +27,14 @@ namespace {
 constexpr const char* kVersion = "0.1.0";
 
 Config g_cfg;
+std::wstring g_iniPath;
 std::unique_ptr<KenshiWorld> g_world;
 std::unique_ptr<kc::Session> g_session;
 bool g_overlayVisible = true;
 std::deque<std::pair<std::string, double>> g_toasts;   // text, expiry time
 bool g_wasReady = false;
+bool g_menuWindowShown = false;   // the Multijoueur window opens by itself once, on the main menu
+double g_startedAt = 0;
 
 const char* StateName(kc::SessionState s) {
     switch (s) {
@@ -64,7 +71,8 @@ struct Hotkey {
     int vk;
     bool down = false;
 };
-Hotkey g_hkHost{'H'}, g_hkJoin{'J'}, g_hkLeave{'L'}, g_hkGive{'G'}, g_hkOverlay{'O'}, g_hkDiag{'D'};
+Hotkey g_hkHost{'H'}, g_hkJoin{'J'}, g_hkLeave{'L'}, g_hkGive{'G'}, g_hkOverlay{'O'}, g_hkDiag{'D'}, g_hkMultiplayer{'M'},
+    g_hkConsole{'K'};
 
 bool Pressed(Hotkey& k, bool modifiers) {
     const bool now = modifiers && KeyDown(k.vk);
@@ -124,8 +132,11 @@ void DumpDiagnostics(const char* why) {
 }
 
 void HandleHotkeys() {
-    const bool mods = OurWindowFocused() && KeyDown(VK_CONTROL) && KeyDown(VK_SHIFT);
+    // while a KenshiCoop text field has the keyboard, keys are text, not commands
+    const bool mods = OurWindowFocused() && !OverlayTyping() && KeyDown(VK_CONTROL) && KeyDown(VK_SHIFT);
     std::string err;
+    if (Pressed(g_hkMultiplayer, mods)) OverlayToggleMultiplayer();
+    if (Pressed(g_hkConsole, mods)) OverlayToggleConsole();
     if (Pressed(g_hkOverlay, mods)) g_overlayVisible = !g_overlayVisible;
     if (Pressed(g_hkHost, mods)) {
         if (g_session->isHost()) Toast("Already hosting.");
@@ -145,6 +156,188 @@ void HandleHotkeys() {
     if (Pressed(g_hkDiag, mods)) { DumpDiagnostics("hotkey"); Toast("Diagnostics written to KenshiCoop.log"); }
 }
 
+// ---- the Multijoueur window and the console (French: what the players read)
+const char* FrenchState(kc::SessionState s) {
+    switch (s) {
+    case kc::SessionState::Idle: return "Hors ligne";
+    case kc::SessionState::Hosting: return "Partie hébergée";
+    case kc::SessionState::Connecting: return "Connexion à l'hôte...";
+    case kc::SessionState::Handshake: return "Connexion à l'hôte...";
+    case kc::SessionState::Downloading: return "Téléchargement du monde de l'hôte...";
+    case kc::SessionState::Loading: return "Chargement du monde de l'hôte...";
+    case kc::SessionState::Connected: return "Connecté";
+    case kc::SessionState::Failed: return "Déconnecté";
+    }
+    return "?";
+}
+
+std::string FrenchError(const std::string& e) {
+    static const std::pair<const char*, const char*> table[] = {
+        {"incompatible KenshiCoop version", "version de KenshiCoop différente de celle de l'hôte"},
+        {"different Kenshi build", "version de Kenshi différente de celle de l'hôte"},
+        {"different active mod list", "mods différents de ceux de l'hôte (mêmes mods, même ordre)"},
+        {"different save loaded", "le monde chargé ne correspond pas à celui de l'hôte"},
+        {"server full", "la partie est pleine"},
+        {"invalid player name", "nom invalide (lettres et chiffres, pas d'espace au début ou à la fin)"},
+        {"host has not loaded a world yet", "l'hôte n'a pas encore chargé de partie"},
+        {"the host could not save its world", "l'hôte n'a pas pu sauvegarder son monde, réessaie"},
+        {"joining took too long", "la connexion a pris trop de temps"},
+        {"removed by the host", "l'hôte t'a retiré de la partie"},
+        {"no answer from host", "pas de réponse de l'hôte (adresse, port UDP fermé ou pare-feu ?)"},
+        {"lost connection to host", "connexion à l'hôte perdue"},
+        {"could not connect to host", "impossible de joindre l'hôte"},
+        {"downloading the host's world timed out", "le téléchargement du monde a expiré"},
+        {"loading the host's world timed out", "le chargement du monde a expiré"},
+        {"the loaded world differs from the host's", "le monde chargé diffère de celui de l'hôte"},
+        {"bad world transfer from host", "transfert du monde corrompu, réessaie"},
+        {"cannot load the host's world", "impossible de charger le monde de l'hôte"},
+        {"world unloaded", "la partie a été quittée"},
+        {"load a save before hosting", "charge d'abord une partie"},
+        {"cannot listen on UDP port", "port UDP déjà utilisé (une autre partie ?)"},
+        {"cannot resolve address", "adresse de l'hôte introuvable"},
+        {"cannot create network socket", "réseau indisponible"},
+        {"cannot start connection", "impossible de démarrer la connexion"},
+    };
+    for (const auto& [en, fr] : table)
+        if (e.find(en) != std::string::npos) return fr;
+    return e;
+}
+
+// Settings typed in the window: used for this session and kept for the next launch.
+bool ApplyConnection(const std::string& name, const std::string& address, uint16_t port) {
+    if (!kc::ValidName(name)) { Toast("Nom invalide : 1 à " + std::to_string(kc::kMaxNameLen) + " caractères, sans espace au début ni à la fin."); return false; }
+    if (!g_session->Configure(name, port)) { Toast("Quitte d'abord la session en cours."); return false; }
+    g_cfg.name = name;
+    g_cfg.joinAddress = address;
+    g_cfg.port = port;
+    if (!SaveConnection(g_iniPath, name, address, port)) Log("cannot save the connection settings to KenshiCoop.ini");
+    return true;
+}
+
+size_t CharactersOf(uint8_t playerId) {
+    std::vector<kc::Handle> hs;
+    g_world->PlayerCharacters(hs);
+    size_t n = 0;
+    for (auto& h : hs) n += g_session->ownerOf(h) == playerId ? 1 : 0;
+    return n;
+}
+
+void ConsoleCommand(const std::string& line) {
+    Log("> %s", line.c_str());
+    std::istringstream in(line);
+    std::string cmd;
+    in >> cmd;
+    std::transform(cmd.begin(), cmd.end(), cmd.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    auto out = [](const std::string& s) { Log("  %s", s.c_str()); };
+    const bool host = g_session->isHost();
+    const bool client = g_session->isClient();
+    if (cmd == "help") {
+        out("help                 cette aide");
+        out("players              joueurs : id, nom, ping, personnages");
+        out("status               état de la session et de la synchro");
+        if (!client) {
+            out("kick <id>            retirer un joueur (hôte)");
+            out("give <id>            donner les personnages sélectionnés au joueur <id> (hôte)");
+            out("save                 sauvegarder la partie");
+            out("pause [0|1]          mettre en pause / reprendre");
+            out("speed <x>            vitesse du jeu (1, 2, 3...)");
+        }
+        return;
+    }
+    if (cmd == "players") {
+        out(std::to_string(g_session->localId()) + ". " + g_cfg.name + " (toi)  " + std::to_string(CharactersOf(g_session->localId())) + " perso(s)");
+        for (auto& [id, p] : g_session->players())
+            out(std::to_string(id) + ". " + p.name + "  ping " + std::to_string(host ? p.rttMs : 0) + " ms  " + std::to_string(CharactersOf(id)) +
+                " perso(s)" + (host && !p.inGame ? "  (en train de rejoindre)" : ""));
+        if (client) out("ping vers l'hôte : " + std::to_string(g_session->pingMs()) + " ms");
+        return;
+    }
+    if (cmd == "status") {
+        char buf[200];
+        snprintf(buf, sizeof(buf), "%s - %zu entités, %zu PNJ, %zu effets météo, vitesse %.1f%s", FrenchState(g_session->state()),
+                 g_session->entityCount(), g_session->npcCount(), g_world->LiveEffects(), kenshi::GetFrameSpeed(),
+                 kenshi::GetPaused() ? " (pause)" : "");
+        out(buf);
+        if (client && g_session->missingNpcs()) out(std::to_string(g_session->missingNpcs()) + " PNJ de l'hôte pas encore présents ici");
+        if (client && g_session->missingSquad()) out(std::to_string(g_session->missingSquad()) + " membres de l'escouade introuvables ici");
+        if (host && g_session->joiningPlayers()) out(std::to_string(g_session->joiningPlayers()) + " joueur(s) en train de rejoindre");
+        if (!g_session->lastError().empty() && !host && !client) out("dernière erreur : " + FrenchError(g_session->lastError()));
+        return;
+    }
+    if (client) { out("commande réservée à l'hôte (ici : help, players, status)"); return; }
+    if (cmd == "kick" || cmd == "give") {
+        int id = -1;
+        in >> id;
+        if (!host) { out("pas de partie hébergée"); return; }
+        if (cmd == "kick") {
+            if (id < 0 || id > 255 || !g_session->KickPlayer(uint8_t(id))) out("joueur inconnu : tape players pour la liste");
+            else out("joueur " + std::to_string(id) + " retiré");
+            return;
+        }
+        const bool known = id == g_session->localId() || (id >= 0 && id <= 255 && g_session->players().count(uint8_t(id)));
+        if (!known) { out("joueur inconnu : tape players pour la liste"); return; }
+        std::vector<kc::Handle> sel;
+        kenshi::SelectedHandles(sel);
+        size_t n = 0;
+        for (auto& h : sel)
+            if (g_world->FindSquad(h)) { g_session->Assign(h, uint8_t(id)); ++n; }
+        out(n ? std::to_string(n) + " personnage(s) donné(s) au joueur " + std::to_string(id) : "sélectionne d'abord des membres de ton escouade");
+        return;
+    }
+    if (!g_world->Ready()) { out("aucune partie chargée"); return; }
+    if (cmd == "save") {
+        char name[64];
+        const std::time_t t = std::time(nullptr);
+        std::tm tm{};
+        localtime_s(&tm, &t);
+        std::strftime(name, sizeof(name), "coop_%Y%m%d_%H%M", &tm);
+        std::string folder;
+        out(kenshi::RequestSave(name, &folder) ? std::string("sauvegarde ") + name + " demandée" : "la sauvegarde a échoué");
+        return;
+    }
+    if (cmd == "pause") {
+        int on = kenshi::GetPaused() ? 0 : 1;
+        in >> on;
+        out(kenshi::CallUserPause(on != 0) ? (on ? "pause" : "reprise") : "échec");
+        return;
+    }
+    if (cmd == "speed") {
+        float v = 1;
+        if (!(in >> v) || v <= 0 || v > 10) { out("usage : speed <x> (entre 0.1 et 10)"); return; }
+        out(kenshi::CallSetFrameSpeed(v) ? "vitesse " + std::to_string(v).substr(0, 4) : "échec");
+        return;
+    }
+    out("commande inconnue : tape help");
+}
+
+void HandleOverlayActions() {
+    std::string err;
+    for (auto& a : OverlayTakeActions()) {
+        switch (a.kind) {
+        case OverlayAction::Kind::Host:
+            if (g_session->isHost()) { Toast("Partie déjà hébergée."); break; }
+            if (!ApplyConnection(a.name, a.address, a.port)) break;
+            if (g_session->Host(&err)) Toast("Partie hébergée sur le port " + std::to_string(g_cfg.port) + ".");
+            else Toast("Impossible d'héberger : " + FrenchError(err));
+            break;
+        case OverlayAction::Kind::Join:
+            if (g_session->isClient()) { Toast("Déjà connecté."); break; }
+            if (a.address.empty()) { Toast("Entre l'adresse de l'hôte."); break; }
+            if (!ApplyConnection(a.name, a.address, a.port)) break;
+            if (g_session->Join(g_cfg.joinAddress, g_cfg.port, &err)) Toast("Connexion à " + g_cfg.joinAddress + "...");
+            else Toast("Impossible de rejoindre : " + FrenchError(err));
+            break;
+        case OverlayAction::Kind::Leave:
+            g_session->Leave();
+            Toast("Session quittée.");
+            break;
+        case OverlayAction::Kind::Command:
+            ConsoleCommand(a.text);
+            break;
+        }
+    }
+}
+
 void PublishOverlay() {
     OverlayModel m;
     m.visible = g_overlayVisible;
@@ -158,6 +351,7 @@ void PublishOverlay() {
         if (st == kc::SessionState::Failed && !g_session->lastError().empty()) m.lines.push_back(g_session->lastError());
         m.lines.push_back("Ctrl+Shift+H  host this game");
         m.lines.push_back("Ctrl+Shift+J  join " + g_cfg.joinAddress + ":" + std::to_string(g_cfg.port) + " (works from the main menu)");
+        m.lines.push_back("Ctrl+Shift+M  multiplayer window   Ctrl+Shift+K  console");
         m.lines.push_back("Ctrl+Shift+O  hide this panel");
     } else {
         m.lines.push_back("You: " + g_cfg.name + " (player " + std::to_string(g_session->localId()) + ")" +
@@ -180,6 +374,22 @@ void PublishOverlay() {
     }
     const auto& chat = g_session->chatLog();
     for (size_t i = chat.size() > 6 ? chat.size() - 6 : 0; i < chat.size(); ++i) m.chat.push_back(chat[i]);
+    // the Multijoueur window
+    m.worldLoaded = g_world->Ready();
+    m.hosting = g_session->isHost();
+    m.active = m.hosting || g_session->isClient();
+    m.stateText = FrenchState(st);
+    if (st == kc::SessionState::Failed && !g_session->lastError().empty()) m.errorText = FrenchError(g_session->lastError());
+    if (st == kc::SessionState::Downloading) m.download = float(g_session->downloadProgress());
+    if (m.active) {
+        m.players.push_back({g_session->localId(), g_cfg.name, 0, CharactersOf(g_session->localId()), true});
+        for (auto& [id, p] : g_session->players())
+            m.players.push_back({id, p.name, m.hosting ? p.rttMs : (id == 1 ? g_session->pingMs() : 0u), CharactersOf(id), false});
+    }
+    m.name = g_cfg.name;
+    m.address = g_cfg.joinAddress;
+    m.port = g_cfg.port;
+    m.fullConsole = !g_session->isClient();
     const double now = NowSeconds();
     while (!g_toasts.empty() && g_toasts.front().second < now) g_toasts.pop_front();
     for (auto& t : g_toasts) m.toasts.push_back(t.first);
@@ -200,6 +410,12 @@ void Tick(bool live) {
         Log("world unloaded (menu or loading)");
     }
     HandleHotkeys();
+    HandleOverlayActions();
+    if (!live && !g_menuWindowShown && !g_wasReady && g_session->state() == kc::SessionState::Idle && NowSeconds() - g_startedAt > 5.0) {
+        g_menuWindowShown = true;   // on the main menu: offer to join
+        OverlayOpenMultiplayer();
+    }
+    if (live) g_menuWindowShown = true;
     if (g_cfg.debugCommands) DebugPoll(*g_session, *g_world, live);
     g_session->Tick(live);
     if (live) g_world->EndFrame();
@@ -306,7 +522,9 @@ bool Start() {
     std::string err;
     if (!kenshi::Init(&err)) { Log("disabled: %s", err.c_str()); return false; }
 
-    g_cfg = LoadConfig(dir + L"KenshiCoop.ini");
+    g_iniPath = dir + L"KenshiCoop.ini";
+    g_cfg = LoadConfig(g_iniPath);
+    g_startedAt = NowSeconds();
     g_overlayVisible = g_cfg.overlay;
     g_world = std::make_unique<KenshiWorld>(g_cfg);
     g_world->SetGameBuild(std::stoull(sha.substr(0, 16), nullptr, 16));
