@@ -14,6 +14,11 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
   en chantier. Test : `coop_test.py buildstate` (sauvegarde kctest_mine).
 - **Porter un corps vu par un client** : le corps est bien sur l'épaule (et plus debout sur la tête),
   et à la pose il tombe où l'hôte l'a posé sans s'envoler ; test en jeu `coop_test.py carry`.
+- **Primes et relations** : les clients ne plantent plus sur une nouvelle prime : primes et crimes
+  restent dans le jeu de l'hôte seulement (le client garde sa copie pour l'affichage et vide ceux de
+  son jeu). Le journal ne répète plus « relation/bounty values set to the host's » chaque seconde :
+  les petites variations des relations ne sont plus envoyées ni corrigées.
+
 - **Robustesse (lot F)** : un PNJ bloqué chez un client (mur, porte, étage) est replacé où l'hôte
   l'a après 1 s sans progrès ; les PNJ lointains sont replacés sur la position de l'hôte ; la TP
   admin déplace aussi un personnage à terre ou porté ; un perso dans un lit ou une cage n'est plus

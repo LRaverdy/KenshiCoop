@@ -1,6 +1,9 @@
 // Lot B: faction relations, bounties and crimes are the host's. The host sends them when they
-// change (and in full every 15 s, and to a player who just arrived); clients impose them on their
-// game, again every few seconds since the local game may drift (its own updates, expiring crimes).
+// change (and in full every 15 s, and to a player who just arrived). Clients impose the relations on
+// their game, again every few seconds since the local game may drift (beyond float noise). Bounties
+// and crimes are not written into a client's game (its own law enforcement would act on characters
+// the host drives, and clients crashed): the client keeps the host's copy to show, and empties any
+// its own game makes (see KenshiWorld::ApplyBounties).
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -55,7 +58,9 @@ void Session::SendFactions(double now) {
     if (world_.ReadFactions(fm)) {
         Writer w(4096);
         Encode(w, fm);
-        const uint64_t h = HashBytes(w);
+        // sent again only on a real change: the game nudges these floats all the time, and sending each
+        // nudge made every client "correct" a value every second
+        const uint64_t h = factionsHash_ != 0 && SameFactions(fm, hostFactions_) ? factionsHash_ : HashBytes(w);
         if (h != factionsHash_ || full) {
             // the log tells what changed (not the periodic refresh)
             if (factionsHash_ != 0 && h != factionsHash_) {

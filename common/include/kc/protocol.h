@@ -889,6 +889,25 @@ struct FactionsMsg {
     std::vector<FactionRelationEntry> factions;
     bool operator==(const FactionsMsg&) const = default;
 };
+// Relations are floats the game nudges on its own every frame (trust and strength drift, decay toward
+// neutral): differences below these are noise, neither sent again nor imposed on a client.
+inline bool CloseEnough(float a, float b, float tol) { return (a > b ? a - b : b - a) < tol; }
+inline bool SameRelation(const RelationState& a, const RelationState& b) {
+    return a.alliance == b.alliance && a.peace == b.peace && a.war == b.war && a.coexists == b.coexists && CloseEnough(a.relation, b.relation, 0.5f) &&
+           CloseEnough(a.trustPositives, b.trustPositives, 0.5f) && CloseEnough(a.trustNegatives, b.trustNegatives, 0.5f) &&
+           CloseEnough(a.strength, b.strength, 1.0f + 0.01f * (a.strength > 0 ? a.strength : -a.strength));
+}
+inline bool SameFactions(const FactionsMsg& a, const FactionsMsg& b) {
+    if (a.playerRank != b.playerRank || !CloseEnough(a.reputationTrust, b.reputationTrust, 0.5f) ||
+        !CloseEnough(a.reputationBadassery, b.reputationBadassery, 0.5f) || a.factions.size() != b.factions.size())
+        return false;
+    for (size_t i = 0; i < a.factions.size(); ++i) {
+        const auto &x = a.factions[i], &y = b.factions[i];
+        if (x.factionSid != y.factionSid || x.hasOurs != y.hasOurs || x.hasTheirs != y.hasTheirs) return false;
+        if ((x.hasOurs && !SameRelation(x.ours, y.ours)) || (x.hasTheirs && !SameRelation(x.theirs, y.theirs))) return false;
+    }
+    return true;
+}
 struct BountyEntry {
     std::string factionSid;     // the faction that wants the character
     int32_t amount = 0;

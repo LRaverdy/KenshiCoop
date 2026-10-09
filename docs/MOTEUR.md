@@ -608,6 +608,18 @@ Tâches par défaut d'un clic droit sur un meuble, selon la recherche :
 - `operator[]` de la table des primes `0x5E7EE0` `(table*, Faction* const&)` : trouve ou crée le nœud
   (`Bounty` construit à 0) et renvoie la paire (clé +0, montant +8, crimes +0xC, réclamée +0x10,
   heure +0x18). C'est ce que `unfairAddToBounty` (`0x853E20`) appelle avant d'ajouter le montant.
+- Appelants de `0x5E7EE0` (par le saut `0xA966`) : `unfairAddToBounty`, `assignBountyForCrimes`
+  (`0x853F34`) et 5 autres dans `0x854000`-`0x854330`, plus `0x5D118F` et le chargement `0x6260D9` ;
+  tous passent `rcx` = le `BountyManager` lui-même (la table est bien à +0). La clé vient de
+  `0x852010` : la faction **racine** (on remonte `Faction+0x38` tant qu'il est non nul), d'où une
+  prime « Cités Unies » pour un crime contre les Chasseurs de Tech. Après le montant, le jeu écrit
+  l'heure (+0x18 de la paire) depuis une table globale, et prévient l'interface (`[bm+0x40]+0x58`,
+  le `hand` du perso).
+- **Plantage du 10/10** : l'insertion du mod était correcte (même chemin que le jeu). Mais le client
+  avait aussi planté au **chargement** de la sauvegarde de l'hôte qui contenait la prime, sans
+  aucune écriture du mod : c'est la présence de la prime (et du crime en cours) dans le jeu du client
+  qui le fait planter, quand sa police locale agit sur un perso piloté par l'hôte (7 à 17 s d'écart
+  entre clients). D'où : primes et crimes jamais écrits chez un client, et vidés s'il en a.
 - `getTotalBounty` `0x853740` renvoie en fait la **plus grosse** prime (pas la somme).
 - `clearBounty` `0x8539F0` efface la prime de la faction **et** celle de la faction qui tient la
   prison où est le personnage (ou de la ville où il se trouve) : le mod ne l'appelle pas, il met le

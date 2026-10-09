@@ -4,11 +4,13 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
 
 ## 10 octobre 2026
 
-- **PRIORITÉ — Les 3 clients plantent juste après une nouvelle prime** (10/10, 00:51:50–00:52:00 ; l'hôte
-  continue). Juste avant : Geoffrey crochète un coffre-fort (crime), l'ouvre, puis devient « recherché par
-  les Cités Unies pour 1000 cats » à 00:51:43 (sa première prime). Suspect : la synchro des primes (lot B)
-  crée chez chaque client la nouvelle entrée de prime avec l'operator[] du jeu (0x5E7EE0), jamais testé
-  en vraie partie. À confirmer avec le KenshiCoop.log / crashDump d'un client.
+- ~~**PRIORITÉ — Les 3 clients plantent juste après une nouvelle prime**~~ (10/10) — **corrigé** (à
+  vérifier en jeu). L'operator[] (0x5E7EE0) était bien appelé comme le jeu le fait ; mais le client
+  plantait aussi au chargement de la sauvegarde contenant la prime, sans le mod : c'est la prime
+  elle-même dans le jeu du client (sa police locale contre un perso que l'hôte pilote). Désormais le
+  client n'a jamais de prime ni de crime dans son jeu (il vide ceux que son jeu crée) et garde la
+  copie de l'hôte pour l'affichage. Reste : si le plantage arrive pendant le chargement, avant la
+  connexion, on n'a pas encore pu vider la prime (à surveiller).
 
 - **Ville lointaine en « bâtons rouges »** : un client parti seul dans une autre ville voit ses bâtiments
   comme des chantiers (bâtons rouges), alors que l'hôte la voit normalement.
@@ -33,9 +35,12 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   délai d'expiration pendant un TP ou faire charger la zone avant de déplacer le perso.
   Journal de l'hôte du 10/10 : `tp 3` à 00:30:51, Geoffrey part à 00:30:58 sans aucune ligne de son jeu
   entre les deux (gel ou plantage pendant le chargement de la zone).
-- **Relations corrigées en boucle** : chez rob, 3 valeurs de relations ou de primes reprennent sans arrêt
-  la valeur du jeu local et le mod les remet chaque seconde (journal « factions: 3 relation/bounty values
-  set to the host's »). Trouver qui les change chez le client et le bloquer.
+- ~~**Relations corrigées en boucle**~~ — **corrigé**. Le journal montre des corrections « fraîches »
+  (pas « the local game had changed them ») : l'hôte renvoyait les relations chaque seconde, car le jeu
+  bouge sans cesse un peu ses flottants (confiance, force), et le client recopiait la valeur exacte.
+  Les « 3 valeurs » apparaissaient pendant un crime (crime, faction, expiration réécrits puis effacés
+  par le jeu du client). Maintenant : envoi et correction seulement au-delà du bruit (0,5 point, 1 %
+  de force), et les crimes ne sont plus écrits chez le client.
 - **Fouille d'un cadavre : l'objet se duplique puis s'annule** (Geoffrey, 10/10 vers 00:35). Le journal de
   l'hôte montre des déplacements d'équipement refusés : « boots -> boots 0,0 : no room ». Quand le joueur
   glisse des bottes du corps sur son perso qui en porte déjà, son jeu fait un échange (les anciennes sortent,

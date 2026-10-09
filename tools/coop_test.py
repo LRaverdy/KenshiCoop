@@ -1184,6 +1184,13 @@ def exp_factions(host, cli):
     time.sleep(3)
     bh, bc = cmd(host, f"bounty {own}")[1], cmd(cli, f"bounty {own}")[1]
     check("primes : prime de l'hote visible chez le client", ":1500" in bh and bh == bc, f"hote {bh} / client {bc}")
+    # a bounty the character never had (the 10/10 crash): the client must live through it, its own
+    # game holding none (the host's law only)
+    log("host gives a brand new bounty:", cmd(host, f"givebounty {own} Ville 2000"))
+    time.sleep(20)
+    alive = cmd(cli, f"bounty {own}")
+    check("primes : le client survit a une nouvelle prime et l'affiche", alive[0] and alive[1] == cmd(host, f"bounty {own}")[1], f"client {alive}")
+    cmd(host, f"givebounty {own} Ville 0")
     cmd(host, f"givebounty {own} {part} 0")
     time.sleep(3)
     bh, bc = cmd(host, f"bounty {own}")[1], cmd(cli, f"bounty {own}")[1]
