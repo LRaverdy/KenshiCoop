@@ -19,3 +19,7 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   (panneau Tâches, clic sur la croix) ne passe que par le jeu du client : l'hôte la garde, et elle revient.
   À faire : intercepter la suppression d'une tâche (et « tout effacer ») côté client et l'exécuter chez
   l'hôte, comme les ordres.
+- **« TP vers moi » sur un joueur loin : il est éjecté** de la partie. Pistes : son jeu charge d'un coup la
+  zone d'arrivée et ne répond plus assez longtemps pour que la connexion expire, ou il plante pendant ce
+  chargement. À vérifier dans son KenshiCoop.log (déconnexion ou CRASH) ; si c'est l'attente, allonger le
+  délai d'expiration pendant un TP ou faire charger la zone avant de déplacer le perso.
