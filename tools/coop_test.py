@@ -323,7 +323,12 @@ def setup(save, name="Tester"):
     ok, t = cmd(host, f"load {save}")
     log("load", ok, t)
     wait_for(host, lambda s: s.get("ready") == "1", 180, "host world")
-    ok, t = cmd(host, "host")
+    for _ in range(20):   # the world can still be settling right after "ready" (err load a save before hosting)
+        ok, t = cmd(host, "host")
+        if ok:
+            break
+        log("host not accepted yet:", t)
+        time.sleep(1)
     log("host", ok, t)
     cli = launch(fake_steam_id=76561190000000002)
     log("client pid", cli)
