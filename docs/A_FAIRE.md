@@ -55,6 +55,16 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   trop espacées, orientation / animation de marche pas mise à jour (marche jouée à l'envers quand
   le PNJ est déplacé vers l'arrière de sa direction). Mesurer : fréquence des positions reçues
   par PNJ chez ce client, écart d'orientation.
+- **Client 2 (nass4) : armes jetées / échangées sur un perso de son escouade** : changé chez lui,
+  pas chez les autres ni chez l'hôte. Journal de l'hôte, plusieurs fois entre 23:08 et 23:11 :
+  « [nass4] drop to the ground not sent: the host does not know that inventory
+  (52295-rebirth.mod) » (et 1020-gamedata.base). Le client fait le geste dans son jeu, ne
+  l'envoie pas (inventaire source inconnu de l'hôte : probablement un sac à dos ou un objet
+  conteneur d'un mod, ou le perso n'est pas reconnu), mais **ne l'annule pas chez lui** :
+  l'objet disparaît localement puis la synchro le fait revenir ou le perd. Même cause probable que
+  « objet glissé au sol disparu » et « ramassage perdu ». À corriger : (1) tout geste qui ne peut
+  pas partir chez l'hôte doit être refusé localement (rien ne bouge chez le client) ; (2) faire
+  connaître ces inventaires à l'hôte (sacs, conteneurs de mods, persos de l'escouade du joueur).
 - **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
