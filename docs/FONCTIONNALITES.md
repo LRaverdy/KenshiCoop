@@ -93,6 +93,24 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   nom du joueur et n'appartient à aucun autre compte ; sinon il crée un nouveau personnage.
 - Vérifié par la suite (« reconnexion »).
 
+### Client qui plante ou perd la connexion 🟡 (tests unitaires ; test en jeu `crashrejoin` pas encore lancé)
+- **L'hôte** voit partir un client planté (jeu tué, réseau coupé) en 5 à 15 s. Un client dont le
+  jeu est **figé** (chargement d'une zone, sauvegarde) n'est pas coupé : un fil de maintien répond
+  au réseau à la place du jeu figé, jusqu'à 90 s.
+- **Ses personnages** reviennent à l'hôte, s'arrêtent là où ils sont (marche, tâche et ramassage en
+  cours abandonnés ; ils se défendent toujours ; un corps porté reste porté). Ce que le joueur avait
+  demandé et qui n'est pas encore fait est jeté (ordres, échanges d'inventaire, poses de
+  bâtiments, portes, conteneurs en route). Les fenêtres de conteneur et de commerce qu'il avait
+  ouvertes sont libérées ; la pause « X crée son personnage » est levée.
+- **Il revient** (même compte Steam ; sans Steam : même nom, ancienne connexion muette depuis 2 s) :
+  il garde son nom, retrouve son personnage et ceux qu'il commandait, dans leur état actuel chez
+  l'hôte. S'il revient avant que l'hôte ait vu la coupure, la nouvelle connexion remplace
+  l'ancienne aussitôt.
+- **Côté client**, rien de persistant n'est abîmé : le monde de l'hôte n'est chargé que dans
+  l'emplacement `KenshiCoopJoin` (vidé à chaque arrivée), et le jeu du client **ne sauvegarde pas**
+  pendant une session (sauvegarde, sauvegarde rapide, sauvegarde automatique refusées : elles
+  écriraient le monde de l'hôte sur une partie du joueur).
+
 ---
 
 ## Personnages
@@ -427,7 +445,7 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
 - Bêtes de somme, chiens, chèvres... achetés ou apprivoisés sont des membres de l'escouade comme les
   autres : à l'hôte tant qu'ils ne sont pas donnés à un joueur (commande `give`), leurs ordres,
   position, santé et inventaire sont ceux de l'hôte partout.
-- Un joueur qui part rend ses personnages à l'hôte ; **quand il revient (même nom), l'hôte lui rend
+- Un joueur qui part rend ses personnages à l'hôte ; **quand il revient (même compte Steam, ou même nom sans Steam), l'hôte lui rend
   ceux qu'il avait** (animaux et recrues compris), s'ils sont encore à l'hôte.
 - **Limites** : un animal acheté par un client n'est pas donné automatiquement à ce client (il
   reste à l'hôte jusqu'à un `give`) ; le contenu d'un sac à dos porté n'est pas synchronisé.

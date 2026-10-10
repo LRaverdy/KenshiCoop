@@ -1265,6 +1265,19 @@ void KenshiWorld::ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) {
         int(kenshi::IsRagdoll(c)), int(kenshi::IsUnconscious(c)), int(kenshi::IsDead(c)));
 }
 
+// A gone player's character (left, crashed, connection lost): it stops walking and drops the task
+// and the pick up it was given, and stays where it is. It still defends itself; what it carries
+// stays carried. Never on a dead one.
+void KenshiWorld::HaltCharacter(const kc::Handle& h) {
+    kenshi::Character* c = FindSquad(h);
+    pickups_.erase(h);
+    if (!c || kenshi::IsDead(c)) return;
+    HostCallScope scope;
+    kenshi::Halt(c);
+    kenshi::DropLocalTasks(c);
+    Log("player gone: %s halted where it stands", KeyOf(h).c_str());
+}
+
 bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
     kenshi::Character* c = FindSquad(h);
     if (!c) return false;

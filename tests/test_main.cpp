@@ -237,6 +237,8 @@ struct FakeWorld : IWorld {
         auto it = chars.find(h.serial);
         if (it != chars.end()) { it->second.vit = v; it->second.vit.netId = 0; }
     }
+    int halts = 0;                                     // host: characters halted (their player gone)
+    void HaltCharacter(const Handle& h) override { (void)h; ++halts; }
     bool Order(const Handle& h, const Command& c) override {
         auto it = chars.find(h.serial);
         if (it == chars.end()) return false;
@@ -1853,6 +1855,51 @@ static void TestTrade() {
     CHECK(!cli.tradeView().open && !cli.tradeView().pending && host.hostTrades() == 0);
 }
 
+static void TestCrashRejoin() {
+    std::printf("session: a client whose game froze, then restarted (same Steam account): replaced cleanly, same character, nothing left open\n");
+    FakeWorld hw, cw, cw2;
+    SetupHost(hw);
+    FakeChar merchant; merchant.squad = false; merchant.pos = {10, 0, -20}; merchant.dest = merchant.pos;
+    hw.chars[50] = merchant;
+    ItemState bread; bread.templateSid = "bread"; bread.quantity = 3; bread.section = "main";
+    hw.boxes[900] = {"counter", {15, 0, -15}, {bread}};
+    hw.shops[50] = {900};
+    hw.merchantMoney[50] = 100;
+    AtMenu(cw);
+    AtMenu(cw2);
+    cw.boxes = cw2.boxes = hw.boxes;
+    SessionConfig hc; hc.port = ++g_port; hc.steamId = 1;
+    SessionConfig cc; cc.port = hc.port; cc.name = "Crashy"; cc.steamId = 4242;
+    Session host(hw, hc, Now, Quiet("host"));
+    std::string err;
+    CHECK(host.Host(&err));
+    auto first = std::make_unique<Session>(cw, cc, Now, Quiet("cli"));
+    CHECK(JoinAndWait(host, hw, *first, cw, hc.port, 5));
+    const uint32_t me = hw.named.count("Crashy") ? hw.named["Crashy"] : 0;
+    hw.tradeReqs.push_back({FakeWorld::H(me), FakeWorld::H(50)});
+    Run({{&host, &hw}, {first.get(), &cw}}, 3.0, [&] { return first->tradeView().open; });
+    CHECK(host.hostTrades() == 1);
+    // the client's game freezes (not ticked): its connection keeps answering, the host keeps it
+    Run({{&host, &hw}}, 7.0);
+    CHECK(host.players().size() == 1);
+    CHECK(host.hostTrades() == 1);
+    // the player kills the game and starts it again: a new connection from the same account while
+    // the old one is still up
+    Session second(cw2, cc, Now, Quiet("cli2"));
+    CHECK(second.Join("127.0.0.1", hc.port, &err));
+    Run({{&host, &hw}, {&second, &cw2}}, 10.0, [&] { return second.state() == SessionState::Connected && cw2.controllable.size() == 1; });
+    CHECK(second.state() == SessionState::Connected);
+    CHECK(host.players().size() == 1 && host.players().begin()->second.name == "Crashy");   // not "Crashy 3"
+    CHECK(hw.named.size() == 1);                       // no second character made for them
+    CHECK(cw2.controllable.size() == 1 && !cw2.controllable.empty() && cw2.controllable[0].serial == me);
+    CHECK(host.hostTrades() == 0);                     // the old trade window is gone
+    CHECK(hw.halts >= 1);                              // its character stood still meanwhile
+    CHECK(host.ownerOf(FakeWorld::H(me)) == host.players().begin()->first);
+    first.reset();   // the old process is gone for good: nothing changes for the new one
+    Run({{&host, &hw}, {&second, &cw2}}, 2.0);
+    CHECK(second.state() == SessionState::Connected && host.players().size() == 1);
+}
+
 static void TestBuildings() {
     std::printf("session: buildings placed by a client or the host are built by everyone; progress, dismantling, removal, purchase\n");
     FakeWorld hw, cw;
@@ -2139,6 +2186,7 @@ int main() {
     TestInventories();
     TestInventorySwaps();
     TestTrade();
+    TestCrashRejoin();
     TestBuildings();
     TestRanged();   // lot C
     TestCaptives();

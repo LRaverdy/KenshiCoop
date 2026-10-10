@@ -91,6 +91,11 @@ recrutement au centre d'emploi, refusés avec un message.
 monde, en pause. Kenshi ne sait pas revenir à son écran titre : pour reprendre une de tes parties,
 fais Échap, puis Charger, ou utilise le bouton « Quitter le jeu ».
 
+**Plantage** : si le jeu d'un client plante ou perd la connexion, l'hôte s'en rend compte en
+quelques secondes, ses personnages s'arrêtent sur place et l'attendent. Il relance Kenshi et
+rejoint : il retrouve ses personnages tels qu'ils sont. Pendant une session, le jeu du client ne
+sauvegarde pas (tes propres parties ne sont jamais écrasées par le monde de l'hôte).
+
 ## Ce qui est synchronisé
 
 - **Le monde** : le client joue dans une copie exacte du monde de l'hôte, sauvegarde transférée au

@@ -95,6 +95,9 @@ public:
 
     // Host side: execute an order for a character (issued by a client).
     virtual bool Order(const Handle& h, const Command& c) = 0;
+    // Host side: a character whose player just left or lost their connection stops what it was
+    // doing (walk, task, pending pick up) and stays where it is.
+    virtual void HaltCharacter(const Handle& h) { (void)h; }
 
     // Orders the local player gave this frame (client: intercepted instead of executed).
     virtual void TakeLocalOrders(std::vector<std::pair<Handle, Command>>& out) = 0;
@@ -557,9 +560,6 @@ private:
     std::unordered_map<uint32_t, Entity> entities_;  // netId -> entity
     std::unordered_map<Handle, uint32_t, HandleHash> byHandle_;  // handle -> netId
     std::vector<std::pair<Handle, uint8_t>> owners_;  // host: explicit squad assignments
-    // host: the squad characters a player had when they left (their recruits, animals, pack beasts),
-    // by player name: given back when they join again
-    std::map<std::string, std::vector<Handle>> leftOwned_;
     std::unordered_map<uint64_t, uint32_t> byIdentity_;   // host: IWorld::Identity -> netId
     uint32_t nextNetId_ = 1;
     uint32_t tick_ = 0;
@@ -758,6 +758,12 @@ private:
     double connectStarted_ = 0;
     std::map<PeerId, double> pendingPeers_;          // host: connected, Hello not received yet
     std::vector<std::pair<uint8_t, Command>> pendingCommands_;  // host: run on the next live tick
+    // A player gone (left, crashed, connection lost): everything still pending for them is dropped,
+    // their characters halt on the next live tick and go back to them if they come back.
+    void ForgetPlayer(uint8_t id);
+    static std::string PlayerKey(const RemotePlayer& p);   // the same person across connections
+    std::vector<Handle> haltQueue_;                             // host: characters to halt on the next live tick
+    std::map<std::string, std::vector<Handle>> leftOwned_;     // host: what each gone player commanded
     std::vector<Handle> despawnQueue_;               // client: stand-ins to remove on the next live tick
 
     // host world export (shared by everyone joining at the same time)

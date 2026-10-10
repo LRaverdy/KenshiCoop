@@ -9,7 +9,7 @@ Deux niveaux de tests :
 
 ```powershell
 .\build.ps1                            # compile aussi kc_tests
-.\build\bin\Release\kc_tests.exe       # dernière ligne : "617 checks, 0 failed" (9 octobre 2026)
+.\build\bin\Release\kc_tests.exe       # dernière ligne : "775 checks, 0 failed" (10 octobre 2026)
 .\build.ps1 -Asan                      # variante AddressSanitizer, dans build-asan\
 ```
 
@@ -28,6 +28,7 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `TestWorldAuthority` | le client n'exécute rien lui-même, ses ordres passent par l'hôte |
 | `TestSpawnReplication` | personnages créés chez l'hôte puis recréés chez le client |
 | `TestInventories` | inventaires identiques, fouille rejouée par l'hôte |
+| `TestCrashRejoin` | client figé 7 s (gardé), puis relancé avec le même compte avant la coupure : remplacé, même nom, même perso, pas de doublon, fenêtre de commerce fermée, perso arrêté |
 | `TestManyPlayers` | 1 hôte + 4 clients arrivant ensemble, 120 personnages |
 
 ## 2. Tests en jeu (`tools/coop_test.py`)
@@ -103,6 +104,7 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `menu` | un hôte qui héberge et un second jeu laissé **au menu principal**, pour rejoindre à la main |
 | `up` | un hôte et un client connectés, laissés ouverts pour un test manuel |
 | `prison` (lot D) | l'hôte met le personnage du client dans la cage la plus proche, l'enchaîne, le réduit en esclavage puis le libère : même état chez le client, gardé dans la cage, tout effacé à la fin. Il faut une cage à moins de 300 m de l'escouade (`--save` d'une sauvegarde près d'une prison ou d'un camp d'esclavagistes) |
+| `crashrejoin` (`--only abcdefg`) | client **tué** (`taskkill /F`) puis relancé avec le même faux id Steam et revenu : (a) au repos, (b) en combat à la vitesse 3, (c) en portant un corps, (d) fenêtre de commerce ouverte, (e) en fouillant un corps, (f) dans l'éditeur de personnage, (g) relancé avant que l'hôte ait vu la coupure. À chaque fois : l'hôte vit, voit la coupure (< 20 s) et nettoie (journal « disconnected (… » / « cleaned up: »), le joueur retrouve les mêmes persos (clés, inventaires ; sauf combat), pas de doublon, comparaison hôte / client propre, l'hôte n'est pas resté en pause |
 | `cmd <pid> <commande…>` | envoie une commande de debug à une instance |
 
 ### La suite (`suite`) : 32 points

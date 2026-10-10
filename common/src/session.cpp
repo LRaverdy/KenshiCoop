@@ -133,6 +133,8 @@ void Session::Leave() {
     sync_.clear();
     pendingPeers_.clear();
     pendingCommands_.clear();
+    haltQueue_.clear();
+    leftOwned_.clear();
     despawnQueue_.clear();
     owners_.clear();
     byIdentity_.clear();
@@ -224,6 +226,11 @@ void Session::HostTick(double now, bool live) {
     }
     if (controllableDirty_) PushControllable();
 
+    for (const Handle& h : haltQueue_) {   // characters of a player gone: they stay put
+        Entity* e = entityByHandle(h);
+        if (e && e->squad) world_.HaltCharacter(h);   // (even if already theirs again: they are still loading)
+    }
+    haltQueue_.clear();
     for (auto& [from, c] : pendingCommands_) ApplyCommand(from, c);
     pendingCommands_.clear();
     HostInvOps();
@@ -420,19 +427,24 @@ void Session::HostJoinFlow(double now, bool live) {
                     if (world_.EnsurePlayerCharacter(players_[id].name, players_[id].steamId, s.own, created)) {
                         Assign(s.own, id);
                         s.ownCreated = created;
-                        // what they had when they left (pets, pack beasts, recruits) comes back to them
-                        if (auto k = leftOwned_.find(players_[id].name); k != leftOwned_.end()) {
-                            size_t back = 0;
-                            for (const Handle& h : k->second) {
-                                Entity* e = entityByHandle(h);
-                                if (e && e->squad && e->owner == hostId_ && !(h == s.own)) { Assign(h, id); ++back; }
-                            }
-                            if (back) log_(players_[id].name + " gets back " + std::to_string(back) + " squad characters they had before leaving");
-                            leftOwned_.erase(k);
-                        }
                     }
                     else log_("no character of their own for " + players_[id].name);
                 }
+            }
+            // a player coming back (after a crash, a lost connection): the characters they
+            // commanded when they went, if the host has not given them to someone else since
+            for (uint8_t id : joining) {
+                auto lo = leftOwned_.find(PlayerKey(players_[id]));
+                if (lo == leftOwned_.end()) continue;
+                size_t back = 0;
+                for (const Handle& h : lo->second) {
+                    Entity* e = entityByHandle(h);
+                    if (!e || !e->squad || e->owner != hostId_) continue;
+                    Assign(h, id);
+                    ++back;
+                }
+                leftOwned_.erase(lo);
+                log_(players_[id].name + " is back: " + std::to_string(back) + " character(s) they had are theirs again");
             }
             std::string err;
             if (world_.BeginWorldExport(&err)) {
@@ -1355,6 +1367,25 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         if (h.gameBuild != world_.GameBuild()) return reject(RejectReason::GameMismatch);
         if (h.modsHash != world_.ModsHash()) return reject(RejectReason::ModsMismatch);
         if (!ValidName(h.name)) return reject(RejectReason::BadName);
+        // One Steam account, one player: a second connection from the same account (two games on
+        // one PC) is told apart by its name only.
+        bool steamTaken = h.steamId != 0 && h.steamId == cfg_.steamId;
+        if (steamTaken) h.steamId = 0;
+        // The same person still connected: a player who restarted the game (crash, killed) before
+        // the old connection timed out. Same Steam account; without one, same name on a connection
+        // silent for 2 s (a live game, even frozen, answers ENet's pings twice a second). The old
+        // connection goes first (before the name and id checks: the player keeps their name, so
+        // their character); they get their characters back.
+        for (auto it = players_.begin(); it != players_.end(); ++it) {
+            const bool same = h.steamId ? it->second.steamId == h.steamId
+                                        : it->second.steamId == 0 && it->second.name == h.name && net_.silentMs(it->second.peer) > 2000;
+            if (!same) continue;
+            const PeerId old = it->second.peer;
+            log_(it->second.name + " reconnected: the old connection (silent for " + std::to_string(net_.silentMs(old)) + " ms) is closed");
+            net_.Kick(old);
+            OnDisconnect(old);
+            break;
+        }
         uint8_t id = 0;
         for (uint8_t i = 2; i <= kMaxPlayers; ++i) if (!players_.count(i)) { id = i; break; }
         if (!id) return reject(RejectReason::Full);
@@ -1363,19 +1394,6 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         bool taken = h.name == cfg_.name;
         for (auto& [pid, p] : players_) taken |= p.name == h.name;
         if (taken) h.name = h.name.substr(0, kMaxNameLen - 4) + " " + std::to_string(id);
-        // One Steam account, one player: a second connection from the same account (two games on
-        // one PC) is told apart by its name only.
-        bool steamTaken = h.steamId != 0 && h.steamId == cfg_.steamId;
-        if (steamTaken) h.steamId = 0;
-        // the same account still connected: a player who restarted the game before the old
-        // connection timed out. The old one goes; the player gets their character back.
-        for (auto it = players_.begin(); h.steamId && it != players_.end(); ++it) {
-            if (it->second.steamId != h.steamId) continue;
-            log_(it->second.name + " reconnected: the old connection is closed");
-            net_.Kick(it->second.peer);
-            OnDisconnect(it->second.peer);
-            break;
-        }
         pendingPeers_.erase(peer);
 
         Welcome wm;
@@ -2668,29 +2686,67 @@ void Session::OnDisconnect(PeerId peer) {
     if (!pl) return;
     const uint8_t id = pl->id;
     const std::string name = pl->name;
+    const bool kicked = sync_[id].kicked;
     if (!pl->inGame)
-        log_(name + " left while joining (" + (sync_[id].kicked ? "removed" : "connection lost: their game quit or crashed while loading") +
+        log_(name + " left while joining (" + (kicked ? "removed" : "connection lost: their game quit or crashed while loading") +
              "): the world is no longer held for them");
-    players_.erase(id);
-    sync_.erase(id);
-    // the leaver's characters go back to the host so they are never left uncontrolled; remembered
-    // so that a rejoin gives them back (animals and recruits too, not only their own character)
-    {
-        auto& kept = leftOwned_[name];
-        kept.clear();
-        for (auto& [nid, e] : entities_) if (e.squad && e.owner == id) kept.push_back(e.handle);
-    }
-    for (auto& o : owners_) if (o.second == id) o.second = hostId_;
-    for (auto& [nid, e] : entities_) {
-        if (e.owner != id) continue;
-        e.owner = hostId_;
-        for (auto& [pid, p] : players_) if (p.inGame) SendBind(e, p.peer);
-    }
-    controllableDirty_ = true;
+    else
+        log_(name + " disconnected (" + (kicked ? "removed" : "left, or connection lost: game closed, crashed or network cut") +
+             "): cleaning up after them");
+    ForgetPlayer(id);
     Writer w;
     Encode(w, PlayerLeft{id});
     BroadcastReliable(w, false);
     AddChat("* " + name + " a quitté la partie", "* " + name + " left");
+}
+
+std::string Session::PlayerKey(const RemotePlayer& p) {
+    return p.steamId ? "steam:" + std::to_string(p.steamId) : "name:" + p.name;
+}
+
+void Session::ForgetPlayer(uint8_t id) {
+    auto pit = players_.find(id);
+    if (pit == players_.end()) return;
+    const std::string key = PlayerKey(pit->second);
+    const bool wasInGame = pit->second.inGame;
+    const bool wasEditing = pit->second.editing;
+    const PeerId peer = pit->second.peer;
+    players_.erase(pit);
+    sync_.erase(id);
+    // the leaver's characters go back to the host so they are never left uncontrolled; they stop
+    // where they are (next live tick) and go back to the player if they come back
+    std::vector<Handle> owned;
+    for (auto& o : owners_) if (o.second == id) o.second = hostId_;
+    for (auto& [nid, e] : entities_) {
+        if (e.owner != id) continue;
+        e.owner = hostId_;
+        if (e.squad) { owned.push_back(e.handle); haltQueue_.push_back(e.handle); }
+        for (auto& [pid, p] : players_) if (p.inGame) SendBind(e, p.peer);
+    }
+    if (wasInGame && !owned.empty()) leftOwned_[key] = owned;
+    while (leftOwned_.size() > 64) leftOwned_.erase(leftOwned_.begin());
+    controllableDirty_ = true;
+    // nothing they asked for runs any more (their id may soon be someone else's)
+    auto drop = [id](auto& v) { v.erase(std::remove_if(v.begin(), v.end(), [id](const auto& x) { return x.first == id; }), v.end()); };
+    drop(pendingCommands_);
+    drop(pendingInvOps_);
+    drop(pendingLooks_);
+    drop(containerAsks_);
+    drop(pendingPlaces_);
+    drop(pendingBuildActions_);
+    drop(pendingDoorReqs_);
+    walkingToContainers_.erase(std::remove_if(walkingToContainers_.begin(), walkingToContainers_.end(), [id](const PendingContainer& c) { return c.player == id; }),
+                               walkingToContainers_.end());
+    // containers and trade windows they had open are free again
+    size_t closed = 0;
+    for (auto& [nid, e] : entities_) closed += e.openBy.erase(id);
+    const bool traded = trades_.erase(id) > 0;
+    for (auto it = dialogOwner_.begin(); it != dialogOwner_.end();) it = it->second == id ? dialogOwner_.erase(it) : std::next(it);
+    buildSyncedPlayers_.erase(id);
+    factionsServed_.erase(peer);
+    log_("player " + std::to_string(id) + " cleaned up: " + std::to_string(owned.size()) + " character(s) back to the host and halted, " +
+         std::to_string(closed) + " container window(s) and " + (traded ? "a" : "no") + " trade window closed" +
+         (wasEditing ? ", character editor hold released" : ""));
 }
 
 void Session::SendChat(const std::string& text) {
