@@ -123,6 +123,11 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   terre), mais chez lui ils restent debout. La posture « à terre » n'est pas appliquée chez lui
   (ou relevée aussitôt : voir la boucle « stood up to fall where the host's lies » des prisonniers,
   même mécanisme). À vérifier avec la correction de cette boucle.
+- **Combats de « Hep » pas fluides chez les clients** (perso de l'escouade qui n'est à aucun
+  joueur, se bat beaucoup). Attaques, esquives et déplacements de combat saccadés. À mesurer :
+  fréquence des positions et des animations de combat envoyées pour les persos de l'escouade
+  non-joueurs, interpolation pendant les attaques (comme le test « vitesse 3 : orientation en
+  marchant » qui échoue parfois).
 - **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
