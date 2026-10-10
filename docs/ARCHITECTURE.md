@@ -166,9 +166,24 @@ Ordre dans `Tick()` (`main.cpp`) :
   | 2 | non fiable, séquencé | `Vitals` |
 
 - Chaque type de message n'est accepté que sur son canal.
-- Un pair muet est coupé après 15 s (`enet_peer_timeout` 5 s / 15 s), ce qui repère vite un jeu
-  planté. `Net::ExpectSilence` porte ce délai à 30 s / 2 min pendant qu'un jeu charge une zone
+- Un pair muet est coupé après 5 à 15 s (`enet_peer_timeout` 5 s / 15 s), ce qui repère vite un
+  jeu planté. `Net::ExpectSilence` porte ce délai à 30 s / 2 min pendant qu'un jeu charge une zone
   (TP admin, message `Stall`), puis le remet.
+- Fil de maintien (`Net::KeepAlive`) : si le fil du jeu n'a pas appelé `Poll` depuis 0,3 s (jeu
+  figé), il appelle `enet_host_service` lui-même (sous `mu_`, sans jamais attendre le fil du jeu)
+  pour acquitter ce qui arrive et répondre aux pings ; les événements sont gardés pour le `Poll`
+  suivant, dans l'ordre. Un jeu figé reste donc connecté, un jeu planté se tait et est coupé. Au
+  plus 90 s (un jeu bloqué pour de bon finit coupé). `Net::silentMs` : temps depuis le dernier
+  paquet d'un pair.
+- Départ d'un joueur, propre ou non (`Session::OnDisconnect` → `ForgetPlayer`) : ses persos
+  reviennent à l'hôte et sont arrêtés au tick suivant (`IWorld::HaltCharacter`), mémorisés par
+  compte (`leftOwned_`) et rendus s'il revient ; tout ce qui porte son id est effacé (ordres,
+  `pendingInvOps_`, apparences, conteneurs demandés ou en route, `openBy`, `trades_`, poses et
+  achats de bâtiments, portes, conversations, `buildSyncedPlayers_`, `factionsServed_`) : l'id
+  sera peut-être celui d'un autre joueur. Une nouvelle connexion du même compte (ou, sans compte,
+  du même nom sur une connexion muette depuis 2 s) remplace l'ancienne **avant** le choix du nom
+  et de l'id.
+- Client : le hook de `SaveManager::save` refuse toute sauvegarde tant que le client est en session.
 - Un nouveau monde (`KenshiWorld::BeginFrame`) est un autre joueur ou une escouade dont les objets
   ont changé, pas une simple coupure du tick. Il remet tout l'état lié au monde à zéro
   (`ResetWorldBound`) : alias, pointeurs, demandes en attente, caches.
