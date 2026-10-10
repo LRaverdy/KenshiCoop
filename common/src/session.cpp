@@ -1615,7 +1615,9 @@ void Session::HostInvOp(uint8_t from, const InvOp& op, const InvOp* swapWith) {
     }
     if (!dstOk || !srcOk) {
         log_("refused an inventory move from player " + std::to_string(from) + ": " + op.item.templateSid + " " +
-             (srcOk ? "" : dst == entities_.end() ? "(unknown destination) " : "(may not take from there) ") + (dstOk ? "" : "(may not put there)"));
+             (srcOk ? "" : dst == entities_.end() ? "(unknown destination) " : "(may not take from there) ") + (dstOk ? "" : dst == entities_.end() ? "(may not put there)" :
+                 "(may not put there: squad=" + std::to_string(dst->second.squad) + " owner=" + std::to_string(dst->second.owner) +
+                 " container=" + std::to_string(dst->second.container) + " down=" + std::to_string(isDown(dst->second)) + ")"));
         src->second.invHash = 0;   // resend the true state so the client's prediction is undone
         if (dst != entities_.end()) dst->second.invHash = 0;
         return;
