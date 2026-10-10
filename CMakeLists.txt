@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(KenshiCoop VERSION 0.1.0 LANGUAGES C CXX)
+project(KenshiCoop VERSION 0.3.0 LANGUAGES C CXX)
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "KenshiCoop must be built for x64 (Kenshi is 64-bit)")

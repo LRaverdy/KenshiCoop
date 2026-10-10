@@ -6,6 +6,15 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+## v0.3.0 (10 octobre 2026)
+
+Protocole 34 : tout le monde doit installer cette version pour jouer ensemble. En bref :
+stabilité (plusieurs plantages corrigés, client qui plante puis revient), un client ne contrôle
+plus jamais les persos de l'hôte, file d'attente pour rejoindre, 4 joueurs testés, carte /
+minicarte / pings / couleurs des joueurs, panneau admin de l'hôte, marchands ambulants et
+sacs à dos, recherche / fabrication / mines / énergie, escouades et IA, dialogues, diplomatie,
+objets posés au sol, poses de bâtiments valides. Le détail suit.
+
 - **Persos des joueurs en double chez les clients déjà là : corrigé** (trouvé dans le stress à 4 joueurs du 10/10 : client 1 avec 4 copies de trop de Joueur3/Joueur4 au début, 12 à la fin ; client 2 avec 2 puis 4). Non revérifié en jeu.
   - *Cause* : `KenshiWorld::BeginFrame` reconnaissait un nouveau monde, après une coupure du tick, à une escouade dont les objets avaient changé. La photo de référence n'était prise qu'au moment où le monde redevenait prêt : toute copie d'un autre joueur créée depuis (un joueur qui arrive) faisait de la coupure suivante (fenêtres réarrangées, zone qui charge) un « nouveau monde ». Celui-ci vidait les alias ; les copies déjà dans le jeu n'étaient plus reconnues (« 2 host squad members are missing in the local world ») et la session en créait d'autres, qui rendaient à leur tour la photo périmée : une série par coupure (journaux : générations 2 à 7 du client 1, chacune suivie de nouvelles copies).
   - *Correction* : `kc::WorldIdentity` (`common/include/kc/world_identity.h`) décide : photo de l'escouade **à chaque image**, **sans les doublures** (alias) ; nouveau monde = autre objet joueur, ou escouade changée après une coupure. Sur un vrai nouveau monde, les doublures créées par `Spawn` (suivies dans `spawned_`, pas les PNJ adoptés) encore là (même handle, même objet) sont détruites avant de tout oublier (`… stand-in(s) of the previous one still here, removed`).

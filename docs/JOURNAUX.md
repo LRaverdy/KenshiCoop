@@ -102,7 +102,7 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 ### Démarrage
 | Ligne | Sens |
 |---|---|
-| `KenshiCoop 0.1.0 starting` | le mod démarre |
+| `KenshiCoop 0.3.0 starting` | le mod démarre |
 | `steam: ready (id …)` | Steam répond : on peut rejoindre par Steam |
 | `ready. name='…' port=… join=…` | mod prêt |
 | `world ready: N player characters`, puis `---- diagnostics (world loaded) …` | une partie est chargée, avec l'état de l'escouade |
