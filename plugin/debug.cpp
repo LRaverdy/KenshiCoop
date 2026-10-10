@@ -307,13 +307,14 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         w.QueueLocalOrder(squad[idx], c);
         return "ok";
     }
-    if (cmd == "groundnear") {   // groundnear <radius>: items lying around squad[0]: key template x,y,z;...
+    if (cmd == "groundnear") {   // groundnear <radius> [loose|ground] [squadIndex]: items lying around that squad member (default 0)
         float radius = 500;
         std::string mode;
-        in >> radius >> mode;
+        size_t sel = 0;
+        in >> radius >> mode >> sel;
         auto squad = SortedSquad(w);
         kc::Vec3 base;
-        if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), base)) return "err no squad";
+        if (sel >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[sel]), base)) return "err no squad";
         std::vector<void*> items;
         if (mode == "loose") kenshi::LooseItemsNear(base, radius, items);
         else kenshi::GroundItemsNear(base, radius, items);

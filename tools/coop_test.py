@@ -2115,7 +2115,7 @@ def exp_groundpick(host, cli):
     time.sleep(8)
     # the client's own character: an order for squad0 (the host's character) is dropped by the client
     own = own_index(host)
-    ok, text = cmd(cli, "groundnear 600 loose")
+    ok, text = cmd(cli, f"groundnear 600 loose {own}")   # around the character that will walk there
     items = text.split()[2:] if ok else []
     log("loose items near the client's squad:", text.split()[1] if ok else text)
     if not items:
