@@ -48,6 +48,13 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   (comptoirs du client pas encore reliés au bâtiment quand la fenêtre se construit ? bâtiment
   du marchand différent chez le client ?). Supprimer la réouverture qui clignote une fois la
   cause corrigée.
+- **PNJ saccadés et « moonwalk » chez le joueur 3 dans un village de la Ruche** (beaucoup de
+  monde), quand il était à ~900 m de l'hôte : mouvements très saccadés, PNJ qui glissent à
+  reculons. Pistes : débit par client trop faible pour une zone dense loin de l'hôte (priorité /
+  fréquence par distance au joueur concerné, pas à l'hôte), interpolation qui suit des positions
+  trop espacées, orientation / animation de marche pas mise à jour (marche jouée à l'envers quand
+  le PNJ est déplacé vers l'arrière de sa direction). Mesurer : fréquence des positions reçues
+  par PNJ chez ce client, écart d'orientation.
 - **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
