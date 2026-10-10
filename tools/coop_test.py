@@ -1324,7 +1324,7 @@ def exp_facing(host, cli):
     log("FACING worst diff while running:", round(worst), "deg | client samples not really moving:", still)
 
 
-# ---- fix G5: client orders never reach the host's characters; the Tâches panel; trade windows
+# ---- fix G5: client orders never reach the host's characters; the TÃƒÂ¢ches panel; trade windows
 def exp_passive(host, cli):
     """The host's character is passive; the client orders its own character to attack an NPC: only the
     client's character engages. Then the host's selection holds the client's character too: the host's
@@ -1363,7 +1363,7 @@ def exp_passive(host, cli):
 
 def exp_jobs(host, cli):
     """The client gives its character a job (follow another squad member), then removes it from its
-    Tâches panel (the cross): the job is gone on the host too and does not come back on the client."""
+    TÃƒÂ¢ches panel (the cross): the job is gone on the host too and does not come back on the client."""
     time.sleep(6)
     cmd(cli, "editdone")
     time.sleep(3)
@@ -2028,20 +2028,53 @@ def exp_lootswap(host, cli):
     time.sleep(5)
     log("ko", cmd(host, "ko"))
     time.sleep(5)
-    for sec in ("boots", "shirt", "pants", "body", "legs", "hat"):
-        ok, text = cmd(cli, f"invswap {key} squad0 {sec}")
-        log("client swap", sec, ok, text)
-        if ok:
-            break
-    else:
-        check("echange de vetements avec un corps", False, "aucun emplacement commun occupe des deux cotes")
+    # the client's own character, as the host knows it (the host's squad0 is the host's)
+    ok, t = cmd(cli, "where 0")
+    me = t.split()[2] if ok and t.startswith("ok") and len(t.split()) > 2 else None
+
+    def secs(pid, who):
+        ok, t = cmd(pid, f"invsecs {who}")
+        return [(int(x.split(":", 1)[0]), x.split(":", 1)[1]) for x in t.split()[2:]] if ok and t.startswith("ok") else []
+
+    def worn(v):
+        return {s for _, s in v if s != "main"}
+
+    npc, mine = secs(host, key), secs(host, me) if me else []
+    log("worn sections: npc", sorted(worn(npc)), "| client's character", sorted(worn(mine)))
+    if me and not (worn(npc) & worn(mine)):
+        # setup: dress both from the host's other squad members, in one section, so they each wear something there
+        donors = {}
+        for j in range(1, 8):
+            d = secs(host, f"squad{j}")
+            if not d:
+                continue
+            for idx, s in d:
+                if s != "main":
+                    donors.setdefault(s, []).append((j, idx))
+        target = next((s for s in worn(npc) if s in donors), None)
+        if target:   # the NPC already wears one: give the client's character one too
+            j, idx = donors[target][0]
+            log("dress client's character", target, cmd(host, f"invmove squad{j} {me} {idx} 0 -1 -1 {target}"))
+        else:
+            target = next((s for s in donors if s not in worn(mine) and len(donors[s]) >= 2), None) or next((s for s in worn(mine) if s in donors), None)
+            if target:
+                j, idx = donors[target][0]
+                log("dress npc", target, cmd(host, f"invmove squad{j} {key} {idx} 0 -1 -1 {target}"))
+                if target not in worn(mine) and len(donors[target]) > 1:
+                    j, idx = donors[target][1]
+                    log("dress client's character", target, cmd(host, f"invmove squad{j} {me} {idx} 0 -1 -1 {target}"))
+        time.sleep(4)
+    ok, text = cmd(cli, f"invswap {key} squad0 any")
+    log("client swap", ok, text)
+    if not ok:
+        check("echange de vetements avec un corps", False, f"aucun emplacement commun occupe des deux cotes ({text})")
         return
     time.sleep(5)
     hs, cs = dump(host, "h_lootswap"), dump(cli, "c_lootswap")
     log("loot swap (live)", compare(hs, cs, "loot swap (live)"))
-    refused = [l for l in host_log()[-200:] if "refused" in l and ("item move" in l or "inventory move" in l)]
+    refused = [l for l in host_log().splitlines()[-200:] if "refused" in l and ("item move" in l or "inventory move" in l)]
     check("echange de vetements : aucun refus chez l'hote", not refused, refused[-1] if refused else "")
-    check("echange de vetements : l'hote a fait l'echange", any("client item swap done" in l for l in host_log()[-200:]))
+    check("echange de vetements : l'hote a fait l'echange", any("client item swap done" in l for l in host_log().splitlines()[-200:]))
 
 
 def exp_groundpick(host, cli):
@@ -2067,7 +2100,9 @@ def exp_groundpick(host, cli):
                 break
         log("  gone from the host's ground:", gone)
         picked += gone
-    failed = [l for l in host_log()[-300:] if "pick up" in l and "FAILED" in l]
+    for l in [l for l in host_log().splitlines()[-300:] if "pick up" in l]:
+        log("  host:", l.strip()[:220])
+    failed = [l for l in host_log().splitlines()[-300:] if "pick up" in l and "FAILED" in l]
     check("ramassage par un client : l'objet est pris chez l'hote", picked > 0, f"{picked}/{min(3, len(items))}")
     check("ramassage par un client : aucun ordre refuse", not failed, failed[-1] if failed else "")
 
@@ -2297,15 +2332,15 @@ def exp_carry(host, cli):
     check("porter PNJ : le client le voit porte par le meme perso", cc == hc, f"hote {hc} / client {cc}")
     cmd(host, "moverel 0 30 0")
     time.sleep(5)
-    me, body = pos(cli, "0"), pos(cli, "npc")
+    me, body = pos(cli, "0"), pos(cli, key)   # "npc" (lastSpawned_) only exists on the host
     up = body[1] - me[1] if me and body else None
     check("porter PNJ : chez le client le corps est a l'epaule (pas sur la tete)",
           up is not None and 5 < up < 25 and dist((me[0], 0, me[2]), (body[0], 0, body[2])) < 10, f"porteur {me} corps {body}")
     log("carrydrop", cmd(host, "carrydrop 0"))
     time.sleep(4)
-    h1, c1 = pos(host, "npc"), pos(cli, "npc")
+    h1, c1 = pos(host, key), pos(cli, key)
     time.sleep(3)
-    c2 = pos(cli, "npc")
+    c2 = pos(cli, key)
     check("poser PNJ : le corps est la ou celui de l'hote est tombe", dist(h1, c1) < 5, f"hote {h1} / client {c1}")
     check("poser PNJ : pas projete (immobile apres la chute)", dist(c1, c2) < 2, f"{c1} -> {c2}")
     check("poser PNJ : plus porte chez le client", cmd(cli, "carrying 0")[1] == "ok none")
@@ -2364,7 +2399,7 @@ def main():
     ad.add_argument("--save", default="kctest_base")
     ad.add_argument("--keep", action="store_true")
     for name, save, helptext in (("passive", "kctest_base", "fix G5: a client's attack leaves the passive host's character alone"),
-                                 ("jobs", "kctest_base", "fix G5: a job removed in the client's Tâches panel is gone on the host"),
+                                 ("jobs", "kctest_base", "fix G5: a job removed in the client's TÃƒÂ¢ches panel is gone on the host"),
                                  ("tradepaths", "kctest_town", "fix G5: trading by conversation and right click opens on the client only")):
         g5 = sub.add_parser(name, help=helptext)
         g5.add_argument("--save", default=save)
