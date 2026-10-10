@@ -724,16 +724,21 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 
 ### Heure (`TimeState`)
 - Le client impose vitesse et pause, avec les mêmes appels que la barre d'espace et F2 à F4.
-- L'heure elle-même n'est pas écrite : le jeu la recalcule à chaque image. Les deux horloges
-  partent de la même sauvegarde et tournent à la même vitesse, mais cela seul dérive : chaque
-  changement de vitesse ou pause arrive en retard chez le client (demi aller-retour, une image).
-  Le soak de 20 min finissait à 0,01 h (36 s de jeu) d'écart.
+- Les deux horloges partent de la même sauvegarde et tournent à la même vitesse, mais cela seul
+  dérive : chaque changement de vitesse ou pause arrive en retard chez le client (demi
+  aller-retour, une image), et un client qui se fige (une zone qui charge, quatre jeux sur un PC)
+  perd tout ce que l'hôte a joué pendant ce temps. Le soak de 20 min finissait à 0,01 h d'écart ;
+  le stress à 4 joueurs à 0,16 h (10 min de jeu), que l'ancien ±5 % mettait des minutes à rattraper.
 - `ClockSync` (`common/include/kc/clock.h`, côté client) : l'hôte envoie son heure avec chaque
   `TimeState` (deux fois par seconde). Le client estime l'heure de l'hôte « maintenant » (dernière
   heure reçue + vitesse × temps écoulé + demi aller-retour ; heures de jeu par seconde mesurées sur
-  les messages de l'hôte) et la compare à la sienne. Écart > 0,003 h, les deux jeux tournant : sa
-  vitesse passe à ±2 % de celle de l'hôte (±5 % au-delà de 0,006 h) jusqu'à moins de 0,0005 h.
-  Jamais en pause, jamais au-delà de 0,25 h d'écart (un autre monde, pas une dérive).
+  les messages de l'hôte) et la compare à la sienne :
+  - plus de 0,008 h d'écart, les deux jeux tournant (et le débit connu), ou plus de 0,002 h l'hôte
+    en pause (son heure est alors exacte) : l'heure est recalée d'un coup (`World::SetGameHours` :
+    le jour, puis l'heure du jour par la fonction du jeu `0x66CF30`, comme une nouvelle partie),
+    au plus une fois toutes les 1,5 s et seulement juste après un message de l'hôte ;
+  - plus de 0,002 h, les deux jeux tournant : sa vitesse passe à ±3 % de celle de l'hôte (±10 %
+    au-delà de 0,004 h) jusqu'à moins de 0,0005 h.
 
 ### Éditeur de personnage
 1. `EditCharacter` : le client ouvre l'éditeur sur son personnage.

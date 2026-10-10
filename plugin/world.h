@@ -262,6 +262,7 @@ public:
     size_t HurryEffects();        // tests: host groups place their next effect now
     void ForceWeather(const std::string& regionSid, const std::string& seasonSid, const std::string& weatherSid);   // tests (host)
     void SetTime(const kc::TimeState& t) override;
+    bool SetGameHours(double hours) override;
     void HoldForJoin(bool hold) override;
     bool EnsurePlayerCharacter(const std::string& playerName, uint64_t steamId, kc::Handle& out, bool& created) override;
     bool BeginWorldExport(std::string* err) override;
@@ -396,6 +397,8 @@ private:
     std::unordered_map<kc::Handle, double, HandleHash> fellAt_;      // client: when we made it fall
     std::unordered_map<kc::Handle, double, HandleHash> relaidAt_;    // client: when a body lying away from the host's was stood up to fall again
     std::unordered_map<kc::Handle, int, HandleHash> relaidCount_;    // client: how often it was, while it stays down
+    std::unordered_map<kc::Handle, kc::Vec3, HandleHash> fallFrom_;  // client: where our copy stood when we made it fall
+    std::unordered_map<kc::Handle, kc::Vec3, HandleHash> fallShift_; // client: where its body then lay, relative to that (x, z)
     std::unordered_multimap<uint32_t, kc::Handle> bySerial_;          // this frame's characters by handle serial (FindMoved)
     bool bySerialBuilt_ = false;
     std::unordered_set<kc::Handle, HandleHash> carriedHere_;
@@ -405,6 +408,7 @@ private:
     std::unordered_set<const void*> applied_;                        // client: characters Apply drove this frame
     std::unordered_map<const void*, double> replicatedAt_;           // client: when Apply last drove each one
     bool ReadyToFall(const kc::Handle& h, kenshi::Character* c, const kc::EntityState& at, double now);
+    kc::EntityState FallSpot(const kc::Handle& h, const kc::EntityState& host) const;
     std::mutex ordersMutex_;
     std::string orderRefusal_;
     kc::ResultReason orderRefusalReason_ = kc::ResultReason::None;

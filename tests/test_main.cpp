@@ -906,6 +906,8 @@ struct FakeWorld : IWorld {
     void ApplyAnim(const Handle& h, const AnimEvent& e) override { animApplied.emplace_back(h.serial, e); }
     TimeState GetTime() override { return time; }
     void SetTime(const TimeState& t) override { time = t; }
+    bool SetGameHours(double hours) override { time.gameHours = hours; ++hourSets; return true; }
+    int hourSets = 0;
     void HoldForJoin(bool h) override { holding = h; }
     bool BeginWorldExport(std::string*) override { exportCountdown = exportFrames; return true; }
     ExportStatus PollWorldExport(std::vector<WorldFile>& files, std::string*) override {
@@ -4180,14 +4182,16 @@ static void TestManyPlayers() {
         for (uint32_t i = 1; i <= 10; ++i) CHECK(std::fabs(hw.chars[k * 10 + i].pos.z - (50.0f + k)) < 1e-3f);
 }
 
-// The client's clock follows the host's: a client behind (or ahead) runs a few percent faster (or
-// slower) until both read the same hours; in step, the host's speed is left as it is.
+// The client's clock follows the host's: a client a little behind (or ahead) runs a few percent
+// faster (or slower) until both read the same hours; far apart (a stall, a zone loading) it is set
+// to the host's hours at once; in step, the host's speed is left as it is.
 static void TestClockSync() {
-    struct Run { double behind; float speed; };
-    for (Run run : {Run{0.008, 2.0f}, Run{-0.006, 3.0f}, Run{0.0, 1.0f}, Run{0.0, 3.0f}}) {
+    struct Run { double behind; float speed; bool snap; };
+    for (Run run : {Run{0.003, 2.0f, false}, Run{-0.0035, 3.0f, false}, Run{0.0, 1.0f, false}, Run{0.0, 3.0f, false},
+                    Run{0.162, 3.0f, true}, Run{-0.13, 3.0f, true}, Run{0.3, 1.0f, true}, Run{-2.0, 2.0f, true}}) {
         ClockSync cs;
         const double rate = 0.0091, delay = 0.06, dt = 1.0 / 30;
-        double host = 40.0, mine = 40.0 - run.behind, nextSend = 0;
+        double host = 40.0, mine = 40.0 - run.behind, nextSend = 0, closeAt = -1;
         std::deque<std::pair<double, TimeState>> inFlight;
         bool everTrimmed = false;
         float clientSpeed = run.speed;
@@ -4198,27 +4202,41 @@ static void TestClockSync() {
             while (!inFlight.empty() && inFlight.front().first <= t) { cs.OnHost(inFlight.front().second, t, delay); inFlight.pop_front(); }
             if (!cs.have()) continue;   // nothing from the host yet: the local speed stays
             const TimeState want = cs.Target(t, mine);
+            if (cs.Snap() >= 0.0) mine = cs.Snap();
             CHECK(!want.paused);
             clientSpeed = want.speed;
             everTrimmed |= cs.trim() != 0.0f;
-            CHECK(std::fabs(clientSpeed - run.speed) <= run.speed * 0.051f);
+            CHECK(std::fabs(clientSpeed - run.speed) <= run.speed * 0.101f);
+            if (closeAt < 0 && std::fabs(host - mine) < 0.002) closeAt = t;
         }
         if (std::fabs(host - mine) >= 0.001 || cs.trim() != 0.0f)
             std::printf("    clock run %.3f h x%.0f: still %.4f h apart, trim %.2f, rate %.5f\n", run.behind, run.speed, host - mine, cs.trim(), cs.rate());
         CHECK(std::fabs(host - mine) < 0.001);
         CHECK(cs.trim() == 0.0f);
-        CHECK(everTrimmed == (run.behind != 0.0));
+        CHECK((cs.snaps() > 0) == run.snap);
+        CHECK(cs.snaps() <= 2);   // one, and maybe a second once the rate is known better
+        if (run.behind != 0.0 && !run.snap) CHECK(everTrimmed);
+        // far apart: close within seconds (the rate is measured over the first 2 s), not minutes
+        if (run.snap) CHECK(closeAt >= 0 && closeAt < 6.0);
         CHECK(std::fabs(cs.rate() - rate) < rate * 0.05);
-        // paused: the host's pause and speed, never a trim
+        // paused: the host's pause and speed, never a trim; its hours are exact: a client off by
+        // more than kPausedSnap is set to them
         cs.OnHost(TimeState{run.speed, true, host}, 100.0, delay);
         const TimeState p = cs.Target(100.1, mine - 0.05);
         CHECK(p.paused && p.speed == run.speed && cs.trim() == 0.0f);
+        CHECK(cs.Snap() == host);
+        cs.OnHost(TimeState{run.speed, true, host}, 102.0, delay);
+        cs.Target(102.1, host - 0.001);   // close enough: left alone
+        CHECK(cs.Snap() < 0.0);
     }
-    // far apart (another world loaded): not drift, left alone
+    // another world's hours (hours apart): set as well, once the rate is known; never twice in a row
     ClockSync cs;
     cs.OnHost(TimeState{1.0f, false, 10.0}, 0.0, 0.0);
+    cs.Target(0.1, 5.0);
+    CHECK(cs.Snap() < 0.0);   // the rate is not known yet: the target cannot be extrapolated
     cs.OnHost(TimeState{1.0f, false, 10.03}, 3.0, 0.0);
-    CHECK(cs.Target(3.0, 5.0).speed == 1.0f && cs.trim() == 0.0f);
+    CHECK(cs.Target(3.0, 5.0).speed == 1.0f && cs.trim() == 0.0f && cs.Snap() > 10.0);
+    CHECK(cs.Target(3.05, 10.03).speed == 1.0f && cs.Snap() < 0.0);   // the same message: no second snap
     std::puts("clock sync ok");
 }
 

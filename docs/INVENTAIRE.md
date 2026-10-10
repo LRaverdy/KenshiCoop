@@ -125,7 +125,7 @@ chez l'hôte, il observe et diffuse.
 
 ## 4. Adresses du jeu
 
-### Table `kFunctions` (`plugin/kenshi.cpp`, enum dans `kenshi.h`) : 167 entrées vérifiées par octets de prologue
+### Table `kFunctions` (`plugin/kenshi.cpp`, enum dans `kenshi.h`) : 189 entrées vérifiées par octets de prologue
 
 « hook » = accrochée ; sinon appelée seulement.
 
@@ -171,6 +171,7 @@ chez l'hôte, il observe et diffuse.
 | 138 | ShowInventoryBuilding | 0x6E6640 | hook |
 | 162–166 | SquadSwapCharacters, ChangePlatoonIndex, DestroyPlatoon, SquadSetName, CharGetPermajobData | 0x792E60, 0x7F3440, 0x6BA9D0, 0x4BE480, 0x5C8F10 | fenêtre Escouade (`squads.cpp`) ; SquadSwapCharacters : hook |
 | fin | TerrainHeight, TerrainWithWaterHeight, IsIndoors, GetNearestTown, WithinBordersRange, GetNearestWithinItsRadius | 0x9B3710, 0x9B3720, 0x9B2BA0, 0x927F10, 0x926D50, 0x928890 | validité d'une pose (`buildings.cpp`) |
+| 188 | ClockSetHourOfDay | 0x66CF30 | recaler l'horloge d'un client (`kenshi::SetGameHours`) |
 
 ### Adresses écrites en dur hors de la table (non vérifiées au démarrage)
 

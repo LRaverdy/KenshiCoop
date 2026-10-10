@@ -395,6 +395,8 @@ public:
 
     virtual TimeState GetTime() = 0;
     virtual void SetTime(const TimeState& t) = 0;
+    // Client: set the local game clock to these hours (a client far off the host's clock: see ClockSync).
+    virtual bool SetGameHours(double hours) = 0;
 
     // Host: freeze the world while players join (true), release it afterwards (false).
     virtual void HoldForJoin(bool hold) = 0;

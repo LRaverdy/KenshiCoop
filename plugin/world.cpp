@@ -112,6 +112,8 @@ void KenshiWorld::ResetWorldBound() {
     fellAt_.clear();
     relaidAt_.clear();
     relaidCount_.clear();
+    fallFrom_.clear();
+    fallShift_.clear();
     lastDest_.clear();
     postureSince_.clear();
     postureFixed_.clear();
@@ -420,6 +422,17 @@ bool KenshiWorld::ReadyToFall(const kc::Handle& h, kenshi::Character* c, const k
     return false;
 }
 
+// Where our copy stands before falling so that its body ends where the host's lies: the host's
+// spot, minus how far from its feet our copy's body came to rest the last time (fallShift_).
+kc::EntityState KenshiWorld::FallSpot(const kc::Handle& h, const kc::EntityState& host) const {
+    kc::EntityState at = host;
+    if (auto s = fallShift_.find(h); s != fallShift_.end()) {
+        at.pos.x -= s->second.x;
+        at.pos.z -= s->second.z;
+    }
+    return at;
+}
+
 float KenshiWorld::NearestSquadDistance(const kc::Vec3& p) {
     float best = 1e9f;
     kc::Vec3 q;
@@ -678,8 +691,10 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
                 HostCallScope scope;
                 kenshi::StandUp(c);
                 fixed = now;
-            } else if (ReadyToFall(h, c, target, now)) {
+            } else if (ReadyToFall(h, c, FallSpot(h, target), now)) {
                 HostCallScope scope;
+                kc::Vec3 from;
+                if (kenshi::GetPosition(c, from)) fallFrom_[h] = from;
                 const bool ok = kenshi::SetRagdoll(c, true);
                 fixed = now;
                 fellAt_[h] = now;
@@ -707,6 +722,20 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         // At most 3 times while it stays down: a body that keeps landing off is not stood up forever.
         constexpr float kBodyOff = 5.0f, kBodySeen = 300.0f;
         constexpr int kMaxRelays = 3;
+        // Where the body came to rest, against where our copy stood when it fell (the fellAt_ wait
+        // above: 2 s): a collapsing body does not lie where its feet were. The host's body position
+        // is its fallen one already, so standing our copy there and letting it fall laid it one
+        // more such offset away, every time: humans 7-12 units, a land bat 47-76, a spider 70-79
+        // (stress4 logs, "lies N units from the host's body", the same N relay after relay). The
+        // next fall starts that much short of the host's spot (FallSpot), so it ends on it.
+        if (auto f = fallFrom_.find(h); f != fallFrom_.end() && localDown && !kenshi::IsDead(c)) {
+            constexpr float kMaxShift = 150.0f;   // never more than a large animal's length
+            kc::Vec3 shift{local.x - f->second.x, 0.0f, local.z - f->second.z};
+            const float len = std::sqrt(shift.x * shift.x + shift.z * shift.z);
+            if (len > kMaxShift) { shift.x *= kMaxShift / len; shift.z *= kMaxShift / len; }
+            fallShift_[h] = shift;   // measured from where it really stood: already short of the host's spot or not
+            fallFrom_.erase(f);
+        }
         if (hostDown && localDown && !hostDead && !kenshi::IsDead(c) && kenshi::IsRagdoll(c) && Dist(local, target.pos) > kBodyOff &&
             NearestSquadDistance(local) < kBodySeen && relaidCount_[h] < kMaxRelays) {
             double& at = relaidAt_[h];
@@ -722,6 +751,8 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         return;
     }
     relaidCount_.erase(h);   // standing again: a next fall may be put right again
+    fallFrom_.erase(h);
+    fallShift_.erase(h);
 
     const float err = Dist(local, target.pos);
     // Far from our squad (beyond what the player sees) the local game hardly runs a character and
@@ -1147,6 +1178,8 @@ void KenshiWorld::ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& 
         postureFixed_.erase(dropped);
         relaidAt_.erase(dropped);
         relaidCount_.erase(dropped);
+        fallFrom_.erase(dropped);
+        fallShift_.erase(dropped);
         Log("carry: %sputs a body down as on the host; it falls where the host's lies (ragdoll %d)", carry ? "swaps and " : "", body ? int(kenshi::IsRagdoll(body)) : -1);
     }
     if (carry && who && (!carrying || kenshi::Resolve(local) != who)) {
@@ -2668,7 +2701,19 @@ bool KenshiWorld::ApplyInventory(const kc::Handle& h, const std::vector<kc::Item
     HostCallScope scope;
     if (!kenshi::RebuildInventory(c, items, &err)) Log("inventory rebuild incomplete: %s", err.c_str());
     // success means: the game now shows exactly the host's layout
-    return kenshi::ReadInventory(c, local) && local == items;
+    local.clear();
+    if (kenshi::ReadInventory(c, local) && local == items) return true;
+    // Say which item the game put elsewhere (the session retries 3 times, then leaves it): an item in
+    // the bag that the host has worn was invisible in the logs until a test compared inventories.
+    for (const kc::ItemState& s : items) {
+        if (std::find(local.begin(), local.end(), s) != local.end()) continue;
+        auto same = std::find_if(local.begin(), local.end(), [&](const kc::ItemState& l) { return l.sameKind(s); });
+        Log("inventory of %s not as on the host: %s x%d at %s %d,%d here %s", KeyOf(h).c_str(), s.templateSid.c_str(), s.quantity,
+            s.section.c_str(), s.x, s.y,
+            same == local.end() ? "missing" : ("at " + same->section + " " + std::to_string(same->x) + "," + std::to_string(same->y)).c_str());
+        break;
+    }
+    return false;
 }
 
 size_t KenshiWorld::ExpireAllWeather() {
@@ -2696,12 +2741,20 @@ kc::TimeState KenshiWorld::GetTime() {
     return t;
 }
 
-// The clock itself is not written: the game recomputes its hours from an internal counter every
-// frame. Clients start from the host's save and run at the host's speed, paused when it is, so
-// both clocks stay together (measured: under 0.01 h apart after 15 minutes at x3).
+// Clients start from the host's save and run at the host's speed, paused when it is; ClockSync
+// trims that speed a little while the clocks are slightly apart, and sets the hours outright when
+// they are far apart (SetGameHours).
 void KenshiWorld::SetTime(const kc::TimeState& t) {
     hostTime_ = t;
     haveHostTime_ = true;
+}
+
+// A client far off the host's clock (it stalled loading a zone, a pause reached it late): the day
+// and the hour of day the clock is recomputed from are set, the game's own way (kenshi::SetGameHours).
+bool KenshiWorld::SetGameHours(double hours) {
+    if (!active_ || !client_ || !live_) return false;
+    HostCallScope scope;
+    return kenshi::SetGameHours(hours);
 }
 
 void KenshiWorld::HoldForJoin(bool hold) {

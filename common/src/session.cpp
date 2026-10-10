@@ -2589,7 +2589,16 @@ void Session::ClientTick(double now, bool live) {
 
     if (haveTime_) {
         // the host's pause and speed, the speed trimmed a few percent while our clock is off the host's
-        world_.SetTime(hostClock_.Target(now, world_.GetTime().gameHours));
+        const double localHours = world_.GetTime().gameHours;
+        world_.SetTime(hostClock_.Target(now, localHours));
+        if (hostClock_.Snap() >= 0.0) {
+            // far off (a stall here, a zone loading, a late pause): straight onto the host's hours
+            const bool ok = world_.SetGameHours(hostClock_.Snap());
+            char b[160];
+            snprintf(b, sizeof(b), "clock: %.4f h %s the host's: set to its %.3f h%s", std::fabs(hostClock_.error()),
+                     hostClock_.error() > 0 ? "behind" : "ahead of", hostClock_.Snap(), ok ? "" : " (refused)");
+            log_(b);
+        }
         if (hostClock_.trim() != lastClockTrim_) {
             char b[160];
             if (hostClock_.trim() == 0.0f)
