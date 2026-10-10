@@ -2,6 +2,24 @@
 
 Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a vu.
 
+## 10 octobre 2026, partie réelle en v0.3.0 (soir, 4 joueurs par Steam)
+
+Journal de l'hôte gardé dans `kc_crashdumps/session_2215/host_live.log` (à compléter par les
+journaux des clients `KenshiCoop-<pid>.log` de chacun).
+
+- **Rejoindre est long** : nass4 a mis ~1 min 55 entre « world sent » (22:15:01) et son arrivée
+  (22:16:55) ; rob, arrivé pendant ce temps, attendait dans la file et n'a reçu le monde qu'à
+  22:17:04 (+1 min 45). Pistes : télécharger et charger le monde pendant l'attente (seule la
+  création du perso chacun son tour) ; mesurer transfert Steam vs chargement Kenshi ; compresser
+  le monde envoyé.
+- **Recrutement par un client** : c'est l'hôte qui a eu la fenêtre pour accepter ; le perso
+  recruté est bien arrivé dans l'escouade (chez l'hôte) mais le client ne le voit pas.
+- **Fenêtre de sortie des mines invisible chez les clients** (l'inventaire de production). Vérifier
+  tous les types de mines et d'ateliers / bâtiments de production.
+- **Objet glissé au sol par le client 2 disparu** : il n'est pas apparu au sol, il a disparu (pas
+  à chaque fois). Perte d'objet : prioritaire.
+- **Joueur 3 dans une ville voisine : parler aux PNJ ne fait rien** (aucune fenêtre de dialogue).
+
 ## 10 octobre 2026
 
 - ~~**Persos des joueurs en double chez les clients déjà là**~~ (stress à 4 joueurs du 10/10) —
