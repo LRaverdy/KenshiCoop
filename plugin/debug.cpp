@@ -63,6 +63,12 @@ void DumpCharacter(std::ostream& o, const char* tag, KenshiWorld& w, const kc::H
     const kc::Handle hostHandle = w.HostHandleOf(h);   // stand-ins are reported under the host's handle
     o << tag << ' ' << Key(hostHandle) << " read=" << ok << " standin=" << (hostHandle != h);
     if (kenshi::Character* ch = w.Find(h)) o << " class=" << std::hex << kenshi::ClassRvas(ch) << std::dec;
+    if (std::string nm; kenshi::Character* ch = w.Find(h)) {   // the character's name ('_' for spaces): who is who with 3+ players
+        if (kenshi::CharacterName(ch, nm) && !nm.empty()) {
+            for (char& ch2 : nm) if (ch2 == 32 || ch2 == 61 || (unsigned char)ch2 < 32) ch2 = 95;   // spaces, =, control chars -> _
+            o << " name=" << nm;
+        }
+    }
     if (ok) {
         o << " pos=" << st.pos.x << ',' << st.pos.y << ',' << st.pos.z << " dest=" << st.dest.x << ',' << st.dest.y << ',' << st.dest.z
           << " flags=" << unsigned(st.flags) << " gait=" << unsigned(st.gait) << " pace=" << st.pace;
@@ -818,6 +824,15 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         snprintf(b, sizeof(b), "ok %llu %llu", static_cast<unsigned long long>(w.masterCorrections), static_cast<unsigned long long>(w.masterChecks));
         w.masterCorrections = w.masterChecks = 0;
         return b;
+    }
+    if (cmd == "ownidx") {   // ownidx [playerId]: squad indices (this machine's order) of that player's characters (default: mine)
+        int id = -1;
+        if (!(in >> id)) id = s.localId();
+        auto squad = SortedSquad(w);
+        std::string out = "ok";
+        for (size_t i = 0; i < squad.size(); ++i)
+            if (s.ownerOf(w.HostHandleOf(squad[i])) == id) out += " " + std::to_string(i);
+        return out;
     }
     if (cmd == "tpplayer") {   // tpplayer <playerId>: (host) that player's characters next to squad member 0, as the admin teleport does
         int id = -1;

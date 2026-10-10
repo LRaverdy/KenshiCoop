@@ -58,6 +58,8 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 4. Chaque client reçoit un faux identifiant Steam : variable d'environnement `KC_FAKE_STEAM_ID`,
    `76561190000000002` puis +1 par client. Le mod ne la lit que si le canal de debug est actif.
    Sans elle, deux jeux sur un même PC partagent le même compte Steam.
+   De même `KC_PLAYER_NAME` (debug seulement, jamais écrit dans l'ini) donne son nom de joueur à
+   chaque jeu (`setup_multi` : Hote, Joueur2, Joueur3...).
 5. Pour tester le relais Steam sur un seul PC :
    - mettre `[debug] steam_loopback=1` dans `KenshiCoop.ini` ;
    - lancer `KC_JOIN="steam:28100 27960" python tools/coop_test.py <expérience>` ;
@@ -66,6 +68,8 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 6. Les états comparés et les journaux de chaque essai sont dans `test_out/` (ignoré par git).
 
 ### Expériences
+
+Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM libre (arrêt propre avec un message si moins de 2 Go ; un hôte prend ~2,2 Go, un client ~0,7 Go). Sur toute erreur, les jeux lancés par le banc sont tués (aucun processus laissé derrière).
 
 `python tools/coop_test.py <expérience> [--save X] [--keep]`
 
@@ -78,6 +82,8 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `four` (`--clients 3`) | 1 hôte + 3 clients : chaque client comparé à l'hôte **et aux autres clients** ; chacun ne commande que son personnage |
 | `run` (`--quick`) | scénario complet avec rapport de désynchronisation |
 | `soak` (`--minutes 20`) | **stabilité** : vitesse 1 → 2 → 3 → 2 → 1 par phases de 90 s, rafale de 20 s au début de chaque phase (vitesse 1/2/3 et pause changées toutes les 1 à 2 s, touches de vitesse aussi chez le client), pause / reprise en pleine activité ; pendant chaque phase : escouades de l'hôte et perso du client qui bougent, combat contre un PNJ créé, K.-O. puis fouille par le client, fenêtre de commerce ouverte / fermée, bâtiments posés par les deux, perso du client téléporté à 30000 puis ramené (une fois). Le client demande une vitesse et une pause : l'horloge de l'hôte ne doit pas bouger et le client y revient. Toutes les 30 s : les deux jeux vivants, comparaison en pause (tolérances de la `suite` : escouade ≤ 0.1, 8 pour un corps au sol ; aucun manquant, état vital ou inventaire différent), aller-retour d'une commande (< 1 s), mémoire des deux processus (psutil, sinon tasklist) : ÉCHEC si elle dépasse +40 % du relevé pris après 2 min |
+| `join4` (`--clients 3`) | **plusieurs joueurs** : hôte + 3 clients lancés avec chacun un faux Steam id (`KC_FAKE_STEAM_ID`) et un nom (`KC_PLAYER_NAME` : Joueur2, Joueur3...), qui rejoignent **en même temps** puis ferment l'éditeur (`editdone`). Vérifie : ids de joueur distincts, chaque client a son propre perso, chaque client voit les persos de tous les joueurs (noms et positions identiques à l'hôte, en pause) ; puis tous partent proprement et l'hôte continue |
+| `stress4` (`--clients 3 --minutes 15 --hop 180 --seed 4242`) | **4 joueurs partout sur la carte** : les persos de chaque client vivent dans leur propre région lointaine (±40000 autour de la maison de l'hôte, ≥ 30000 de l'hôte et des autres) et changent de région toutes les `--hop` s ; dans chaque zone : combat contre un PNJ créé, K.-O. puis fouille, bâtiment posé. Chaque client **clique partout** (fil par client, graine dérivée de `--seed`, chaque action journalisée avec sa graine pour rejouer un plantage) : déplacements (les siens et ceux des autres, refusés), parler, coffres, glisser des objets, sélection, ordres de la barre, tâches, porter, ramasser, commerce, fermer les fenêtres, vitesse / pause, construire. Tous les joueurs en **mode dieu** (`god all` de la console admin, `heal all` toutes les 8 s). Deux clients prennent les mêmes objets d'un même corps au même instant. L'hôte change de vitesse 1/2/3 et met en pause ; le dernier client part puis revient. Toutes les 30 s : tous les jeux vivants, comparaison en pause hôte / chaque client (tolérances du `soak`), persistance par zone (un perso près d'un client absent ou décalé > 3 deux relevés de suite = ÉCHEC), aller-retour, temps de frame de l'hôte (< 250 ms), mémoire par processus (+40 % après 2 min), **objet marqué** (5 donnés à chaque joueur) compté pareil chez l'hôte et chaque client et jamais en trop. À la fin, chacun ramené à la maison |
 | `facing` | un personnage de l'hôte court dans plusieurs directions : le client doit vraiment courir, dans le même sens |
 | `jitter` (`kctest_town`) | les PNJ immobiles ne tremblent pas chez le client, quelle que soit la vitesse |
 | `kosquad` | des membres de l'escouade K.-O. chez l'hôte tombent et restent au sol chez le client, puis se relèvent ensemble |
@@ -334,6 +340,7 @@ l'escouade triée par handle.
 | `itemtypes <nom>` | modèles d'objets (hors bâtiments) dont le nom contient ce texte |
 | `giveitem <sid|nom> <n> <membre>` | (hôte) n objets neufs (fabrique du jeu) dans l'inventaire de ce membre ; par nom : les objets (types 2-4) d'abord, chaque candidat essayé jusqu'à ce que la fabrique en fasse un |
 | `invcount <membre|all> <sid|nom>` | combien de ces objets ce membre (ou toute l'escouade) porte |
+| `ownidx [id]` | indices d'escouade (ordre de ce jeu) des persos du joueur `id` (défaut : le mien) |
 
 **Météo**
 

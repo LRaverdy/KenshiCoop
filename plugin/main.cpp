@@ -788,6 +788,12 @@ bool Start() {
     steam::Init(g_cfg.steamLoopback);
     g_startedAt = NowSeconds();
     g_overlayVisible = g_cfg.overlay;
+    // tests: several games on one PC share one KenshiCoop.ini; the harness gives each its own name
+    // (debug channel only, never in normal play; not written back to the ini)
+    if (char buf[64]; g_cfg.debugCommands && GetEnvironmentVariableA("KC_PLAYER_NAME", buf, sizeof(buf)) > 0 && kc::ValidName(buf)) {
+        g_cfg.name = buf;
+        Log("test: player name from KC_PLAYER_NAME: '%s'", buf);
+    }
     g_world = std::make_unique<KenshiWorld>(g_cfg);
     g_world->SetGameBuild(std::stoull(sha.substr(0, 16), nullptr, 16));
 
