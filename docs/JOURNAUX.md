@@ -149,6 +149,10 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 | `[X] carry: …` | corps porté ou posé comme chez l'hôte |
 | `local order dropped: …` | (client) un ordre visait un perso qui n'est pas à ce joueur : il n'est pas envoyé |
 | `[X] effect N ended by the host after …` / `gone by itself …` | cycle de vie des effets météo |
+| `[X] our copy A of the host's B changed squads here (now C): followed` / `our copy of the host's B changed squads here (now C): followed` | le jeu du client a changé d'escouade une copie (une mort la met dans l'escouade des morts), donc son handle : le mod la suit au lieu d'en créer une autre |
+| `[X] stand-in A for the host's B is gone here: it can be recreated` | la doublure a vraiment disparu (nettoyée, zone déchargée) : elle sera recréée |
+| `[X] posture: … lies N units from the host's body: stood up to fall where the host's lies` | corps K.-O. couché à plus de 5 unités de celui de l'hôte : relevé puis recouché à sa place (3 fois au plus tant qu'il reste à terre) |
+| `[X] clock: N h behind the host's: running +2 %` / `ahead of the host's: running -5 %` / `clock: back on the host's (…): host speed again` | l'horloge du client rattrape celle de l'hôte en tournant un peu plus vite ou plus lentement |
 | `[X] a local Y stands in for the host's` | un PNJ local remplace un PNJ de l'hôte de même type |
 | `[X] removed N local character(s) the host does not have` | PNJ créés par le jeu du client, retirés |
 | `[X] N host squad members are missing in the local world` | **le client n'a pas la même escouade** : mauvaise sauvegarde |

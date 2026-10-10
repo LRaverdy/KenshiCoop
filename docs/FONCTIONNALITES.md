@@ -351,6 +351,8 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   exactement où l'hôte s'est arrêté, puis se met en pause : le jeu n'enregistre aucune position
   pendant la pause.
 - Vérifié par la suite (« pause en pleine course », 0,000 à 0,024 d'écart).
+- L'heure du client est recalée sur celle de l'hôte : écart de plus de 0,003 h, il tourne 2 à 5 %
+  plus vite ou plus lentement jusqu'à la rattraper (`ClockSync`). Non vérifié en jeu.
 
 ### Météo et effets météo ✅
 - **Le joueur** a la même météo par région, ainsi que les mêmes éclairs, rayons, tempêtes et

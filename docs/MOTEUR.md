@@ -640,6 +640,13 @@ Tâches par défaut d'un clic droit sur un meuble, selon la recherche :
 
 ## 6. Comportements observés
 
+- **Mort d'un perso de l'escouade du joueur** : le jeu le déplace dans une escouade `__DEAD_SQUAD__`.
+  Son `hand` change de conteneur (`container`, `containerSerial`) mais garde `type`, `index` et
+  `serial` (hôte : `1:1:2712646400:6:3978271488` → `1:4:940063488:6:3978271488`). Chaque jeu le
+  fait de son côté : chez un client, la copie change de handle quand il rejoue la mort. Un
+  déplacement fait par le mod (`MoveToSquad`) donne en revanche un nouvel `index` et un nouveau
+  `serial`.
+
 - `PlayerInterface::addOrderSelectedCharacters` (`0x7F9E20`) parcourt la sélection et appelle
   `Character::addOrder` (`0x5D20D0`) sur chacun, immédiatement ; pour une attaque (tâches 5, 16, 61)
   sur un personnage, il appelle aussi `Character::rememberCharacter(cible, 4)` (`0x6744A0`) sur

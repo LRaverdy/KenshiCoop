@@ -528,8 +528,15 @@ format, et une version différente est refusée à la connexion.
 ### Heure (`TimeState`)
 - Le client impose vitesse et pause, avec les mêmes appels que la barre d'espace et F2 à F4.
 - L'heure elle-même n'est pas écrite : le jeu la recalcule à chaque image. Les deux horloges
-  restent ensemble parce qu'elles partent de la même sauvegarde et tournent à la même vitesse
-  (moins de 0,01 h d'écart après 15 min à ×3).
+  partent de la même sauvegarde et tournent à la même vitesse, mais cela seul dérive : chaque
+  changement de vitesse ou pause arrive en retard chez le client (demi aller-retour, une image).
+  Le soak de 20 min finissait à 0,01 h (36 s de jeu) d'écart.
+- `ClockSync` (`common/include/kc/clock.h`, côté client) : l'hôte envoie son heure avec chaque
+  `TimeState` (deux fois par seconde). Le client estime l'heure de l'hôte « maintenant » (dernière
+  heure reçue + vitesse × temps écoulé + demi aller-retour ; heures de jeu par seconde mesurées sur
+  les messages de l'hôte) et la compare à la sienne. Écart > 0,003 h, les deux jeux tournant : sa
+  vitesse passe à ±2 % de celle de l'hôte (±5 % au-delà de 0,006 h) jusqu'à moins de 0,0005 h.
+  Jamais en pause, jamais au-delà de 0,25 h d'écart (un autre monde, pas une dérive).
 
 ### Éditeur de personnage
 1. `EditCharacter` : le client ouvre l'éditeur sur son personnage.

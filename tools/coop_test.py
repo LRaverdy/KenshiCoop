@@ -2782,8 +2782,9 @@ def exp_soak(host, cli, minutes=20, phase_seconds=90, kinds=("Feu", "Tente", "Co
         rep = compare(h, dump(cli, "c_soak_" + label), "soak " + label, pos_tol=0.1)
         cmd(host, "pause 0")
         set_speed(cur_speed["v"])
-        # as the suite: a body lying on the ground is a ragdoll each game simulates itself
-        down = {k for k, v in h["squad"].items() if int(v.get("vflags", 0) or 0) & 3}
+        # as the suite: a body lying on the ground is a ragdoll each game simulates itself (knocked
+        # out, dead, or down with a crippled leg: flag 4 on the host)
+        down = {k for k, v in h["squad"].items() if int(v.get("vflags", 0) or 0) & 3 or int(v.get("flags", 0) or 0) & 4}
         s["squad_bad"] = [t for t in rep["squad"] if not isinstance(t[1], (int, float)) or t[1] > (8.0 if t[0] in down else 0.1)]
         for k in ("vital_flag_mismatch", "inventory_mismatch", "missing_on_client", "extra_on_client", "pos_err_max", "hours_diff",
                   "host_chars", "client_chars", "missing_sample", "inventory_mismatch_sample"):
@@ -2928,7 +2929,8 @@ def exp_soak(host, cli, minutes=20, phase_seconds=90, kinds=("Feu", "Tente", "Co
     worst_rtt = max([max(s["rtt"]) for s in samples] or [0])
     check("stabilite : aller-retour d'une commande < 1 s", worst_rtt < 1000, f"pire {worst_rtt} ms")
     # the client's speed / pause requests: the host's clock is unchanged and the client follows it
-    wrong = [c for c in client_speed if abs(c[2] - c[1]) > 0.01 or abs(c[3] - c[2]) > 0.01]
+    # (the client may run up to 5 % off the host's speed for a while: that is how its clock catches up)
+    wrong = [c for c in client_speed if abs(c[2] - c[1]) > 0.01 or abs(c[3] - c[2]) > 0.01 + 0.06 * c[2]]
     check("stabilite : demande de vitesse / pause du client ignoree (horloge de l'hote)", client_speed and not wrong,
           f"{len(client_speed)} demandes, ecarts {wrong[:4]}")
     if tp_state["done"]:
@@ -3581,7 +3583,7 @@ def exp_stress4(host, clis, ids, minutes=15, hop_seconds=180, seed=4242):
                     continue
                 cs = dump(c, f"c{i + 1}_s4_{label}")
                 rep = compare(h, cs, f"stress4 {label} client {i + 1}", pos_tol=3.0)
-                down = {k for k, v in h["squad"].items() if int(v.get("vflags", 0) or 0) & 3}
+                down = {k for k, v in h["squad"].items() if int(v.get("vflags", 0) or 0) & 3 or int(v.get("flags", 0) or 0) & 4}
                 squad_bad = [t for t in rep["squad"] if not isinstance(t[1], (int, float)) or t[1] > (8.0 if t[0] in down else 0.1)]
                 s["cmp"][c] = {"squad_bad": squad_bad, "vital": rep["vital_flag_mismatch"], "inv": rep["inventory_mismatch"],
                                "inv_sample": rep["inventory_mismatch_sample"], "hours": rep.get("hours_diff", 0)}
