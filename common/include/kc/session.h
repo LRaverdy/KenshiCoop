@@ -157,6 +157,12 @@ public:
     virtual void TakeDialogEvents(std::vector<WorldDialog>& out) { out.clear(); }
     virtual void ApplySay(const Handle& speaker, const std::string& text, bool shout) { (void)speaker; (void)text; (void)shout; }
     virtual void DialogAnswer(uint32_t dialogId, int index) { (void)dialogId; (void)index; }   // host
+    // Host: end that conversation in the game (its player walked away or left the game). Its window
+    // closes through the usual Close event (or a Close is reported if the game sends none).
+    virtual void EndDialog(uint32_t dialogId) { (void)dialogId; }
+    // Host: the character `npc` is in a conversation now, with `other` (any conversation: the host's
+    // own, NPCs among themselves); false when it is free.
+    virtual bool TalkingWith(const Handle& npc, Handle& other) { (void)npc; (void)other; return false; }
     // Squads of the player faction. Host: each squad's name and members (in squad order).
     // Client: split the local characters the same way.
     struct WorldSquad {
@@ -435,6 +441,8 @@ public:
         std::string name, text;
         std::vector<std::string> replies;
         bool waiting = false;   // an answer was sent, the next line has not come yet
+        uint32_t actor = 0;     // our character in it (the actor named by our answers)
+        uint32_t turn = 0;      // the line shown (our answer names it)
     };
     const DialogView& dialog() const { return dialog_; }
     // Client: lines of our log for the host's log (sent a few times a second); frames counted for
@@ -448,6 +456,9 @@ public:
     size_t RequestResync(uint8_t playerId);
     bool TakeResyncRequest() { return std::exchange(resyncRequested_, false); }
     void AnswerDialog(int index);
+    void LeaveDialog();   // client: our character walks away from the conversation (the host ends it)
+    size_t openDialogs() const { return hostDialogs_.size(); }   // host: conversations shown on a client's screen
+    uint32_t dialogBusyRefusals() const { return dialogBusy_; }   // host: talk orders refused, the NPC being busy
     // Client: the trade window the host opened for us (tests, overlay).
     struct TradeView {
         bool pending = false, open = false;
@@ -614,6 +625,9 @@ private:
     void SendSquads(double now);
     void SendEditedAppearances();
     void SendBind(const Entity& e, PeerId to, const Handle& previous = Handle{});
+    // Host: an NPC already followed joined the player faction (recruited in a conversation): it is a
+    // squad character now, the host's until it is given to a player (a newcomer).
+    void JoinSquad(Entity& e, std::vector<Handle>& newcomers, const Handle* previous = nullptr);
     void SendInventories(double now, bool force, PeerId onlyTo);
     void ClientInventoryDiff(double now);
     void SendLocalDrops();
@@ -682,7 +696,26 @@ private:
     SquadsMsg lastSquads_;                 // host: last sent / client: last received
     bool haveSquads_ = false;
     double squadsAt_ = -1e9, nextSquads_ = 0;
-    std::unordered_map<uint32_t, uint8_t> dialogOwner_;   // host: conversation -> the player it was sent to
+    // Host: each conversation shown on a client's screen: whose it is, the player's character in it
+    // (the only actor its answers may name), the NPC, and the line shown (turn, answers offered).
+    struct HostDialog {
+        uint8_t owner = 0;
+        uint32_t pc = 0;
+        Handle npc;
+        uint64_t npcIdentity = 0;
+        std::string npcName;
+        uint32_t turn = 0;
+        std::vector<std::string> replies;
+    };
+    std::unordered_map<uint32_t, HostDialog> hostDialogs_;
+    std::vector<uint32_t> pendingDialogEnds_;   // host: conversations to end in the game (live tick)
+    // host: who each player answered lately (a recruit or an animal bought in that conversation is theirs)
+    struct RecentPartner { uint8_t player = 0; uint64_t identity = 0; double at = 0; };
+    std::vector<RecentPartner> recentPartners_;
+    uint32_t dialogBusy_ = 0;
+    // Host: `npc` is in someone else's conversation (a client's shown here, or any in the game) than
+    // the actor's: who it talks with.
+    bool TalkTargetBusy(uint32_t actorNetId, const Handle& actor, const Handle& npc, std::string& with);
     std::vector<IWorld::WorldDialog> scratchDialogs_;
     std::vector<DialogReply> pendingAnswers_;   // host
     struct PendingContainer { uint8_t player; uint32_t looter; uint32_t netId; double until; };
@@ -893,7 +926,6 @@ private:
     size_t logDropped_ = 0;
     double nextLogSend_ = 0, nextReport_ = 0, reportStart_ = 0;
     uint32_t frames_ = 0;
-    std::unordered_map<uint32_t, std::vector<std::string>> dialogReplies_;   // host: last answers offered per conversation
     std::vector<Handle> scratchEdited_;
     bool haveMoney_ = false;               // client
     int32_t hostMoney_ = 0;

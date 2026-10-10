@@ -105,7 +105,7 @@ chez l'hôte, il observe et diffuse.
   contenu réel à l'hôte).
 - **Prisons** : SetPrisonMode, SetChainedMode, SetSlaveState.
 - **Dialogues** : Say, SetInDialog, SetResponses, SetReplyText, SendEvent, SendEventOverride,
-  StartConversation, StartPlayerConversation, DoActions.
+  StartConversation, StartPlayerConversation, DoActions ; EndDialogue (appelée seulement).
 - **IA, factions** : SensoryDialogAssessment, SensoryAssessCrimes, BlackboardUpdate,
   BlackboardPeriodic, FactionWarPeriodic, UniqueSquadPeriodic, AffectRelationsAmount,
   AffectRelationsEvent, SetRelation, SetCrime, AssignBounty.
@@ -229,7 +229,7 @@ hk_medKnockout) ; `ReadOperatorCount` +0x3E0 ; CharBody +0x648 / Tasker +0x68 / 
   invmove, loot, lootorder, containerreq, contake, contcount, minereq.
 - **Commerce** : merchants, shopcounters, tradegui, tradelist, tradeopen, tradebuy, tradesell,
   tradestate, closewindows.
-- **Dialogues** : say, says, dialog, convo, answer, talkreq.
+- **Dialogues** : say, says, dialog, convo, answer (dont `answer leave`), talkreq, talkto, npcevent, dialogs.
 - **Ordres** : orderreq, taskreq, bedreq, carryreq, carrying.
 - **Éditeur** : editchar, editdone.
 - **Monde** : hours, pause, paused, speed, weathers, setweather, rollweather, fxhurry.

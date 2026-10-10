@@ -1624,6 +1624,19 @@ bool KenshiWorld::RemoteDialogParties(void* dialogue, kenshi::Character*& pc, ke
     return false;
 }
 
+// (under dialogMutex_)
+KenshiWorld::RemoteDialog& KenshiWorld::Remember(void* dialogue, kenshi::Character* pc, kenshi::Character* other) {
+    auto it = remoteDialogs_.find(dialogue);
+    if (it == remoteDialogs_.end()) {
+        it = remoteDialogs_.emplace(dialogue, RemoteDialog{}).first;
+        it->second.id = nextDialogId_++;
+    }
+    RemoteDialog& r = it->second;
+    if (pc) { r.pc = pc; kenshi::GetHandle(pc, r.pcH); }
+    if (other) { r.other = other; kenshi::GetHandle(other, r.otherH); }
+    return r;
+}
+
 bool KenshiWorld::NoteDialogWindow(void* dialogue, bool open) {
     std::lock_guard<std::mutex> lk(dialogMutex_);
     auto known = remoteDialogs_.find(dialogue);
@@ -1633,18 +1646,18 @@ bool KenshiWorld::NoteDialogWindow(void* dialogue, bool open) {
     if (!remote && known == remoteDialogs_.end()) return false;
     WorldDialog d;
     d.kind = open ? kc::DialogKind::Open : kc::DialogKind::Close;
-    if (pc) kenshi::GetHandle(pc, d.pc);
-    if (other) {
-        kenshi::GetHandle(other, d.speaker);
-        kenshi::CharacterName(other, d.text);
-    }
     if (open) {
-        if (known == remoteDialogs_.end()) known = remoteDialogs_.emplace(dialogue, nextDialogId_++).first;
-        d.dialogId = known->second;
+        RemoteDialog& r = Remember(dialogue, pc, other);
+        d.dialogId = r.id;
+        d.pc = r.pcH;
+        d.speaker = r.otherH;
+        if (r.other) kenshi::CharacterName(r.other, d.text);
         Log("conversation %u opened for another player's character", d.dialogId);
     } else {
         if (known == remoteDialogs_.end()) return true;
-        d.dialogId = known->second;
+        d.dialogId = known->second.id;
+        d.pc = known->second.pcH;
+        d.speaker = known->second.otherH;
         remoteDialogs_.erase(known);
         Log("conversation %u closed", d.dialogId);
     }
@@ -1657,23 +1670,126 @@ bool KenshiWorld::NoteDialogText(void* dialogue) {
     auto known = remoteDialogs_.find(dialogue);
     kenshi::Character* pc = nullptr;
     kenshi::Character* other = nullptr;
-    if (known == remoteDialogs_.end()) {
-        if (!RemoteDialogParties(dialogue, pc, other)) return false;
-        known = remoteDialogs_.emplace(dialogue, nextDialogId_++).first;   // text before the window: open it now
-    } else {
-        RemoteDialogParties(dialogue, pc, other);
-    }
+    const bool remote = RemoteDialogParties(dialogue, pc, other);
+    if (known == remoteDialogs_.end() && !remote) return false;   // (text before the window: open it now)
+    RemoteDialog& r = Remember(dialogue, pc, other);
     WorldDialog d;
     d.kind = kc::DialogKind::Text;
-    d.dialogId = known->second;
-    if (pc) kenshi::GetHandle(pc, d.pc);
-    if (other) kenshi::GetHandle(other, d.speaker);
+    d.dialogId = r.id;
+    d.pc = r.pcH;
+    d.speaker = r.otherH;
     kenshi::ReadDialogueWindowText(dialogue, d.text, d.replies);
     dialogEvents_.push_back(std::move(d));
     return true;
 }
 
+bool KenshiWorld::ConversationAllowed(void* dialogue, void* target) {
+    kenshi::Character* me = kenshi::DialogueOwner(dialogue);
+    kenshi::Character* t = kenshi::IsCharacter(target) ? static_cast<kenshi::Character*>(target) : nullptr;
+    if (!me && !t) return true;
+    std::lock_guard<std::mutex> lk(dialogMutex_);
+    for (const auto& [dl, r] : remoteDialogs_) {
+        const bool npcIn = r.other && (r.other == me || r.other == t);
+        const bool pcIn = r.pc && (r.pc == me || r.pc == t);
+        if (!npcIn || pcIn) continue;   // its own conversation going on (a leader taking over...) stays allowed
+        // the NPC is in another player's conversation: refused, the one asking is told
+        kenshi::Character* asker = r.other == me ? t : me;
+        ++dialogsBusyRefused;
+        const double now = NowSeconds();
+        auto& told = busyToldAt_[asker];
+        if (asker && now - told > 3.0) {
+            told = now;
+            WorldDialog d;
+            d.kind = kc::DialogKind::Busy;
+            kenshi::GetHandle(asker, d.pc);
+            d.speaker = r.otherH;
+            kenshi::CharacterName(r.other, d.text);
+            if (dialogEvents_.size() < 512) dialogEvents_.push_back(std::move(d));
+            Log("conversation refused: that NPC is in conversation %u with another player's character", r.id);
+        }
+        return false;
+    }
+    return true;
+}
+
+bool KenshiWorld::TalkingWith(const kc::Handle& npc, kc::Handle& other) {
+    kenshi::Character* c = Find(npc);
+    if (!c) c = kenshi::Resolve(npc);
+    void* d = c ? kenshi::CharacterDialogue(c) : nullptr;
+    if (!d) return false;
+    {
+        std::lock_guard<std::mutex> lk(dialogMutex_);   // a client's conversation, whichever side holds it
+        for (const auto& [dl, r] : remoteDialogs_)
+            if (r.other == c && r.pcH.valid()) { other = r.pcH; return true; }
+    }
+    if (kenshi::DialogueEnded(d)) return false;
+    kenshi::Character* t = kenshi::DialogueTarget(d);
+    kc::Vec3 a, b;
+    // a stale target (a conversation long over) is not "talking": only someone close by
+    if (!t || t == c || kenshi::IsDead(t) || !kenshi::GetPosition(c, a) || !kenshi::GetPosition(t, b) || Dist(a, b) > 150.0f) return false;
+    return kenshi::GetHandle(t, other) && other.valid();
+}
+
+std::vector<KenshiWorld::RemoteDialogInfo> KenshiWorld::RemoteDialogList() {
+    std::vector<RemoteDialogInfo> out;
+    std::lock_guard<std::mutex> lk(dialogMutex_);
+    for (const auto& [dl, r] : remoteDialogs_) {
+        RemoteDialogInfo i{r.id, {}, {}};
+        if (r.pc) kenshi::CharacterName(r.pc, i.pc);
+        if (r.other) kenshi::CharacterName(r.other, i.other);
+        out.push_back(std::move(i));
+    }
+    return out;
+}
+
+// A conversation is over for good when its dialogue is gone or ended, a side is dead, knocked out or
+// down, the player's character is no longer another player's, or the two stand far apart (a
+// teleport): the game may not close the window itself then. Ended in the game, and closed.
+void KenshiWorld::SweepDialogs() {
+    const double now = NowSeconds();
+    if (now < nextDialogSweep_) return;
+    nextDialogSweep_ = now + 0.5;
+    struct Gone { void* d; uint32_t id; kc::Handle pc, other; bool end; const char* why; };
+    std::vector<Gone> gone;
+    auto v = View();
+    {
+        std::lock_guard<std::mutex> lk(dialogMutex_);
+        for (const auto& [dl, r] : remoteDialogs_) {
+            kenshi::Character* pc = r.pcH.valid() ? kenshi::Resolve(r.pcH) : nullptr;
+            kenshi::Character* other = r.otherH.valid() ? kenshi::Resolve(r.otherH) : nullptr;
+            const bool alive = kenshi::DialogueOwner(dl) != nullptr;
+            const char* why = nullptr;
+            kc::Vec3 a, b;
+            if (!alive) why = "its character is gone";
+            else if (!pc || pc != r.pc || !other || other != r.other) why = "a character in it is gone";
+            else if (kenshi::DialogueEnded(dl)) why = "the game ended it";
+            else if (kenshi::IsDead(pc) || kenshi::IsDead(other) || kenshi::IsDown(pc) || kenshi::IsDown(other) || kenshi::IsUnconscious(pc) ||
+                     kenshi::IsUnconscious(other))
+                why = "a character in it is down";
+            else if (!v->squadForeign.count(pc)) why = "the character is no longer another player's";
+            else if (kenshi::GetPosition(pc, a) && kenshi::GetPosition(other, b) && Dist(a, b) > 400.0f) why = "they are far apart (teleport)";
+            if (why) gone.push_back({dl, r.id, r.pcH, r.otherH, alive && !kenshi::DialogueEnded(dl), why});
+        }
+    }
+    for (const Gone& g : gone) {
+        Log("conversation %u ends: %s", g.id, g.why);
+        if (g.end) kenshi::CallEndDialogue(g.d);   // closes the window through setInDialog(false) (hook: Close)
+        std::lock_guard<std::mutex> lk(dialogMutex_);
+        auto it = remoteDialogs_.find(g.d);
+        if (it == remoteDialogs_.end() || it->second.id != g.id) continue;   // closed by the game meanwhile
+        remoteDialogs_.erase(it);
+        WorldDialog d;
+        d.kind = kc::DialogKind::Close;
+        d.dialogId = g.id;
+        d.pc = g.pc;
+        d.speaker = g.other;
+        dialogEvents_.push_back(std::move(d));
+        ++dialogsSwept;
+    }
+}
+
 void KenshiWorld::TakeDialogEvents(std::vector<WorldDialog>& out) {
+    if (live_ && !View()->client) SweepDialogs();   // host, game thread
     std::lock_guard<std::mutex> lk(dialogMutex_);
     out.swap(dialogEvents_);
     dialogEvents_.clear();
@@ -1690,11 +1806,35 @@ void KenshiWorld::DialogAnswer(uint32_t dialogId, int index) {
     void* dialogue = nullptr;
     {
         std::lock_guard<std::mutex> lk(dialogMutex_);
-        for (const auto& [d, id] : remoteDialogs_)
-            if (id == dialogId) { dialogue = d; break; }
+        for (const auto& [d, r] : remoteDialogs_)
+            if (r.id == dialogId) { dialogue = d; break; }
     }
     if (!dialogue) return;
+    if (index == kc::kDialogLeave) { EndDialog(dialogId); return; }
     Log("conversation %u: the player answered %d (%s)", dialogId, index, CallReplyClicked(dialogue, index) ? "ok" : "failed");
+}
+
+void KenshiWorld::EndDialog(uint32_t dialogId) {
+    void* dialogue = nullptr;
+    RemoteDialog r;
+    {
+        std::lock_guard<std::mutex> lk(dialogMutex_);
+        for (const auto& [d, info] : remoteDialogs_)
+            if (info.id == dialogId) { dialogue = d; r = info; break; }
+    }
+    if (!dialogue) return;
+    const bool ended = kenshi::CallEndDialogue(dialogue);
+    Log("conversation %u ended by the mod (%s)", dialogId, ended ? "ok" : "its dialogue is gone");
+    std::lock_guard<std::mutex> lk(dialogMutex_);
+    auto it = remoteDialogs_.find(dialogue);
+    if (it == remoteDialogs_.end() || it->second.id != dialogId) return;   // the game closed it (Close sent)
+    remoteDialogs_.erase(it);
+    WorldDialog d;
+    d.kind = kc::DialogKind::Close;
+    d.dialogId = dialogId;
+    d.pc = r.pcH;
+    d.speaker = r.otherH;
+    dialogEvents_.push_back(std::move(d));
 }
 
 void KenshiWorld::UpdatePendingPickups() {

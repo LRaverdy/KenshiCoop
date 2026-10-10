@@ -521,7 +521,20 @@ void hk_setInDialog(void* d, bool on) {
     if (v->active && v->client && on && !g_hostCall) return;
     // another player's conversation: it opens on their screen, not on the host's
     if (v->active && !v->client) {   // any thread: the game prepares conversations on worker threads too
-        if (KenshiWorld* w = TheWorld(); w && w->NoteDialogWindow(d, on)) return;
+        KenshiWorld* w = TheWorld();
+        if (w && w->NoteDialogWindow(d, on)) return;
+        // The host's own conversation: in single player the game pauses while its window is open
+        // (userPause(true) when the window opens, 0x727875). With other players in the game it does
+        // not: the world goes on for everyone (off the main thread the call is only queued, nothing changes).
+        if (on && w && !v->squadForeign.empty()) {
+            const bool before = kenshi::GetPaused();
+            o_setInDialog(d, on);
+            if (!before && kenshi::GetPaused() && kenshi::CallUserPause(false)) {
+                ++w->hostDialogUnpaused;
+                Log("the host's own conversation: the game is not paused in co-op");
+            }
+            return;
+        }
     }
     o_setInDialog(d, on);
 }
@@ -551,10 +564,24 @@ SendEventOverrideFn o_sendEventOverride = nullptr;
 bool hk_sendEventOverride(void* d, void* who, int ev, bool force) { return ClientRefuses() ? false : o_sendEventOverride(d, who, ev, force); }
 using StartConvFn = bool (*)(void* d, void* target, void* line, int ev, bool force);
 StartConvFn o_startConv = nullptr;
-bool hk_startConv(void* d, void* target, void* line, int ev, bool force) { return ClientRefuses() ? false : o_startConv(d, target, line, ev, force); }
+// Host: one conversation at a time per NPC. An NPC in another player's conversation does not start
+// another one (nor is it pulled into one): the character asking is told "occupé".
+bool HostRefusesConversation(void* d, void* target) {
+    auto v = KenshiWorld::View();
+    if (!v->active || v->client) return false;
+    KenshiWorld* w = TheWorld();
+    return w && !w->ConversationAllowed(d, target);
+}
+bool hk_startConv(void* d, void* target, void* line, int ev, bool force) {
+    if (ClientRefuses() || HostRefusesConversation(d, target)) return false;
+    return o_startConv(d, target, line, ev, force);
+}
 using StartPlayerConvFn = bool (*)(void* d, void* target, void* line);
 StartPlayerConvFn o_startPlayerConv = nullptr;
-bool hk_startPlayerConv(void* d, void* target, void* line) { return ClientRefuses() ? false : o_startPlayerConv(d, target, line); }
+bool hk_startPlayerConv(void* d, void* target, void* line) {
+    if (ClientRefuses() || HostRefusesConversation(d, target)) return false;
+    return o_startPlayerConv(d, target, line);
+}
 using PtrFn = void (*)(void* self, void* p);
 PtrFn o_doActions = nullptr, o_assessCrimes = nullptr, o_assignBounty = nullptr;
 void hk_doActions(void* d, void* line) { if (!ClientRefuses()) o_doActions(d, line); }

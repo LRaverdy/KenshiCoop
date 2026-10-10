@@ -380,6 +380,22 @@ struct FakeWorld : IWorld {
         return it == chars.end() ? 1e9f : Dist(it->second.pos, pos);
     }
     std::string CharacterNameOf(const Handle& h) override { return "npc-" + std::to_string(h.serial); }
+    // conversations: what the host's game reports, answers and ends asked of it, who talks with whom
+    std::vector<WorldDialog> dialogEvents;
+    void TakeDialogEvents(std::vector<WorldDialog>& out) override { out.swap(dialogEvents); dialogEvents.clear(); }
+    std::vector<std::pair<uint32_t, int>> answers;
+    void DialogAnswer(uint32_t dialogId, int index) override { answers.emplace_back(dialogId, index); }
+    std::vector<uint32_t> ended;
+    void EndDialog(uint32_t dialogId) override { ended.push_back(dialogId); }
+    std::map<uint32_t, uint32_t> talking;   // npc serial -> serial of who it talks with
+    bool TalkingWith(const Handle& npc, Handle& other) override {
+        auto it = talking.find(npc.serial);
+        if (it == talking.end()) return false;
+        other = H(it->second);
+        return true;
+    }
+    int saysShown = 0;
+    void ApplySay(const Handle&, const std::string&, bool) override { ++saysShown; }
     std::vector<MapThreat> threats;   // map: what ReadMapThreats answers
     size_t threatCalls = 0;
     void ReadMapThreats(const std::vector<Vec3>& centers, float radius, std::vector<MapThreat>& out) override {
@@ -918,10 +934,35 @@ static void TestWire() {
         DialogMsg dm2; CHECK(Decode(dr, dm2));
         CHECK(dm2.events.size() == 2 && dm2.events[0].shout && dm2.events[0].text == say.text && dm2.events[1].dialogId == 3 &&
               dm2.events[1].replies.size() == 2 && dm2.events[1].replies[1] == "Join me");
-        DialogReply rep; rep.dialogId = 3; rep.index = 1;
+        DialogReply rep; rep.dialogId = 3; rep.actor = 9; rep.turn = 4; rep.index = 1;
         Writer rw; Encode(rw, rep);
         Reader rr(rw.data(), rw.size()); CHECK(PeekType(rr) == Msg::DialogReply);
-        DialogReply rep2; CHECK(Decode(rr, rep2) && rep2.dialogId == 3 && rep2.index == 1);
+        DialogReply rep2; CHECK(Decode(rr, rep2) && rep2.dialogId == 3 && rep2.actor == 9 && rep2.turn == 4 && rep2.index == 1);
+        // the actor, the line and the "busy" kind travel; an answer naming no actor is not read
+        DialogEvent busy; busy.kind = DialogKind::Busy; busy.netId = 5; busy.pcNetId = 9; busy.text = "Garde";
+        txt.pcNetId = 9; txt.turn = 7;
+        DialogMsg dm3; dm3.events = {txt, busy};
+        Writer bw; Encode(bw, dm3);
+        Reader br(bw.data(), bw.size()); CHECK(PeekType(br) == Msg::Dialog);
+        DialogMsg dm4; CHECK(Decode(br, dm4));
+        CHECK(dm4.events.size() == 2 && dm4.events[0].pcNetId == 9 && dm4.events[0].turn == 7 && dm4.events[1].kind == DialogKind::Busy &&
+              dm4.events[1].pcNetId == 9);
+        DialogReply noActor; noActor.dialogId = 3; noActor.index = 0;
+        Writer nw; Encode(nw, noActor);
+        Reader nr(nw.data(), nw.size()); CHECK(PeekType(nr) == Msg::DialogReply);
+        DialogReply na2; CHECK(!Decode(nr, na2));
+        DialogReply leave; leave.dialogId = 3; leave.actor = 9; leave.index = kDialogLeave;
+        Writer lw; Encode(lw, leave);
+        Reader lr(lw.data(), lw.size()); CHECK(PeekType(lr) == Msg::DialogReply);
+        DialogReply lv2; CHECK(Decode(lr, lv2) && lv2.index == kDialogLeave);
+        DialogReply bad; bad.dialogId = 3; bad.actor = 9; bad.index = -2;
+        Writer xw; Encode(xw, bad);
+        Reader xr(xw.data(), xw.size()); CHECK(PeekType(xr) == Msg::DialogReply);
+        DialogReply bad2; CHECK(!Decode(xr, bad2));
+        Result rb; rb.seq = 3; rb.state = ResultState::Rejected; rb.reason = ResultReason::Busy; rb.text = "Garde est occupé";
+        Writer rbw; Encode(rbw, rb);
+        Reader rbr(rbw.data(), rbw.size()); CHECK(PeekType(rbr) == Msg::Result);
+        Result rb2; CHECK(Decode(rbr, rb2) && rb2.reason == ResultReason::Busy && rb2.text == rb.text);
     }
     {   // a character's looks
         AppearanceMsg look; look.netId = 7; look.name = "Nassim";
@@ -3000,6 +3041,165 @@ static void TestActorSafety() {
     CHECK(host.state() == SessionState::Hosting && cli.state() == SessionState::Connected);   // everyone alive
 }
 
+// Conversations: the window of a client's character opens on that client only, its answers name
+// their actor and line and reach the host's game once; one conversation per NPC ("occupé"); walking
+// away, a player leaving, a recruit given to the player who recruited it.
+static void TestDialogue() {
+    std::printf("dialogue: windows on their player's screen, answers with their actor, one conversation per NPC\n");
+    FakeWorld hw, cw, cw2;
+    SetupHost(hw);
+    for (uint32_t n : {10u, 11u, 12u}) {
+        FakeChar npc; npc.squad = false; npc.pos = {110.0f + float(n), 0, 10}; npc.dest = npc.pos;
+        hw.chars[n] = npc;
+    }
+    AtMenu(cw);
+    AtMenu(cw2);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port;
+    SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    SessionConfig cc2; cc2.port = hc.port; cc2.name = "D";
+    std::vector<std::string> hostLog;
+    Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
+    Session cli(cw, cc, Now, Quiet("cli"));
+    Session cli2(cw2, cc2, Now, Quiet("cli2"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 6));
+    CHECK(cli2.Join("127.0.0.1", hc.port, &err));
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}, {&cli2, &cw2}};
+    Run(all, 10.0, [&] { return cli2.state() == SessionState::Connected && cli2.entityCount() == 6; });
+    host.Assign(FakeWorld::H(2), cli.localId());
+    host.Assign(FakeWorld::H(3), cli2.localId());
+    Run(all, 1.5);
+    std::map<uint32_t, uint32_t> net;
+    host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { net[h.serial] = id; });
+    CHECK(net.size() == 6);
+    const uint8_t me = cli.localId(), other = cli2.localId();
+    auto ev = [](DialogKind k, uint32_t id, uint32_t speaker, uint32_t pc, std::string text, std::vector<std::string> replies = {}) {
+        IWorld::WorldDialog d;
+        d.kind = k; d.dialogId = id; d.speaker = FakeWorld::H(speaker); d.pc = FakeWorld::H(pc); d.text = std::move(text); d.replies = std::move(replies);
+        return d;
+    };
+    auto has = [](const std::deque<std::string>& lines, const char* what) {
+        for (const auto& l : lines) if (l.find(what) != std::string::npos) return true;
+        return false;
+    };
+
+    // 1. a guard (NPC 10) stops the client's character: its window opens on that client only, with the
+    //    host's line and answers, named after the client's own character; the bubble goes to everyone
+    hw.dialogEvents.push_back(ev(DialogKind::Open, 1, 10, 2, "Garde"));
+    hw.dialogEvents.push_back(ev(DialogKind::Text, 1, 10, 2, "Halte ! Qui va la ?", {"Un voyageur", "Ca ne te regarde pas"}));
+    IWorld::WorldDialog say = ev(DialogKind::Say, 0, 10, 0, "Halte !");
+    hw.dialogEvents.push_back(say);
+    Run(all, 2.0, [&] { return cli.dialog().open && !cli.dialog().replies.empty() && cw2.saysShown > 0; });
+    CHECK(cli.dialog().open && cli.dialog().id == 1 && cli.dialog().name == "Garde" && cli.dialog().replies.size() == 2);
+    CHECK(cli.dialog().actor == net[2] && cli.dialog().turn == 1);
+    CHECK(!cli2.dialog().open);                       // not on the other player's screen
+    CHECK(cw.saysShown == 1 && cw2.saysShown == 1);   // the bubble: everyone
+    CHECK(host.openDialogs() == 1);
+
+    // 2. answers that are not the client's: another player answering it, a forged actor (the host's
+    //    character, the other player's, none): refused before the host's game sees them
+    const uint32_t r0 = host.actorRefusals();
+    { DialogReply a; a.dialogId = 1; a.actor = net[3]; a.turn = 1; a.index = 0; Writer w; Encode(w, a); CHECK(host.InjectForTest(other, w)); }
+    { DialogReply a; a.dialogId = 1; a.actor = net[2]; a.turn = 1; a.index = 0; Writer w; Encode(w, a); CHECK(host.InjectForTest(other, w)); }
+    { DialogReply a; a.dialogId = 1; a.actor = net[1]; a.turn = 1; a.index = 0; Writer w; Encode(w, a); CHECK(host.InjectForTest(me, w)); }
+    { DialogReply a; a.dialogId = 1; a.actor = net[3]; a.turn = 1; a.index = 0; Writer w; Encode(w, a); CHECK(host.InjectForTest(me, w)); }
+    { DialogReply a; a.dialogId = 1; a.actor = 0; a.turn = 1; a.index = 0; Writer w; Encode(w, a); CHECK(host.InjectForTest(me, w)); }
+    Run(all, 1.0);
+    CHECK(hw.answers.empty());
+    CHECK(host.actorRefusals() >= r0 + 5);
+
+    // 3. the client answers: once, on the host, as its own character
+    cli.AnswerDialog(1);
+    CHECK(cli.dialog().waiting);
+    Run(all, 2.0, [&] { return !hw.answers.empty(); });
+    CHECK((hw.answers == std::vector<std::pair<uint32_t, int>>{{1u, 1}}));
+    cli.AnswerDialog(0);   // waiting for the next line: not sent twice
+    Run(all, 0.5);
+    CHECK(hw.answers.size() == 1);
+    // ... an answer to an older line (the conversation moved on: speed 3) is ignored
+    hw.dialogEvents.push_back(ev(DialogKind::Text, 1, 10, 2, "Bon, circule.", {"Merci"}));
+    Run(all, 2.0, [&] { return cli.dialog().turn == 2; });
+    CHECK(cli.dialog().turn == 2 && !cli.dialog().waiting && cli.dialog().replies.size() == 1);
+    { DialogReply a; a.dialogId = 1; a.actor = net[2]; a.turn = 1; a.index = 0; Writer w; Encode(w, a); CHECK(host.InjectForTest(me, w)); }
+    { DialogReply a; a.dialogId = 1; a.actor = net[2]; a.turn = 2; a.index = 5; Writer w; Encode(w, a); CHECK(host.InjectForTest(me, w)); }   // not offered
+    Run(all, 1.0);
+    CHECK(hw.answers.size() == 1);
+
+    // 4. one conversation per NPC: the other player's character asking the guard to talk is refused
+    //    ("occupé"); the client's own character may; an NPC the game has talking with the host's
+    //    character too
+    hw.subjectFlags[10] = kTgtCharacter | kTgtConscious;
+    hw.subjectFlags[11] = kTgtCharacter | kTgtConscious;
+    const int run0 = hw.tasksRun;
+    { Command c; c.seq = 900; c.netId = net[3]; c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = kTaskTalk; c.subject = FakeWorld::H(10); Writer w; Encode(w, c); CHECK(host.InjectForTest(other, w)); }
+    Run(all, 1.5);
+    CHECK(hw.tasksRun == run0);
+    bool busy = false;
+    for (const auto& r : cli2.results()) busy |= r.seq == 900 && r.state == ResultState::Rejected && r.reason == ResultReason::Busy && r.text.find("occupé") != std::string::npos;
+    CHECK(busy);
+    CHECK(has(cli2.chatLog(), "occupé"));
+    CHECK(host.dialogBusyRefusals() == 1);
+    { Command c; c.seq = 901; c.netId = net[2]; c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = kTaskTalk; c.subject = FakeWorld::H(10); Writer w; Encode(w, c); CHECK(host.InjectForTest(me, w)); }
+    Run(all, 1.0);
+    CHECK(hw.tasksRun == run0 + 1);
+    hw.talking[11] = 1;   // the host's character talks with NPC 11
+    { Command c; c.seq = 902; c.netId = net[3]; c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = kTaskTalkNearest; c.subject = FakeWorld::H(11); Writer w; Encode(w, c); CHECK(host.InjectForTest(other, w)); }
+    Run(all, 1.5);
+    CHECK(hw.tasksRun == run0 + 1 && host.dialogBusyRefusals() == 2);
+    hw.talking.clear();
+    // ... and the host's game refusing a conversation because the NPC is busy tells that player
+    const size_t chat2 = cli2.chatLog().size();
+    hw.dialogEvents.push_back(ev(DialogKind::Busy, 0, 10, 3, "Garde"));
+    Run(all, 2.0, [&] { return cli2.chatLog().size() > chat2; });
+    CHECK(cli2.chatLog().size() > chat2 && has(cli2.chatLog(), "Garde est occupé"));
+    CHECK(!cli.chatLog().empty() ? !has(cli.chatLog(), "Garde est occupé") : true);
+    const size_t hostChat = host.chatLog().size();
+    hw.dialogEvents.push_back(ev(DialogKind::Busy, 0, 10, 1, "Garde"));   // the host's own character: on the host's screen
+    Run(all, 1.0, [&] { return host.chatLog().size() > hostChat; });
+    CHECK(host.chatLog().size() > hostChat && has(host.chatLog(), "occupé"));
+
+    // 5. a recruit: the NPC the client was talking with joins the player faction; it is the client's,
+    //    even though the other player answered a conversation meanwhile
+    hw.dialogEvents.push_back(ev(DialogKind::Open, 2, 11, 3, "Mercenaire"));
+    hw.dialogEvents.push_back(ev(DialogKind::Text, 2, 11, 3, "Tu cherches du travail ?", {"Non"}));
+    hw.dialogEvents.push_back(ev(DialogKind::Open, 3, 12, 2, "Vagabond"));
+    hw.dialogEvents.push_back(ev(DialogKind::Text, 3, 12, 2, "Je peux te suivre ?", {"Oui, rejoins-nous", "Non"}));
+    Run(all, 2.0, [&] { return cli2.dialog().id == 2 && cli2.dialog().turn == 1 && cli.dialog().id == 3 && cli.dialog().turn == 1; });
+    CHECK(cli2.dialog().open && cli2.dialog().actor == net[3] && cli.dialog().id == 3);
+    cli2.AnswerDialog(0);
+    cli.AnswerDialog(0);
+    Run(all, 2.0, [&] { return hw.answers.size() == 3; });
+    CHECK(hw.answers.size() == 3);
+    hw.chars[12].squad = true;   // recruited
+    Run(all, 3.0, [&] { return std::find_if(cw.controllable.begin(), cw.controllable.end(), [](const Handle& h) { return h.serial == 12; }) != cw.controllable.end(); });
+    CHECK(std::find_if(cw.controllable.begin(), cw.controllable.end(), [](const Handle& h) { return h.serial == 12; }) != cw.controllable.end());
+    CHECK(std::find_if(cw2.controllable.begin(), cw2.controllable.end(), [](const Handle& h) { return h.serial == 12; }) == cw2.controllable.end());
+    CHECK(host.CheckActor(me, net[12]) == Session::ActorVerdict::Ok);
+
+    // 6. walking away: the host ends it in its game; the game's Close shuts the window
+    cli.LeaveDialog();
+    Run(all, 2.0, [&] { return !hw.ended.empty(); });
+    CHECK((hw.ended == std::vector<uint32_t>{3}));
+    hw.dialogEvents.push_back(ev(DialogKind::Close, 3, 12, 2, ""));
+    Run(all, 2.0, [&] { return !cli.dialog().open; });
+    CHECK(!cli.dialog().open);
+    // the first conversation closes too
+    hw.dialogEvents.push_back(ev(DialogKind::Close, 1, 10, 2, ""));
+    Run(all, 1.0);
+    CHECK(host.openDialogs() == 1);   // the other player's
+
+    // 7. a player leaving mid-conversation: it ends in the host's game, nothing stays open
+    cli2.Leave();
+    Run(all, 3.0, [&] { return hw.ended.size() == 2; });
+    CHECK((hw.ended == std::vector<uint32_t>{3, 2}));
+    CHECK(host.openDialogs() == 0);
+    bool cleaned = false;
+    for (const auto& l : hostLog) cleaned |= l.find("1 conversation(s)") != std::string::npos;
+    CHECK(cleaned);
+    CHECK(host.state() == SessionState::Hosting && cli.state() == SessionState::Connected);
+}
+
 // Every message has exactly one authority rule; PeekType accepts exactly the messages; host->client
 // messages sent by a client are refused; a client's map pings are rate-limited by their rule.
 static void TestMessageRules() {
@@ -3369,6 +3569,7 @@ int main() {
     TestTaskTargets();   // actor safety
     TestActorSafety();
     TestGuiToDisplay();
+    TestDialogue();
     TestMap();
     TestManyPlayers();
     TestJoinQueue();

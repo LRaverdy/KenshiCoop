@@ -190,6 +190,9 @@ const FunctionSig kFunctions[FnCount] = {
     {"CharacterAnimal::dropItem", 0x5CA4A0, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48}},
     // ---- crash report (main loop's catch(...) funclets 0x1373AB0 / 0x1373A20 call it)
     {"writeCrashDump", 0x744D20, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x8D, 0xAC, 0x24}},
+    // ---- conversations (KenshiLib 1.0.65 0x6740B0 + 0x780, like setInDialog / replyClicked; body read: DT_END_DIALOG off the
+    //      main thread, else _hasEnded = 1 and setInDialog(false) at 0x674B46)
+    {"Dialogue::endDialogue", 0x674830, {0x40, 0x53, 0x56, 0x41, 0x54, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B, 0xF1}},
 };
 
 namespace {
@@ -794,6 +797,31 @@ bool CallStartPlayerConversation(Character* npc, Character* pc) {
 }
 
 namespace {
+bool SendEventOverrideSeh(void* d, void* pc, int ev, bool& result) {
+    __try {
+        result = reinterpret_cast<bool (*)(void*, void*, int, bool)>(FnAddr(FnDialogueSendEventOverride))(d, pc, ev, true);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+bool EndDialogueSeh(void* d) {
+    __try {
+        reinterpret_cast<void (*)(void*, bool)>(FnAddr(FnDialogueEndDialogue))(d, true);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool CallDialogueEvent(Character* npc, Character* pc, int ev) {
+    void* d = CharacterDialogue(npc);
+    bool result = false;
+    return d && IsCharacter(pc) && ev > 0 && SendEventOverrideSeh(d, pc, ev, result) && result;
+}
+
+namespace {
 bool PickupItemSeh(void* pi, void* item) {
     __try { reinterpret_cast<void (*)(void*, void*)>(FnAddr(FnPickupItem))(pi, item); return true; }
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -1367,7 +1395,7 @@ int SelectionRestoreFailures() { return g_selectionRestoreFailures; }
 
 namespace {
 constexpr uintptr_t CH_dialogue = 0x280;    // Dialogue*
-constexpr uintptr_t DL_shouting = 0x149, DL_me = 0x150, DL_target = 0x158;   // bool, Character*, hand
+constexpr uintptr_t DL_hasEnded = 0x148, DL_shouting = 0x149, DL_me = 0x150, DL_target = 0x158;   // bool, bool, Character*, hand
 constexpr uintptr_t DL_responses = 0x258, DL_npcReply = 0x278;               // vector<std::string>, std::string
 constexpr size_t kGameStringSize = 0x28;
 } // namespace
@@ -1399,6 +1427,15 @@ bool DialogueShouting(const void* dialogue) {
 
 void SetDialogueShouting(void* dialogue, bool shout) {
     if (dialogue) Wr(dialogue, DL_shouting, shout);
+}
+
+bool DialogueEnded(const void* dialogue) {
+    bool v = false;
+    return dialogue && Rd(dialogue, DL_hasEnded, v) && v;
+}
+
+bool CallEndDialogue(void* dialogue) {
+    return DialogueOwner(dialogue) && EndDialogueSeh(dialogue);
 }
 
 bool ReadDialogueWindowText(const void* dialogue, std::string& text, std::vector<std::string>& replies) {

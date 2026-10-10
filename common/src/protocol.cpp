@@ -417,6 +417,8 @@ void Encode(Writer& w, const DialogMsg& m) {
         const size_t n = std::min(e.replies.size(), kMaxDialogReplies);
         w.varint(n);
         for (size_t i = 0; i < n; ++i) w.str(e.replies[i].size() > kMaxDialogText ? e.replies[i].substr(0, kMaxDialogText) : e.replies[i]);
+        w.varint(e.pcNetId);
+        w.varint(e.turn);
     }
 }
 bool Decode(Reader& r, DialogMsg& m) {
@@ -424,7 +426,7 @@ bool Decode(Reader& r, DialogMsg& m) {
     m.events.resize(n);
     for (auto& e : m.events) {
         const uint8_t k = r.u8();
-        if (k < uint8_t(DialogKind::Say) || k > uint8_t(DialogKind::Close)) return false;
+        if (k < uint8_t(DialogKind::Say) || k > uint8_t(DialogKind::Busy)) return false;
         e.kind = DialogKind(k);
         e.dialogId = GetU32Var(r);
         e.netId = GetU32Var(r);
@@ -433,6 +435,8 @@ bool Decode(Reader& r, DialogMsg& m) {
         const uint32_t nr = r.count(kMaxDialogReplies, 1);
         e.replies.resize(nr);
         for (auto& s : e.replies) s = r.str(kMaxDialogText);
+        e.pcNetId = GetU32Var(r);
+        e.turn = GetU32Var(r);
         if (!r.ok()) return false;
     }
     return Done(r);
@@ -440,12 +444,16 @@ bool Decode(Reader& r, DialogMsg& m) {
 void Encode(Writer& w, const DialogReply& m) {
     w.u8(uint8_t(Msg::DialogReply));
     w.varint(m.dialogId);
+    w.varint(m.actor);
+    w.varint(m.turn);
     w.i32(m.index);
 }
-bool Decode(Reader& r, DialogReply& m) {
+bool Decode(Reader& r, DialogReply& m) {   // every answer names its actor
     m.dialogId = GetU32Var(r);
+    m.actor = GetU32Var(r);
+    m.turn = GetU32Var(r);
     m.index = r.i32();
-    return Done(r) && m.index >= 0 && m.index < int32_t(kMaxDialogReplies);
+    return Done(r) && m.actor != 0 && m.index >= kDialogLeave && m.index < int32_t(kMaxDialogReplies);
 }
 
 void Encode(Writer& w, const SquadsMsg& m) {
@@ -699,6 +707,7 @@ const char* ToString(ResultReason r) {
     case ResultReason::NotAllowed: return "not allowed";
     case ResultReason::SelectionBusy: return "selection busy";
     case ResultReason::Failed: return "failed";
+    case ResultReason::Busy: return "busy";
     }
     return "?";
 }
@@ -717,7 +726,7 @@ bool Decode(Reader& r, Result& m) {
     m.netId = GetU32Var(r);
     const uint8_t st = r.u8(), why = r.u8();
     m.text = r.str(400);
-    if (st < 1 || st > 3 || why > uint8_t(ResultReason::Failed)) return false;
+    if (st < 1 || st > 3 || why > uint8_t(ResultReason::Busy)) return false;
     m.state = ResultState(st);
     m.reason = ResultReason(why);
     return Done(r);

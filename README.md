@@ -138,8 +138,10 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
 - **Chacun commande ses persos** : un ordre d'un joueur (dormir, parler, piller, construire…) n'est
   exécuté que par **ses** personnages, jamais par ceux de l'hôte ou d'un autre joueur ; un ordre
   impossible (mauvaise cible) est refusé avec un message, sans rien faire.
-- **Dialogues** : les bulles chez tout le monde ; une conversation avec un PNJ s'ouvre chez le
-  joueur concerné (fenêtre du mod), qui choisit ses réponses.
+- **Dialogues** : les bulles chez tout le monde ; une conversation avec un PNJ (qu'on lui parle ou
+  qu'il nous aborde : garde, mendiant, chasseur de primes...) s'ouvre chez le joueur concerné
+  seulement (fenêtre du mod, bouton « Partir »), qui choisit ses réponses ; le jeu ne se met pas en
+  pause pour une conversation. Un PNJ ne parle qu'à un joueur à la fois (« occupé »).
 - **Heure, vitesse et pause** : celles de l'hôte, imposées en permanence. Les clients ne peuvent
   pas les changer.
 - **Météo** (pluie, tempêtes, éclairs, nuages de gaz…) : celle de l'hôte, région par région.

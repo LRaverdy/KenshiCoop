@@ -158,7 +158,10 @@ void Session::Leave() {
     haveMoney_ = false;
     moneySent_ = false;
     dialog_ = DialogView{};
-    dialogOwner_.clear();
+    hostDialogs_.clear();
+    pendingDialogEnds_.clear();
+    recentPartners_.clear();
+    dialogBusy_ = 0;
     lastSquads_ = SquadsMsg{};
     haveSquads_ = false;
     pendingLooks_.clear();
@@ -183,7 +186,6 @@ void Session::Leave() {
     haveMoneyBase_ = false;
     unsentSpend_ = 0;
     ResetRanged();   // lot C
-    dialogReplies_.clear();
     holdForEditor_ = false;
     pendingAnswers_.clear();
     missingSquad_ = 0;
@@ -250,6 +252,8 @@ void Session::HostTick(double now, bool live) {
     pendingInvOps_.clear();
     for (const auto& a : pendingAnswers_) world_.DialogAnswer(a.dialogId, a.index);
     pendingAnswers_.clear();
+    for (uint32_t id : pendingDialogEnds_) world_.EndDialog(id);   // walked away, or their player left
+    pendingDialogEnds_.clear();
     HostContainers(now);
     HostBags(now);
     HostTrades(now);
@@ -734,6 +738,7 @@ void Session::UpdateInterest() {
         if (it != byHandle_.end()) {
             Entity& e = entities_[it->second];
             e.keep = true;
+            if (squad && !e.squad && !e.container) JoinSquad(e, newcomers);
             return e;
         }
         // The same character under a new handle (it died, or changed squad): it keeps its netId,
@@ -747,7 +752,8 @@ void Session::UpdateInterest() {
             byHandle_[h] = e.netId;
             for (auto& o : owners_) if (o.first == previous) o.first = h;
             e.keep = true;
-            for (auto& [pid, p] : players_) if (p.inGame) SendBind(e, p.peer, previous);
+            if (squad && !e.squad && !e.container) JoinSquad(e, newcomers, &previous);
+            else for (auto& [pid, p] : players_) if (p.inGame) SendBind(e, p.peer, previous);
             if (e.squad) controllableDirty_ = true;
             return e;
         }
@@ -783,19 +789,32 @@ void Session::UpdateInterest() {
     }
 
     squadKnown_ = true;
-    // A newcomer to the player faction right after a player answered a conversation (an animal
-    // bought from an animal trader, a recruit): it is that player's. Only when one player alone
-    // could have done it; otherwise it stays the host's (the host gives it with the squad UI).
+    // A newcomer to the player faction right after a player answered a conversation (a recruit, an
+    // animal bought from an animal trader): it is that player's. The NPC that player was talking with
+    // (a recruit: the same character, by identity) decides first, whoever else answered meanwhile;
+    // otherwise only when one player alone could have done it; else it stays the host's (the host
+    // gives it with the squad UI).
     if (!newcomers.empty()) {
         const double t = clock_();
+        recentPartners_.erase(std::remove_if(recentPartners_.begin(), recentPartners_.end(),
+                                             [&](const RecentPartner& r) { return t - r.at >= 20.0 || !players_.count(r.player); }),
+                              recentPartners_.end());
         uint8_t buyer = 0;
         int candidates = 0;
         for (const auto& [pid, at] : lastDialogAnswer_)
             if (t - at < 20.0 && players_.count(pid)) { buyer = pid; ++candidates; }
         for (const Handle& h : newcomers) {
+            const uint64_t id = world_.Identity(h);
+            uint8_t partnerOf = 0;
+            for (const auto& r : recentPartners_) if (id && r.identity == id) partnerOf = r.player;
+            if (partnerOf) {
+                log_("a new squad character (" + world_.CharacterNameOf(h) + ") goes to " + players_[partnerOf].name + ", who was talking with it (recruited)");
+                Assign(h, partnerOf);
+                continue;
+            }
             if (candidates != 1) {
                 if (candidates > 1) log_("a new squad character appeared while several players were in a conversation: it stays the host's");
-                break;
+                continue;
             }
             log_("a new squad character (" + world_.CharacterNameOf(h) + ") goes to " + players_[buyer].name + ", who just bought or recruited it");
             Assign(h, buyer);
@@ -907,7 +926,9 @@ void Session::SendVitals(double now) {
 }
 
 // Lines said aloud go to everyone who knows the speaker; a conversation window goes to the owner of
-// the character in it (the host's game shows it to nobody).
+// the character in it (the host's game shows it to nobody). Each line shown gets a turn number: an
+// answer names the line it answers. "Busy": a character could not talk with an NPC that is in
+// another player's conversation (the host's own character: told on the host's screen).
 void Session::SendDialogs() {
     world_.TakeDialogEvents(scratchDialogs_);
     if (scratchDialogs_.empty()) return;
@@ -928,21 +949,50 @@ void Session::SendDialogs() {
         }
         auto pc = byHandle_.find(d.pc);
         auto ent = pc != byHandle_.end() ? entities_.find(pc->second) : entities_.end();
+        e.pcNetId = ent != entities_.end() ? ent->second.netId : 0;
         uint8_t owner = 0;
         if (ent != entities_.end() && ent->second.squad) owner = ent->second.owner;
-        else if (auto o = dialogOwner_.find(d.dialogId); o != dialogOwner_.end()) owner = o->second;
+        else if (auto o = hostDialogs_.find(d.dialogId); o != hostDialogs_.end()) owner = o->second.owner;
+        if (d.kind == DialogKind::Busy) {
+            const std::string name = e.text.empty() ? std::string("Ce personnage") : e.text;
+            if (owner == hostId_) {
+                AddChat("* " + name + " est occupé : il parle déjà avec quelqu'un.", "the host's character could not talk with " + e.text + ": busy in another player's conversation");
+            } else if (owner) {
+                log_("[" + (players_.count(owner) ? players_[owner].name : std::string("?")) + "] could not talk with " + e.text + ": busy in another conversation");
+                perPlayer[owner].events.push_back(std::move(e));
+            }
+            continue;
+        }
         if (!owner || owner == hostId_) continue;
-        if (d.kind == DialogKind::Close) dialogOwner_.erase(d.dialogId);
-        else dialogOwner_[d.dialogId] = owner;
         const std::string who = players_.count(owner) ? players_[owner].name : "?";
-        if (d.kind == DialogKind::Open) log_("[" + who + "] conversation with " + e.text);
+        if (d.kind == DialogKind::Close) {
+            if (auto o = hostDialogs_.find(d.dialogId); o != hostDialogs_.end()) {
+                if (!e.pcNetId) e.pcNetId = o->second.pc;
+                hostDialogs_.erase(o);
+            }
+            log_("[" + who + "] conversation over");
+            perPlayer[owner].events.push_back(std::move(e));
+            continue;
+        }
+        HostDialog& info = hostDialogs_[d.dialogId];
+        info.owner = owner;
+        if (e.pcNetId) info.pc = e.pcNetId;
+        else e.pcNetId = info.pc;
+        if (d.speaker.valid() && !(info.npc == d.speaker)) {
+            info.npc = d.speaker;
+            info.npcIdentity = world_.Identity(d.speaker);
+        }
+        if (d.kind == DialogKind::Open) {
+            if (!e.text.empty()) info.npcName = e.text;
+            log_("[" + who + "] conversation with " + e.text);
+        }
         if (d.kind == DialogKind::Text) {
+            e.turn = ++info.turn;
             std::string r;
             for (size_t i = 0; i < e.replies.size(); ++i) r += (i ? " | " : "") + std::to_string(i + 1) + ". " + e.replies[i];
             log_("[" + who + "] they say: \"" + e.text.substr(0, 160) + "\"" + (r.empty() ? "" : "  answers: " + r));
-            dialogReplies_[d.dialogId] = e.replies;
+            info.replies = e.replies;
         }
-        if (d.kind == DialogKind::Close) { log_("[" + who + "] conversation over"); dialogReplies_.erase(d.dialogId); }
         perPlayer[owner].events.push_back(std::move(e));
     }
     scratchDialogs_.clear();
@@ -1569,14 +1619,32 @@ void Session::QueueLog(std::string line) {
 }
 
 void Session::AnswerDialog(int index) {
+    if (index == kDialogLeave) { LeaveDialog(); return; }
     if (state_ != SessionState::Connected || !dialog_.open || dialog_.waiting || index < 0 || index >= int(dialog_.replies.size())) return;
+    if (!ClientMaySend(Msg::DialogReply, dialog_.actor, "answer in a conversation")) return;
     DialogReply r;
     r.dialogId = dialog_.id;
+    r.actor = dialog_.actor;
+    r.turn = dialog_.turn;
     r.index = index;
     Writer w;
     Encode(w, r);
     SendReliable(net_.serverPeer(), w);
     dialog_.waiting = true;
+}
+
+void Session::LeaveDialog() {
+    if (state_ != SessionState::Connected || !dialog_.open) return;
+    if (!ClientMaySend(Msg::DialogReply, dialog_.actor, "leave a conversation")) return;
+    DialogReply r;
+    r.dialogId = dialog_.id;
+    r.actor = dialog_.actor;
+    r.turn = dialog_.turn;
+    r.index = kDialogLeave;
+    Writer w;
+    Encode(w, r);
+    SendReliable(net_.serverPeer(), w);
+    dialog_.waiting = true;   // the window goes when the host's Close comes
 }
 
 // Skill levels change slowly (a few thousandths per hit or per minute of training): what changed is
@@ -1660,6 +1728,36 @@ void Session::Assign(const Handle& h, uint8_t playerId) {
         }
     }
     controllableDirty_ = true;
+}
+
+void Session::JoinSquad(Entity& e, std::vector<Handle>& newcomers, const Handle* previous) {
+    e.squad = true;
+    e.owner = hostId_;
+    for (const auto& [oh, pid] : owners_)
+        if (oh == e.handle && (pid == hostId_ || players_.count(pid))) e.owner = pid;
+    log_("NPC " + world_.CharacterNameOf(e.handle) + " joined the player faction: a squad character now");
+    for (auto& [pid, p] : players_) if (p.inGame) SendBind(e, p.peer, previous ? *previous : Handle{});
+    controllableDirty_ = true;
+    if (e.owner == hostId_ && squadKnown_) newcomers.push_back(e.handle);
+}
+
+// One conversation at a time per NPC: busy when a client's conversation shown here has it with
+// another character than the actor, or when the game has it talking with someone else.
+bool Session::TalkTargetBusy(uint32_t actorNetId, const Handle& actor, const Handle& npc, std::string& with) {
+    const uint64_t npcId = world_.Identity(npc);
+    for (const auto& [id, d] : hostDialogs_) {
+        const bool same = d.npc == npc || (npcId && d.npcIdentity == npcId);
+        if (!same || d.pc == actorNetId) continue;
+        auto pe = entities_.find(d.pc);
+        with = pe != entities_.end() ? world_.CharacterNameOf(pe->second.handle) : std::string();
+        return true;
+    }
+    Handle other;
+    if (!world_.TalkingWith(npc, other) || !other.valid() || other == actor) return false;
+    const uint64_t a = world_.Identity(actor);
+    if (a && world_.Identity(other) == a) return false;
+    with = world_.CharacterNameOf(other);
+    return true;
 }
 
 void Session::PushControllable() {
@@ -1816,15 +1914,30 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         }
         break;
     }
-    case Msg::DialogReply: {
+    case Msg::DialogReply: {   // Authorize checked: the sender's conversation, named by the sender's character in it
         DialogReply a;
         if (!pl->inGame || !Decode(r, a)) break;
-        auto o = dialogOwner_.find(a.dialogId);
-        if (o == dialogOwner_.end() || o->second != pl->id) { log_("ignored an answer to a conversation player " + std::to_string(pl->id) + " is not in"); break; }
+        auto o = hostDialogs_.find(a.dialogId);
+        if (o == hostDialogs_.end() || o->second.owner != pl->id) { log_("ignored an answer to a conversation player " + std::to_string(pl->id) + " is not in"); break; }
+        HostDialog& info = o->second;
+        if (a.index == kDialogLeave) {
+            log_("[" + pl->name + "] walks away from the conversation with " + info.npcName);
+            if (pendingDialogEnds_.size() < 64) pendingDialogEnds_.push_back(a.dialogId);
+            break;
+        }
+        if (a.turn != info.turn) {   // the conversation moved on meanwhile (speed 3, a line said on a timer)
+            log_("[" + pl->name + "] answer to an older line ignored (line " + std::to_string(a.turn) + ", now " + std::to_string(info.turn) + ")");
+            break;
+        }
+        if (a.index >= int(info.replies.size())) { log_("[" + pl->name + "] answer " + std::to_string(a.index) + " is not offered: ignored"); break; }
         if (pendingAnswers_.size() < 64) pendingAnswers_.push_back(a);
-        lastDialogAnswer_[pl->id] = clock_();   // a purchase or a recruitment in it gives them the newcomer
-        if (auto rr = dialogReplies_.find(a.dialogId); rr != dialogReplies_.end() && a.index < int(rr->second.size()))
-            log_("[" + pl->name + "] answers: \"" + rr->second[size_t(a.index)] + "\"");
+        const double now = clock_();
+        lastDialogAnswer_[pl->id] = now;   // a purchase or a recruitment in it gives them the newcomer
+        if (info.npcIdentity) {
+            recentPartners_.push_back({pl->id, info.npcIdentity, now});
+            if (recentPartners_.size() > 64) recentPartners_.erase(recentPartners_.begin());
+        }
+        log_("[" + pl->name + "] answers: \"" + info.replies[size_t(a.index)] + "\"");
         break;
     }
     case Msg::BuildPlace:
@@ -2351,6 +2464,24 @@ void Session::ApplyCommand(uint8_t from, const Command& c) {
         else what = std::string("order \"") + TaskLabel(c.task) + "\" (" + std::to_string(c.task) + ")" + (c.itemSid.empty() ? "" : " on " + world_.TemplateName(c.itemSid));
         break;
     case CommandKind::SquadMove: what = "change squad"; break;
+    }
+    // talk: one conversation at a time per NPC
+    if (c.kind == CommandKind::Task && (c.task == kTaskTalk || c.task == kTaskTalkNearest) && c.subject.valid()) {
+        std::string with;
+        if (TalkTargetBusy(c.netId, it->second.handle, c.subject, with)) {
+            ++dialogBusy_;
+            log_("[" + who + "] " + what + " -> refused: " + world_.CharacterNameOf(c.subject) + " is busy talking with " + with);
+            Result res;
+            res.request = Msg::Command;
+            res.seq = c.seq;
+            res.netId = c.netId;
+            res.state = ResultState::Rejected;
+            res.reason = ResultReason::Busy;
+            const std::string name = world_.CharacterNameOf(c.subject);
+            res.text = (name.empty() ? std::string("Ce personnage") : name) + " est occupé : il parle déjà avec " + (with.empty() ? std::string("quelqu'un") : with) + ".";
+            SendResult(from, res);
+            return;
+        }
     }
     const bool ok = world_.Order(it->second.handle, c);
     if (c.kind != CommandKind::MoveTo || !ok) log_("[" + who + "] " + what + (ok ? " -> ok" : " -> FAILED"));
@@ -2914,15 +3045,22 @@ void Session::ClientPacket(Msg type, Reader& r) {
                 dialog_.open = true;
                 dialog_.id = e.dialogId;
                 dialog_.name = e.text;
+                if (e.pcNetId) dialog_.actor = e.pcNetId;
                 break;
             case DialogKind::Text:
                 if (!dialog_.open || dialog_.id != e.dialogId) { dialog_ = DialogView{}; dialog_.open = true; dialog_.id = e.dialogId; }
                 if (!e.text.empty()) dialog_.text = std::move(e.text);
                 dialog_.replies = std::move(e.replies);
                 dialog_.waiting = false;
+                dialog_.turn = e.turn;
+                if (e.pcNetId) dialog_.actor = e.pcNetId;
                 break;
             case DialogKind::Close:
                 if (dialog_.id == e.dialogId) dialog_ = DialogView{};
+                break;
+            case DialogKind::Busy:
+                AddChat("* " + (e.text.empty() ? std::string("Ce personnage") : e.text) + " est occupé : il parle déjà avec quelqu'un.",
+                        "conversation refused by the host: " + e.text + " is busy in another conversation");
                 break;
             }
         }
@@ -3228,12 +3366,20 @@ void Session::ForgetPlayer(uint8_t id) {
     for (auto& [nid, e] : entities_) closed += e.openBy.erase(id);
     for (auto it = lastAccepted_.begin(); it != lastAccepted_.end();) it = it->first.first == id ? lastAccepted_.erase(it) : std::next(it);
     const bool traded = trades_.erase(id) > 0;
-    for (auto it = dialogOwner_.begin(); it != dialogOwner_.end();) it = it->second == id ? dialogOwner_.erase(it) : std::next(it);
+    size_t talks = 0;   // their conversations end in the game too (no window left open on nobody's screen)
+    for (auto it = hostDialogs_.begin(); it != hostDialogs_.end();) {
+        if (it->second.owner != id) { ++it; continue; }
+        if (pendingDialogEnds_.size() < 64) pendingDialogEnds_.push_back(it->first);
+        ++talks;
+        it = hostDialogs_.erase(it);
+    }
+    recentPartners_.erase(std::remove_if(recentPartners_.begin(), recentPartners_.end(), [id](const RecentPartner& r) { return r.player == id; }),
+                          recentPartners_.end());
     buildSyncedPlayers_.erase(id);
     factionsServed_.erase(peer);
     diploServed_.erase(peer);
     log_("player " + std::to_string(id) + " cleaned up: " + std::to_string(owned.size()) + " character(s) back to the host and halted, " +
-         std::to_string(closed) + " container window(s) and " + (traded ? "a" : "no") + " trade window closed" +
+         std::to_string(closed) + " container window(s), " + std::to_string(talks) + " conversation(s) and " + (traded ? "a" : "no") + " trade window closed" +
          (wasEditing ? ", character editor hold released" : ""));
 }
 

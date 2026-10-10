@@ -346,12 +346,15 @@ struct ProgressMsg {
 };
 
 // Conversations happen in the host's world. Lines said aloud (speech bubbles) are shown to
-// everyone; the conversation window of a player's character opens on that player's screen.
+// everyone; the conversation window of a player's character opens on that player's screen only (the
+// host's game shows it to nobody and does not pause for it). One conversation at a time per NPC.
 enum class DialogKind : uint8_t {
     Say = 1,     // netId says `text` (shout: louder bubble)
     Open = 2,    // a conversation window opens: netId = who the player talks with, text = their name
-    Text = 3,    // what they say now (text) and the answers the player can pick (replies)
+    Text = 3,    // what they say now (text) and the answers the player can pick (replies), line `turn`
     Close = 4,
+    Busy = 5,    // the player's character pcNetId could not talk with netId (text = its name): it is in
+                 // another player's conversation
 };
 constexpr size_t kMaxDialogText = 2000;
 constexpr size_t kMaxDialogReplies = 16;
@@ -362,13 +365,21 @@ struct DialogEvent {
     std::string text;
     bool shout = false;
     std::vector<std::string> replies;
+    uint32_t pcNetId = 0;    // Open/Text/Close/Busy: the player's character in it (the actor of the answers)
+    uint32_t turn = 0;       // Text: which line of the conversation this is (an answer names it)
 };
 struct DialogMsg {
     std::vector<DialogEvent> events;
 };
+// The player picked an answer, or walks away (index kDialogLeave). It names its actor (the player's
+// character in the conversation) and the line it answers: an answer to an older line (the
+// conversation moved on, at speed 3 for instance) is ignored.
+constexpr int32_t kDialogLeave = -1;
 struct DialogReply {
     uint32_t dialogId = 0;
-    int32_t index = 0;       // position in the last `replies`
+    uint32_t actor = 0;      // netId of the player's character in that conversation
+    uint32_t turn = 0;       // the Text it answers
+    int32_t index = 0;       // position in that Text's `replies`, or kDialogLeave
 };
 
 // The player faction's squads, in the host's order: name and members (netIds, in squad order).
@@ -655,6 +666,7 @@ bool Decode(Reader& r, AppearanceMsg& m);
 void Encode(Writer& w, const EditCharacter& m);
 void Encode(Writer& w, const EditState& m);
 const char* TaskLabel(int task);   // a player order's name, for logs ("?" when unknown)
+constexpr int32_t kTaskTalk = 12, kTaskTalkNearest = 126;   // PLAYER_TALK_TO, and its "nearest" form
 const char* StandingOrderLabel(int order);   // a squad bar toggle's name, for logs
 
 // ---- actor safety: what the subject of a client's order is, as the host's world sees it. Every
@@ -695,6 +707,7 @@ enum class ResultReason : uint8_t {
     NotAllowed = 4,         // not available to client players, or not in the game yet
     SelectionBusy = 5,      // the host could not give the order to that character alone
     Failed = 6,             // run, but the game did not do it
+    Busy = 7,               // talk: that NPC is already in a conversation with someone else ("occupé")
 };
 const char* ToString(ResultReason r);
 struct Result {
@@ -721,7 +734,7 @@ enum class AuthRole : uint8_t {
 enum class AuthSubject : uint8_t {
     None,              // nothing to check beyond the role
     OwnCharacter,      // the netId it names is a squad member assigned to the sender
-    OwnConversation,   // the conversation it answers is the sender's
+    OwnConversation,   // the conversation it answers is the sender's, and its actor is the sender's character in it
     Inventory,         // drop: the character that drops it is the sender's; moves: the inventory rules (own, opened, bodies)
 };
 struct MessageRule {

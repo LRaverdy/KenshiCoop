@@ -234,6 +234,8 @@ enum Fn : int {
     // ---- crash report
     FnWriteCrashDump,           // void writeCrashDump(EXCEPTION_POINTERS*, const char* name)   (the game's crash reporter, called from the
                                 //   catch(...) around its main loop: crashDump*.dmp and "Kenshi has crashed"; no unhandled-exception filter sees that crash)
+    // ---- conversations
+    FnDialogueEndDialogue,      // void Dialogue::endDialogue(bool definitelyTheEnd)   (ends the conversation; off the main thread: queued DT_END_DIALOG)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -504,6 +506,11 @@ bool DialogueShouting(const void* dialogue);
 void SetDialogueShouting(void* dialogue, bool shout);
 // What the other one says now and the answers the player can pick (what the window would show).
 bool ReadDialogueWindowText(const void* dialogue, std::string& text, std::vector<std::string>& replies);
+bool DialogueEnded(const void* dialogue);                // Dialogue::_hasEnded (+0x148), set by endDialogue
+bool CallEndDialogue(void* dialogue);                    // Dialogue::endDialogue(true) (main thread)
+// tests: `npc` sends that dialogue event to `pc` (EventTriggerEnum: 1 talk to me, 3 "I see a
+// neutral squad", the guards' check...), forced past the repeat timers
+bool CallDialogueEvent(Character* npc, Character* pc, int ev);
 // A std::string the game can read (const&) for as long as `s` lives; 0x28 bytes.
 void GameStringView(const std::string& s, void* out);
 // Orders: make `actors` the whole selection (exactly them: nothing else), run `fn`, then restore the

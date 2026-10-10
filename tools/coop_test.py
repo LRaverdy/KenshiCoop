@@ -941,6 +941,161 @@ def exp_talk(host, cli):
             return
 
 
+# ---- dialogue: conversations of client characters, NPCs who talk to them, one conversation per NPC
+def exp_dialogue(host, cli):
+    """Sandbox (kctest_town): the host creates an NPC next to the client's character. The client's
+    character talks to it: the window opens on the client only (its own character as the actor), the host
+    is not paused and none of its characters is pulled in; an answer reaches the host. The host's own
+    character asking the same NPC is refused ("occupe"). Walking away closes it. Then the NPC starts the
+    conversation itself (event 3, a guard's check, else 1), a teleport and a fight end it cleanly, and a
+    conversation at speed 3."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    hidx = [int(x) for x in cmd(host, "ownidx 1")[1].split()[1:] if int(x) != own]
+
+    def dialog():
+        t = cmd(cli, "dialog")[1]
+        d = {}
+        for kv in t.split(" | ")[0].split()[1:]:
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                d[k] = v
+        d["raw"] = t
+        return d
+
+    def wait_open(want=True, seconds=15):
+        d = dialog()
+        for _ in range(int(seconds * 2)):
+            if (d.get("open") == "1") == want:
+                return d
+            time.sleep(0.5)
+            d = dialog()
+        return d
+
+    def dialogs():
+        t = cmd(host, "dialogs")[1]
+        return dict(kv.split("=", 1) for kv in t.split(" | ")[0].split()[1:] if "=" in kv), t
+
+    def host_states():
+        out = {}
+        for i in hidx:
+            t = cmd(host, f"charstate {i}")[1]
+            out[i] = dict(kv.split("=") for kv in t.split()[1:]) if t.startswith("ok") else {}
+        return out
+
+    def npc_opens(events=(1,)):
+        for ev in events:
+            for which in ["npc"] + [str(k) for k in range(4)]:
+                r = cmd(host, f"npcevent {own} {ev} {which}")
+                log("host: npcevent", ev, which, r)
+                if r[0]:
+                    d = wait_open(True, 8)
+                    if d.get("open") == "1":
+                        return ev, which, d
+        return None, None, dialog()
+
+    paused0 = cmd(host, "paused")[1]
+    log("host spawns an NPC next to the client's character", cmd(host, f"spawnnpc 15 15 {own}"))
+    time.sleep(3)
+    before = host_states()
+
+    # 1. the client's character talks to it
+    r = cmd(cli, f"talkto {own} 0")
+    log("client: talk to the nearest NPC", r)
+    d = wait_open(True, 20)
+    how = "le client parle"
+    if d.get("open") != "1":
+        log("   (no conversation from the client's order: the NPC starts it instead)")
+        ev, which, d = npc_opens((1,))
+        how = "le PNJ parle"
+    check("dialogue : la fenetre s'ouvre chez le client (" + how + ")", d.get("open") == "1", d["raw"])
+    check("dialogue : le perso du client est l'acteur", d.get("actor", "0") != "0", d["raw"])
+    ds, dt = dialogs()
+    check("dialogue : l'hote suit la conversation du client", int(ds.get("n", 0)) >= 1 and int(ds.get("open", 0)) >= 1, dt)
+    check("dialogue : l'hote n'est pas mis en pause", cmd(host, "paused")[1].split()[1] == paused0.split()[1], cmd(host, "paused")[1])
+    after = host_states()
+    check("dialogue : aucun perso de l'hote n'est entraine dans la conversation",
+          all(after[i].get("dialog") == before[i].get("dialog") for i in hidx if after.get(i) and before.get(i)), f"{before} -> {after}")
+    if d.get("open") == "1" and "[" in d["raw"]:
+        turn0 = d.get("turn")
+        cmd(cli, "answer 0")
+        for _ in range(20):
+            time.sleep(0.5)
+            d2 = dialog()
+            if d2.get("turn") != turn0 or d2.get("open") != "1":
+                break
+        check("dialogue : la reponse du client arrive a l'hote", "] answers: \"" in host_log()[-30000:], dialog()["raw"])
+
+    # 2. one conversation per NPC: the host's own character asking the same NPC
+    d = dialog()
+    if d.get("open") != "1":
+        npc_opens((1,))
+    if hidx and dialog().get("open") == "1":
+        b0 = int(dialogs()[0].get("busy", 0))
+        log("host's own character talks to the same NPC", cmd(host, f"talkto {hidx[0]} npc"))
+        busy = False
+        for _ in range(30):
+            time.sleep(0.5)
+            if int(dialogs()[0].get("busy", 0)) > b0:
+                busy = True
+                break
+        chat = cmd(host, "chatlast 5")[1]
+        check("dialogue : un PNJ deja en conversation est occupe pour un autre perso", busy and "occup" in chat, f"{dialogs()[1]} | {chat}")
+        check("dialogue : la conversation du client continue", dialog().get("open") == "1", dialog()["raw"])
+
+    # 3. walking away
+    if dialog().get("open") == "1":
+        cmd(cli, "answer leave")
+        d = wait_open(False, 10)
+        check("dialogue : partir ferme la conversation proprement", d.get("open") == "0" and dialogs()[0].get("n") == "0", f"{d['raw']} | {dialogs()[1]}")
+    time.sleep(3)
+
+    # 4. an NPC starts it: a guard's check (event 3), else "talk to me"
+    ev, which, d = npc_opens((3, 1))
+    check("dialogue : un PNJ engage la conversation avec le perso du client", d.get("open") == "1", f"event {ev} {which} | {d['raw']}")
+
+    # 5. a teleport ends it
+    if d.get("open") == "1":
+        x, y, z = vec(cmd(host, f"where {own}")[1])
+        log("host teleports the client's character away", cmd(host, f"teleport {own} {x + 1500} {y} {z + 1500}"))
+        d = wait_open(False, 10)
+        ds, dt = dialogs()
+        check("dialogue : une teleportation ferme la conversation", d.get("open") == "0" and ds.get("n") == "0", f"{d['raw']} | {dt}")
+        cmd(host, f"teleport {own} {x} {y} {z}")
+        time.sleep(4)
+
+    # 6. a fight ends it
+    ev, which, d = npc_opens((1,))
+    if d.get("open") == "1":
+        log("host: the client's character fights the NPC", cmd(host, f"fight {own}"))
+        d = wait_open(False, 15)
+        check("dialogue : un combat ferme la conversation", d.get("open") == "0" and dialogs()[0].get("n") == "0", f"{d['raw']} | {dialogs()[1]}")
+    time.sleep(5)
+
+    # 7. speed 3
+    cmd(host, "speed 3")
+    time.sleep(2)
+    log("host spawns another NPC", cmd(host, f"spawnnpc -15 15 {own}"))
+    time.sleep(2)
+    ev, which, d = npc_opens((1,))
+    if d.get("open") == "1" and "[" in d["raw"]:
+        cmd(cli, "answer 0")
+        time.sleep(4)
+        hl = host_log()[-30000:]
+        check("dialogue : vitesse 3 : la reponse est appliquee ou ignoree proprement",
+              "] answers: \"" in hl or "answer to an older line ignored" in hl or dialog().get("open") == "0", dialog()["raw"])
+    else:
+        check("dialogue : vitesse 3 : conversation ouverte", d.get("open") == "1", d["raw"])
+    cmd(cli, "answer leave")
+    time.sleep(2)
+    cmd(host, "speed 1")
+    check("dialogue : l'hote est toujours vivant", alive(host) and cmd(host, "echo")[0])
+    check("dialogue : le client est toujours vivant", alive(cli) and cmd(cli, "echo")[0])
+    summary()
+
+
 # ---- lot A: doors and locks
 def exp_doors(host, cli):
     """Doors and locks: the host's doors reach the client; the client's own game cannot open a door by
@@ -4961,6 +5116,9 @@ def main():
     tk = sub.add_parser("talk")
     tk.add_argument("--save", default="kctest_base")
     tk.add_argument("--keep", action="store_true")
+    dl_ = sub.add_parser("dialogue", help="conversations: the client's own, an NPC's (guard check), one per NPC (occupe), leave, teleport, fight, speed 3")
+    dl_.add_argument("--save", default="kctest_town")
+    dl_.add_argument("--keep", action="store_true")
     rg = sub.add_parser("ranged", help="lot C: a crossbowman shoots at the squad, turrets turn: same on the client")
     rg.add_argument("--save", default="kctest_base")
     rg.add_argument("--keep", action="store_true")
@@ -5103,6 +5261,8 @@ def main():
             exp_talk(host, cli)
         elif a.what == "actorsafety":
             exp_actorsafety(host, cli)
+        elif a.what == "dialogue":
+            exp_dialogue(host, cli)
         elif a.what == "stuck":
             exp_stuck(host, cli)
         elif a.what == "farnpc":

@@ -285,6 +285,16 @@ public:
     void TakeDialogEvents(std::vector<WorldDialog>& out) override;
     void ApplySay(const kc::Handle& speaker, const std::string& text, bool shout) override;
     void DialogAnswer(uint32_t dialogId, int index) override;
+    void EndDialog(uint32_t dialogId) override;
+    bool TalkingWith(const kc::Handle& npc, kc::Handle& other) override;
+    // Host, any thread (Dialogue::startConversation / startPlayerConversation): false when `dialogue`
+    // starting a conversation with `target` would take an NPC out of another player's conversation
+    // (one conversation at a time per NPC); the character asking is told "occupé".
+    bool ConversationAllowed(void* dialogue, void* target);
+    // Host (tests): conversations shown on clients' screens, and talks refused because the NPC was busy.
+    struct RemoteDialogInfo { uint32_t id; std::string pc, other; };
+    std::vector<RemoteDialogInfo> RemoteDialogList();
+    int dialogsBusyRefused = 0, dialogsSwept = 0, hostDialogUnpaused = 0;
     int saysApplied = 0;          // tests (client): speech bubbles replayed
     std::string lastSay;
     // Client: the player dropped it from that character or that building's inventory (any thread).
@@ -488,8 +498,21 @@ private:
     bool pauseRefusedLogged_ = false;
     std::mutex dialogMutex_;
     std::vector<WorldDialog> dialogEvents_;                 // host, under dialogMutex_
-    std::unordered_map<void*, uint32_t> remoteDialogs_;    // host: Dialogue* shown to another player -> id
+    // host: Dialogue* shown to another player -> its id, the player's character and who it talks with
+    struct RemoteDialog {
+        uint32_t id = 0;
+        kenshi::Character* pc = nullptr;
+        kenshi::Character* other = nullptr;
+        kc::Handle pcH, otherH;
+    };
+    std::unordered_map<void*, RemoteDialog> remoteDialogs_;
     uint32_t nextDialogId_ = 1;
+    double nextDialogSweep_ = 0;
+    std::unordered_map<const void*, double> busyToldAt_;   // host: character -> last "occupé" (rate limit)
+    // host (game thread): conversations whose game side ended without a Close (a fight, a teleport, a
+    // knock out, a character gone) are ended and closed
+    void SweepDialogs();
+    RemoteDialog& Remember(void* dialogue, kenshi::Character* pc, kenshi::Character* other);
     // the other player's character in it (and who it talks with), or false
     bool RemoteDialogParties(void* dialogue, kenshi::Character*& pc, kenshi::Character*& other);
     // gameOrder: the game's own pick up order was given (we only watch it, and walk the character
