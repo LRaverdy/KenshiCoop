@@ -245,7 +245,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         kenshi::Character* c = w.Find(lastSpawned_);
         if (!c) return "err no spawned NPC";
         HostCallScope scope;
-        const bool ok = cmd == "ko" ? kenshi::CallKnockout(c) : kenshi::CallDeclareDead(c);
+        const bool ok = cmd == "ko" ? kenshi::ForceKnockout(c, 60.0f) : kenshi::CallDeclareDead(c);
         return ok ? "ok " + Key(lastSpawned_) : "err call failed";
     }
     if (cmd == "rollweather") return "ok " + std::to_string(w.ExpireAllWeather());
@@ -1091,7 +1091,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         auto squad = SortedSquad(w);
         if (idx >= squad.size()) return "err no such squad member";
         HostCallScope scope;
-        return kenshi::CallKnockout(w.FindSquad(squad[idx])) ? "ok" : "err";
+        return kenshi::ForceKnockout(w.FindSquad(squad[idx]), 60.0f) ? "ok" : "err";
     }
     if (cmd == "convo") {   // convo <squadIndex> <k>: (host) the k-th nearest NPC starts a conversation with that squad member
         size_t sel = 0, k = 0;

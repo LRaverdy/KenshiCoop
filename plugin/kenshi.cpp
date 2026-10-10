@@ -1324,6 +1324,19 @@ bool CallKnockout(Character* c) {
     return m && CallMedFloat(FnAddr(FnMedKnockout), m, 0.0f);
 }
 
+bool ForceKnockout(Character* c, float seconds) {
+    // knockout() only arms the timer (+0xA0): nothing makes the character unconscious until damage
+    // or stun does, so a standing NPC kept standing with ko=3. The state and the fall themselves,
+    // with a timer long enough for the medical update not to wake it at once.
+    void* m = Medical(c);
+    if (!m || !CallMedFloat(FnAddr(FnMedKnockout), m, 0.0f)) return false;
+    float t = 0;
+    if (!Rd(m, off::MS_koTimer, t) || !std::isfinite(t) || t < seconds) Wr(m, off::MS_koTimer, seconds);
+    SetUnconscious(c, true);
+    SetRagdoll(c, true);
+    return IsUnconscious(c);
+}
+
 bool GetGameHours(double& out) {
     void* clock = nullptr;
     if (!Rd(reinterpret_cast<void*>(Addr(rva::GameClockOwner)), 0, clock) || !clock) return false;

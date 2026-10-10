@@ -639,6 +639,8 @@ bool WriteVitals(Character* c, const kc::EntityVitals& v);
 // The irreversible transitions; callers must hold a HostCallScope on clients.
 bool CallDeclareDead(Character* c);
 bool CallKnockout(Character* c);
+// knockout() plus the unconscious state and the fall (knockout() alone only arms a timer)
+bool ForceKnockout(Character* c, float seconds);
 
 // ---- lot D: prisons
 // What holds a character captive. Character: +0x2F8 inSomething (2 = IN_PRISON), +0x300 inWhat

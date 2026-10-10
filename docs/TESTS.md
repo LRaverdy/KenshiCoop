@@ -228,7 +228,7 @@ l'escouade triée par handle.
 |---|---|
 | `spawnnpc <dx> <dz> [index]` | (hôte) crée un PNJ, copie d'un PNJ voisin, à côté du membre 0 (ou de ce membre) |
 | `fight <index>` | ce membre attaque le dernier PNJ créé |
-| `wake` / `npcstate` / `ko` / `kill` | le dernier PNJ créé : se relève ; état ; K.-O. ; mort |
+| `wake` / `npcstate` / `ko` / `kill` | le dernier PNJ créé : se relève ; état ; K.-O. (minuteur, état inconscient et chute : `knockout` seul ne fait pas tomber) ; mort |
 
 **Progression et apparence**
 
