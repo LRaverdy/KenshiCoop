@@ -344,12 +344,21 @@ Emplacements de vtable :
 | 0x58 | `getFaction` |
 | 0x160 | `getInventory` (bâtiments, meubles) |
 | 0x1A8 | `dropItem` |
+| 0x228 | crée un `CharStats` neuf (`0x621190` ; `CharacterAnimal` : `0x623660`, `CharStatsAnimal`) et l'écrit à +0x450, **`MedicalSystem` nul** jusqu'à son `init` ; sur un `Building`, le même emplacement est un simple accesseur (`0xF6B10` : `return this+0x160`) |
+| 0x278 / 0x280 | mises à jour du perso par le thread de travail (`0x787940`, listes +0x1C8 / +0x1E0 de son objet) ; 0x280 = `0x5D00B0`, qui appelle `stats->update` (`0x5D066A`) si `ActivePlatoon` (+0x658) est non nul ; 0x278 (`0x5C7D40`) l'appelle aussi (`0x5C7DCF`) |
 | 0x290 | `isItOkForMeToLoot` |
 | 0x298 | `ImStealingDoYouNotice` |
 | 0x370 | `setProneState` |
+| 0x378 | mise en place du perso depuis son `GameData` (`0x62B210` : écrit `ActivePlatoon` +0x658 en premier, initialise les stats plus loin) |
 | 0x390 | `getAge` |
 
 ### CharStats (ordres permanents et compétences)
+- +0x8 `MedicalSystem*` (celui du perso, `Character+0x458`), +0x10 `me`. Le constructeur
+  (`0x886E20`) met +0x8 à nul ; c'est vt 0x0 `init(GameData*, MedicalSystem*, Character*)` qui le
+  remplit (appelé par la mise en place du perso, `0x62BB73`). vt 0x8 `update(dt)` (`0x883B70`, aussi
+  `CharStatsAnimal`) : `if (!medical->inconscient(+0x161) && !medical->mort(+0x164)) this->vt0x20(dt)`,
+  sans tester le pointeur : des stats créées mais pas initialisées plantent là (`+0x883B78`, lecture
+  à 0x161). Voir section 13.
 - Ordres permanents :
   - +0x128 bloquer (défensif), +0x129 distance, +0x12A narguer, +0x12B tenir la position, +0x12C
     passif ;
@@ -1419,3 +1428,28 @@ KenshiLib (`InventoryGUI::playSound(eventId, Item*)` dépend d'un objet) : les p
   plantent souvent à leur tour (`0x86D6D6` appelle un destructeur par une vtable morte), et c'est
   ce second plantage que voyait le filtre du mod. Dans le dump, la pile au-dessus de `rsp` est
   déjà en partie réécrite (déroulement C++ et écriture du dump).
+
+## 13. Plantage `kenshi_x64+0x883B78` (lecture à 0x161) [D]
+- **Où** : `CharStats::update` (`0x883B70`, vt 0x8 de `CharStats` et `CharStatsAnimal`) lit
+  `this->medical` (+0x8) puis l'octet +0x161 (inconscient) : `rax = 0` et `addr = 0x161` disent que
+  le `MedicalSystem*` des stats est **nul**. Appelant réel : `Character::update` (vt 0x280,
+  `0x5D00B0`, retour `0x5D066D`) chez le client, vt 0x278 (`0x5C7D40`, retour `0x5C7DD2`) chez
+  l'hôte, tous deux depuis la boucle du **thread de travail** `0x787940` (retours `0x787C24` /
+  `0x787BF4`, thread lancé par `0x25FE48`). Les autres adresses de la pile journalisée (`0x883DFB`,
+  `0x5C9765`, `0x886662`, `0x88685F`, `0x7D1461`, `0x883B90`) sont des restes d'appels précédents
+  (le journal liste toutes les valeurs de la pile qui ressemblent à une adresse de code).
+- **Comment un perso vivant a des stats sans `MedicalSystem`** : seul le constructeur de
+  `CharStats` met +0x8 à nul, et seule la vt 0x228 du perso en construit un sur un perso existant
+  (la mise en place le fait avant `init`). Les deux plantages ont suivi de quelques millisecondes
+  un ordre **BUILD (tâche 2) sur un PNJ** (`addTaskNearest` : chez l'hôte `[Joueur2] order "build"`,
+  chez le client `npcreq 7 2 a`). Hypothèse la plus probable (non prouvée, l'appel exact dans le
+  code de construction n'est pas identifié) : la tâche traite sa cible comme un `Building` et
+  appelle un de ses virtuels ; sur un `Character`, le même emplacement remplace ses stats par des
+  stats neuves non initialisées, et la mise à jour suivante plante. Autre chemin possible : une
+  usine de personnages qui faute après la vt 0x378 (`ActivePlatoon` écrit) et avant `init` laisse
+  un perso à moitié prêt dans les listes de mise à jour.
+- **Comment le client y est arrivé** : voir CHANGELOG (une exception rattrapée a laissé
+  `HostCallScope` compté ; le client exécutait ensuite tous les ordres lui-même).
+- **Compilateur** : sous `/EHsc` (le mod), une exception non C++ (violation d'accès) rattrapée par
+  un `__except` **ne lance pas les destructeurs** des objets C++ entre la faute et le gestionnaire
+  (vérifié : `TestCallScopeRepair`, une portée laissée ouverte). Kenshi lui-même est en `/EHa`.

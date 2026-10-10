@@ -3,6 +3,7 @@
 #include <functional>
 #include <string>
 
+#include "kc/call_scopes.h"
 #include "kc/protocol.h"
 #include "kenshi.h"
 
@@ -30,6 +31,12 @@ struct HostCallScope {
     HostCallScope& operator=(const HostCallScope&) = delete;
 };
 bool InHostCall();   // a HostCallScope is alive on this thread (lot A: doors, other files' hooks)
+// An access violation caught by an __except skips the destructors of the scopes opened between the
+// fault and the handler (kc/call_scopes.h): one left counted made a client run every later order
+// itself. Mark before a guarded call into the game; repair after it returned or its exception was
+// caught (logged when scopes were left open; returns how many).
+kc::ScopeCounts MarkCallScopes();
+int RepairCallScopes(const kc::ScopeCounts& mark, const char* where);
 // Inside it, the animation hooks let a client play one of the host's animations (every other
 // animation call on the host's characters is refused on clients, ours included).
 std::string AnimHookStats();   // tests

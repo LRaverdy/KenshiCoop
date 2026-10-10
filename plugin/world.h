@@ -325,6 +325,7 @@ private:
     std::unordered_set<kc::Handle, HandleHash> controllable_;
     // client: host handle -> handle of the local stand-in we created for it
     std::unordered_map<kc::Handle, kc::Handle, HandleHash> alias_;
+    std::unordered_set<std::string> factoryFaulted_;   // client: templates whose factory call faulted (not recreated again)
     std::unordered_map<kc::Handle, double, HandleHash> strangerSince_;   // client: local-only NPCs, first seen
     struct FloorTry { uint8_t group = 0; double at = 0; int tries = 0; };
     std::unordered_map<kc::Handle, FloorTry, HandleHash> floorTry_;   // client: floor placements tried (fix G7)

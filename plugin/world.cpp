@@ -350,14 +350,27 @@ bool KenshiWorld::ReadSpawnInfo(const kc::Handle& h, kc::SpawnInfo& out) {
 
 bool KenshiWorld::Spawn(const kc::Handle& h, const kc::SpawnInfo& info, const kc::EntityState& at) {
     if (alias_.count(h)) return false;
+    // a template whose factory call faulted once is not tried again: each try may leave another
+    // half set-up character in the game's update lists (see kenshi::CreateCharacter)
+    if (factoryFaulted_.count(info.templateSid)) return false;
     std::string err;
-    HostCallScope scope;
-    kenshi::Character* c = kenshi::CreateCharacter(info, at.pos, &err);
+    const kc::ScopeCounts mark = MarkCallScopes();
+    kenshi::Character* c = nullptr;
+    {
+        HostCallScope scope;
+        c = kenshi::CreateCharacter(info, at.pos, &err);
+    }
+    // the factory runs our hooks: an exception it raised, caught by CreateCharacter, skipped the
+    // destructors of the scopes they had opened
+    RepairCallScopes(mark, "character factory");
     kc::Handle local;
     if (!c || !kenshi::GetHandle(c, local)) {
-        Log("cannot recreate host character %s: %s", info.templateSid.c_str(), err.c_str());
+        const bool faulted = err.rfind("exception", 0) == 0;
+        if (faulted) factoryFaulted_.insert(info.templateSid);
+        Log("cannot recreate host character %s: %s%s", info.templateSid.c_str(), err.c_str(), faulted ? " (not tried again)" : "");
         return false;
     }
+    HostCallScope scope;
     kenshi::Teleport(c, at.pos, at.rot);
     alias_[h] = local;
     resolved_.erase(h);

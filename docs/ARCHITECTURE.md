@@ -87,7 +87,14 @@ Ordre dans `Tick()` (`main.cpp`) :
   (`...Seh`). Une faute du jeu donne `false` au lieu d'un plantage.
 - **`HostCallScope`** (`g_hostCall`, par thread) : quand le mod appelle lui-même le jeu, par
   exemple pour rejouer un K.-O. de l'hôte chez un client ou exécuter l'ordre d'un client chez
-  l'hôte, les hooks de blocage le laissent passer.
+  l'hôte, les hooks de blocage le laissent passer. Le mod est compilé en `/EHsc` : une violation
+  d'accès rattrapée par un `__except` saute les destructeurs des portées ouvertes entre la faute et
+  le gestionnaire, et le compteur resterait au-dessus de zéro (un client exécutait alors tous les
+  ordres lui-même : plantage `0x883B78`). `MarkCallScopes` / `RepairCallScopes`
+  (`kc/call_scopes.h`) remettent le compte au début de chaque tick de la boucle principale, à la
+  fin de chaque tick (`TickSEH`), après l'exception d'un ordre (`CallTaskSeh`, `AddJobSeh`) et
+  après l'usine de personnages (`Spawn`), avec une ligne au journal (`... call scope(s) left open
+  by a caught exception`) ; les destructeurs ne descendent jamais sous zéro.
 - **`AnimReplayScope`** : même principe pour rejouer une animation de l'hôte.
 - **`HookView`** : publiée à chaque image par `EndFrame`, et lisible depuis n'importe quel thread
   du jeu (l'IA tourne sur d'autres threads). Elle contient :

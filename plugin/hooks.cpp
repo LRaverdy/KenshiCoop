@@ -134,12 +134,21 @@ void SafeTick(bool live) {
 }
 
 void TickSEH(bool live) {
+    // No scope is open when the main loop's tick starts (it runs from GameWorld's main loop, never
+    // inside one of our calls; ticks never nest: g_tickMutex). One still counted was left by an
+    // exception caught outside the tick (kc/call_scopes.h). Not for the frame listener's tick: a
+    // frame drawn while one of our calls loads something could run it inside that call's scope.
+    if (live) RepairCallScopes(kc::ScopeCounts{}, "before the tick");
+    const kc::ScopeCounts mark = MarkCallScopes();
     __try {
         SafeTick(live);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         static int reported = 0;
         if (reported++ < 5) Log("tick: access violation caught (code %08lx)", GetExceptionCode());
     }
+    // after a clean tick or a caught exception alike: an exception caught by one of our own
+    // __try wrappers inside the tick may have left scopes open too
+    RepairCallScopes(mark, "tick");
 }
 
 void hk_mainLoop(void* gw, float t) {
@@ -230,6 +239,19 @@ bool OpensWindow(int task) {
     }
 }
 
+// The game's addJobSelectedCharacters, an exception caught here (inside the caller's scopes, which
+// then close normally).
+bool AddJobSeh(void* pi, int task, void* subject, bool shift, bool add, const float* loc) {
+    const kc::ScopeCounts mark = MarkCallScopes();
+    __try {
+        o_addJob(pi, task, subject, shift, add, loc);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        RepairCallScopes(mark, "addJob");
+        return false;
+    }
+}
+
 // A player order given through the game's UI. The host runs every order: on a client it becomes
 // a command for each of the player's selected characters (or the nearest one), executed by the
 // host's game for that character alone; the result comes back like everything else. On the host
@@ -304,15 +326,28 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
     for (const auto& h : who) w->QueueLocalOrder(h, c);
     if (via == kc::TaskVia::AddJob && shift && loc && o_addJob) {
         // a permanent job (Tâches panel): our copy takes it too, so the panel shows it at once; the
-        // host's job lists (Session::ClientJobs) then keep it or take it away like any other
+        // host's job lists (Session::ClientJobs) then keep it or take it away like any other.
+        // Only with a subject of the kind the task expects (the host's check, kc::TaskTargetAllowed):
+        // the game's addJob with a wrong one crashed here (task 27 on a squad mate, 10 oct.), and the
+        // exception, caught by the tick, left this HostCallScope counted: from then on this client
+        // ran every order itself, until a BUILD on an NPC crashed it (kenshi_x64+0x883B78).
+        void* target = subject ? subject : subj;
         for (const auto& h : who) {
             kenshi::Character* ch = w->FindSquad(h);
             if (!ch) continue;
+            std::string why;
+            const uint32_t flags = w->TargetFlagsOf(ch, target, c.subject.valid() || !c.itemSid.empty());
+            if (!kc::TaskTargetAllowed(via, task, flags, &why)) {
+                Log("client job %d not shown ahead here: %s (subject flags %#x); the host decides", task, why.c_str(), unsigned(flags));
+                continue;
+            }
             const int before = kenshi::PermajobCount(ch);
+            bool ran = false;
             kenshi::WithSelection(ch, [&] {
                 HostCallScope scope;
-                o_addJob(kenshi::Player(), task, subject ? subject : subj, shift, add, loc);
+                ran = AddJobSeh(kenshi::Player(), task, target, shift, add, loc);
             });
+            if (!ran) Log("client job %d: the game's addJob failed here (exception caught); the host decides", task);
             if (kenshi::PermajobCount(ch) > before) w->NoteLocalJob(h, kenshi::PermajobType(ch, kenshi::PermajobCount(ch) - 1));
         }
     }
@@ -1247,10 +1282,30 @@ std::string AnimHookStats() {
 
 bool InHostCall() { return g_hostCall > 0; }
 
+kc::ScopeCounts MarkCallScopes() { return kc::ScopeCounts{g_hostCall, g_animReplay}; }
+int RepairCallScopes(const kc::ScopeCounts& mark, const char* where) {
+    kc::ScopeCounts live{g_hostCall, g_animReplay};
+    if (live.host == mark.host && live.anim == mark.anim) return 0;
+    const int before = live.host;
+    const int leaked = kc::RepairScopeCounts(live, mark);
+    g_hostCall = live.host;
+    g_animReplay = live.anim;
+    static int reported = 0;
+    if (reported++ < 20)
+        Log("%s: %d KenshiCoop call scope(s) left open by a caught exception (count %d, should be %d): put back, or this game "
+            "would run every order itself",
+            where, leaked, before, mark.host);
+    return leaked;
+}
+
 HostCallScope::HostCallScope() { ++g_hostCall; }
-HostCallScope::~HostCallScope() { --g_hostCall; }
+// never below zero: a repair (RepairCallScopes) may have closed this scope already
+HostCallScope::~HostCallScope() { if (g_hostCall > 0) --g_hostCall; }
 AnimReplayScope::AnimReplayScope() { ++g_animReplay; ++g_hostCall; }
-AnimReplayScope::~AnimReplayScope() { --g_animReplay; --g_hostCall; }
+AnimReplayScope::~AnimReplayScope() {
+    if (g_animReplay > 0) --g_animReplay;
+    if (g_hostCall > 0) --g_hostCall;
+}
 
 namespace {
 bool SaySeh(void* d, const void* gs) {
@@ -1292,6 +1347,7 @@ namespace {
 // The game's own "order the selected characters" functions, with only that character selected: the
 // order goes through every check and special case the game has (carrying, beds, shops, speed groups).
 bool CallTaskSeh(void* pi, const kc::Command& cmd, void* subject, void* building, const float* loc, const void* hand) {
+    const kc::ScopeCounts mark = MarkCallScopes();
     __try {
         switch (cmd.via) {
         case kc::TaskVia::AddOrder: o_addOrder(pi, building, cmd.task, subject, cmd.shift, cmd.add, loc); break;
@@ -1303,6 +1359,7 @@ bool CallTaskSeh(void* pi, const kc::Command& cmd, void* subject, void* building
         }
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+        RepairCallScopes(mark, "a client's order");
         return false;
     }
 }
