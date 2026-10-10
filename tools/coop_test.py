@@ -1443,6 +1443,8 @@ def frame_latency(pid, n=5):
 
 def find_material(pid, name=None):
     """The building materials' item template (sid), searched by name on that machine."""
+    if not name:
+        return "580-gamedata.base"   # vanilla "Building Materials" (the names are translated; "construction" matched construction_goods, type 49)
     for part in ([name] if name else []) + ["Building_Materials", "Matériaux_de_construction", "Materiaux_de_construction", "construction"]:
         t = cmd(pid, f"itemtypes {part}")[1]
         log("item templates", part, ":", t[:300])
