@@ -188,8 +188,12 @@ const char* FrenchPhase(kc::JoinPhase p) {
 std::vector<std::string> QueueLines() {
     std::vector<std::string> out;
     if (const kc::JoinQueueMsg* q = g_session->queueStatus()) {
-        out.push_back("File d'attente : position " + std::to_string(q->position) + "/" + std::to_string(q->total) + " — en attente de " + q->current +
-                      " (" + FrenchPhase(q->phase) + ")…");
+        if (g_session->state() == kc::SessionState::Connected)   // in the world: the editor, one player at a time
+            out.push_back("Création de ton personnage : position " + std::to_string(q->position) + "/" + std::to_string(q->total) + " — " +
+                          q->current + " crée le sien, chacun son tour…");
+        else
+            out.push_back("File d'attente : position " + std::to_string(q->position) + "/" + std::to_string(q->total) + " — en attente de " + q->current +
+                          " (" + FrenchPhase(q->phase) + ")…");
     } else if (g_session->isHost()) {
         const auto list = g_session->joinQueue();
         if (!list.empty()) out.push_back("File d'attente des arrivées :");
@@ -578,7 +582,8 @@ void PublishOverlay() {
             m.lines.push_back("ATTENTION : " + std::to_string(g_session->missingSquad()) + " membres de l'escouade manquent ici (charge la sauvegarde de l'hôte)");
         if (g_session->isHost() && g_session->joiningPlayers())
             m.lines.push_back(std::to_string(g_session->joiningPlayers()) + " joueur(s) en train d'arriver : partie en pause");
-        if (g_session->isHost()) m.lines.insert(m.lines.end(), m.queueLines.begin(), m.queueLines.end());
+        // host: everyone on their way in; client in the world: our turn in the character editor to come
+        if (g_session->isHost() || g_session->queueStatus()) m.lines.insert(m.lines.end(), m.queueLines.begin(), m.queueLines.end());
         if (g_session->isHost()) m.lines.push_back("Ctrl+Shift+G  confier la sélection au joueur suivant");
         m.lines.push_back("Ctrl+Shift+F  diplomatie (relations, primes, monde)");
         m.lines.push_back("Ctrl+Shift+L  quitter la session");

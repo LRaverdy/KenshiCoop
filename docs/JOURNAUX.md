@@ -117,11 +117,18 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 | `hosting on UDP port 27960` / `steam: hosting through Steam (id …)` | partie hébergée |
 | `* X is joining...` | quelqu'un se connecte |
 | `X is back with their character` / `created X's own character` | personnage retrouvé (compte Steam ou nom) / nouveau personnage |
-| `saving the world for X` → `world saved: N files, N KB` → `world sent to X` | sauvegarde pour le joueur dont c'est le tour, puis envoi du monde |
-| `join queue: X's turn to join (N waiting after them)` / `join queue: X's turn is over (raison), N still waiting` | file d'attente des arrivées : début et fin d'un tour (raisons : dans le monde, éditeur fermé, parti, retiré, éditeur jamais ouvert, 10 min d'éditeur) |
-| `join queue: X (save being made / loading / character editor), then Y, then Z` | la file à chaque changement |
-| `join queue: X left during their turn` | le joueur en cours est parti ou a planté : le suivant commence |
-| client : `join queue: position 2/3, waiting for X (étape)` / `join queue: our turn, the host is saving its world for us` | ce que voit un joueur qui attend |
+| `X's remembered character is not a living member of the squad in this world: a new one for them` | le perso mémorisé (`KenshiCoop-players.txt`) est mort ou absent de ce monde : nouveau perso, éditeur |
+| `X never finished making their character (gone before closing the editor): the editor opens again for them` | il était parti avant de fermer l'éditeur : l'éditeur rouvre sur le même perso |
+| `X is back: N character(s) they had are theirs again (M of them their own character)` | retour après une coupure : persos rendus (retrouvés par netId) |
+| `saving the world for X, Y` → `world saved: N files, N KB in T s, packed to N KB (P %) in T s` → `world sent to X (N KB)` | une sauvegarde pour tous ceux qui attendent, sa durée, sa compression, puis l'envoi à chacun |
+| `world delivered to X: N KB in T s (R KB/s, ping N ms)` | ENet a tout acquitté : durée et débit du transfert (par Steam : le relais) |
+| `X has loaded the world: T s after it was sent (download T s, then loading)` | le joueur a chargé le monde (téléchargement + chargement de Kenshi) |
+| `joining: X (loading), Y (save being made), Z (character editor), W (waiting for the editor)` | les arrivées en cours, à chaque changement |
+| `character editor: X's turn (N waiting after them)` / `character editor: X's turn is over (raison) after T s, N still waiting` | file de l'éditeur : début et fin d'un tour (raisons : éditeur fermé, parti, retiré, éditeur jamais ouvert, 10 min d'éditeur) |
+| `character editor: X left during their turn` | le joueur dans l'éditeur est parti ou a planté : le suivant commence |
+| `join timings for X: T in all (waiting for a save, save, download + load, waiting for the editor, editor)` | le bilan de l'arrivée, étape par étape |
+| client : `world downloaded: N files, N KB (N KB streamed) in T s (R KB/s), unpacked in T s` / `host world written to save slot S, loading it` / `world loaded in T s (T s since the host sent it)` | côté joueur : transfert, emplacement d'import, chargement |
+| client : `join queue: position 2/3, waiting for X (character editor)` / `join queue: our turn in the character editor` | ce que voit un joueur qui attend l'éditeur |
 | `* X is in the world` | le joueur a chargé le monde |
 | `X opened the character editor: the game waits for them` / `X closed the character editor` | éditeur ouvert (partie en pause) / fermé |
 | `nobody is in the character editor any more: the game resumes` | le dernier éditeur ouvert s'est fermé : la partie reprend |

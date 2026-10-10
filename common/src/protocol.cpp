@@ -1212,18 +1212,19 @@ std::optional<Msg> PeekType(Reader& r) {
     return Msg(t);
 }
 
-void Encode(Writer& w, const WorldBegin& m) { w.u8(uint8_t(Msg::WorldBegin)); w.u64(m.totalBytes); w.varint(m.fileCount); }
+void Encode(Writer& w, const WorldBegin& m) { w.u8(uint8_t(Msg::WorldBegin)); w.u64(m.totalBytes); w.varint(m.fileCount); w.u64(m.rawBytes); }
 bool Decode(Reader& r, WorldBegin& m) {
     m.totalBytes = r.u64();
     m.fileCount = GetU32Var(r);
-    return Done(r) && m.totalBytes <= kMaxWorldBytes && m.fileCount <= kMaxWorldFiles;
+    m.rawBytes = r.u64();
+    return Done(r) && m.totalBytes <= kMaxWorldBytes && m.rawBytes <= kMaxWorldBytes && m.totalBytes <= m.rawBytes && m.fileCount <= kMaxWorldFiles;
 }
 
 void Encode(Writer& w, const WorldChunk& m) {
     w.u8(uint8_t(Msg::WorldChunk));
     w.varint(m.file);
     w.varint(m.offset);
-    if (m.offset == 0) { w.str(m.path); w.varint(m.fileSize); }
+    if (m.offset == 0) { w.str(m.path); w.varint(m.fileSize); w.varint(m.packedSize); }
     w.varint(m.data.size());
     w.bytes(m.data.data(), m.data.size());
 }
@@ -1233,7 +1234,8 @@ bool Decode(Reader& r, WorldChunk& m) {
     if (m.offset == 0) {
         m.path = r.str(kMaxWorldPathLen);
         m.fileSize = r.varint();
-        if (!r.ok() || !ValidWorldPath(m.path) || m.fileSize > kMaxWorldBytes) return false;
+        m.packedSize = r.varint();
+        if (!r.ok() || !ValidWorldPath(m.path) || m.fileSize > kMaxWorldBytes || m.packedSize > m.fileSize) return false;
     }
     const uint64_t n = r.varint();
     if (!r.ok() || n > kWorldChunkSize || n > r.remaining()) return false;

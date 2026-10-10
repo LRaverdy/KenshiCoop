@@ -4655,9 +4655,10 @@ def close_join_editor(host, c, name, i):
 def setup_multi(save, n_clients=3, simultaneous=False):
     """A host and n_clients clients on this PC, each with its own fake Steam id and player name.
     Sequential: each client joins once the previous one is in (editor closed). Simultaneous: every
-    client sends its join at once; the host takes them one at a time (join queue), the others show
-    their place; each closes its character editor when its turn comes (what was seen of the queue
-    goes to JOIN_QUEUE). Each client must own a character of its own.
+    client sends its join at once; they all download and load the host's world at the same time
+    (0.3.1), then make their characters one at a time (the character editor queue), the others
+    showing their place; each closes its character editor when its turn comes (what was seen of the
+    queue goes to JOIN_QUEUE). Each client must own a character of its own.
     Returns (host, [client pids], {pid: player id})."""
     kill_all()
     host = launch(name="Hote")
@@ -4690,7 +4691,7 @@ def setup_multi(save, n_clients=3, simultaneous=False):
             close_join_editor(host, c, f"Joueur{n + 2}", n)
         clis.append(c)
     if simultaneous:
-        log("every client joins at the same time: they go through the host's join queue one by one")
+        log("every client joins at the same time: they load the world together, then make their characters one by one")
         JOIN_QUEUE.clear()
         th = [threading.Thread(target=lambda c=c, i=i: log(f"client {i + 1} join:", join_one(c, i))) for i, c in enumerate(clis)]
         for t in th:
@@ -4719,14 +4720,18 @@ def setup_multi(save, n_clients=3, simultaneous=False):
                 if s.get("queue", "-") != "-":
                     q = (s.get("queue"), s.get("queueWait"), s.get("queuePhase"))
                     if q not in JOIN_QUEUE["seen"][c]:
-                        log(f"client {i + 1} in the join queue: position {q[0]}, waiting for {q[1]} ({q[2]})")
+                        log(f"client {i + 1} waiting for the character editor: position {q[0]}, after {q[1]} ({q[2]})")
                     JOIN_QUEUE["seen"][c].add(q)
                 elif s.get("state") == "loading":
                     busy.append(c)
                 if s.get("state") == "connected" and s.get("ready") == "1":
-                    log(f"client {i + 1} connected")
-                    close_join_editor(host, c, f"Joueur{i + 2}", i)
-                    JOIN_QUEUE["order"].append(c)
+                    name = f"Joueur{i + 2}"
+                    # in the world: its editor turn (the host lists '<name>:editor'), or still waiting
+                    # for it ('<name>:wait'), or no editor for it (not in the host's list any more)
+                    if f"{name}:editor" in hq or name + ":" not in status(host).get("queue", "-"):
+                        log(f"client {i + 1} connected")
+                        close_join_editor(host, c, name, i)
+                        JOIN_QUEUE["order"].append(c)
             if len(busy) > 1:
                 JOIN_QUEUE["overlap"].append([clis.index(c) + 1 for c in busy])
             time.sleep(1)
@@ -4788,15 +4793,15 @@ def keys_of_owner(state, owner):
 
 
 def exp_join4(host, clis, ids):
-    """3 clients joined at the same time: the host's join queue took them one at a time (the others
-    shown their place, nobody dropped), everyone sees every player's characters (names, positions),
-    then every client leaves and the host carries on."""
+    """3 clients joined at the same time: they loaded the world together, then made their characters
+    one at a time (the others shown their place, nobody dropped), everyone sees every player's
+    characters (names, positions), then every client leaves and the host carries on."""
     n = len(clis)
     who = f"{n + 1} joueurs"
     check(f"{who} : chaque client est connecte", all(status(c).get("state") == "connected" for c in clis),
           [(c, status(c).get("state")) for c in clis])
     check(f"{who} : ids de joueur distincts", len(set(ids.values())) == len(ids), ids)
-    # the join queue: one player at a time, the others shown their place, nobody dropped
+    # the editor queue: one player at a time, the others shown their place, nobody dropped
     seen, order = JOIN_QUEUE.get("seen", {}), JOIN_QUEUE.get("order", [])
     log("join queue seen by the host:", JOIN_QUEUE.get("host"))
     check(f"{who} : file d'attente : tous les clients arrivent dans la partie, aucun rejete",
@@ -4812,13 +4817,13 @@ def exp_join4(host, clis, ids):
             except ValueError:
                 bad_pos.append((clis.index(c) + 1, pos))
                 continue
-            if not (2 <= p_ <= t_ <= n) or not wait.startswith("Joueur") or phase not in ("saving", "loading", "editor"):
+            if not (2 <= p_ <= t_ <= n) or not wait.startswith("Joueur") or phase != "editor":
                 bad_pos.append((clis.index(c) + 1, pos, wait, phase))
     check(f"{who} : file d'attente : positions (2..{n}/{n}), joueur attendu et etape coherents", waited and not bad_pos, bad_pos[:6])
     last = order[-1] if order else None
     check(f"{who} : file d'attente : le dernier arrive a vu sa position avancer",
           last is not None and len({q[0] for q in seen.get(last, set())}) >= 2, sorted(seen.get(last, [])) if last else None)
-    check(f"{who} : file d'attente : un seul joueur charge le monde a la fois", not JOIN_QUEUE.get("overlap"), JOIN_QUEUE.get("overlap", [])[:5])
+    check(f"{who} : arrivee : plusieurs joueurs chargent le monde en meme temps", bool(JOIN_QUEUE.get("overlap")), JOIN_QUEUE.get("overlap", [])[:5])
     check(f"{who} : file d'attente : l'hote affiche la file", any("," in q for q in JOIN_QUEUE.get("host", [])), JOIN_QUEUE.get("host", [])[:6])
     cmd(host, "pause 1")
     time.sleep(3)

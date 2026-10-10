@@ -74,8 +74,10 @@ Raccourcis (Kenshi au premier plan) :
 3. La première fois, l'ami reçoit **son propre personnage** dans l'escouade de l'hôte, et
    **l'éditeur de personnage de Kenshi** s'ouvre chez lui : race, visage, cheveux, nom… Toute la
    partie attend pendant qu'il le crée. Le bouton « Modifier mon personnage » de la fenêtre
-   Multijoueur le rouvre plus tard. Si plusieurs amis rejoignent en même temps, ils passent **un
-   par un** : les autres attendent leur tour et voient leur place dans la file d'attente.
+   Multijoueur le rouvre plus tard. Si plusieurs amis rejoignent en même temps, ils téléchargent
+   et chargent le monde **ensemble**, puis créent leur personnage **un par un** : les autres
+   attendent leur tour dans le monde et voient leur place. Un ami parti avant d'avoir fini son
+   personnage retrouve l'éditeur à son retour.
 4. Quand il revient plus tard, même sous un autre nom, il **retrouve le même personnage** : il est
    reconnu par son compte Steam. L'hôte peut lui confier d'autres membres avec Ctrl+Shift+G.
 

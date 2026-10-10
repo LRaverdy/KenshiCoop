@@ -64,6 +64,9 @@ public:
     // Milliseconds since that peer last sent anything (a live game answers ENet's pings every half
     // second, even frozen; a crashed one is silent). 0: unknown peer.
     uint32_t silentMs(PeerId peer) const;
+    // Everything reliable sent to that peer so far has been acknowledged (nothing queued or in
+    // flight): a big transfer has arrived. False for an unknown peer.
+    bool reliableIdle(PeerId peer) const;
 
 private:
     struct Event { int type = 0; PeerId id = 0; uint8_t channel = 0; _ENetPacket* packet = nullptr; };

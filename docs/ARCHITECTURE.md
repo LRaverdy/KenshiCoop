@@ -307,7 +307,7 @@ Ordre dans `Tick()` (`main.cpp`) :
 
 ## Messages (`common/include/kc/protocol.h`)
 
-Version du protocole : **34** (atelier : `Research`, `ResearchRequest`, `Machines`, `MachineRequest` ; fenêtre Escouade : `SquadState`, `SquadRequest`, `JobState` ; 33 : sacs à dos portés : `BagBind` ; sécurité des acteurs : `Result` ; file d'attente des arrivées : `JoinQueue` ; diplomatie : `Diplomacy` ; carte : `MapMarkers`, `MapPing`) au moment de la rédaction. Elle augmente à chaque changement de
+Version du protocole : **35** (35 : monde envoyé compressé : `WorldBegin` et `WorldChunk` portent les tailles décompressées ; `JoinQueue` aussi pour un joueur dans le monde qui attend l'éditeur ; 34 : atelier : `Research`, `ResearchRequest`, `Machines`, `MachineRequest` ; fenêtre Escouade : `SquadState`, `SquadRequest`, `JobState` ; 33 : sacs à dos portés : `BagBind` ; sécurité des acteurs : `Result` ; file d'attente des arrivées : `JoinQueue` ; diplomatie : `Diplomacy` ; carte : `MapMarkers`, `MapPing`) au moment de la rédaction. Elle augmente à chaque changement de
 format, et une version différente est refusée à la connexion.
 
 Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51, 63 à 67, 69, 73 à 79, 81, 84,
@@ -330,8 +330,8 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | 11 | TimeState | H→C | vitesse, pause, heure du jeu |
 | 12 / 13 | Ping / Pong | C→H / H→C | mesure du ping (le client envoie `Ping`, l'hôte répond `Pong`) |
 | 14 | Vitals | H→C (non fiable) | sang, minuteur de K.-O., faim, inconscient ou mort, chair, étourdissement et bandage de chaque membre |
-| 15 | WorldBegin | H→C | début du transfert du monde (taille, nombre de fichiers) |
-| 16 | WorldChunk | H→C | morceau d'un fichier de la sauvegarde (16 Ko) |
+| 15 | WorldBegin | H→C | début du transfert du monde (octets envoyés, nombre de fichiers, octets décompressés) |
+| 16 | WorldChunk | H→C | morceau d'un fichier de la sauvegarde compressé (16 Ko) ; le premier porte le chemin, la taille décompressée et la taille envoyée (égales : fichier envoyé tel quel) |
 | 17 | WorldEnd | H→C | fin du transfert et empreinte attendue |
 | 18 | Ready | C→H | monde chargé (empreinte vérifiée par l'hôte) |
 | 19 | Weather | H→C | météo de chaque région |
@@ -377,7 +377,7 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | 68 | JobList | H→C | fix G5 : la liste de tâches (panneau Tâches) des persos des joueurs, telle que l'hôte l'a |
 | 70 | Stall | H→C | fix G6 : ton jeu va se figer (TP lointaine, zone à charger), la connexion attend jusqu'à 2 min |
 | 71 | Floors | H→C | fix G6 : groupe d'étage (`CharMovement::floorGroup`) des persos, à chaque changement et toutes les 5 s |
-| 72 | JoinQueue | H→C | file d'attente des arrivées : ta place (1 = ton tour), le total, qui arrive et son étape (sauvegarde, chargement, éditeur) ; à chaque changement et toutes les 2 s |
+| 72 | JoinQueue | H→C | file de l'éditeur de personnage (depuis 35, à un joueur déjà dans le monde) : ta place, le total, qui est dans l'éditeur ; à chaque changement et toutes les 2 s |
 | 80 | BagBind | H→C | sac à dos porté par un personnage : son netId, son porteur, son modèle (son contenu suit en `Inventory`) |
 | 82 | MapMarkers | H→C | carte : joueurs, position de chaque perso de l'escouade (joueur, perso du joueur, à terre, mort) et escouades hostiles proches, 3 fois par seconde |
 | 83 | MapPing | ⇄ | ping sur la carte (client : demande à l'hôte, au plus un toutes les 0,5 s ; hôte : à tous, avec son id et son joueur) |
@@ -391,50 +391,74 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
    - Un nom déjà pris devient « Nom 2 ».
    - Une connexion du même compte Steam remplace l'ancienne.
    - L'hôte répond `Welcome` et annonce `PlayerJoined` aux autres.
-   - Le joueur entre dans la **file d'attente des arrivées** (`joinQueue_`, premier arrivé, premier
-     servi). Les étapes 2 à 6 et l'éditeur se font **pour un seul joueur à la fois**
-     (`joinTurn_`, voir « File d'attente » ci-dessous).
+   - Le joueur attend la **prochaine sauvegarde** (`joinQueue_`) : elle commence dès qu'aucune
+     autre n'est en cours, et sert **tous** ceux qui attendent (voir « Arrivées » ci-dessous).
 2. L'hôte **gèle son monde** (`HoldForJoin` : vraie pause, réimposée si quelqu'un appuie sur
-   lecture). Avec `own_character=1`, il retrouve ou crée le personnage du joueur
-   (`EnsurePlayerCharacter`) **avant** de sauvegarder.
-3. L'hôte sauvegarde dans l'emplacement `KenshiCoopHost`. Le jeu efface sa demande avant d'avoir
-   tout écrit : l'hôte attend que `quick.save` existe et que la taille du dossier ne bouge plus
-   pendant 1 s.
-4. Il envoie `WorldBegin`, des `WorldChunk` et `WorldEnd`, avec des chemins validés et des tailles
-   bornées.
-5. Le client écrit les fichiers dans `KenshiCoopJoin` (seul dossier qu'il efface), demande le
-   chargement, puis attend un monde dont l'empreinte (les handles de l'escouade) correspond depuis
-   une seconde. Il envoie alors `Ready`.
-6. L'hôte vérifie l'empreinte puis appelle `FinishJoin`. Il envoie au joueur :
+   lecture). Avec `own_character=1`, il retrouve ou crée le personnage de chaque joueur de la
+   sauvegarde (`EnsurePlayerCharacter`) **avant** de sauvegarder.
+3. L'hôte sauvegarde dans l'emplacement `KenshiCoopHost` (`HostSaves`). Le jeu efface sa demande
+   avant d'avoir tout écrit : l'hôte attend que `quick.save` existe et que la taille du dossier ne
+   bouge plus pendant 1 s.
+4. Il **compresse** chaque fichier une fois (`kc::PackBytes`, `kc/pack.h` : XPRESS Huffman de
+   Windows, `cabinet.dll` ; un fichier qui ne rétrécit pas part tel quel), puis envoie à chacun
+   `WorldBegin` (octets envoyés, octets décompressés), des `WorldChunk` (le premier de chaque
+   fichier porte sa taille décompressée et sa taille envoyée) et `WorldEnd`, avec des chemins
+   validés et des tailles bornées.
+5. Le client remet chaque fichier à sa taille (`kc::UnpackBytes`, taille exacte annoncée, sinon
+   refus), l'écrit dans son emplacement d'import (`KenshiCoopJoin`, seul dossier qu'il efface ;
+   un deuxième jeu sur le même PC prend `KenshiCoopJoin2`, etc., réservé par un mutex nommé pour
+   la vie du processus), demande le chargement, puis attend un monde dont l'empreinte (les handles
+   de l'escouade) correspond depuis une seconde. Il envoie alors `Ready`.
+6. L'hôte vérifie l'empreinte (celle de la sauvegarde envoyée à ce joueur, et un monde de l'hôte
+   qui n'a changé depuis que par les persos des joueurs arrivés après lui) puis appelle
+   `FinishJoin`. Il envoie au joueur :
    - les `Bind` de toutes les entités, l'heure et les inventaires ;
+   - l'apparence des persos modifiée depuis sa sauvegarde (éditeur d'un autre joueur fermé pendant
+     son chargement) ;
    - la météo complète, puis les effets une seconde plus tard ;
    - les escouades ;
-   - `EditCharacter` si le personnage vient d'être créé.
+   - si son personnage est à créer, il entre dans la **file de l'éditeur** (`editorQueue_`) ;
+     `EditCharacter` part à son tour.
 
-#### File d'attente des arrivées (`AdvanceJoinQueue`, `SendJoinQueue`)
-- **Pourquoi** : l'empreinte vérifiée à l'étape 6 est l'ensemble des handles de l'escouade. Le
-  personnage d'un nouveau venu la change. Avant la file, plusieurs arrivées partageaient une
-  sauvegarde : quand un joueur arrivait après l'envoi de la sauvegarde aux premiers, l'hôte créait
-  son personnage et sauvegardait de nouveau pour lui seul ; les premiers chargeaient un monde qui
-  ne correspondait plus à celui de l'hôte et restaient bloqués jusqu'au délai de 300 s (essai
-  `join4` du 10/10 : Joueur2 et Joueur3 « joining took too long », seul Joueur4 entré).
-- **Un tour** commence quand le joueur précédent a fini. Le délai de 300 s court à partir du
-  début du tour (puis de l'envoi du monde), jamais pendant l'attente. Le tour se termine quand le
-  joueur est dans le monde **et** a fermé l'éditeur (`EditState`), ou sans éditeur s'il avait déjà
-  son personnage ; aussi s'il part, plante ou est exclu, après 10 min d'éditeur, ou si l'éditeur
-  ne s'est pas ouvert 30 s après son arrivée. Le tour suivant commence aussitôt, avec une
-  **sauvegarde neuve** qui contient tous les joueurs arrivés avant.
-- **Ceux qui attendent** reçoivent `JoinQueue` (position, total, joueur en cours, étape) à chaque
-  changement et toutes les 2 s. Le client reste en « Downloading » : chaque `JoinQueue` repousse
-  son propre délai, la connexion ENet reste vivante. Panneau et fenêtre Multijoueur : « File
-  d'attente : position 2/3 — en attente de Joueur2 (création du personnage)… ». Un joueur qui
-  part de la file est retiré tout de suite (`ForgetPlayer`) et les positions sont renumérotées.
-- **L'hôte** liste la file dans son panneau, sa fenêtre Multijoueur et la commande `status` de la
-  console (« File d'attente des arrivées : 1. Joueur2 — création du personnage, 2. Joueur3 —
-  attend son tour »). Journal : « join queue: … ».
-- Le monde reste gelé du premier tour au dernier. Sur un même PC, les clients partagent le
-  dossier `KenshiCoopJoin` : la file évite aussi qu'un téléchargement écrase celui d'un autre
-  pendant son chargement.
+#### Arrivées : tout le monde charge en même temps, l'éditeur un par un (`HostSaves`, `AdvanceEditorQueue`, `SendJoinQueue`)
+- **Avant (0.3.0)** : une file faisait tout passer un joueur à la fois (sauvegarde, téléchargement,
+  chargement, éditeur). Partie du 10/10 : rob, arrivé pendant le chargement de nass4, a attendu
+  1 min 45 (le chargement de nass4 puis son éditeur) avant même que sa sauvegarde soit faite.
+- **Sauvegardes** : une seule à la fois, faite pour **tous** les joueurs qui en attendent une (leurs
+  persos créés d'abord), envoyée à chacun dès qu'elle est prête ; ceux qui arrivent pendant
+  qu'elle se fait attendent la suivante, lancée aussitôt après (elle contient leurs persos et ceux
+  de tous les précédents). Tous téléchargent et chargent **en même temps**.
+- **Empreinte** : le monde reste gelé de la première arrivée à la dernière fermeture d'éditeur. Il
+  ne change que par les persos créés pour les arrivants. L'hôte retient les empreintes par
+  lesquelles il passe pendant ce gel (`joinFps_`) : un `Ready` est accepté si le client a chargé
+  exactement la sauvegarde qu'on lui a envoyée (`sentHash`) et si le monde de l'hôte est encore à
+  une de ces empreintes. Le perso d'un joueur arrivé après lui manque chez lui : il en reçoit une
+  doublure, comme les joueurs déjà dans le monde. Tout autre changement (recrue pendant le gel)
+  fait refuser le `Ready` (`WorldMismatch`), comme avant.
+- **Éditeur de personnage, un joueur à la fois** (`editorTurn_`, `editorQueue_`, dans l'ordre
+  d'arrivée dans le monde). Le tour se termine quand il ferme l'éditeur (`EditState`), après 10 min
+  d'éditeur, si l'éditeur ne s'est pas ouvert 30 s après `EditCharacter`, ou s'il part, plante ou
+  est exclu ; le suivant reçoit `EditCharacter` aussitôt.
+- **Ceux qui attendent l'éditeur** sont déjà dans le monde (en pause) et reçoivent `JoinQueue`
+  (position, total, joueur dans l'éditeur, étape « éditeur ») à chaque changement et toutes les
+  2 s. Panneau : « Création de ton personnage : position 2/3 — Joueur2 crée le sien, chacun son
+  tour… ». Un joueur qui part est retiré de la file tout de suite (`ForgetPlayer`).
+- **L'hôte** liste les arrivées dans son panneau, sa fenêtre Multijoueur et la commande `status`
+  (`Joueur2:editor,Joueur3:loading,Joueur4:wait`). Journal : « joining: … », « character
+  editor: … » et les durées (voir docs/JOURNAUX.md).
+- **Délais** : 300 s depuis l'arrivée pour recevoir la sauvegarde, puis 300 s depuis l'envoi pour
+  la charger ; 120 s pour la sauvegarde de l'hôte.
+- **Même PC** (tests) : chaque jeu a son propre emplacement d'import (`KenshiCoopJoin`,
+  `KenshiCoopJoin2`… réservé par un mutex nommé) : deux chargements simultanés ne s'écrasent pas.
+- **Personnage jamais fait** : un joueur dont le perso a été créé pour lui mais qui est parti
+  avant de fermer l'éditeur (jeu fermé ou planté pendant le chargement, resync ou plantage
+  éditeur ouvert : Geoffrey le 10/10) reste dans `editorOwed_` (par compte Steam, sinon par nom) :
+  à son retour, l'éditeur s'ouvre de nouveau sur ce même perso. Côté jeu, un perso mémorisé
+  (`KenshiCoop-players.txt`) qui n'est pas un membre **vivant** de l'escouade de ce monde ne lui
+  est pas rendu : il reçoit un nouveau perso, créé dans l'éditeur.
+- **Retour après un plantage** : ce que le joueur commandait est retenu par **netId**
+  (`leftOwned_`), qui ne change pas quand Kenshi donne un nouveau handle au perso (nouvelle
+  escouade, mort) ; à son retour, chaque perso encore à l'hôte lui est rendu sous le même netId.
 
 ### Positions (`SendSnapshots`, `KenshiWorld::Apply`)
 - Règles pures dans `common/include/kc/motion.h` (tests `TestMotion`).
