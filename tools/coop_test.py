@@ -5231,10 +5231,21 @@ def find_template(pid, parts):
     return None, None
 
 
+# vanilla templates by id (gamedata.base): names are translated, ids are not
+RESEARCH_BENCH = "1875-gamedata.base"      # Small Research Bench (unlocked from the start)
+CRAFT_BENCHES = ("2929-gamedata.base", "2262-gamedata.base", "2299-gamedata.base")   # Clothing Bench, Leather / Chain Armour Crafting Bench
+WIND_GENERATOR = "1999-gamedata.base"
+BATTERY_BANK = "1855-gamedata.base"
+LIGHTS = ("14444-gamedata.base", "5363-gamedata.base", "5361-gamedata.base")   # Light Post, Searchlight, Spotlight
+IRON_NODE = "42248-gamedata.base"           # Iron Resource: 3 workers (a copper node takes 2)
+FABRICS = "584-gamedata.base"
+
+
 def sandbox_building(host, sid, dx, dz, label):
-    """Placed by the host next to squad member 0 and finished at once (sandbox): True when built."""
+    """Placed by the host next to squad member 0 at a spot build mode accepts, then finished at once
+    (sandbox). True when built."""
     ok, t, spot = place_valid(host, sid, 0, dx, dz)
-    log(label, "placed:", ok, t, spot)
+    log(label, sid, "placed:", ok, t, spot)
     if not ok:
         return False
     time.sleep(2)
@@ -5243,11 +5254,43 @@ def sandbox_building(host, sid, dx, dz, label):
     return True
 
 
+def squad_size(pid):
+    n = 0
+    while cmd(pid, f"pos {n}")[0] and n < 32:
+        n += 1
+    return n
+
+
+def move_squad_out_of_town(host):
+    """Every squad member (the client's too) on dry land well away from any town: the host refuses
+    placements near one ('too close to a town'). True when a test placement there is accepted."""
+    t = cmd(host, "pos 0")[1].split()
+    if len(t) < 2:
+        return False
+    x, y, z = (float(v) for v in t[1].split(","))
+    n = squad_size(host)
+    rings = [(5000, 0), (0, 5000), (-5000, 0), (0, -5000), (8000, 8000), (-8000, 8000), (8000, -8000), (-8000, -8000), (12000, 0), (0, 12000)]
+    for dx, dz in rings:
+        spot = teleport_dry(host, 0, (x, y, z), [(dx, dz)], settle=8)
+        if not spot:
+            continue
+        sx, sy, sz = spot
+        for i in range(1, n):
+            cmd(host, f"teleport {i} {sx + 15 * i:.0f} {sy + 300:.0f} {sz + 10:.0f}")
+        time.sleep(6)
+        probe = cmd(host, f"buildcheck {RESEARCH_BENCH} 60 0")
+        log("out of town at", spot, "build check:", probe)
+        if probe[0] or "town" not in probe[1]:
+            return True
+    return False
+
+
 def exp_research(host, cli):
     """Workshop: the research (tech tree), the crafting benches, the mines and machines and the power of
     the players' outpost are the host's. The client researches, builds what it unlocked and crafts
     with it through requests the host runs; skills, workers, outputs and power show the same on both
-    sides. The save may lack benches and materials: the host's sandbox commands set them up."""
+    sides. The save may lack benches and materials: the host's sandbox commands set them up (templates
+    by id, placed away from towns)."""
     time.sleep(6)
     cmd(cli, "editdone")
     time.sleep(3)
@@ -5255,26 +5298,54 @@ def exp_research(host, cli):
     log("client's own character: squad index", own)
     cmd(host, "console xp all 60")   # faster researchers, builders and miners
     time.sleep(2)
-    # ---- sandbox: a research bench, a crafting bench, a generator, a battery, a light
-    rb_sid, rb_name = find_template(host, ("recherche", "Research", "Recherche"))
-    cb_sid, cb_name = find_template(host, ("tabli", "Workbench", "Fabrication", "Bench", "Forge"))
-    gen_sid, gen_name = find_template(host, ("olienne", "Wind", "nérateur", "Generator"))
-    bat_sid, bat_name = find_template(host, ("Batterie", "Battery"))
-    light_sid, light_name = find_template(host, ("Lampe", "Lumi", "Light"))
-    log("templates:", rb_sid, rb_name, "|", cb_sid, cb_name, "|", gen_sid, gen_name, "|", bat_sid, bat_name, "|", light_sid, light_name)
-    check("recherche : un banc de recherche existe dans les modeles", rb_sid is not None, rb_name)
-    rb_ok = rb_sid is not None and sandbox_building(host, rb_sid, 60, 0, "research bench")
-    cb_ok = cb_sid is not None and sandbox_building(host, cb_sid, -60, 0, "crafting bench")
+
+    # ---- mine first (the save's iron nodes): three characters, the host's and the client's, on one node
+    others = [i for i in range(squad_size(host)) if i != own][:2]
+    log("client's character works the iron node:", cmd(cli, f"workreq {own} {IRON_NODE}"))
+    for i in others:
+        log("host's character", i, "works the iron node:", cmd(host, f"workreq {i} {IRON_NODE}"))
+    mh = {}
+    for _ in range(30):   # they walk there (up to 90 s)
+        time.sleep(3)
+        mh = mfields(cmd(host, f"machine {IRON_NODE}")[1])
+        if mh.get("ops", "").startswith("3/"):
+            break
+    log("iron node on the host:", mh)
+    ok, last = machine_both(host, cli, IRON_NODE, "mine", floats=("prog", "prod"), tol=0.3)
+    check("mine : nombre de mineurs identique partout", ok, last[2] if len(last) > 2 else last)
+    check("mine : trois mineurs (hote et client melanges)", mh.get("ops", "").startswith("3/"), mh.get("ops"))
+    time.sleep(20)   # some ore
+    ih = cmd(host, f"machineinv {IRON_NODE}")[1]
+    time.sleep(2)
+    ic = cmd(cli, f"machineinv {IRON_NODE}")[1]
+    ih2 = cmd(host, f"machineinv {IRON_NODE}")[1]
+    check("mine : meme minerai produit partout", ic in (ih, ih2), f"{ih} / {ic}")
+    if others:
+        log("host's character", others[-1], "stops working", cmd(host, f"moverel {others[-1]} 200 0"))
+        time.sleep(8)
+        ok, last = machine_both(host, cli, IRON_NODE, "mine after a worker left", floats=("prog", "prod"), tol=0.3)
+        mh2 = mfields(cmd(host, f"machine {IRON_NODE}")[1])
+        check("mine : un mineur retire, vu partout", ok and mh2.get("ops") != mh.get("ops"), f"{mh.get('ops')} -> {mh2.get('ops')} | {last[2] if len(last) > 2 else ''}")
+
+    # ---- sandbox away from towns: research bench, crafting bench, generator, battery, light
+    out = move_squad_out_of_town(host)
+    check("recherche : escouade hors des villes pour le bac a sable", out, "")
+    rb_ok = sandbox_building(host, RESEARCH_BENCH, 60, 0, "research bench")
+    check("recherche : banc de recherche pose", rb_ok, RESEARCH_BENCH)
+    cb_sid, cb_ok = None, False
+    for sid in CRAFT_BENCHES:
+        if sandbox_building(host, sid, -60, 0, "crafting bench"):
+            cb_sid, cb_ok = sid, True
+            break
     time.sleep(4)
-    rb_part = (rb_name or "").split("_")[0] or "any"
-    cb_part = (cb_name or "").split("_")[0] or "any"
     if rb_ok:
-        for what in ("Livres", "Book", "Artefact", "Artifact", "Engineering", "Ingénierie"):
-            log("sandbox: into the research bench", what, cmd(host, f"machinegive {rb_part} {what} 20"))
+        for what in ("Livre", "Book", "Books", "Artefact", "Artifact", "artifact"):
+            log("sandbox: into the research bench", what, cmd(host, f"machinegive {RESEARCH_BENCH} {what} 20"))
+        log("client's character works the research bench:", cmd(cli, f"workreq {own} {RESEARCH_BENCH}"))
     if cb_ok:
-        for what in ("Fer", "Iron", "Cuir", "Leather", "Tissu", "Fabric", "Acier", "Steel"):
-            log("sandbox: into the crafting bench", what, cmd(host, f"machinegive {cb_part} {what} 20"))
-    time.sleep(3)
+        for what in (FABRICS, "Tissus", "Cuir", "Leather", "Fer", "Iron"):
+            log("sandbox: into the crafting bench", what, cmd(host, f"machinegive {cb_sid} {what} 20"))
+    time.sleep(15)   # the client's character walks to the research bench
 
     # ---- research: the same state on both sides
     def rstate(pid):
@@ -5288,8 +5359,9 @@ def exp_research(host, cli):
     enabled0 = cmd(cli, "researchenabled 0")[1].split()[3:]
     crafts0 = set(x.split("=")[0] for x in cmd(cli, "craftlist 2000")[1].split()[2:])
     stats0 = (cmd(host, f"stats {own}")[1], cmd(cli, f"stats {own}")[1])
-    # the client queues a tech from its research window: a request the host runs
-    picks = [p.split("=")[0] for p in cmd(cli, "researchpick 6")[1].split()[1:]]
+    # what the host's benches can pay for first, then anything whose requirements are met
+    picks = [p.split("=")[0] for p in cmd(host, "researchpick 6 cost")[1].split()[1:]]
+    picks += [p.split("=")[0] for p in cmd(cli, "researchpick 6")[1].split()[1:] if p.split("=")[0] not in picks]
     log("techs the client may research:", picks)
     tech = None
     for sid in picks:
@@ -5301,22 +5373,22 @@ def exp_research(host, cli):
                 break
         if tech:
             break
-    check("recherche : demande du client mise en file par l'hote", tech is not None, picks)
+    check("recherche : demande du client mise en file par l'hote", tech is not None, f"{picks} -> host queue {rstate(host).get('queue')}")
     if tech:
         time.sleep(3)
         rh, rc = rstate(host), rstate(cli)
         check("recherche : meme file et meme avancement partout", rh["queue_sids"] == rc["queue_sids"], f"{rh.get('queue')} / {rc.get('queue')}")
         # asked twice (a double click, or two players at once): queued once, paid once
-        before = cmd(host, f"machineinv {rb_part}")[1] if rb_ok else ""
+        before = cmd(host, f"machineinv {RESEARCH_BENCH}")[1] if rb_ok else ""
         log("client queues it again", cmd(cli, f"researchreq queue {tech}"))
         log("host player queues it too", cmd(host, f"researchreq queue {tech}"))
         time.sleep(3)
         rh = rstate(host)
         check("recherche : une seule fois dans la file malgre deux demandes", rh["queue_sids"].count(tech) == 1, rh.get("queue"))
         if rb_ok:
-            after = cmd(host, f"machineinv {rb_part}")[1]
+            after = cmd(host, f"machineinv {RESEARCH_BENCH}")[1]
             check("recherche : rien n'est consomme deux fois", before == after, f"{before} -> {after}")
-            check("recherche : inventaire du banc identique partout", cmd(cli, f"machineinv {rb_part}")[1] == after, cmd(cli, f"machineinv {rb_part}")[1])
+            check("recherche : inventaire du banc identique partout", cmd(cli, f"machineinv {RESEARCH_BENCH}")[1] == after, cmd(cli, f"machineinv {RESEARCH_BENCH}")[1])
         # cancelled by the client, then queued again
         log("client cancels", cmd(cli, f"researchreq cancel {tech}"))
         time.sleep(3)
@@ -5359,32 +5431,32 @@ def exp_research(host, cli):
     craftable = new_crafts or sorted(crafts0)
     log("crafts for the client:", len(crafts0), "->", len(craftable), new_crafts[:6])
     if cb_ok and craftable:
-        m0 = mfields(cmd(host, f"machine {cb_part}")[1])
+        m0 = mfields(cmd(host, f"machine {cb_sid}")[1])
         n0 = len([x for x in m0.get("crafts", "").split(",") if x])
         base = craftable[0]
-        log("client orders a craft", base, cmd(cli, f"machinereq {cb_part} addcraft {base}"))
+        log("client orders a craft", base, cmd(cli, f"machinereq {cb_sid} addcraft {base}"))
         time.sleep(4)
-        m1 = mfields(cmd(host, f"machine {cb_part}")[1])
+        m1 = mfields(cmd(host, f"machine {cb_sid}")[1])
         n1 = len([x for x in m1.get("crafts", "").split(",") if x])
         check("fabrication : ordre du client execute par l'hote", n1 == n0 + 1, f"{m0.get('crafts')} -> {m1.get('crafts')}")
-        ok, last = machine_both(host, cli, cb_part, "crafting bench")
+        ok, last = machine_both(host, cli, cb_sid, "crafting bench")
         check("fabrication : meme file de fabrication partout", ok, last[2] if len(last) > 2 else last)
         # the host player and the client change the same bench at once: the last order wins everywhere
-        log("host sets repeat on", cmd(host, f"machinereq {cb_part} repeat 1"))
-        log("client sets repeat off", cmd(cli, f"machinereq {cb_part} repeat 0"))
+        log("host sets repeat on", cmd(host, f"machinereq {cb_sid} repeat 1"))
+        log("client sets repeat off", cmd(cli, f"machinereq {cb_sid} repeat 0"))
         time.sleep(4)
-        ok, last = machine_both(host, cli, cb_part, "crafting bench repeat")
+        ok, last = machine_both(host, cli, cb_sid, "crafting bench repeat")
         check("fabrication : deux ordres en meme temps, meme resultat partout", ok, last[2] if len(last) > 2 else last)
-        check("fabrication : inventaire de l'etabli identique partout", cmd(host, f"machineinv {cb_part}")[1] == cmd(cli, f"machineinv {cb_part}")[1],
-              f"{cmd(host, f'machineinv {cb_part}')[1]} / {cmd(cli, f'machineinv {cb_part}')[1]}")
+        check("fabrication : inventaire de l'etabli identique partout", cmd(host, f"machineinv {cb_sid}")[1] == cmd(cli, f"machineinv {cb_sid}")[1],
+              f"{cmd(host, f'machineinv {cb_sid}')[1]} / {cmd(cli, f'machineinv {cb_sid}')[1]}")
         # the client's own character works the bench (a job: the host's game makes it craft)
-        log("client works the bench", cmd(cli, f"objreq {own} 87 {cb_part}"))
+        log("client works the bench", cmd(cli, f"workreq {own} {cb_sid}"))
         time.sleep(30)
-        ok, last = machine_both(host, cli, cb_part, "crafting bench worked")
+        ok, last = machine_both(host, cli, cb_sid, "crafting bench worked")
         check("fabrication : le perso du client travaille l'etabli, vu pareil partout", ok, last[2] if len(last) > 2 else last)
-        log("client removes the order", cmd(cli, f"machinereq {cb_part} removecraft 0"))
+        log("client removes the order", cmd(cli, f"machinereq {cb_sid} removecraft 0"))
         time.sleep(4)
-        ok, last = machine_both(host, cli, cb_part, "crafting bench order removed")
+        ok, last = machine_both(host, cli, cb_sid, "crafting bench order removed")
         check("fabrication : ordre retire par le client, retire partout", ok, last[2] if len(last) > 2 else last)
     else:
         check("fabrication : un etabli et un objet a fabriquer", False, f"bench {cb_sid} ok={cb_ok}, crafts {len(craftable)}")
@@ -5394,42 +5466,21 @@ def exp_research(host, cli):
     log("skills before:", stats0[0][:80], "| after host:", sh[:80], "client:", sc[:80])
     check("fabrication : competences du perso du client identiques partout", sh == sc, f"{sh[:120]} / {sc[:120]}")
 
-    # ---- mine: three characters, the host's and the client's, work the same iron node
-    log("objects around (host):", cmd(host, f"objnear {own} 3000")[1][:300])
-    r = cmd(cli, f"objreq {own} 87 Ressource_Fer")
-    log("client's character mines:", r)
-    others = [i for i in range(3) if i != own][:2]
-    for i in others:
-        log("host's character", i, "mines:", cmd(host, f"minereq {i}"))
-    time.sleep(45)
-    ok, last = machine_both(host, cli, "Fer", "mine", floats=("prog", "prod"), tol=0.3)
-    mh = mfields(cmd(host, "machine Fer")[1])
-    check("mine : nombre de mineurs identique partout", ok, last[2] if len(last) > 2 else last)
-    check("mine : trois mineurs (hote et client melanges)", mh.get("ops", "").startswith("3/"), mh.get("ops"))
-    ih = cmd(host, "machineinv Fer")[1]
-    time.sleep(2)
-    ic = cmd(cli, "machineinv Fer")[1]
-    ih2 = cmd(host, "machineinv Fer")[1]
-    check("mine : meme minerai produit partout", ic in (ih, ih2), f"{ih} / {ic}")
-    if others:
-        log("host's character", others[0], "stops mining", cmd(host, f"moverel {others[0]} 200 0"))
-        time.sleep(8)
-        ok, last = machine_both(host, cli, "Fer", "mine after a worker left", floats=("prog", "prod"), tol=0.3)
-        mh2 = mfields(cmd(host, "machine Fer")[1])
-        check("mine : un mineur retire, vu partout", ok and mh2.get("ops") != mh.get("ops"), f"{mh.get('ops')} -> {mh2.get('ops')} | {last[2] if len(last) > 2 else ''}")
-
     # ---- power: a generator, a battery and a consumer
     built = {}
-    for sid, name, dx, dz, label in ((gen_sid, gen_name, 0, 90, "generator"), (bat_sid, bat_name, 40, 90, "battery"), (light_sid, light_name, -40, 90, "light")):
-        if sid:
-            built[label] = (name or "").split("_")[0] if sandbox_building(host, sid, dx, dz, label) else None
+    if sandbox_building(host, WIND_GENERATOR, 0, 90, "generator"):
+        built["generator"] = WIND_GENERATOR
+    if sandbox_building(host, BATTERY_BANK, 40, 90, "battery"):
+        built["battery"] = BATTERY_BANK
+    for sid in LIGHTS:
+        if sandbox_building(host, sid, -40, 90, "light"):
+            built["light"] = sid
+            break
     gen_part = built.get("generator")
-    check("energie : un generateur pose dans le bac a sable", bool(gen_part), gen_sid)
+    check("energie : un generateur pose dans le bac a sable", bool(gen_part), WIND_GENERATOR)
     if gen_part:
         time.sleep(6)
         for label, part in built.items():
-            if not part:
-                continue
             ok, last = machine_both(host, cli, part, label)
             check(f"energie : {label} identique partout (sortie, charge, consommation)", ok, last[2] if len(last) > 2 else last)
         th, tc = mfields(cmd(host, f"machine {gen_part}")[1]).get("town"), mfields(cmd(cli, f"machine {gen_part}")[1]).get("town")
@@ -5444,7 +5495,7 @@ def exp_research(host, cli):
         check("energie : generateur coupe par le client, coupe partout", not (fh & 1) and not (fc & 1), f"host {fh} client {fc}")
         time.sleep(4)
         for label, part in built.items():
-            if part and label != "generator":
+            if label != "generator":
                 ok, last = machine_both(host, cli, part, label + " after the generator went off")
                 check(f"energie : {label} apres la coupure, identique partout", ok, last[2] if len(last) > 2 else last)
     summary()

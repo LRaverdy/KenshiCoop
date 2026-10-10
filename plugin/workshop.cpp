@@ -758,8 +758,8 @@ uint32_t Fnv(const std::string& s, uint32_t h = 2166136261u) {
     return h;
 }
 using FnCheckReq = bool (*)(void*, void*, bool, bool);
-bool CallCheckReq(void* r, void* gd, bool& out) {
-    __try { out = reinterpret_cast<FnCheckReq>(kenshi::FnAddr(kenshi::FnResearchCheckRequirements))(r, gd, false, false); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+bool CallCheckReq(void* r, void* gd, bool checkCost, bool& out) {
+    __try { out = reinterpret_cast<FnCheckReq>(kenshi::FnAddr(kenshi::FnResearchCheckRequirements))(r, gd, false, checkCost); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 using FnProgressCall = void (*)(void*, float);
 bool CallProgress(void* r, float amount) {
@@ -887,9 +887,11 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
         if (!w.ReadResearch(st)) return "err no research";
         return std::string("ok ") + (std::binary_search(st.finished.begin(), st.finished.end(), sid) ? "1" : "0");
     }
-    if (cmd == "researchpick") {   // techs that can be researched now (requirements met, cost not checked)
+    if (cmd == "researchpick") {   // researchpick [n] [cost]: techs whose requirements are met here ("cost": and whose cost the benches hold)
         size_t n = 5;
-        in >> n;
+        std::string opt;
+        in >> n >> opt;
+        const bool checkCost = opt == "cost";
         if (!r) return "err no research";
         kc::ResearchState st;
         w.ReadResearch(st);
@@ -903,13 +905,38 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
             bool queued = false;
             for (auto& q : st.queue) queued |= q.sid == sid;
             bool ok = false;
-            if (queued || !CallCheckReq(r, gd, ok) || !ok) continue;
+            if (queued || !CallCheckReq(r, gd, checkCost, ok) || !ok) continue;
             std::string name = w.TemplateName(sid);
             std::replace(name.begin(), name.end(), ' ', '_');
             out += " " + sid + "=" + name;
             if (++found >= n) break;
         }
         return out;
+    }
+    if (cmd == "workreq") {   // workreq <squadIndex> <template sid>: that member alone works the instance nearest to squad member 0 (OPERATE_MACHINERY, as a right click)
+        size_t idx = 0;
+        std::string sid;
+        in >> idx >> sid;
+        kc::Vec3 anchor, p;
+        if (!squadAt(0, anchor)) return "err no squad";
+        kenshi::Character* c = squadAt(idx, p);
+        if (!c) return "err no such squad member";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(anchor, 4000.0f, objs);
+        void* best = nullptr;
+        float bestD = 1e30f;
+        kc::Vec3 bp;
+        for (void* o : objs) {
+            std::string s2;
+            kc::Vec3 op;
+            if (!IsBuilding(o) || !kenshi::ObjectTemplate(o, s2) || s2 != sid || !kenshi::ObjectPosition(o, op)) continue;
+            const float d = Dist(op, anchor);
+            if (d < bestD) { bestD = d; best = o; bp = op; }
+        }
+        if (!best) return "err no " + sid + " within 4000";
+        bool ok = false;
+        kenshi::WithSelection(c, [&] { ok = kenshi::CallNewPlayerTaskOn(87, best, bp, kenshi::FurnitureParent(best)); });
+        return (ok ? "ok " : "err ") + w.TemplateName(sid) + " at " + std::to_string(int(Dist(bp, p)));
     }
     if (cmd == "researchreq") {   // the research window's add / remove (client: becomes a request)
         std::string what, sid;
