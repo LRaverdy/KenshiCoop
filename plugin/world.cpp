@@ -43,6 +43,8 @@ void KenshiWorld::BeginFrame(bool live) {
     live_ = live;
     squad_.clear();
     resolved_.clear();
+    bySerial_.clear();
+    bySerialBuilt_ = false;
     if (!live) {   // menus and loading screens: nothing in the world may be touched
         wasReady_ = false;
         return;
@@ -75,7 +77,12 @@ void KenshiWorld::BeginFrame(bool live) {
         // does not have"), the merchant of an open trade window with them (window closed, sale lost).
         resolved_.clear();
         kenshi::ResetLookupCaches();
-        for (auto a = alias_.begin(); a != alias_.end();) a = kenshi::ResolveObject(a->second) ? std::next(a) : alias_.erase(a);
+        for (auto a = alias_.begin(); a != alias_.end();) {
+            kc::Handle moved;
+            if (kenshi::ResolveObject(a->second)) ++a;
+            else if (FindMoved(a->second, moved)) { a->second = moved; ++a; }   // moved to another squad meanwhile
+            else a = alias_.erase(a);
+        }
         pendingLoot_.clear();
         strangerSince_.clear();
         lastTarget_.clear();
@@ -96,6 +103,8 @@ void KenshiWorld::ResetWorldBound() {
     lastTarget_.clear();
     fallPrep_.clear();
     fellAt_.clear();
+    relaidAt_.clear();
+    relaidCount_.clear();
     lastDest_.clear();
     postureSince_.clear();
     postureFixed_.clear();
@@ -413,13 +422,68 @@ bool KenshiWorld::Exists(const kc::Handle& h) {
         // the alias must go too, or Spawn and Reconcile would skip this character forever.
         // ResolveObject: an alias may name any object, not only a character.
         if (!kenshi::ResolveObject(a->second)) {
+            // Not gone: the local game moved our copy to another squad, which gave it another handle
+            // (a death puts it in the dead squad). Recreating it there made a new body every few
+            // seconds (54 copies of one dead squad member in the 20-minute soak).
+            kc::Handle moved;
+            if (FindMoved(a->second, moved)) {
+                Log("our copy %s of the host's %s changed squads here (now %s): followed", KeyOf(a->second).c_str(), KeyOf(h).c_str(),
+                    KeyOf(moved).c_str());
+                LocalRehandled(a->second, moved);
+                return true;
+            }
             Log("stand-in %s for the host's %s is gone here: it can be recreated", KeyOf(a->second).c_str(), KeyOf(h).c_str());
             alias_.erase(a);
             resolved_.erase(h);
             return false;
         }
     }
-    return Find(h) != nullptr;
+    if (Find(h)) return true;
+    // Our copy still under the host's old handle, moved by the local game before the host's new
+    // handle for it arrived (its death applied here first): the host's handle now names it.
+    kc::Handle moved;
+    if (client_ && FindMoved(h, moved)) {
+        Log("our copy of the host's %s changed squads here (now %s): followed", KeyOf(h).c_str(), KeyOf(moved).c_str());
+        alias_[h] = moved;
+        resolved_.erase(h);
+        if (auto it = squad_.find(h); it != squad_.end()) { squad_[moved] = it->second; squad_.erase(it); }
+        return Find(h) != nullptr;
+    }
+    return false;
+}
+
+bool KenshiWorld::FindMoved(const kc::Handle& stale, kc::Handle& now) {
+    if (!stale.valid() || stale.serial == 0) return false;
+    if (!bySerialBuilt_) {   // once per frame: every character the game knows (squads, active, bodies)
+        bySerialBuilt_ = true;
+        std::vector<kenshi::Character*> all;
+        for (int pass = 0; pass < 3; ++pass) {
+            if (pass == 0) kenshi::PlayerCharacters(all);
+            else if (pass == 1) kenshi::ActiveCharacters(all);
+            else kenshi::DeadBodies(all);
+            for (kenshi::Character* c : all) {
+                kc::Handle h;
+                if (kenshi::GetHandle(c, h) && h.valid()) bySerial_.emplace(h.serial, h);
+            }
+        }
+    }
+    // The handle keeps its type and serial when the game moves a character to another squad; only
+    // the squad part changes. Exactly one candidate, or none is taken.
+    kc::Handle found;
+    int n = 0;
+    auto [b, e] = bySerial_.equal_range(stale.serial);
+    for (auto it = b; it != e; ++it) {
+        const kc::Handle& h = it->second;
+        if (h == stale || h.type != stale.type || h == found) continue;
+        if (h.container == stale.container && h.containerSerial == stale.containerSerial) continue;
+        found = h;
+        ++n;
+    }
+    if (n != 1 || !kenshi::Resolve(found)) return false;
+    // never one already standing in for another host character
+    for (const auto& [host, local] : alias_) if (local == found) return false;
+    now = found;
+    return true;
 }
 
 void KenshiWorld::Reconcile(const std::vector<kc::Handle>& known, const std::vector<kc::MissingChar>& missing, double now,
@@ -612,12 +676,18 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         // minutes in the far-zone test): once a player comes near, it is stood up, and the posture
         // code above puts it on the host's spot (ReadyToFall) and lays it down again. Never a dead
         // body, never more than once every 5 s.
-        constexpr float kBodyOff = 25.0f, kBodySeen = 300.0f;
+        // 5 units, not 25: squad members knocked out in a fight lay 11 and 17 units from the host's
+        // bodies for the rest of the 20-minute soak (they fell where our copy was, mid-blow, before
+        // the move to the host's spot took), and died there, where nothing can move them any more.
+        // At most 3 times while it stays down: a body that keeps landing off is not stood up forever.
+        constexpr float kBodyOff = 5.0f, kBodySeen = 300.0f;
+        constexpr int kMaxRelays = 3;
         if (hostDown && localDown && !hostDead && !kenshi::IsDead(c) && kenshi::IsRagdoll(c) && Dist(local, target.pos) > kBodyOff &&
-            NearestSquadDistance(local) < kBodySeen) {
+            NearestSquadDistance(local) < kBodySeen && relaidCount_[h] < kMaxRelays) {
             double& at = relaidAt_[h];
             if (now - at > 5.0) {
                 at = now;
+                ++relaidCount_[h];
                 HostCallScope scope;
                 kenshi::SetRagdoll(c, false);
                 postureFixed_[h] = 0;
@@ -626,6 +696,7 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         }
         return;
     }
+    relaidCount_.erase(h);   // standing again: a next fall may be put right again
 
     const float err = Dist(local, target.pos);
     // Far from our squad (beyond what the player sees) the local game hardly runs a character and
@@ -1018,6 +1089,7 @@ void KenshiWorld::ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& 
         lastDest_.erase(dropped);
         postureFixed_.erase(dropped);
         relaidAt_.erase(dropped);
+        relaidCount_.erase(dropped);
         Log("carry: %sputs a body down as on the host; it falls where the host's lies (ragdoll %d)", carry ? "swaps and " : "", body ? int(kenshi::IsRagdoll(body)) : -1);
     }
     if (carry && who && (!carrying || kenshi::Resolve(local) != who)) {

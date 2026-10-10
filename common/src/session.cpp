@@ -145,6 +145,8 @@ void Session::Leave() {
     dlFiles_.shrink_to_fit();
     dlComplete_ = importStarted_ = false;
     haveTime_ = false;
+    hostClock_.Reset();
+    lastClockTrim_ = 0;
     haveMoney_ = false;
     moneySent_ = false;
     dialog_ = DialogView{};
@@ -2032,7 +2034,20 @@ void Session::ClientTick(double now, bool live) {
     else if (now - lastLive_ > cfg_.worldLostTimeout) { Fail("world unloaded"); return; }
     if (!live) return;
 
-    if (haveTime_) world_.SetTime(hostTime_);
+    if (haveTime_) {
+        // the host's pause and speed, the speed trimmed a few percent while our clock is off the host's
+        world_.SetTime(hostClock_.Target(now, world_.GetTime().gameHours));
+        if (hostClock_.trim() != lastClockTrim_) {
+            char b[160];
+            if (hostClock_.trim() == 0.0f)
+                snprintf(b, sizeof(b), "clock: back on the host's (%.4f h apart): host speed again", hostClock_.error());
+            else
+                snprintf(b, sizeof(b), "clock: %.4f h %s the host's: running %+.0f %%", std::fabs(hostClock_.error()),
+                         hostClock_.error() > 0 ? "behind" : "ahead of", hostClock_.trim() * 100.0f);
+            log_(b);
+            lastClockTrim_ = hostClock_.trim();
+        }
+    }
     for (const Handle& h : despawnQueue_) world_.Despawn(h);
     despawnQueue_.clear();
     if (controllableDirty_) PushControllable();
@@ -2604,7 +2619,11 @@ void Session::ClientPacket(Msg type, Reader& r) {
     }
     case Msg::TimeState: {
         TimeState t;
-        if (Decode(r, t)) { hostTime_ = t; haveTime_ = true; }
+        if (Decode(r, t)) {
+            hostTime_ = t;
+            haveTime_ = true;
+            hostClock_.OnHost(t, clock_(), rttMs_ / 2000.0);
+        }
         break;
     }
     case Msg::Weather: {

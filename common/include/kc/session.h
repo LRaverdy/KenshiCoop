@@ -21,6 +21,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "kc/clock.h"
 #include "kc/net.h"
 #include "kc/protocol.h"
 
@@ -789,6 +790,8 @@ private:
     // client: latest host time, applied on live ticks
     bool haveTime_ = false;
     TimeState hostTime_;
+    ClockSync hostClock_;   // client: our clock kept on the host's (speed trimmed a little while apart)
+    float lastClockTrim_ = 0;
 
     // client clock sync: hostTime ~= localTime + offset_
     double offset_ = 0;

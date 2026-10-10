@@ -215,6 +215,9 @@ public:
     kenshi::Character* Find(const kc::Handle& h);   // squad first, then any live character
     kenshi::Character* FindSquad(const kc::Handle& h) const;
     void LocalRehandled(const kc::Handle& before, const kc::Handle& after);
+    // client: the character that had the handle `stale` here and now has another one (the local
+    // game moved it to another squad on its own: a death puts it in the dead squad)
+    bool FindMoved(const kc::Handle& stale, kc::Handle& now);
     // client: the host handle a local stand-in replaces (or `local` itself)
     kc::Handle HostHandleOf(const kc::Handle& local) const {
         for (const auto& [host, l] : alias_) if (l == local) return host;
@@ -295,6 +298,9 @@ private:
     std::unordered_map<kc::Handle, FallPrep, HandleHash> fallPrep_;   // client: moving into place before a fall
     std::unordered_map<kc::Handle, double, HandleHash> fellAt_;      // client: when we made it fall
     std::unordered_map<kc::Handle, double, HandleHash> relaidAt_;    // client: when a body lying away from the host's was stood up to fall again
+    std::unordered_map<kc::Handle, int, HandleHash> relaidCount_;    // client: how often it was, while it stays down
+    std::unordered_multimap<uint32_t, kc::Handle> bySerial_;          // this frame's characters by handle serial (FindMoved)
+    bool bySerialBuilt_ = false;
     std::unordered_set<kc::Handle, HandleHash> carriedHere_;
     std::unordered_map<kc::Handle, kc::CharBounties, HandleHash> hostBounties_;   // client: the host's, shown, not written
     struct HandTool { std::string sid; void* item = nullptr; kenshi::Character* who = nullptr; };

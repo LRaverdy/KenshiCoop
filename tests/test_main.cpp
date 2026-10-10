@@ -2173,8 +2173,51 @@ static void TestManyPlayers() {
         for (uint32_t i = 1; i <= 10; ++i) CHECK(std::fabs(hw.chars[k * 10 + i].pos.z - (50.0f + k)) < 1e-3f);
 }
 
+// The client's clock follows the host's: a client behind (or ahead) runs a few percent faster (or
+// slower) until both read the same hours; in step, the host's speed is left as it is.
+static void TestClockSync() {
+    struct Run { double behind; float speed; };
+    for (Run run : {Run{0.008, 2.0f}, Run{-0.006, 3.0f}, Run{0.0, 1.0f}, Run{0.0, 3.0f}}) {
+        ClockSync cs;
+        const double rate = 0.0091, delay = 0.06, dt = 1.0 / 30;
+        double host = 40.0, mine = 40.0 - run.behind, nextSend = 0;
+        std::deque<std::pair<double, TimeState>> inFlight;
+        bool everTrimmed = false;
+        float clientSpeed = run.speed;
+        for (double t = 0; t < 90.0; t += dt) {
+            host += rate * run.speed * dt;
+            mine += rate * clientSpeed * dt;
+            if (t >= nextSend) { nextSend = t + 0.5; inFlight.push_back({t + delay, TimeState{run.speed, false, host}}); }
+            while (!inFlight.empty() && inFlight.front().first <= t) { cs.OnHost(inFlight.front().second, t, delay); inFlight.pop_front(); }
+            if (!cs.have()) continue;   // nothing from the host yet: the local speed stays
+            const TimeState want = cs.Target(t, mine);
+            CHECK(!want.paused);
+            clientSpeed = want.speed;
+            everTrimmed |= cs.trim() != 0.0f;
+            CHECK(std::fabs(clientSpeed - run.speed) <= run.speed * 0.051f);
+        }
+        if (std::fabs(host - mine) >= 0.001 || cs.trim() != 0.0f)
+            std::printf("    clock run %.3f h x%.0f: still %.4f h apart, trim %.2f, rate %.5f\n", run.behind, run.speed, host - mine, cs.trim(), cs.rate());
+        CHECK(std::fabs(host - mine) < 0.001);
+        CHECK(cs.trim() == 0.0f);
+        CHECK(everTrimmed == (run.behind != 0.0));
+        CHECK(std::fabs(cs.rate() - rate) < rate * 0.05);
+        // paused: the host's pause and speed, never a trim
+        cs.OnHost(TimeState{run.speed, true, host}, 100.0, delay);
+        const TimeState p = cs.Target(100.1, mine - 0.05);
+        CHECK(p.paused && p.speed == run.speed && cs.trim() == 0.0f);
+    }
+    // far apart (another world loaded): not drift, left alone
+    ClockSync cs;
+    cs.OnHost(TimeState{1.0f, false, 10.0}, 0.0, 0.0);
+    cs.OnHost(TimeState{1.0f, false, 10.03}, 3.0, 0.0);
+    CHECK(cs.Target(3.0, 5.0).speed == 1.0f && cs.trim() == 0.0f);
+    std::puts("clock sync ok");
+}
+
 int main() {
     TestWire();
+    TestClockSync();
     TestFuzz();
     TestJoinFromMenu();
     TestSessionReplication();
