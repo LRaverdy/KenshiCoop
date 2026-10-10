@@ -197,6 +197,7 @@ public:
     virtual void RefreshTradeWindow(const Handle& trader) { (void)trader; }
     virtual bool OpenTradeWindow(const Handle& looter, const Handle& trader) { (void)looter; (void)trader; return false; }
     virtual bool TradeWindowBusy() { return false; }   // client: an item is on the mouse (do not reopen the window now)
+    virtual int TradeWindowStock() { return -1; }      // client: stacks the open trade window's merchant side shows (-1: no window)
     virtual void SetMoneyOf(const Handle& who, int32_t money) { (void)who; (void)money; }
     virtual std::string CharacterNameOf(const Handle& h) { (void)h; return {}; }
     // ---- lot B: factions. Host: the player faction's relations with every faction (both ways) and
@@ -644,6 +645,8 @@ private:
         int32_t traderMoney = 0;
         bool pending = false, open = false, refresh = false;
         double pendingSince = 0;
+        double checkAt = 0;   // when to check that the window shows the counters' stock (0: checked)
+        int reopens = 0;      // times it was opened again because it showed none of it
     };
     ClientTrade trade_;
     bool IsTradeCounter(uint32_t netId) const;

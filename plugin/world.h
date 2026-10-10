@@ -93,6 +93,7 @@ public:
     void RefreshTradeWindow(const kc::Handle& trader) override;
     bool OpenTradeWindow(const kc::Handle& looter, const kc::Handle& trader) override;
     bool TradeWindowBusy() override { return kenshi::MouseHoldsItem(); }
+    int TradeWindowStock() override;
     void SetMoneyOf(const kc::Handle& who, int32_t money) override;
     std::string CharacterNameOf(const kc::Handle& h) override;
     // ---- lot B: factions (plugin/factions.cpp)

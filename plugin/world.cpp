@@ -69,12 +69,13 @@ void KenshiWorld::BeginFrame(bool live) {
         }
         lastSquadPtrs_ = std::move(now);
         // Same world, but the game ran frames we did not see (it opened a trade window, loaded a
-        // zone): handle lookups and stand-ins are matched again. Keeping the stand-ins across such a
-        // frame (fix G6) made a client's trade window lose the shop's stock and crash in
-        // ShopTraderInventory (bisected: trade 13/13 before G6, crash after, 12/13 with this back).
+        // zone): handle lookups are made again, and a stand-in whose local object is gone is
+        // forgotten. A stand-in still there keeps its alias: forgetting them all (as after a reload)
+        // made each one a stranger again, removed 5 s later ("removed N local character(s) the host
+        // does not have"), the merchant of an open trade window with them (window closed, sale lost).
         resolved_.clear();
         kenshi::ResetLookupCaches();
-        alias_.clear();
+        for (auto a = alias_.begin(); a != alias_.end();) a = kenshi::ResolveObject(a->second) ? std::next(a) : alias_.erase(a);
         pendingLoot_.clear();
         strangerSince_.clear();
         lastTarget_.clear();
@@ -887,6 +888,11 @@ void KenshiWorld::RefreshTradeWindow(const kc::Handle& trader) {
 
 bool KenshiWorld::OpenTradeWindow(const kc::Handle& looter, const kc::Handle& trader) {
     return kenshi::OpenTradeWindow(Find(looter), Find(trader));
+}
+
+int KenshiWorld::TradeWindowStock() {
+    std::vector<kenshi::WindowItem> items;
+    return kenshi::TradeWindowItems(true, items) ? int(items.size()) : -1;
 }
 
 std::string KenshiWorld::CharacterNameOf(const kc::Handle& h) {
