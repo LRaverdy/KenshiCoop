@@ -24,6 +24,7 @@ struct HookView {
     bool client = false;   // we are a client: the host simulates everything
     std::unordered_set<const void*> squadForeign;  // squad members this machine may not command
     std::unordered_set<kc::Handle, HandleHash> controllable;  // handles this machine may command
+    std::unordered_set<kc::Handle, HandleHash> shared;        // nobody's characters: their AI settings are anyone's
     std::unordered_set<const void*> replicated;    // client: characters driven by the host's state
     std::unordered_map<const void*, kc::Vec3> facing;   // client: CharMovement -> where the host's character faces
     struct AnimTarget {
@@ -268,6 +269,27 @@ public:
     bool BeginWorldImport(const std::vector<kc::WorldFile>& files, std::string* err) override;
     void SetRole(bool client, bool active) override;
     void SetControllable(const std::vector<kc::Handle>& handles) override;
+    // ---- squad window and AI settings (plugin/squads.cpp)
+    void ReadSquadViews(std::vector<SquadView>& out) override;
+    bool SquadMove(const kc::Handle& who, const kc::Handle& squad, int index, bool swap, const std::string& name, kc::Handle& created) override;
+    bool SquadCreate(const std::string& name, kc::Handle& created) override;
+    bool SquadRename(const kc::Handle& squad, const std::string& name) override;
+    bool SquadOrder(const kc::Handle& squad, int index) override;
+    bool SquadRemove(const kc::Handle& squad) override;
+    bool RenameCharacter(const kc::Handle& h, const std::string& name) override;
+    void ReadLocalSquads(std::vector<SquadView>& out) override;
+    void ApplySquadViews(const std::vector<SquadView>& host) override;
+    void RemoveLocalSquad(uint64_t key) override;
+    void ApplyCharacterName(const kc::Handle& h, const std::string& name) override;
+    bool ReadCharacterName(const kc::Handle& h, std::string& out) override;
+    void TakeLocalSquadRequests(std::vector<LocalSquadRequest>& out) override;
+    void SetShared(const std::vector<kc::Handle>& handles) override;
+    bool OrderShared(const kc::Handle& h, const kc::Command& c) override;
+    bool ReadJobList(const kc::Handle& h, std::vector<kc::JobEntry>& jobs) override;
+    void ApplyJobList(const kc::Handle& h, const std::vector<kc::JobEntry>& jobs) override;
+    // Called from hooks (client): a portrait dropped in the squad window, asked of the host.
+    void QueueSquadRequest(kenshi::Character* actor, void* targetSquad, int index);
+    kc::Handle HostSquadId(void* localSquad) const;   // client: the host squad ours is matched to (invalid: none)
 
     void SetGameBuild(uint64_t b) { build_ = b; }
     kenshi::Character* Find(const kc::Handle& h);   // squad first, then any live character
@@ -354,6 +376,11 @@ private:
     std::unordered_map<kc::Handle, kenshi::Character*, HandleHash> squad_;      // this frame's squad
     std::unordered_map<kc::Handle, kenshi::Character*, HandleHash> resolved_;   // this frame's lookups
     std::unordered_set<kc::Handle, HandleHash> controllable_;
+    std::unordered_set<kc::Handle, HandleHash> shared_;              // nobody's characters (session)
+    std::unordered_map<uint64_t, kc::Handle> squadIds_;             // client: our Platoon (its handle, packed) -> the host squad
+    std::unordered_set<uint64_t> squadAwaiting_;                    // client: our new squads a portrait was dropped on
+    std::vector<LocalSquadRequest> squadReqs_;                      // client: from the squad window, for the session
+    bool sharedOrder_ = false;                                      // host: Order runs a settings order on a nobody's character
     // client: host handle -> handle of the local stand-in we created for it
     std::unordered_map<kc::Handle, kc::Handle, HandleHash> alias_;
     std::unordered_map<kc::Handle, double, HandleHash> strangerSince_;   // client: local-only NPCs, first seen

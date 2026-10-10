@@ -552,6 +552,7 @@ const char* TaskLabel(int task) {
     case 55: return "recruit";
     case 57: return "repair robot";
     case 58: return "medic (job)";
+    case 105: case 142: case 148: return "rescue (job)";
     case 60: case 61: return "first aid (robot)";
     case 68: case 225: return "carry someone";
     case 69: return "put down";
@@ -611,7 +612,7 @@ const char* StandingOrderLabel(int order) {
     case 12: return "hold position";
     case 13: return "passive";
     case 14: return "taunt";
-    case 15: return "chase";
+    case 15: return "jobs (permanence)";
     case 16: return "group speed";
     case 17: return "ranged";
     default: return "?";
@@ -664,6 +665,8 @@ bool TaskTargetAllowed(TaskVia via, int task, uint32_t t, std::string* why) {
     case 25: case 57: case 60: case 61: case 249: case 250: case 269:   // first aid, repair a robot, splint, heal legs
         return living ? true : fail("a living character");
     case 58:   // medic (job)
+        return none || living ? true : fail("no subject or a living character");
+    case 105: case 142: case 148:   // find and rescue (the orders panel's RESCUE button: 148)
         return none || living ? true : fail("no subject or a living character");
     case 26:   // loot: a body, a container, or a merchant standing there (the game's trade)
         return other || cont ? true : fail("a character or a container");
@@ -799,6 +802,9 @@ const MessageRule kMessageRules[] = {
     {Msg::Research, AuthRole::HostOnly, AuthSubject::None, "research"},
     {Msg::Machines, AuthRole::HostOnly, AuthSubject::None, "machines"},
     {Msg::Result, AuthRole::HostOnly, AuthSubject::None, "result"},
+    {Msg::SquadState, AuthRole::HostOnly, AuthSubject::None, "squad state"},
+    {Msg::SquadRequest, AuthRole::InGame, AuthSubject::OwnCharacter, "squad request"},
+    {Msg::JobState, AuthRole::HostOnly, AuthSubject::None, "job state"},
 };
 } // namespace
 const char* MsgName(Msg type) {
@@ -870,6 +876,9 @@ const char* MsgName(Msg type) {
     case Msg::Machines: return "Machines";
     case Msg::MachineRequest: return "MachineRequest";
     case Msg::Result: return "Result";
+    case Msg::SquadState: return "SquadState";
+    case Msg::SquadRequest: return "SquadRequest";
+    case Msg::JobState: return "JobState";
     }
 #pragma warning(pop)
     return nullptr;

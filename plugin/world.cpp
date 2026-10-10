@@ -250,6 +250,10 @@ void KenshiWorld::EndFrame() {
             v->controllable.insert(a != alias_.end() ? a->second : h);
         }
         for (auto& [h, c] : squad_) if (!v->controllable.count(h)) v->squadForeign.insert(c);
+        for (const kc::Handle& h : shared_) {
+            auto a = alias_.find(h);
+            v->shared.insert(a != alias_.end() ? a->second : h);
+        }
     }
     clientActive_.store(active_ && client_, std::memory_order_relaxed);
     view_.store(std::shared_ptr<const HookView>(std::move(v)), std::memory_order_release);
@@ -1450,7 +1454,7 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
     // A client's order only ever moves that client's characters: never one the host commands (a
     // stale handle after a squad change once made a player's orders move the host's character).
     // The session checked that the actor is that player's (Session::AdmitActor).
-    if (!client_) {
+    if (!client_ && !sharedOrder_) {   // (a nobody's character's settings: OrderShared, checked by the session)
         auto v = View();
         if (!v->squadForeign.count(c)) {
             Log("refused: client order not run, the character its actor resolves to is not another player's (the host's?)");

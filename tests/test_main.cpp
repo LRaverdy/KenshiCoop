@@ -51,6 +51,9 @@ struct FakeChar {
     std::vector<ItemState> items;
     CaptiveState cap;      // lot D: cage, shackles, slavery (netId unused)
     std::vector<int32_t> jobs;   // fix G5: its job list (Tâches panel), by kind
+    std::vector<JobEntry> jobList;   // the same with targets (JobState)
+    bool passive = false;        // the squad bar's PASSIVE toggle
+    std::string name;            // empty: "C<serial>"
     bool animal = false;
     std::string bagSid;          // the backpack it wears (empty: none); its handle serial is local
     uint32_t bagSerial = 0;
@@ -280,6 +283,7 @@ struct FakeWorld : IWorld {
                 return false;
             }
             ++tasksRun;
+            if (c.via == TaskVia::SetOrder && c.task == 13) it->second.passive = c.shift ? c.add : !it->second.passive;
         }
         orderedSerials.push_back(h.serial);
         if (c.kind == CommandKind::MoveTo) it->second.dest = c.pos;
@@ -593,6 +597,100 @@ struct FakeWorld : IWorld {
             if (left[j] > 0) { --left[j]; kept.push_back(j); }
         it->second.jobs = kept;
     }
+    // ---- squad window: squads by id (host: the game's; client: ours, mapped to the host's)
+    struct FSquad { Handle id; std::string name; std::vector<uint32_t> members; };
+    std::vector<FSquad> squads;
+    std::map<uint32_t, Handle> squadIds;   // client: our squad (id serial) -> the host's
+    std::vector<LocalSquadRequest> squadReqs;
+    std::vector<Handle> sharedSet;
+    uint32_t nextSquad = 700;
+    int sharedOrders = 0;
+    static Handle SquadId(uint32_t s) { Handle h; h.type = 9; h.index = s; h.serial = s; return h; }
+    FSquad* SquadBy(const Handle& id) { for (auto& q : squads) if (q.id == id) return &q; return nullptr; }
+    void TakeOut(uint32_t serial) { for (auto& q : squads) q.members.erase(std::remove(q.members.begin(), q.members.end(), serial), q.members.end()); }
+    std::string NameOf(uint32_t s) { auto it = chars.find(s); return it == chars.end() ? "" : it->second.name.empty() ? "C" + std::to_string(s) : it->second.name; }
+    void ReadSquadViews(std::vector<SquadView>& out) override {
+        out.clear();
+        for (auto& q : squads) {
+            SquadView v; v.id = q.id; v.key = q.id.serial; v.name = q.name;
+            for (uint32_t m : q.members) v.members.push_back(Hc(m));
+            out.push_back(v);
+        }
+    }
+    bool SquadMove(const Handle& who, const Handle& squad, int index, bool swap, const std::string& name, Handle& created) override {
+        FSquad* t = squad.valid() ? SquadBy(squad) : nullptr;
+        if (squad.valid() && !t) return false;
+        if (!t) { squads.push_back({SquadId(nextSquad++), name, {}}); t = &squads.back(); created = t->id; }
+        auto& m = t->members;
+        if (swap) {
+            auto a = std::find(m.begin(), m.end(), who.serial);
+            if (a == m.end() || index >= int(m.size())) return false;
+            std::iter_swap(a, m.begin() + index);
+            return true;
+        }
+        TakeOut(who.serial);
+        m.insert(m.begin() + std::min<int>(index, int(m.size())), who.serial);
+        return true;
+    }
+    bool SquadCreate(const std::string& name, Handle& created) override { squads.push_back({SquadId(nextSquad++), name, {}}); created = squads.back().id; return true; }
+    bool SquadRename(const Handle& id, const std::string& name) override { FSquad* q = SquadBy(id); if (q) q->name = name; return q != nullptr; }
+    bool SquadOrder(const Handle& id, int index) override {
+        auto it = std::find_if(squads.begin(), squads.end(), [&](const FSquad& q) { return q.id == id; });
+        if (it == squads.end()) return false;
+        FSquad q = *it; squads.erase(it);
+        squads.insert(squads.begin() + std::min<int>(index, int(squads.size())), q);
+        return true;
+    }
+    bool SquadRemove(const Handle& id) override {
+        auto it = std::find_if(squads.begin(), squads.end(), [&](const FSquad& q) { return q.id == id && q.members.empty(); });
+        if (it == squads.end()) return false;
+        squads.erase(it);
+        return true;
+    }
+    bool RenameCharacter(const Handle& h, const std::string& name) override { auto it = chars.find(h.serial); if (it == chars.end()) return false; it->second.name = name; return true; }
+    bool ReadCharacterName(const Handle& h, std::string& out) override { out = NameOf(h.serial); return !out.empty(); }
+    void ApplyCharacterName(const Handle& h, const std::string& name) override { if (chars.count(h.serial)) chars[h.serial].name = name; }
+    void ReadLocalSquads(std::vector<SquadView>& out) override {
+        out.clear();
+        for (auto& q : squads) {
+            SquadView v; v.key = q.id.serial; v.name = q.name;
+            if (auto it = squadIds.find(q.id.serial); it != squadIds.end()) v.id = it->second;
+            for (uint32_t m : q.members) v.members.push_back(Hc(m));
+            out.push_back(v);
+        }
+    }
+    void ApplySquadViews(const std::vector<SquadView>& host) override {   // as KenshiWorld, simplified
+        std::vector<FSquad> next;
+        std::set<uint32_t> used;
+        for (const auto& hv : host) {
+            FSquad* mine = nullptr;
+            for (auto& q : squads) if (!used.count(q.id.serial) && squadIds.count(q.id.serial) && squadIds[q.id.serial] == hv.id) mine = &q;
+            if (!mine) for (auto& q : squads) if (!used.count(q.id.serial) && !squadIds.count(q.id.serial) && q.members.empty()) { mine = &q; break; }
+            FSquad q = mine ? *mine : FSquad{SquadId(nextSquad++), "", {}};
+            used.insert(q.id.serial);
+            squadIds[q.id.serial] = hv.id;
+            q.name = hv.name;
+            q.members.clear();
+            for (const auto& m : hv.members) q.members.push_back(m.serial);
+            next.push_back(q);
+        }
+        for (auto& q : squads)   // ours the host does not have yet (asked of it), kept while empty
+            if (!used.count(q.id.serial) && !squadIds.count(q.id.serial) && q.members.empty()) next.push_back(q);
+        squads = next;
+    }
+    void RemoveLocalSquad(uint64_t key) override {
+        squads.erase(std::remove_if(squads.begin(), squads.end(), [&](const FSquad& q) { return q.id.serial == key && q.members.empty(); }), squads.end());
+    }
+    void TakeLocalSquadRequests(std::vector<LocalSquadRequest>& out) override { out.swap(squadReqs); squadReqs.clear(); }
+    void SetShared(const std::vector<Handle>& handles) override { sharedSet = handles; }
+    bool OrderShared(const Handle& h, const Command& c) override { ++sharedOrders; return Order(h, c); }
+    bool ReadJobList(const Handle& h, std::vector<JobEntry>& out) override {
+        auto it = chars.find(h.serial);
+        if (it == chars.end()) return false;
+        out = it->second.jobList;
+        return true;
+    }
+    void ApplyJobList(const Handle& h, const std::vector<JobEntry>& host) override { if (chars.count(h.serial)) chars[h.serial].jobList = host; }
     // ---- lot B: factions: the player faction's relations, bounties per character (serial)
     FactionsMsg factions;
     std::map<uint32_t, CharBounties> bounties;
@@ -2822,6 +2920,195 @@ static void TestJobs() {   // fix G5
     CHECK((cw.chars[2].jobs == std::vector<int32_t>{87}));
 }
 
+static void TestSquadWire() {
+    std::printf("squad window: SquadState, SquadRequest and JobState round trips; names cleaned; malformed requests refused\n");
+    SquadStateMsg m;
+    m.rev = 7;
+    m.squads.push_back({FakeWorld::SquadId(5), "Les Ma\xc3\xaetres", {3, 1, 2}});
+    m.squads.push_back({FakeWorld::SquadId(6), "", {}});
+    m.members.push_back({3, "Beep", kMemberShared});
+    Writer w; Encode(w, m);
+    Reader r(w.data(), w.size());
+    CHECK(PeekType(r) == Msg::SquadState);
+    SquadStateMsg back;
+    CHECK(Decode(r, back) && SameSquadState(m, back) && back.rev == 7);
+    SquadRequest q; q.seq = 3; q.actor = 9; q.op = SquadOp::Rename; q.squad = FakeWorld::SquadId(5); q.name = "Rats";
+    Writer w2; Encode(w2, q);
+    Reader r2(w2.data(), w2.size());
+    SquadRequest q2;
+    CHECK(PeekType(r2) == Msg::SquadRequest && Decode(r2, q2) && q2.op == SquadOp::Rename && q2.squad == q.squad && q2.name == "Rats" && q2.actor == 9);
+    auto refused = [](SquadRequest x) { Writer ww; Encode(ww, x); Reader rr(ww.data(), ww.size()); PeekType(rr); SquadRequest y; return !Decode(rr, y); };
+    SquadRequest bad = q; bad.actor = 0; CHECK(refused(bad));                   // no actor named
+    bad = q; bad.squad = Handle{}; CHECK(refused(bad));                         // rename of no squad
+    bad = q; bad.name = "  \x01 "; CHECK(refused(bad));                          // no name left
+    bad = q; bad.index = -1; CHECK(refused(bad));
+    CHECK(CleanSquadName("  a\tb  ") == "ab");
+    CHECK(CleanSquadName(std::string(100, 'x')).size() == kMaxSquadName);
+    CHECK(CleanSquadName(std::string(63, 'x') + "\xc3\xae").size() == 63);    // a cut UTF-8 letter is dropped
+    JobStateMsg js;
+    JobEntry e; e.task = 87; e.subjectSid = "mine"; e.subjectPos = {1, 2, 3}; e.location = {4, 5, 6};
+    js.chars.push_back({12, {e}});
+    Writer w3; Encode(w3, js);
+    Reader r3(w3.data(), w3.size());
+    JobStateMsg js2;
+    CHECK(PeekType(r3) == Msg::JobState && Decode(r3, js2) && js2.chars.size() == 1 && js2.chars[0].jobs.size() == 1 && js2.chars[0].jobs[0] == e);
+    // the RESCUE button's task (148) and its kin are accepted without a subject
+    CHECK(TaskTargetAllowed(TaskVia::NewTask, 148, 0, nullptr) && TaskTargetAllowed(TaskVia::AddJob, 105, 0, nullptr));
+    // settings commands: what a nobody's character takes from any player
+    Command c; c.kind = CommandKind::Task; c.via = TaskVia::SetOrder; CHECK(Session::IsSettingsCommand(c));
+    c.via = TaskVia::AddJob; c.shift = false; CHECK(!Session::IsSettingsCommand(c));
+    c.shift = true; CHECK(Session::IsSettingsCommand(c));
+    c.kind = CommandKind::MoveTo; CHECK(!Session::IsSettingsCommand(c));
+}
+
+static void TestSquadWindow() {
+    std::printf("squad window: moves, new squads, renames, order, leader and names go through the host; concurrent edits end the same everywhere\n");
+    FakeWorld hw, cw, cw2;
+    SetupHost(hw);
+    hw.chars[4] = hw.chars[3];   // a recruit nobody owns
+    hw.chars[5] = hw.chars[3];   // the second player's
+    hw.chars[1].name = "H";      // the host's avatar (named like the host)
+    hw.squads = {{FakeWorld::SquadId(500), "Alpha", {1, 2, 4}}, {FakeWorld::SquadId(501), "Beta", {3, 5}}};
+    AtMenu(cw);
+    AtMenu(cw2);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; hc.name = "H";
+    SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    SessionConfig cc2; cc2.port = hc.port; cc2.name = "D";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    Session cli2(cw2, cc2, Now, Quiet("cli2"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 5));
+    CHECK(cli2.Join("127.0.0.1", hc.port, &err));
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}, {&cli2, &cw2}};
+    Run(all, 10.0, [&] { return cli2.state() == SessionState::Connected && cli2.entityCount() == 5; });
+    host.Assign(FakeWorld::H(2), cli.localId());
+    host.Assign(FakeWorld::H(5), cli2.localId());
+    host.Assign(FakeWorld::H(3), cli2.localId());
+    std::map<uint32_t, uint32_t> net;
+    host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { net[h.serial] = id; });
+    auto names = [](const FakeWorld& w) { std::vector<std::string> v; for (auto& q : w.squads) v.push_back(q.name); return v; };
+    auto members = [](const FakeWorld& w) { std::vector<std::vector<uint32_t>> v; for (auto& q : w.squads) v.push_back(q.members); return v; };
+    auto same = [&] { return names(cw) == names(hw) && members(cw) == members(hw) && names(cw2) == names(hw) && members(cw2) == members(hw); };
+    Run(all, 4.0, [&] { return same() && cli.squadState().members.size() == 5 && cw.sharedSet.size() == 1; });
+    CHECK(same());
+    CHECK((names(cw) == std::vector<std::string>{"Alpha", "Beta"}));
+    // nobody's: the recruit (4), not the host's avatar (1) nor a player's character
+    CHECK(host.IsShared(net[4]) && !host.IsShared(net[1]) && !host.IsShared(net[2]) && cli.IsShared(net[4]));
+    CHECK(cw.sharedSet.size() == 1 && !cw.sharedSet.empty() && cw.sharedSet[0].serial == 4);
+
+    // 1. the client renames the squad holding its character in its squad window: the host takes it
+    cw.squads[0].name = "Les Rats";
+    Run(all, 4.0, [&] { return hw.squads[0].name == "Les Rats" && same(); });
+    CHECK(hw.squads[0].name == "Les Rats" && same());
+    // ... a squad without any of its characters: put back
+    cw.squads[1].name = "Pas a toi";
+    Run(all, 2.5);
+    CHECK(hw.squads[1].name == "Beta" && cw.squads[1].name == "Beta");
+
+    // 2. a new squad made in the client's squad window: the host makes it, everyone has it
+    cw.squads.push_back({FakeWorld::SquadId(800), "Eclaireurs", {}});
+    Run(all, 5.0, [&] { return hw.squads.size() == 3 && same(); });
+    CHECK(hw.squads.size() == 3 && hw.squads.back().name == "Eclaireurs" && same());
+    if (hw.squads.size() != 3) return;
+    {   // the client drops its portrait on it
+        IWorld::LocalSquadRequest r; r.actor = FakeWorld::H(2); r.op = SquadOp::Move; r.squad = hw.squads[2].id; r.index = 0;
+        cw.squadReqs.push_back(r);
+    }
+    Run(all, 3.0, [&] { return hw.squads[2].members == std::vector<uint32_t>{2} && same(); });
+    CHECK(hw.squads[2].members == std::vector<uint32_t>{2} && same());
+    {   // back in the first squad at index 0: it leads it
+        IWorld::LocalSquadRequest r; r.actor = FakeWorld::H(2); r.op = SquadOp::Move; r.squad = hw.squads[0].id; r.index = 0;
+        cw.squadReqs.push_back(r);
+    }
+    Run(all, 3.0, [&] { return hw.squads[0].members.size() == 3 && hw.squads[0].members[0] == 2 && same(); });
+    CHECK(hw.squads[0].members.size() == 3 && hw.squads[0].members[0] == 2 && same());
+    // the empty squad removed in the client's window (its cross): gone everywhere
+    cw.squads.erase(cw.squads.begin() + 2);
+    Run(all, 3.0, [&] { return hw.squads.size() == 2 && same(); });
+    CHECK(hw.squads.size() == 2 && same());
+
+    // 3. only one's own characters move: the host's character is refused before sending, and on the host
+    const uint32_t refusedBefore = host.actorRefusals();
+    {
+        SquadRequest q; q.actor = net[1]; q.op = SquadOp::Move; q.squad = hw.squads[1].id;
+        CHECK(!cli.RequestSquadChange(q));
+        q.seq = 77;
+        Writer w; Encode(w, q);
+        CHECK(host.InjectForTest(cli.localId(), w));
+        Run(all, 1.0);
+        CHECK(host.actorRefusals() == refusedBefore + 1);
+        CHECK(std::find(hw.squads[0].members.begin(), hw.squads[0].members.end(), 1u) != hw.squads[0].members.end());
+    }
+
+    // 4. squad order: the client drags its squad last
+    std::swap(cw.squads[0], cw.squads[1]);
+    Run(all, 3.0, [&] { return hw.squads[0].name == "Beta" && same(); });
+    CHECK(hw.squads[0].name == "Beta" && same());
+
+    // 5. concurrent: the host and the client rename the same squad at once; the host runs them in
+    //    order (the client's arrives last: it wins) and everyone ends with the same name
+    for (auto& q : hw.squads) if (q.name == "Les Rats") q.name = "Hote";
+    for (auto& q : cw.squads) if (q.name == "Les Rats") q.name = "Client";
+    Run(all, 5.0, [&] { return same() && names(hw)[1] == "Client"; });
+    CHECK(same() && names(hw)[1] == "Client");
+    // concurrent moves of one character: the host puts the client's character in Beta, the client
+    // asks for a new squad of its own: the last one wins, everyone the same
+    hw.TakeOut(2);
+    hw.squads[0].members.push_back(2);
+    {
+        IWorld::LocalSquadRequest r; r.actor = FakeWorld::H(2); r.op = SquadOp::Move; r.name = "Solo";
+        cw.squadReqs.push_back(r);
+    }
+    Run(all, 4.0, [&] { return hw.squads.size() == 3 && same(); });
+    CHECK(hw.squads.size() == 3 && same() && hw.squads.back().name == "Solo");
+
+    // 6. character names: one's own goes through the host, another's is put back
+    cw.chars[2].name = "Kenji";
+    cw.chars[1].name = "Vole";
+    Run(all, 4.0, [&] { return hw.chars[2].name == "Kenji" && cw2.chars[2].name == "Kenji" && cw.chars[1].name == "H"; });
+    CHECK(hw.chars[2].name == "Kenji" && cw2.chars[2].name == "Kenji" && cw.chars[1].name == "H" && hw.chars[1].name == "H");
+
+    // 7. AI settings of the recruit nobody owns: any player, the last one wins; the host's avatar: refused
+    auto passive = [](FakeWorld& w, uint32_t actor, bool on) {
+        Command c; c.kind = CommandKind::Task; c.via = TaskVia::SetOrder; c.task = 13; c.shift = true; c.add = on;
+        w.localOrders.push_back({FakeWorld::H(actor), c});
+    };
+    passive(cw, 4, true);
+    Run(all, 2.0, [&] { return hw.chars[4].passive; });
+    CHECK(hw.chars[4].passive && hw.sharedOrders >= 1);
+    passive(cw2, 4, false);
+    passive(cw, 4, true);
+    Run(all, 1.5);
+    passive(cw2, 4, false);   // the last one
+    Run(all, 2.0, [&] { return !hw.chars[4].passive; });
+    CHECK(!hw.chars[4].passive);
+    Run(all, 1.0);   // every order in flight has arrived
+    CHECK(!hw.chars[4].passive);
+    const size_t ordersBefore = hw.orderedSerials.size();
+    passive(cw, 1, true);   // the host's own character: never sent
+    Run(all, 1.5);
+    CHECK(!hw.chars[1].passive && hw.orderedSerials.size() == ordersBefore);
+    {   // a move order on the recruit is not a setting: refused
+        Command c; c.seq = 501; c.netId = net[4]; c.kind = CommandKind::MoveTo; c.pos = {9, 0, 9};
+        Writer w; Encode(w, c);
+        CHECK(host.InjectForTest(cli.localId(), w));
+        Run(all, 1.0);
+        CHECK(hw.chars[4].dest.x != 9.0f);
+    }
+
+    // 8. jobs with their targets: the same list on every client (added and ordered, not only removed)
+    JobEntry j1; j1.task = 31; j1.subject = FakeWorld::H(1);
+    JobEntry j2; j2.task = 87; j2.subjectSid = "mine"; j2.subjectPos = {10, 0, 10};
+    hw.chars[2].jobList = {j1, j2};
+    Run(all, 3.0, [&] { return cw.chars[2].jobList.size() == 2 && cw2.chars[2].jobList.size() == 2; });
+    CHECK(cw.chars[2].jobList == hw.chars[2].jobList && cw2.chars[2].jobList == hw.chars[2].jobList);
+    hw.chars[2].jobList = {j2, j1};
+    Run(all, 3.0, [&] { return cw.chars[2].jobList == hw.chars[2].jobList; });
+    CHECK(cw.chars[2].jobList == hw.chars[2].jobList);
+}
+
 static void TestRanged() {   // lot C
     std::printf("session: ranged combat: the host's shots are fired again on clients, aims and turrets follow\n");
     FakeWorld hw, cw;
@@ -3868,6 +4155,8 @@ int main() {
     TestDoors();   // lot A
     TestFloorsAndStall();   // fix G6
     TestJobs();   // fix G5
+    TestSquadWire();
+    TestSquadWindow();   // squad window and AI settings
     TestAdmin();
     TestTaskTargets();   // actor safety
     TestActorSafety();

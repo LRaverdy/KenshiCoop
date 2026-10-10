@@ -242,6 +242,48 @@ public:
     // Client: remove from ours the jobs the host's no longer has.
     virtual bool ReadJobs(const Handle& h, std::vector<int32_t>& jobs) { (void)h; jobs.clear(); return false; }
     virtual void ApplyJobs(const Handle& h, const std::vector<int32_t>& jobs) { (void)h; (void)jobs; }
+    // ---- squad window and AI settings (session_squads.cpp)
+    // A squad of the player faction as this machine has it. id: the host's Platoon handle (client: the
+    // host squad it is matched to, invalid when none yet); key: this machine's own identity of it;
+    // members: host handles, in squad order (index 0 leads the squad).
+    struct SquadView {
+        Handle id;
+        uint64_t key = 0;
+        std::string name;
+        std::vector<Handle> members;
+        bool awaitingHost = false;   // client: a portrait was dropped on this new squad, the host makes it
+    };
+    // Host: every squad of the player faction, in the faction's order (empty ones too).
+    virtual void ReadSquadViews(std::vector<SquadView>& out) { out.clear(); }
+    // Host: run a request the session authorized. Move: into `squad` (invalid: a new squad named
+    // `name`) at `index`, or swapped with the member at `index` (swap). Order: index in ReadSquadViews'
+    // list. Remove: an empty squad. created: the new squad's id. False: the game did not do it.
+    virtual bool SquadMove(const Handle& who, const Handle& squad, int index, bool swap, const std::string& name, Handle& created) {
+        (void)who; (void)squad; (void)index; (void)swap; (void)name; (void)created; return false;
+    }
+    virtual bool SquadCreate(const std::string& name, Handle& created) { (void)name; (void)created; return false; }
+    virtual bool SquadRename(const Handle& squad, const std::string& name) { (void)squad; (void)name; return false; }
+    virtual bool SquadOrder(const Handle& squad, int index) { (void)squad; (void)index; return false; }
+    virtual bool SquadRemove(const Handle& squad) { (void)squad; return false; }
+    virtual bool RenameCharacter(const Handle& h, const std::string& name) { (void)h; (void)name; return false; }
+    // Client: our squads (matched to the host's ones), make them the host's (order, names, members,
+    // squads created and removed), remove one of ours the host refused to create, impose a name.
+    virtual void ReadLocalSquads(std::vector<SquadView>& out) { out.clear(); }
+    virtual void ApplySquadViews(const std::vector<SquadView>& host) { (void)host; }
+    virtual void RemoveLocalSquad(uint64_t key) { (void)key; }
+    virtual void ApplyCharacterName(const Handle& h, const std::string& name) { (void)h; (void)name; }
+    virtual bool ReadCharacterName(const Handle& h, std::string& out) { (void)h; out.clear(); return false; }
+    // Client: squad changes made in our squad window (portraits dropped): the requests to send.
+    struct LocalSquadRequest { Handle actor; SquadOp op = SquadOp::Move; Handle squad; int index = 0; std::string name; };
+    virtual void TakeLocalSquadRequests(std::vector<LocalSquadRequest>& out) { out.clear(); }
+    // Characters nobody owns (recruits never given to a player): their AI settings are anyone's.
+    virtual void SetShared(const std::vector<Handle>& handles) { (void)handles; }
+    // Host: a settings order (squad bar toggle, Tâches panel) on a character nobody owns.
+    virtual bool OrderShared(const Handle& h, const Command& c) { return Order(h, c); }
+    // Job lists with each job's target. Host: read (subjects as host handles). Client: make ours the
+    // same (remove, add, reorder).
+    virtual bool ReadJobList(const Handle& h, std::vector<JobEntry>& jobs) { (void)h; jobs.clear(); return false; }
+    virtual void ApplyJobList(const Handle& h, const std::vector<JobEntry>& jobs) { (void)h; (void)jobs; }
     // ---- lot A: doors and locks. Host: the doors and locked furniture within `radius` of the points,
     // as they are; is this container locked (it cannot be looked into); run a door button a client
     // clicked. Client: impose one door's state (found by kind and place; false: not here); the door
@@ -956,6 +998,53 @@ private:
     void ClientJobs(double now);
     void ClientJobsPacket(Reader& r);
     void ResetJobs();
+    std::unordered_map<uint32_t, std::vector<JobEntry>> jobListSent_;   // host: JobState, per character
+    std::unordered_map<uint32_t, std::vector<JobEntry>> hostJobLists_;  // client: the host's, with targets
+    std::unordered_set<uint32_t> jobListDirty_;
+    bool haveJobState_ = false;                                         // client: the host sends JobState (JobList ignored)
+    void ClientJobStatePacket(Reader& r);
+    // ---- squad window and AI settings (session_squads.cpp)
+public:
+    // Host: may that player set the AI settings (squad bar toggles, fight style, Tâches panel) of that
+    // character? Its own, or one nobody owns (shared; the last request wins).
+    bool MaySetSettings(uint8_t player, uint32_t netId) const;
+    bool IsShared(uint32_t netId) const { return shared_.count(netId) != 0; }
+    static bool IsSettingsCommand(const Command& c);
+    const SquadStateMsg& squadState() const { return squadState_; }   // host: last sent; client: the host's
+    size_t pendingSquadRequests() const { return squadPending_.size(); }   // client
+    // Client: ask the host for a squad change (tests, debug commands). False: not sent (not ours).
+    bool RequestSquadChange(const SquadRequest& r);
+private:
+    void ResetSquads();
+    void SendSquadState(double now);
+    void HostSquadRequest(uint8_t from, const SquadRequest& r);
+    void ClientSquads(double now);
+    void ClientSquadStatePacket(Reader& r);
+    void OnSquadResult(const Result& m);
+    bool SquadEditable(uint8_t player, const SquadEntry& s) const;
+    void ComputeShared();
+    SquadStateMsg squadState_;
+    bool haveSquadState_ = false;
+    bool squadStateDirty_ = false;                 // client: just received
+    double nextSquadState_ = 0, squadStateFullAt_ = 0, nextClientSquads_ = 0;
+    std::unordered_set<uint32_t> shared_;          // characters nobody owns (host: computed; client: received)
+    std::vector<std::pair<uint8_t, SquadRequest>> pendingSquadReqs_;   // host: run on the next live tick
+    uint32_t squadSeq_ = 0;
+    struct SquadPending {                          // client: a request the host has not answered yet
+        SquadRequest req;
+        uint64_t localKey = 0;                     // Create: our squad it is for
+        double until = 0;
+    };
+    std::map<uint32_t, SquadPending> squadPending_;   // seq ->
+    struct NameEdit { std::string name; double since = 0; };
+    std::map<std::pair<int, std::string>, NameEdit> nameEdits_;   // client: names being typed here (kind 0 squad id, 1 netId)
+    std::map<uint64_t, double> createSeen_;        // client: our unmatched empty squads, first seen
+    std::set<uint64_t> createAsked_;
+    std::map<uint64_t, Handle> lastLocalIds_;      // client: our squads matched last pass (key -> host id)
+    std::map<std::string, std::string> baseSquadNames_;   // client: our squads' names as we last left them (host id key)
+    std::vector<Handle> baseOrder_;                // client: ... and their order
+    std::map<uint32_t, std::string> baseCharNames_;   // client: squad characters' names as we last left them
+    std::vector<IWorld::LocalSquadRequest> scratchSquadReqs_;
     // ---- lot D: prisons (session_prisons.cpp)
     std::unordered_map<uint32_t, CaptiveState> captiveSent_;   // host: last state sent per character
     double nextCaptives_ = 0, captivesFullAt_ = 0;

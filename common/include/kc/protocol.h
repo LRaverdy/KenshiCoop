@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 34;   // 34: Research, ResearchRequest, Machines, MachineRequest (workshop); 33: BagBind (travelling merchants), Result (actor safety), JoinQueue, Diplomacy, MapMarkers and MapPing (map)
+constexpr uint16_t kProtocolVersion = 34;   // 34: Research, ResearchRequest, Machines, MachineRequest (workshop), SquadState, SquadRequest, JobState (squad window); 33: BagBind (travelling merchants), Result (actor safety), JoinQueue, Diplomacy, MapMarkers and MapPing (map)
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -107,6 +107,10 @@ enum class Msg : uint8_t {
     ResearchRequest = 57, // C->S  queue / cancel a tech in the research window, learn a blueprint (actor: the player's character)
     Machines = 58,        // S->C  player machines near the players: operators, power, battery, crafting orders; town power totals
     MachineRequest = 59,  // C->S  a crafting order (add, remove, repeat) or a power / battery switch on a machine (actor named)
+    // ---- squad window and AI settings (60-62)
+    SquadState = 60,      // S->C  the player faction's squads (id, name, members in order, squad order) and each squad character's name and "shared" flag
+    SquadRequest = 61,    // C->S  a change in the squad window: move one's character, create, rename, reorder, remove a squad, rename one's character
+    JobState = 62,        // S->C  the job list of the players' characters with each job's target (the Tâches panel, built the same everywhere)
     // ---- actor safety
     Result = 90,          // S->C  the host's answer to a request: rejected (with the reason) or done
 };
@@ -1317,5 +1321,78 @@ struct MachineRequest {
 };
 void Encode(Writer& w, const MachineRequest& m);
 bool Decode(Reader& r, MachineRequest& m);
+// ---- squad window and AI settings (protocol 34, messages 60-62). The host's game holds the only
+// squads: a client's squad window edits become SquadRequests, run by the host one at a time (in the
+// order they arrive: the last one wins), then everyone gets the same SquadState.
+// A squad is named by the host's handle of its Platoon (the client maps it to its own squad).
+struct SquadEntry {
+    Handle id;                      // the host's Platoon handle
+    std::string name;
+    std::vector<uint32_t> members;  // netIds, in squad order (index 0: the squad leader)
+};
+enum SquadMemberFlags : uint8_t {
+    kMemberShared = 1,   // nobody's (a recruit never given to a player): any player may set its AI settings
+};
+struct SquadMemberInfo {
+    uint32_t netId = 0;
+    std::string name;    // the character's name on the host
+    uint8_t flags = 0;
+};
+struct SquadStateMsg {
+    uint32_t rev = 0;                       // changes every time the content does
+    std::vector<SquadEntry> squads;         // in the faction's squad order (empty squads included)
+    std::vector<SquadMemberInfo> members;   // every squad character
+};
+constexpr uint32_t kMaxSquads = 128, kMaxSquadMembers = 512;
+constexpr size_t kMaxSquadName = 64;
+void Encode(Writer& w, const SquadStateMsg& m);
+bool Decode(Reader& r, SquadStateMsg& m);
+bool SameSquadState(const SquadStateMsg& a, const SquadStateMsg& b);   // rev ignored
+
+enum class SquadOp : uint8_t {
+    Move = 1,              // actor into `squad` (invalid: a new squad, named `name` if given) at `index`
+    Create = 2,            // a new empty squad named `name`
+    Rename = 3,            // `squad` takes `name`
+    Order = 4,             // `squad` goes to place `index` in the squad list
+    Remove = 5,            // `squad` (empty) is removed
+    RenameCharacter = 6,   // the actor takes `name`
+};
+const char* ToString(SquadOp op);
+struct SquadRequest {
+    uint32_t seq = 0;
+    uint32_t actor = 0;    // netId of one of the sender's own characters (always named: actor safety)
+    SquadOp op = SquadOp::Move;
+    Handle squad;
+    int32_t index = 0;
+    std::string name;
+};
+void Encode(Writer& w, const SquadRequest& m);
+bool Decode(Reader& r, SquadRequest& m);
+// Squad and character names a player may give: printable, at most kMaxSquadName bytes, trimmed.
+std::string CleanSquadName(const std::string& s);
+
+// A character's job list with targets (fix G5's JobList only had kinds, so jobs added elsewhere never
+// showed on a client).
+struct JobEntry {
+    int32_t task = 0;
+    Handle subject;        // the host's handle of what the job is about (invalid: none)
+    std::string subjectSid;   // furniture and machines: kind and place (handles differ between machines)
+    Vec3 subjectPos;
+    Vec3 location;
+    bool operator==(const JobEntry& o) const {
+        return task == o.task && subject == o.subject && subjectSid == o.subjectSid && subjectPos.x == o.subjectPos.x &&
+               subjectPos.y == o.subjectPos.y && subjectPos.z == o.subjectPos.z && location.x == o.location.x &&
+               location.y == o.location.y && location.z == o.location.z;
+    }
+};
+struct CharJobs {
+    uint32_t netId = 0;
+    std::vector<JobEntry> jobs;
+};
+struct JobStateMsg {
+    std::vector<CharJobs> chars;
+};
+void Encode(Writer& w, const JobStateMsg& m);
+bool Decode(Reader& r, JobStateMsg& m);
 
 } // namespace kc

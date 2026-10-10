@@ -196,6 +196,11 @@ Les signatures sont celles du commentaire du code.
 | sol | `FnInventoryDropItem` | `Inventory::dropItem(Item*)` | `0x745D90` | oui | ce que fait une fenêtre d'inventaire d'un objet lâché sur le monde ; vt 0x38 de `Inventory` et `ShopTraderInventory` |
 | sol | `FnDropItemAnimal` | `CharacterAnimal::dropItem(RootObject*)` | `0x5CA4A0` | oui | même code que `CharacterHuman::dropItem`, pour les bêtes de somme |
 | dialogue (162) | `FnDialogueEndDialogue` | `Dialogue::endDialogue(bool definitelyTheEnd)` | `0x674830` | — | termine la conversation (voir « Dialogue ») ; le mod l'appelle quand le joueur part, quitte la partie, ou que la conversation est finie sans fermeture (combat, TP, K.-O.) |
+| escouade | `FnSquadSwapCharacters` | `ActivePlatoon::swapCharacters(int a, int b)` | `0x792E60` | oui | [D] échange deux cases du tableau des membres (+0x60, nombre +0x58), renumérote les cases entre les deux (`Character::_setPlatoon`), la case 0 devient chef (`setSquadLeader`) ; appelée seulement par `SquadManagementScreen::notifyEndDropPortrait` (`0x49B050`) |
+| escouade | `FnChangePlatoonIndex` | `Faction::changePlatoonIndex(Platoon*, int index)` | `0x7F3440` | — | [D] retire le `Platoon` de `Faction::activePlatoons` (+0x208 : nombre +0x210, tableau +0x218), le réinsère à `index` (index < 0 : à la fin), renumérote `Platoon`+0x1F2 ; appelée par `notifyEndDropSquad` (`0x493CB0`) : l'ordre des escouades de la fenêtre |
+| escouade | `FnDestroyPlatoon` | `Faction::destroyPlatoon(Platoon*)` | `0x6BA9D0` | — | [D, partiel] retire l'escouade de la faction ; `SquadManagementScreen::removeSquad` (`0x491D20`) ne l'appelle que pour une escouade vide et pas la dernière (sinon une boîte de message) |
+| escouade | `FnSquadSetName` | `ActivePlatoon::setName(const std::string&)` | `0x4BE480` | — | [D] affecte `Platoon` (+0x78) +0x18 ; sans appelant direct dans 1.0.68 : la case de nom de la fenêtre (`onNameChanged` `0x48DF00`) écrit le même champ à chaque frappe |
+| tâches | `FnCharGetPermajobData` | `Character::getPermajobData(int slot) const` | `0x5C8F10` | — | [D] `Character::ai` (+0x650) → `orders` (+0x20) → `OrdersReceiver::getPermajobData` : le `Tasker*` de la tâche (sujet `hand` +0x10, lieu +0x58) |
 
 | validité | `FnTerrainHeight` | `UtilityT::getTerrainHeight(float x, float z)` | `0x9B3710` | — | le sol sous l'eau éventuelle ; -99 où aucun terrain n'est connu (saut vers `getTerrainHeightFast(x, z, nullptr)` `0x9B32F0`) |
 | validité | `FnTerrainWithWaterHeight` | `UtilityT::getTerrainWithWaterHeight(float x, float z)` | `0x9B3720` | — | max(sol, 100) : la hauteur que `createBuildings` retire à la position (appel vérifié à `0x4D7512`) |
@@ -254,7 +259,6 @@ commentaire de son énumérateur.
 
 | RVA | Fonction | Usage |
 |---|---|---|
-| `0x4BE480` | `ActivePlatoon::setName(const std::string&)` | renommer une escouade |
 | `0x9FF210` | `ZoneSpacialGrid::getObjects(point, radius, filter, lektor&, max)` | objets autour d'un point |
 | `0xED6504` / `0xED64FE` | `operator new` / `operator delete` du jeu | allouer ce que le jeu libérera (lektor) |
 | `0x6508D0`–`0x651FF1` | corps de `MedicalSystem::addWound` | reconnaître les chiffres de dégâts (adresse de retour) |
@@ -519,9 +523,27 @@ Emplacements de vtable :
   `_allItems`.
 
 ### Escouades
-- `Character` +0x658 → `ActivePlatoon` ; +0x78 → `Platoon` (nom à +0x18).
-- Créer une escouade : `PlayerInterface::createSquad`.
-- Déplacer un personnage : `ActivePlatoon::addCharacterAt`, ce que fait le dépôt d'un portrait.
+- `Character` +0x658 → `ActivePlatoon` ; +0x78 → `Platoon` (nom à +0x18, `hand` à +0x58 : il
+  identifie l'escouade ; le même sur toutes les machines pour les escouades de la sauvegarde).
+- `Platoon` +0x1D8 → `ActivePlatoon` ; `ActivePlatoon` +0x58 nombre de membres, +0x60 tableau,
+  +0xA0 chef. `Character` +0x418 sa case dans l'escouade.
+- **Le chef est la case 0** [D] : `swapCharacters` et `addCharacterAt` appellent
+  `ActivePlatoon::setSquadLeader` (`0x7917A0`, écrit +0xA0 et le `hand` du chef dans `Platoon`
+  +0x128) pour la case 0, `Character::setSquadMemberType(0)` pour les autres.
+- Créer une escouade : `PlayerInterface::createSquad` (bouton `onAddSquad`, `0x491B50`).
+- Déplacer un personnage : `ActivePlatoon::addCharacterAt`, ce que fait le dépôt d'un portrait sur
+  une autre escouade ; sur un portrait de la même escouade : `swapCharacters`.
+- Ordre des escouades (fenêtre Escouade) : celui de `Faction::activePlatoons` (faction du joueur :
+  `PlayerInterface` +0x2A0), changé par `changePlatoonIndex`. L'escouade des morts
+  (`PlayerInterface` +0x2C8, `hand`) en fait partie et n'est pas montrée.
+- Retirer une escouade : `Faction::destroyPlatoon`, seulement vide. `ActivePlatoon::emptySquadCheck`
+  (`0x79AB10`) : vide → `Platoon::setPersistentSquad(false)` puis `Platoon::declareDead`.
+- Renommer : la case de nom écrit `Platoon`+0x18 directement à chaque frappe (pas d'appel à
+  hooker) ; le mod compare les noms deux fois par seconde.
+- Gestionnaires de la fenêtre (`SquadManagementScreen`, traduits de KenshiLib, début de fonction
+  confirmé par `.pdata`) : `onNameChanged` `0x48DF00`, `onRemove` `0x4A1460`, `removeSquad`
+  `0x491D20`, `onAddSquad` `0x491B50`, `notifyEndDropSquad` `0x493CB0`, `notifyEndDropPortrait`
+  `0x49B050`, `dismissCharacter` `0x48FA30` (non étudiée).
 
 ### Apparence et éditeur
 - GameData d'apparence : `Character` +0x448 → +0xE8 → +0x148.
@@ -577,14 +599,26 @@ Emplacements de vtable :
 | 12 | tenir la position |
 | 13 | passif |
 | 14 | narguer |
-| 15 | poursuivre |
+| 15 | poursuivre : le bouton **JOBS** de la barre (`OrdersChaseButton`), la permanence des tâches (`OrdersReceiver` +0x35) |
 | 16 | vitesse de groupe |
 | 17 | distance |
 
 Dans l'interface, les ordres 11 et plus sont des bascules : `setOrderSelectedCharacters` décide
-d'après les boutons du joueur **local**. Pour l'ordre d'un client, l'hôte calcule donc l'état voulu
-d'après le personnage lui-même (`on = !état actuel`) et appelle `Character::setStandingOrder`
-(ordre, on) directement.
+d'après les boutons du joueur **local**. Le client envoie donc la valeur voulue (`Command.shift` =
+valeur absolue dans `add`, calculée sur le premier perso choisi) et l'hôte appelle
+`Character::setStandingOrder(ordre, valeur)` directement ; un ancien client (sans `shift`) : l'hôte
+calcule `on = !état actuel`.
+
+`setStandingOrder` (`0x5CAA50`, table de sauts de 18 cas) [D] : 0/1/2/16 écrivent `CharMovement`
+(+0x640) +0x20 (2 courir, 1 trottiner, 0 marcher, 3 vitesse du groupe ; c'est le `gait` des
+snapshots) ; 3/4 `Character`+0xD4 ; 5/6/7 `AI` (+0x650) +0x2B8 ; 8/9 une fonction d'`AI` ; 11/12/13/14/17
+`CharStats` +0x128/+0x12B/+0x12C/+0x12A/+0x129 ; 15 `OrdersReceiver` (`0x508210`).
+
+Boutons de la barre (`OrdersPanel`, `0x72B540`) : BLOCK, HOLD, PASSIVE, JOBS, RANGED, TAUNT, SNEAK et
+les flèches d'allure appellent `setOrderSelectedCharacters` ; MEDIC (`0x7FAC20`) et RESCUE
+(`0x721790`) appellent `newPlayerTaskSelectedCharacters` avec les tâches 58 (`JOB_MEDIC`) et 148
+(`FIND_AND_RESCUE_IF_THERES_BEDS`) ; PROSPECT ouvre la fenêtre de prospection. Le curseur de
+comportement (AGRESSIVE / CONFIDENT / SUBMISSIVE) existe dans la mise en page mais est caché.
 
 ### Tâches (`TaskType`, celles que le mod nomme dans le journal)
 | Valeur | Tâche |

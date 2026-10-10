@@ -257,6 +257,12 @@ enum Fn : int {
     FnToggleBattButton,         // void UseableStuff::toggleBattButton(DataPanelLine*)   (the building panel's battery switch, +0x3B4)
     FnRefreshResearchList,      // void ManagementScreen::refreshResearchList()
     FnResearchCheckRequirements, // bool Research::checkRequirements(GameData*, bool twoLevels, bool checkCost)   (tests: what can be researched now)
+    // ---- squad window (plugin/squads.cpp)
+    FnSquadSwapCharacters,      // void ActivePlatoon::swapCharacters(int indexA, int indexB)   (a portrait dropped on another of its squad; index 0 leads)
+    FnChangePlatoonIndex,       // void Faction::changePlatoonIndex(Platoon*, int index)   (a squad dragged in the squad window: the squads' order)
+    FnDestroyPlatoon,           // void Faction::destroyPlatoon(Platoon*)   (the squad window's cross on an empty squad)
+    FnSquadSetName,             // void ActivePlatoon::setName(const std::string&)   (writes Platoon::name)
+    FnCharGetPermajobData,      // const Tasker* Character::getPermajobData(int slot) const   (a job's subject hand +0x10, location +0x58)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -509,6 +515,19 @@ void SetSquadName(void* squad, const std::string& name);
 void SquadMembers(void* squad, std::vector<Character*>& out);   // the player characters in it
 bool MoveToSquad(void* squad, Character* c, int index);          // what dropping a portrait on a squad does
 void* NewSquad();                                              // what the "new squad" button does
+// The player faction's squads in the faction's order (the squad window's), empty ones too, the dead
+// squad left out; a squad's handle (its Platoon's); the squad window's swap, reorder and cross.
+void PlayerSquads(std::vector<void*>& out);
+bool SquadHandle(void* squad, kc::Handle& out);
+bool SwapInSquad(void* squad, int a, int b);
+bool SetSquadOrder(void* squad, int factionIndex);
+int SquadFactionIndex(void* squad);                           // its place in the faction's list (-1: none)
+bool DestroySquad(void* squad);
+int SquadSize(void* squad);                                    // members of any kind (ActivePlatoon count)
+bool SetCharacterName(Character* c, const std::string& name);   // the character window's rename
+// A job of the Tâches panel: what it is about and where (false: no such slot); give a permanent job.
+bool PermajobTarget(Character* c, int slot, kc::Handle& subject, kc::Vec3& location);
+bool AddPermajob(Character* c, int task, void* subject, const kc::Vec3& location);
 void* ShownSquad();                                            // the squad the squad bar shows
 void ShowSquad(void* squad);                                   // show that one
 // Appearance: the character's appearance GameData, read whole / written back (then the game

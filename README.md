@@ -133,8 +133,11 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
   Le client n'a pas d'IA ni de dégâts propres : il ne peut pas diverger. Les PNJ que l'hôte fait
   apparaître sont recréés chez le client ; ceux que le jeu du client créerait de lui-même sont
   retirés.
-- **Escouades** (noms, membres, ordre), **ordres permanents** (furtif, tenir la position, passif…),
-  **compétences et expérience**, **argent**.
+- **Escouades** (noms, membres, chef, ordre des escouades, escouades vides), **noms des persos**,
+  **ordres permanents** (furtif, tenir la position, passif, style de combat, allure…), **listes de
+  tâches**, **compétences et expérience**, **argent**. Tout ce que tu changes dans la fenêtre
+  Escouade passe par l'hôte : tu ne déplaces et ne renommes que tes persos ; les recrues que l'hôte
+  n'a données à personne se règlent par tout le monde (le dernier clic gagne).
 - **Chacun commande ses persos** : un ordre d'un joueur (dormir, parler, piller, construire…) n'est
   exécuté que par **ses** personnages, jamais par ceux de l'hôte ou d'un autre joueur ; un ordre
   impossible (mauvaise cible) est refusé avec un message, sans rien faire.
