@@ -719,6 +719,18 @@ bool WritePlayerMoney(int32_t money) {
     return true;
 }
 
+bool ReadStat(Character* c, size_t statIndex, float& out) {
+    void* s = StatsOf(c);
+    return s && statIndex < kc::kStatCount && Rd(s, kStatOffsets[statIndex], out) && std::isfinite(out);
+}
+
+bool WriteStat(Character* c, size_t statIndex, float value) {
+    void* s = StatsOf(c);
+    if (!s || statIndex >= kc::kStatCount || !std::isfinite(value)) return false;
+    Wr(s, kStatOffsets[statIndex], value);
+    return true;
+}
+
 bool GainExperience(Character* c, size_t statIndex, float amount) {
     void* s = StatsOf(c);
     if (!s || statIndex >= kc::kStatCount) return false;
@@ -3639,6 +3651,17 @@ void ForgetGodModes() {
 bool GodMode(const void* c) {
     std::lock_guard<std::mutex> lk(g_godMutex);
     return g_god.count(c) != 0;
+}
+
+void SetGodModes(const std::vector<Character*>& chars) {
+    std::lock_guard<std::mutex> lk(g_godMutex);
+    g_god.clear();
+    for (Character* c : chars) if (c) g_god.insert(c);
+}
+
+size_t GodModeCount() {
+    std::lock_guard<std::mutex> lk(g_godMutex);
+    return g_god.size();
 }
 
 // ---- tools in hands (mining...)

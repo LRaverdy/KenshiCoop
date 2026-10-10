@@ -48,6 +48,11 @@ bool ReplaySay(kenshi::Character* c, const std::string& text, bool shout);
 // Host: the player answered in a conversation shown on their screen.
 bool CallReplyClicked(void* dialogue, int index);
 
+// Admin panel: the last ground point the local player ordered a move to (false: none since the
+// world was loaded).
+bool LastMoveOrderPoint(kc::Vec3& out);
+void ForgetMoveOrderPoint();
+
 // Character::playerMoveOrderDefault(nullptr, nullptr, pos) through the original function.
 bool CallPlayerMoveOrder(kenshi::Character* c, const kc::Vec3& pos);
 

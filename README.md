@@ -81,6 +81,25 @@ porter, dormir, portes, machines, parler… Exceptions pour l'instant : le **com
 recrutement au centre d'emploi, refusés avec un message.
 
 **Outils de l'hôte**, dans la fenêtre Multijoueur ou la console :
+- **Administration** : la liste des joueurs (nom, ping, personnages, persos à terre) avec, pour
+  chacun et pour « Tout le monde » (toi compris) :
+  - **Dieu** (case à cocher) : plus aucun dégât ni K.-O. ; reste actif aux changements de zone et
+    quand le joueur se reconnecte ;
+  - **TP moi** (ses persos près de toi), **Aller** (les tiens près des siens), **TP à…** (près d'un
+    autre joueur, ou au *point marqué* : le dernier endroit où tu as ordonné un déplacement par
+    clic droit au sol) ; un perso à terre est relevé pour le voyage, le bouton demande alors une
+    confirmation ;
+  - **Soigner** (blessures, sang, réveil d'un K.-O.) ;
+  - **XP** : la compétence (ou toutes) et la quantité, en points d'expérience ou en niveaux, se
+    règlent sous la liste ; au-delà de 1000 points ou 10 niveaux, confirmation ;
+  - l'**argent commun** (cats ajoutés ou retirés).
+
+  Le joueur concerné reçoit un message (« L'hôte t'a téléporté près de lui. »…). Les mêmes actions
+  existent en commandes : `admin god <id|all|host> on|off`, `admin tp <id|all> host`,
+  `admin tp host <id>`, `admin tp <id> <id>`, `admin tp <id> point`, `admin tp <id> <x> <y> <z>`,
+  `admin xp <id|all|host> <compétence|all> <n> [levels]`, `admin heal <id|all|host>`,
+  `admin money <n>`, `admin list` (tape `admin` pour l'aide). Un client n'a ni ces boutons ni ces
+  commandes ;
 - **TP vers moi** (`tp <id>`) : amène les personnages d'un joueur bloqué près de toi ;
 - **Resync** (`resync <id>`) et **Resynchroniser tout le monde** : en cas de désynchro, le joueur
   recharge ton monde tel qu'il est, en quelques secondes ;

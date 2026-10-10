@@ -41,6 +41,7 @@ protocole 32, environ 25 500 lignes). L'état de chaque fonctionnalité au sens 
 | Lot D — prisons, chaînes, esclavage | `plugin/prisons.cpp`, `session_prisons.cpp` ; hooks SetPrisonMode, SetChainedMode, SetSlaveState ; Captives | harnais `prison`, pas en partie |
 | Lot E — construction, achat, démontage | `plugin/buildings.cpp`, `session_buildings.cpp` ; 7 hooks ; Build* | harnais `build` ; bâtiments existants non synchronisés |
 | Overlay, console de l'hôte | `plugin/overlay.cpp`, `plugin/host_console.cpp` | vérifié en jeu |
+| Administration de l'hôte (dieu, TP, XP, soins, argent) | `plugin/admin.cpp`, `common/src/admin.cpp` ; hooks MedApplyDamage, MedKnockout, IncreaseStat, PlayerMove ; Chat (message au joueur) | `TestAdmin` ; harnais `admin` pas encore lancé |
 | Journaux et rapports client | ClientLog/ClientReport, `util.cpp` | vérifié en jeu |
 
 ## 2. Messages réseau (`common/include/kc/protocol.h`)

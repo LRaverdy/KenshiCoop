@@ -15,6 +15,9 @@ struct OverlayPlayer {
     uint32_t pingMs = 0;
     size_t characters = 0;
     bool you = false;
+    // host only (Administration section)
+    bool god = false;
+    size_t down = 0;    // characters lying (knocked out, dead...): a teleport asks to confirm
 };
 
 struct OverlayModel {
@@ -35,6 +38,9 @@ struct OverlayModel {
     std::string name, address;          // current settings
     uint16_t port = 0;
     bool fullConsole = false;           // host: every console command; client: read-only ones
+    // host: the Administration section (god mode, teleports, experience, healing, money)
+    bool godAll = false;                // god mode for everyone is on
+    std::string movePoint;              // "x, z" of the host's last move order (empty: none)
     // Steam: our id (the code friends join with) and friends hosting a session right now
     std::string steamId;
     std::vector<std::pair<std::string, std::string>> steamFriends;   // name, id

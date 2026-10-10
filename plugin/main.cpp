@@ -9,9 +9,11 @@
 #include <ctime>
 #include <deque>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <string>
 
+#include "admin.h"
 #include "debug.h"
 #include "hooks.h"
 #include "kc/session.h"
@@ -255,9 +257,10 @@ void ConsoleCommand(const std::string& line) {
             out("speed <x>            vitesse du jeu (1, 2, 3...)");
             out("tp <id> [vers <id>]  téléporter les persos du joueur <id> près de ton perso sélectionné (ou d'un autre joueur)");
             out("resync [id]          le joueur <id> (sans id : tout le monde) recharge ton monde tel qu'il est");
-            out("heal <id|all>        soigne complètement les persos du joueur <id> (all : toute l'escouade)");
+            out("heal <id|all>        soigne complètement les persos du joueur <id> (all : tout le monde)");
             out("xp <id|all> <n>      +n niveaux dans toutes les compétences (ex. xp 2 10)");
             out("god <id|all> [off]   mode dieu : plus aucun dégât ni K.-O. (off pour l'enlever)");
+            out("admin ...            administration (hôte) : tape admin pour le détail (dieu, TP, XP, soins, argent)");
             out("money <n>            ajoute n cats à l'argent commun (négatif pour en retirer)");
         }
         return;
@@ -328,37 +331,22 @@ void ConsoleCommand(const std::string& line) {
         Log("admin: money %lld -> %lld", (long long)cur, next);
         return;
     }
-    if (cmd == "heal" || cmd == "xp" || cmd == "god") {   // admin: heal / xp / god mode on a player's characters
-        std::string who, arg;
-        in >> who >> arg;
-        if (!host) { out("seul l'hôte peut faire ça"); return; }
-        const bool all = who == "all" || who == "tous";
-        int id = -1;
-        if (!all) { try { id = std::stoi(who); } catch (...) { id = -1; } }
-        if (!all && (id < 0 || id > 255)) { out("usage : " + cmd + " <id|all> ...  (tape players pour les numéros)"); return; }
-        std::vector<kc::Handle> squad;
-        g_world->PlayerCharacters(squad);
-        int n = 0;
-        for (const auto& h : squad) {
-            if (!all && g_session->ownerOf(h) != id) continue;
-            kenshi::Character* c = g_world->FindSquad(h);
-            if (!c) continue;
-            HostCallScope scope;
-            if (cmd == "heal") n += kenshi::HealCompletely(c) ? 1 : 0;
-            else if (cmd == "god") { kenshi::SetGodMode(c, arg != "off"); if (arg != "off") kenshi::HealCompletely(c); ++n; }
-            else {
-                float levels = 0;
-                try { levels = std::stof(arg); } catch (...) { levels = 0; }
-                std::vector<float> stats;
-                if (levels <= 0 || !kenshi::ReadStats(c, stats)) continue;
-                for (auto& v : stats) v = std::min(100.0f, v + levels);
-                kenshi::WriteStats(c, stats);
-                ++n;
-            }
+    // admin: god mode, teleports, experience, healing, money (plugin/admin.cpp); heal / xp / god are
+    // the older short forms of the same actions
+    if (cmd == "admin" || cmd == "heal" || cmd == "xp" || cmd == "god") {
+        std::string rest;
+        if (cmd == "admin") {
+            std::getline(in, rest);
+        } else {
+            std::string who, arg;
+            in >> who >> arg;
+            if (cmd == "heal") rest = "heal " + who;
+            else if (cmd == "god") rest = "god " + who + (arg == "off" ? " off" : " on");
+            else rest = "xp " + who + " all " + arg + " levels";
         }
-        const std::string what = cmd == "heal" ? "soigné(s)" : cmd == "xp" ? "monté(s) de niveau" : (arg == "off" ? "sans mode dieu" : "en mode dieu");
-        out(std::to_string(n) + " personnage(s) " + what);
-        Log("admin: %s %s %s -> %d character(s)", cmd.c_str(), who.c_str(), arg.c_str(), n);
+        if (!host) { out("seul l'hôte peut faire ça"); return; }
+        std::istringstream lines(AdminRun(rest, *g_session, *g_world));
+        for (std::string l; std::getline(lines, l);) out(l);
         return;
     }
     if (cmd == "tp") {   // tp <id> [<toId>]: unstick a player's characters next to my selection (or another player's)
@@ -499,10 +487,29 @@ void PublishOverlay() {
     if (st == kc::SessionState::Failed && !g_session->lastError().empty()) m.errorText = FrenchError(g_session->lastError());
     m.leftHostWorld = g_leftHostWorld && g_world->Ready();
     if (st == kc::SessionState::Downloading) m.download = float(g_session->downloadProgress());
-    if (m.active) {
+    if (m.active && m.hosting) {   // the host's view also feeds its Administration section
+        for (const auto& a : AdminPlayers(*g_session, *g_world, g_cfg.name)) {
+            OverlayPlayer p;
+            p.id = a.id;
+            p.name = a.name;
+            p.pingMs = a.pingMs;
+            p.characters = a.characters;
+            p.you = a.host;
+            p.god = a.god;
+            p.down = a.down;
+            m.players.push_back(p);
+        }
+        m.godAll = AdminGodAll();
+        kc::Vec3 pt;
+        if (g_world->Ready() && LastMoveOrderPoint(pt)) {
+            char b[64];
+            snprintf(b, sizeof(b), "%.0f, %.0f", pt.x, pt.z);
+            m.movePoint = b;
+        }
+    } else if (m.active) {
         m.players.push_back({g_session->localId(), g_cfg.name, 0, CharactersOf(g_session->localId()), true});
         for (auto& [id, p] : g_session->players())
-            m.players.push_back({id, p.name, m.hosting ? p.rttMs : (id == 1 ? g_session->pingMs() : 0u), CharactersOf(id), false});
+            m.players.push_back({id, p.name, id == 1 ? g_session->pingMs() : 0u, CharactersOf(id), false});
     }
     m.name = g_cfg.name;
     m.address = g_cfg.joinAddress;
@@ -584,12 +591,17 @@ void LogAndConsoleUpkeep() {
     snprintf(status, sizeof(status), "%s   |   %zu entites, %zu PNJ   |   vitesse %.1f%s   |   %s", FrenchState(g_session->state()), g_session->entityCount(),
              g_session->npcCount(), kenshi::GetFrameSpeed(), kenshi::GetPaused() ? " (PAUSE)" : "", g_cfg.name.c_str());
     m.status = status;
+    std::set<uint8_t> gods;   // host: players in god mode (Administration), shown in their state
+    if (g_session->isHost() && g_world->Ready())
+        for (const auto& a : AdminPlayers(*g_session, *g_world, g_cfg.name))
+            if (a.god) gods.insert(a.id);
     if (g_session->isHost() || g_session->isClient()) {
         ConsolePlayer me;
         me.id = g_session->localId();
         me.name = g_cfg.name + " (toi)";
         me.characters = CharactersOf(me.id);
         me.state = g_session->isHost() ? "hote" : "en jeu";
+        if (gods.count(me.id)) me.state += " [dieu]";
         m.players.push_back(me);
     }
     for (auto& [id, p] : g_session->players()) {
@@ -599,6 +611,7 @@ void LogAndConsoleUpkeep() {
         cp.pingMs = p.rttMs;
         cp.characters = CharactersOf(id);
         cp.state = !p.inGame ? "arrive (telechargement)" : p.editing ? "cree son personnage" : "en jeu";
+        if (gods.count(id)) cp.state += " [dieu]";
         if (p.reportAt >= 0) {
             const auto& r = p.report;
             char b[200];
@@ -673,6 +686,7 @@ void Tick(bool live) {
     if (g_cfg.debugCommands) DebugPoll(*g_session, *g_world, live);
     SteamUpkeep();
     if (live) g_session->CountFrame();
+    if (live || !g_session->isHost()) AdminUpkeep(*g_session, *g_world);   // god modes follow their players
     LogAndConsoleUpkeep();
     g_session->Tick(live);
     ResyncUpkeep();

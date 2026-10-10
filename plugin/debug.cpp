@@ -1,4 +1,5 @@
 #include "debug.h"
+#include "admin.h"
 
 #include <windows.h>
 
@@ -834,6 +835,14 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         for (size_t i = 0; i < squad.size(); ++i)
             if (s.ownerOf(w.HostHandleOf(squad[i])) == id) out += " " + std::to_string(i);
         return out;
+    }
+    if (cmd == "admin") {   // admin <verb> ...: (host) the Administration section's actions (plugin/admin.cpp); refused elsewhere
+        std::string line;
+        std::getline(in, line);
+        bool ok = false;
+        std::string r = AdminRun(line, s, w, &ok);
+        for (auto& ch : r) if (ch == '\n') ch = '|';
+        return (ok ? "ok " : "err ") + r;
     }
     if (cmd == "tpplayer") {   // tpplayer <playerId>: (host) that player's characters next to squad member 0, as the admin teleport does
         int id = -1;

@@ -291,6 +291,11 @@ Vtables (pour reconnaître un objet) :
 | +0x2A8 | escouade montrée par la barre d'escouade (`setCurrentPlatoon`) |
 | +0x2B0 | `lektor<Character*>` des personnages du joueur |
 
+- `PlayerInterface::playerMove(const Vector3& pos, Building*)` (détourné) reçoit le point du sol où
+  le joueur a cliqué droit pour un déplacement, hauteur du sol comprise : l'administration le garde
+  comme « point marqué » pour y téléporter des persos (pas de fonction de hauteur du terrain
+  connue). Un clic sur la carte du monde passe-t-il aussi par là ? Non vérifié.
+
 ### RootObject / Character
 | Offset | Champ |
 |---|---|
@@ -346,6 +351,14 @@ Emplacements de vtable :
   - Offsets : 0x80, 0x120, 0xE4, 0xE0, 0xCC, 0xDC, 0xD0, 0xD4, 0x98, 0xAC, 0x114, 0xE8, 0xEC,
     0xA4, 0x94, 0x88, 0x124, 0x90, 0xB8, 0xA8, 0x8C, 0xF8, 0xFC, 0x100, 0x108, 0x104, 0x10C,
     0xF0, 0x118, 0x110, 0xF4, 0xB0, 0xD8, 0x9C.
+- `increaseStat(float& stat, float amount, float upperLimit)` (`0x8C5DF0`, désassemblé le 10 oct.
+  pour l'administration) : `stat += amount * ((upperLimit - stat) / upperLimit)²`. Rien ne change
+  si `amount <= 0`, si `amount > 20` (constante `0x1683188` = 20.0) ou si le facteur dépasse 20. Un
+  résultat NaN est annulé (l'ancienne valeur revient ; si elle-même est NaN, la compétence passe à
+  20). Le jeu l'appelle avec `upperLimit` = 100. Conséquences : un « gain d'expérience » se donne
+  par paquets de 20 au plus, avec des rendements décroissants (à 50, 20 points donnent +5) ; près
+  de 100, les gains deviennent infimes (à 99, +0,002 par appel de 20). L'administration (niveaux)
+  calcule chaque appel pour tomber juste et écrit le dernier bout elle-même après 600 appels.
 
 ### MedicalSystem (Character + 0x458)
 | Offset | Champ |

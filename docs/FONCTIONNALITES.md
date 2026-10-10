@@ -370,6 +370,46 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   personnage.
 - Vérifié par la suite.
 
+### Administration de l'hôte (dieu, TP, XP, soins, argent) 🟡 implémenté, à vérifier en jeu
+- **L'hôte** a, dans la fenêtre Multijoueur, une liste des joueurs (nom, ping, personnages, persos
+  à terre) avec une ligne d'actions par joueur et une ligne « Tout le monde » (l'hôte compris) :
+  - **Dieu** : case à cocher, l'état est affiché. Le mode dieu est retenu par joueur (compte Steam,
+    sinon nom), pas par personnage : il est réappliqué 5 fois par seconde aux persos de ce joueur,
+    donc il tient aux changements de zone, aux reconnexions et aux nouveaux persos. « Tout le
+    monde » couvre toute l'escouade, nouveaux venus compris ; décocher un joueur pendant ce temps
+    laisse les autres en mode dieu. Il s'arrête quand l'hôte cesse d'héberger. Activer le mode dieu
+    soigne d'abord.
+  - **TP** : ses persos près de l'hôte (« TP moi »), l'hôte près de lui (« Aller »), près d'un autre
+    joueur ou au *point marqué* (« TP à… »). Le point marqué est le dernier endroit où l'hôte a
+    ordonné un déplacement par clic droit au sol (`PlayerInterface::playerMove`, déjà détourné) :
+    on a ainsi la hauteur du sol. Les commandes acceptent aussi des coordonnées. C'est le TP admin
+    sûr (`TeleportCharacters`) : un corps à terre est relevé avant, recouché à l'arrivée, un perso
+    porté est posé ; le jeu du joueur téléporté a droit à 120 s de gel (chargement de zone).
+    Confirmation (second clic) quand un des persos déplacés est à terre.
+  - **XP** : une compétence (ou toutes) et une quantité réglées sous la liste, en points
+    d'expérience ou en niveaux. Les points passent par la fonction du jeu `increaseStat`, par
+    appels de 20 au plus (le jeu refuse au-delà) : mêmes rendements décroissants qu'en jouant. Les
+    niveaux aussi, chaque appel calculé pour tomber juste ; tout près de 100 (où les gains
+    deviennent infimes), le reste est écrit directement après 600 appels. Les valeurs de l'hôte
+    partent chez les clients par la synchro habituelle des compétences. Confirmation au-delà de
+    1000 points ou 10 niveaux ; refus au-delà de 20000 points ou 100 niveaux.
+  - **Soigner** : `Character::healCompletely` (blessures, sang, K.-O.), puis relève un perso resté
+    inconscient.
+  - **Argent** : cats ajoutés (ou retirés) à l'argent commun de l'escouade.
+- Chaque action s'exécute sur le fil du jeu de l'hôte, est journalisée en anglais (« admin: … ») et
+  le joueur concerné reçoit un message en français dans son fil de discussion (« * L'hôte t'a
+  téléporté près de lui. ») ; l'hôte, lui, voit un message à l'écran.
+- Les mêmes actions en commandes (console dans le jeu, console hors du jeu) : `admin god`,
+  `admin tp`, `admin xp`, `admin heal`, `admin money`, `admin list` (voir le README). Les anciennes
+  `god`, `heal` et `xp <id> <n>` (niveaux dans toutes les compétences) passent par là.
+- **Le client** n'a ni la section ni les commandes : sa console répond « commande réservée à
+  l'hôte », et aucun message réseau ne permet d'en demander une (pas de changement de protocole :
+  le message au joueur est un `Chat` « de l'hôte », comme pour un commerce refusé).
+- Tests : `TestAdmin` (syntaxe, calcul de l'XP du jeu, registre du mode dieu, message à un seul
+  joueur) ; expérience `admin` (pas encore lancée en jeu).
+- **Pas fait** : remettre la faim à zéro (l'échelle de la faim n'est pas connue avec certitude) ;
+  ressusciter un mort.
+
 ### Téléportation admin (« TP vers moi ») ✅ — perso à terre ou porté 🟡 implémenté, à vérifier en jeu
 - Un personnage à terre (K.-O.) est désormais déplacé aussi : il quitte le ragdoll, est téléporté,
   puis se recouche 0,5 s plus tard s'il est toujours inconscient (un ragdoll lancé juste après une
