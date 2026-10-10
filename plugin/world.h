@@ -431,7 +431,8 @@ private:
     bool RemoteDialogParties(void* dialogue, kenshi::Character*& pc, kenshi::Character*& other);
     // gameOrder: the game's own pick up order was given (we only watch it, and walk the character
     // there ourselves if it has not moved by checkAt); startDist: its distance to the item then
-    struct PendingPickup { kc::Handle item; double until; bool gameOrder = false; double checkAt = 0; float startDist = 0; };
+    struct PendingPickup { kc::Handle item; double until; bool gameOrder = false; double checkAt = 0; float startDist = 0; bool pauseLogged = false; };
+    double lastPickupTick_ = 0;   // host: last UpdatePendingPickups (paused time is not counted)
     std::unordered_map<kc::Handle, PendingPickup, kc::HandleHash> pickups_;   // host: character -> item it goes to take             // client: last damage number shown on each               // client: "<char>|<anim>" -> last attempt
     std::mutex toastMutex_;
     std::vector<std::string> toasts_;

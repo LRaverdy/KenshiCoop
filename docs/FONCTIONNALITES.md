@@ -283,7 +283,8 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   inventaire (marchandises de magasin, objets de décor de la ville, que le jeu range dans un groupe
   d'objets ou garde non physiques). Puis il donne au perso du client l'ordre « ramasser » du jeu
   lui-même : le perso y va et le prend, en le volant (avec la réaction des gardes) s'il appartient à
-  quelqu'un. Expérience `groundpick` (à lancer en ville).
+  quelqu'un. Pendant une pause (dont celle de l'éditeur de personnage d'un joueur qui arrive), la
+  demande attend la reprise. Expérience `groundpick` (à lancer en ville).
 
 ### Inventaires, équipement, fouille des corps ✅
 - **Le joueur** voit le même inventaire et le même équipement partout. Il peut fouiller un
