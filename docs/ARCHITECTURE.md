@@ -533,7 +533,16 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 - Départ d'un joueur : ses conversations sont terminées dans le jeu (live tick). `SweepDialogs`
   (0,5 s, thread du jeu) ferme celles qui sont finies sans fermeture (combat, TP, K.-O.).
 - Recrue : un PNJ suivi qui entre dans la faction du joueur devient perso d'escouade (`JoinSquad`) ;
-  il va au joueur qui lui parlait (`recentPartners_`, par identité).
+  il va au joueur qui lui parlait (`recentPartners_`, par identité). Le crochet de
+  `PlayerInterface::recruit` (hôte, `hk_recruit`) voit le recrutement dans la conversation d'un
+  client : sans éditeur chez l'hôte, `IWorld::TakeRecruits` → `pendingRecruits_` (joueur, identité,
+  ancien handle) ; à l'arrivée de la recrue (nouvelle entité ou `JoinSquad`) : à ce joueur, `Bind`
+  avec `previous` = son handle de PNJ, `EditCharacter` si le jeu voulait l'éditeur. Client : un
+  `Bind` d'escouade avec `previous` renomme sa copie (`Rehandle`) et la marque `adopt` ;
+  `IWorld::AdoptRecruit` la fait entrer dans la faction du joueur (le `recruit` du jeu, sans éditeur).
+- « Parler » d'un joueur à un PNJ de sa propre conversation : `TalkTargetBusy(from, …)` ne refuse
+  jamais pour lui ; même perso → `ResendDialog` ; autre perso → `EndDialog` puis la nouvelle ;
+  conversation du jeu avec un de ses persos sans fenêtre → `IWorld::EndConversationOf`.
 
 ### Inventaires (`SendInventories`, `ClientInventoryDiff`, `HostInvOp`)
 1. L'hôte envoie l'inventaire complet de chaque entité dont l'empreinte a changé ; celui d'un

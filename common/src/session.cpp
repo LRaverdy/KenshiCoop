@@ -161,6 +161,8 @@ void Session::Leave() {
     hostDialogs_.clear();
     pendingDialogEnds_.clear();
     recentPartners_.clear();
+    pendingRecruits_.clear();
+    talkToldAt_.clear();
     dialogBusy_ = 0;
     lastSquads_ = SquadsMsg{};
     haveSquads_ = false;
@@ -236,6 +238,7 @@ void Session::HostTick(double now, bool live) {
     HostJoinFlow(now, live);
     if (state_ != SessionState::Hosting || !live) return;
 
+    TakeRecruits();   // before the newcomers are given out (UpdateInterest)
     if (now >= nextInterest_) {
         nextInterest_ = now + kInterestInterval;
         UpdateInterest();
@@ -777,11 +780,19 @@ void Session::UpdateInterest() {
             for (const auto& [oh, pid] : owners_) if (oh == h) e.owner = pid;
         e.keep = true;
         byHandle_[h] = e.netId;
+        // a recruit made in a player's conversation, never followed as an NPC before: that player's,
+        // and every player is told which NPC of their world it is (its handle before it joined)
+        const PendingRecruit* rec = squad && squadKnown_ ? RecruitOf(h) : nullptr;
+        if (rec) {
+            e.owner = rec->player;
+            owners_.emplace_back(h, rec->player);
+        }
         const bool assigned = e.owner != hostId_;
         Entity& ref = entities_[e.netId] = std::move(e);
-        for (auto& [pid, p] : players_) if (p.inGame) SendBind(ref, p.peer);
+        for (auto& [pid, p] : players_) if (p.inGame) SendBind(ref, p.peer, rec ? rec->before : Handle{});
         if (squad) controllableDirty_ = true;
-        if (squad && !assigned && squadKnown_) newcomers.push_back(h);
+        if (rec) RecruitJoined(ref, *rec);
+        else if (squad && !assigned && squadKnown_) newcomers.push_back(h);
         return ref;
     };
 
@@ -1748,29 +1759,127 @@ void Session::JoinSquad(Entity& e, std::vector<Handle>& newcomers, const Handle*
     e.owner = hostId_;
     for (const auto& [oh, pid] : owners_)
         if (oh == e.handle && (pid == hostId_ || players_.count(pid))) e.owner = pid;
+    const PendingRecruit* rec = squadKnown_ ? RecruitOf(e.handle) : nullptr;
+    if (rec && e.owner == hostId_) {
+        e.owner = rec->player;
+        owners_.emplace_back(e.handle, rec->player);
+    }
     log_("NPC " + world_.CharacterNameOf(e.handle) + " joined the player faction: a squad character now");
-    for (auto& [pid, p] : players_) if (p.inGame) SendBind(e, p.peer, previous ? *previous : Handle{});
+    for (auto& [pid, p] : players_) if (p.inGame) SendBind(e, p.peer, previous ? *previous : (rec ? rec->before : Handle{}));
     controllableDirty_ = true;
-    if (e.owner == hostId_ && squadKnown_) newcomers.push_back(e.handle);
+    if (rec) RecruitJoined(e, *rec);
+    else if (e.owner == hostId_ && squadKnown_) newcomers.push_back(e.handle);
+}
+
+// The game's recruitments in a client's conversation (seen by the plugin's recruit hook): who gets
+// the newcomer is known at once, not guessed from who answered last.
+void Session::TakeRecruits() {
+    world_.TakeRecruits(scratchRecruits_);
+    const double now = clock_();
+    pendingRecruits_.erase(std::remove_if(pendingRecruits_.begin(), pendingRecruits_.end(),
+                                          [&](const PendingRecruit& r) { return now - r.at > 60.0 || !players_.count(r.player); }),
+                           pendingRecruits_.end());
+    for (const auto& r : scratchRecruits_) {
+        auto pc = byHandle_.find(r.pc);
+        auto ent = pc != byHandle_.end() ? entities_.find(pc->second) : entities_.end();
+        if (ent == entities_.end() || !ent->second.squad || ent->second.owner == hostId_ || !players_.count(ent->second.owner)) {
+            log_("recruitment in a conversation of no player's character: the newcomer stays the host's");
+            continue;
+        }
+        PendingRecruit p;
+        p.player = ent->second.owner;
+        p.identity = r.identity;
+        p.before = r.before;
+        p.editor = r.editor;
+        p.at = now;
+        log_("[" + players_[p.player].name + "] recruited " + world_.CharacterNameOf(r.before) + " in their conversation" +
+             (r.editor ? " (its character editor goes to them, not to the host)" : ""));
+        if (pendingRecruits_.size() < 16) pendingRecruits_.push_back(p);
+    }
+    scratchRecruits_.clear();
+}
+
+const Session::PendingRecruit* Session::RecruitOf(const Handle& h) {
+    const uint64_t id = world_.Identity(h);
+    for (const auto& r : pendingRecruits_)
+        if ((id && r.identity == id) || r.before == h) return &r;
+    return nullptr;
+}
+
+void Session::RecruitJoined(Entity& e, const PendingRecruit& r) {
+    const PendingRecruit rec = r;   // (erased below)
+    pendingRecruits_.erase(std::remove_if(pendingRecruits_.begin(), pendingRecruits_.end(),
+                                          [&](const PendingRecruit& p) { return p.identity == rec.identity && p.before == rec.before; }),
+                           pendingRecruits_.end());
+    auto pl = players_.find(rec.player);
+    if (pl == players_.end()) return;
+    log_("a new squad character (" + world_.CharacterNameOf(e.handle) + ") goes to " + pl->second.name + ", who recruited it");
+    controllableDirty_ = true;
+    if (rec.editor && pl->second.inGame) {   // the game wanted its editor: on that player's screen
+        Writer w;
+        Encode(w, EditCharacter{e.netId});
+        SendReliable(pl->second.peer, w);
+    }
 }
 
 // One conversation at a time per NPC: busy when a client's conversation shown here has it with
 // another character than the actor, or when the game has it talking with someone else.
-bool Session::TalkTargetBusy(uint32_t actorNetId, const Handle& actor, const Handle& npc, std::string& with) {
+bool Session::TalkTargetBusy(uint8_t from, uint32_t actorNetId, const Handle& actor, const Handle& npc, std::string& with, uint32_t& own,
+                             bool& ownStale) {
+    own = 0;
+    ownStale = false;
     const uint64_t npcId = world_.Identity(npc);
     for (const auto& [id, d] : hostDialogs_) {
         const bool same = d.npc == npc || (npcId && d.npcIdentity == npcId);
-        if (!same || d.pc == actorNetId) continue;
+        if (!same) continue;
+        if (d.owner == from || d.pc == actorNetId) { own = id; continue; }   // their own: resumed or replaced, never "busy"
         auto pe = entities_.find(d.pc);
         with = pe != entities_.end() ? world_.CharacterNameOf(pe->second.handle) : std::string();
         return true;
     }
+    if (own) return false;
     Handle other;
     if (!world_.TalkingWith(npc, other) || !other.valid() || other == actor) return false;
     const uint64_t a = world_.Identity(actor);
     if (a && world_.Identity(other) == a) return false;
+    // the game still has it talking with one of that player's characters (by handle or identity:
+    // a character's handle changes with its squad): a conversation of theirs no window shows
+    const Entity* oe = entityByHandle(other);
+    if (!oe)
+        if (const uint64_t oid = world_.Identity(other); oid)
+            if (auto bi = byIdentity_.find(oid); bi != byIdentity_.end())
+                if (auto it = entities_.find(bi->second); it != entities_.end()) oe = &it->second;
+    if (oe && oe->squad && oe->owner == from) { ownStale = true; return false; }
     with = world_.CharacterNameOf(other);
     return true;
+}
+
+void Session::ResendDialog(uint32_t dialogId) {
+    auto o = hostDialogs_.find(dialogId);
+    if (o == hostDialogs_.end()) return;
+    auto pl = players_.find(o->second.owner);
+    if (pl == players_.end() || !pl->second.inGame) return;
+    const HostDialog& d = o->second;
+    DialogMsg m;
+    DialogEvent open;
+    open.kind = DialogKind::Open;
+    open.dialogId = dialogId;
+    open.pcNetId = d.pc;
+    open.text = d.npcName;
+    m.events.push_back(open);
+    if (d.turn) {
+        DialogEvent line;
+        line.kind = DialogKind::Text;
+        line.dialogId = dialogId;
+        line.pcNetId = d.pc;
+        line.text = d.text;
+        line.replies = d.replies;
+        line.turn = d.turn;
+        m.events.push_back(std::move(line));
+    }
+    Writer w;
+    Encode(w, m);
+    SendReliable(pl->second.peer, w);
 }
 
 void Session::PushControllable() {
@@ -2496,7 +2605,42 @@ void Session::ApplyCommand(uint8_t from, const Command& c) {
     // talk: one conversation at a time per NPC
     if (c.kind == CommandKind::Task && (c.task == kTaskTalk || c.task == kTaskTalkNearest) && c.subject.valid()) {
         std::string with;
-        if (TalkTargetBusy(c.netId, it->second.handle, c.subject, with)) {
+        uint32_t own = 0;
+        bool ownStale = false;
+        const bool busy = TalkTargetBusy(from, c.netId, it->second.handle, c.subject, with, own, ownStale);
+        if (!busy && own) {
+            auto o = hostDialogs_.find(own);
+            if (o->second.pc == c.netId) {
+                // the same character again (its window closed there, or a click while walking to
+                // it): the conversation goes on, shown again on their screen
+                log_("[" + who + "] " + what + ": their conversation with " + o->second.npcName + " is shown again");
+                ResendDialog(own);
+            } else {
+                // another of their characters: the new conversation replaces the old one
+                log_("[" + who + "] " + what + ": their other conversation with " + o->second.npcName + " ends first");
+                world_.EndDialog(own);
+                if (auto again = hostDialogs_.find(own); again != hostDialogs_.end()) {
+                    DialogMsg m;
+                    DialogEvent e;
+                    e.kind = DialogKind::Close;
+                    e.dialogId = own;
+                    e.pcNetId = again->second.pc;
+                    m.events.push_back(e);
+                    if (auto pl = players_.find(from); pl != players_.end()) {
+                        Writer w;
+                        Encode(w, m);
+                        SendReliable(pl->second.peer, w);
+                    }
+                    hostDialogs_.erase(again);
+                }
+            }
+        } else if (!busy && ownStale) {
+            // the game still has that NPC in a conversation with one of their characters that no
+            // window shows (a new "talk" then did nothing): ended, the new one can start
+            log_("[" + who + "] " + what + ": a stale conversation of theirs with " + world_.CharacterNameOf(c.subject) + " ended first");
+            world_.EndConversationOf(c.subject);
+        }
+        if (busy) {
             ++dialogBusy_;
             log_("[" + who + "] " + what + " -> refused: " + world_.CharacterNameOf(c.subject) + " is busy talking with " + with);
             Result res;
@@ -2630,11 +2774,24 @@ void Session::ClientTick(double now, bool live) {
         if (e.present) e.missingSince = -1;
         else if (e.missingSince < 0) e.missingSince = now;
         if (e.squad && !e.present) ++missing;
+        // a recruit of the host's game: our copy is still the NPC it was here, it joins the player
+        // faction too (else it stays an NPC no one can select)
+        if (e.adopt && e.squad && e.present && (fullCheck || e.adoptTries == 0)) {
+            const std::string name = world_.CharacterNameOf(e.handle);
+            if (world_.AdoptRecruit(e.handle)) {
+                e.adopt = false;
+                log_("recruit " + name + " joined the player faction here too");
+            } else if (++e.adoptTries >= 5) {
+                e.adopt = false;
+                log_("recruit " + name + " could not join the player faction here");
+            }
+        }
     }
     // Our own characters are never recreated (a missing one means a different save); another
-    // player's can be: it may have been made for a player who joined after we did.
+    // player's can be: it may have been made for a player who joined after we did. A recruit of ours
+    // whose NPC is not in our world either: recreated, then it joins our faction (e.adopt).
     auto spawnable = [&](const Entity& e) {
-        return !e.present && (!e.squad || e.owner != localId_) && e.hasSpawn && !e.buf.empty() && now - e.missingSince >= kSpawnGrace;
+        return !e.present && (!e.squad || e.owner != localId_ || e.adopt) && e.hasSpawn && !e.buf.empty() && now - e.missingSince >= kSpawnGrace;
     };
     // Characters the local game made on its own have no place in the host's world: they stand in
     // for missing host characters of the same kind, or go away.
@@ -2695,6 +2852,19 @@ void Session::ClientTick(double now, bool live) {
         Command c = cmd;
         c.seq = ++cmdSeq_;
         c.netId = e->netId;
+        if (c.kind == CommandKind::Task && (c.task == kTaskTalk || c.task == kTaskTalkNearest) && c.subject.valid()) {
+            // the conversation opens once the character got there (the host's game walks it there):
+            // said now, once per NPC every few seconds (players click again when nothing shows)
+            double& told = talkToldAt_[c.subject.serial ^ (c.subject.index << 1)];
+            if (clock_() - told > 5.0) {
+                told = clock_();
+                const std::string who = world_.CharacterNameOf(h), npc = world_.CharacterNameOf(c.subject);
+                AddChat("* " + (who.empty() ? std::string("Ton personnage") : who) + " va parler à " + (npc.empty() ? std::string("ce personnage") : npc) +
+                            " : la conversation s'ouvrira à son arrivée.",
+                        "talk order sent: " + who + " walks to " + npc);
+            }
+            if (talkToldAt_.size() > 64) talkToldAt_.clear();
+        }
         sentOrders_[c.seq] = {h, c};   // until the host answers (Result)
         while (sentOrders_.size() > 64) sentOrders_.erase(sentOrders_.begin());
         Writer w;
@@ -2804,8 +2974,15 @@ void Session::ClientTick(double now, bool live) {
     if (editRequest_) {
         auto it = entities_.find(editRequest_);
         if (it != entities_.end() && it->second.present && world_.OpenCharacterEditor(it->second.handle)) {
+            // our first character, or a recruit (a "join with edit" line of a conversation: the
+            // host's game never shows that editor, it is ours)
+            bool recruit = false;
+            for (const auto& [id, o] : entities_) recruit |= id != it->first && o.squad && o.owner == localId_ && !o.container;
             editRequest_ = 0;
-            AddChat("* Crée ton personnage, puis valide : tout le monde le verra ainsi.", "the host asks us to make our character (editor open)");
+            if (recruit)
+                AddChat("* Personnalise ta recrue, puis valide : tout le monde la verra ainsi.", "the host asks us to edit our recruit (editor open)");
+            else
+                AddChat("* Crée ton personnage, puis valide : tout le monde le verra ainsi.", "the host asks us to make our character (editor open)");
         }
     }
     // Tell the host whether our character editor is open (the same tick it opens): it holds the
@@ -2995,7 +3172,16 @@ void Session::ClientPacket(Msg type, Reader& r) {
             if (m.previous.valid() && m.previous == e.handle) world_.Rehandle(e.handle, m.handle);
             byHandle_.erase(e.handle);
             e.checked = false;
+        } else if (e.netId == 0 && m.previous.valid() && m.squad && !(m.previous == m.handle)) {
+            // a recruit the host never followed as an NPC: our copy is that NPC, under its old handle
+            if (auto old = byHandle_.find(m.previous); old != byHandle_.end() && old->second != m.netId) {
+                entities_.erase(old->second);   // the NPC it was (another netId): it is this one now
+                byHandle_.erase(old);
+            }
+            world_.Rehandle(m.previous, m.handle);
+            e.checked = false;
         }
+        if (m.squad && m.previous.valid() && !e.squad) { e.adopt = true; e.adoptTries = 0; }   // it joined the player faction: ours too
         e.netId = m.netId;
         e.handle = m.handle;
         e.owner = m.owner;

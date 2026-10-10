@@ -180,7 +180,14 @@ struct FakeWorld : IWorld {
     uint64_t Identity(const Handle& h) override { return chars.count(h.serial) ? 0x1000 + h.serial : 0; }
     std::vector<std::pair<Handle, Handle>> rehandles;
     std::map<uint32_t, uint32_t> container;   // serial -> current container (part of the handle)
-    void Rehandle(const Handle& from, const Handle& to) override { rehandles.emplace_back(from, to); }
+    bool moveOnRehandle = false;   // the local character then answers to the new handle (a recruit's)
+    void Rehandle(const Handle& from, const Handle& to) override {
+        rehandles.emplace_back(from, to);
+        if (auto it = chars.find(from.serial); moveOnRehandle && it != chars.end() && !chars.count(to.serial)) {
+            chars[to.serial] = it->second;
+            chars.erase(it);
+        }
+    }
     bool ReadSpawnInfo(const Handle& h, SpawnInfo& out) override {
         auto it = chars.find(h.serial);
         if (it == chars.end()) return false;
@@ -397,6 +404,16 @@ struct FakeWorld : IWorld {
         auto it = talking.find(npc.serial);
         if (it == talking.end()) return false;
         other = H(it->second);
+        return true;
+    }
+    std::vector<uint32_t> endedConversations;   // NPCs whose stale conversation was ended
+    void EndConversationOf(const Handle& npc) override { endedConversations.push_back(npc.serial); talking.erase(npc.serial); }
+    std::vector<WorldRecruit> recruits;          // host: what the recruit hook saw
+    void TakeRecruits(std::vector<WorldRecruit>& out) override { out.swap(recruits); recruits.clear(); }
+    std::vector<uint32_t> recruitsAdopted;       // client: recruits that joined the player faction here
+    bool AdoptRecruit(const Handle& h) override {
+        recruitsAdopted.push_back(h.serial);
+        if (auto it = chars.find(h.serial); it != chars.end()) it->second.squad = true;
         return true;
     }
     int saysShown = 0;
@@ -3525,6 +3542,65 @@ static void TestTaskTargets() {
                 CHECK(got || !why.empty());
             }
         }
+    // every task a player can give from the game's UI (KenshiLib / fcs_enums.def numbering), each on a
+    // subject of the right kind: allowed through every way of giving orders. The session of 10 oct.
+    // refused 16 (the attack's follow-up, queued by the right click on an enemy) 26 times, 69 with
+    // the carried body named, 29 on an item, 45 on a squad mate.
+    struct UiTask { int task; const char* what; uint32_t f; };
+    const uint32_t npcUp = F | kTgtCharacter | kTgtConscious, npcDown = F | kTgtCharacter | kTgtDown, npcDead = F | kTgtCharacter | kTgtDead | kTgtDown;
+    const uint32_t mateUp = F | kTgtCharacter | kTgtConscious | kTgtSquad, me = F | kTgtCharacter | kTgtSelf | kTgtConscious | kTgtSquad;
+    const uint32_t siteOurs = F | kTgtBuilding | kTgtUnfinished | kTgtOurs, bldOurs = F | kTgtBuilding | kTgtOurs, bldAny = F | kTgtBuilding;
+    const uint32_t mach = F | kTgtBuilding | kTgtMachine, bedF = F | kTgtBuilding | kTgtBed, cageF = F | kTgtBuilding | kTgtCage;
+    const uint32_t doorF = F | kTgtBuilding | kTgtDoor, box = F | kTgtContainer | kTgtBuilding, itemF = F | kTgtItem;
+    const UiTask ui[] = {
+        {2, "construire", siteOurs}, {71, "apporter les materiaux", siteOurs}, {125, "batisseur (tache)", 0},
+        {95, "reparer", bldOurs}, {95, "reparer un chantier", siteOurs}, {96, "demonter", bldOurs}, {96, "demonter un chantier", siteOurs},
+        {3, "ramasser", itemF}, {259, "manger", itemF}, {259, "manger (soi)", 0}, {244, "prendre a manger", box}, {231, "manger les cultures", bldAny},
+        {4, "attaquer", npcUp}, {5, "attaquer (clic droit)", npcUp}, {16, "attaquer les ennemis (suite du clic droit)", npcUp},
+        {61, "attaquer sans provocation", npcUp}, {227, "attaquer un animal", npcUp}, {235, "tirer", npcUp}, {262, "tirer", npcUp},
+        {263, "tirer", npcUp}, {228, "assommer en furtif", npcUp}, {229, "tuer en furtif", npcUp}, {246, "kidnapper", npcDown},
+        {6, "degainer", 0}, {7, "rengainer", 0}, {27, "s'accroupir", 0}, {28, "se relever", me}, {30, "tenir la position", 0}, {54, "se reposer", 0},
+        {29, "aller a", 0}, {29, "aller a un objet", itemF}, {29, "aller a un batiment", bldAny}, {29, "aller vers un perso", npcUp},
+        {44, "suivre", mateUp}, {31, "rester pres", mateUp}, {45, "garde du corps", mateUp},
+        {12, "parler", npcUp}, {126, "parler (au plus proche)", npcUp},
+        {25, "premiers soins", npcDown}, {25, "premiers soins (soi)", me}, {57, "reparer un robot", mateUp}, {58, "medecin (tache)", 0},
+        {60, "premiers soins robot", npcDown}, {249, "attelle", npcDown}, {250, "attelle (tache)", 0}, {269, "soigner les jambes", 0},
+        {105, "secourir", 0}, {148, "secourir (bouton)", 0}, {142, "secourir le chef", 0},
+        {26, "fouiller un corps", npcDead}, {26, "voler dans un coffre", box}, {26, "voler un PNJ (pickpocket)", npcUp}, {284, "fouiller un contenant", box},
+        {177, "fouiller les morts (tache)", 0}, {238, "depecer les animaux (tache)", 0}, {88, "transporter (tache)", 0}, {184, "ranger le butin", box},
+        {241, "ranger les ressources", 0},
+        {68, "porter", npcDown}, {225, "porter (ordre)", npcDead}, {69, "deposer", 0}, {69, "deposer le porte", npcDown}, {69, "deposer pres d'un perso", mateUp},
+        {70, "deposer dans un lit", bedF}, {98, "dormir", bedF}, {258, "dormir (ordre)", bedF}, {99, "mettre au lit", npcDown}, {99, "mettre au lit (lit)", bedF},
+        {116, "sortir du lit", 0}, {257, "sortir du lit (gueri)", me},
+        {107, "entrer en cage", cageF}, {108, "mettre en cage", npcDown}, {108, "mettre en cage (cage)", cageF}, {110, "liberer", cageF},
+        {110, "liberer un prisonnier", npcDown}, {133, "sortir de cage", 0}, {166, "enchainer", npcDown},
+        {185, "couper les chaines", mateUp}, {186, "forcer les chaines", mateUp}, {201, "crocheter les chaines", npcUp}, {219, "retirer ses chaines", 0},
+        {72, "ouvrir", doorF}, {73, "fermer", doorF}, {76, "crocheter", doorF}, {76, "crocheter une cage", cageF}, {77, "verrouiller", doorF},
+        {78, "deverrouiller", doorF}, {140, "deverrouiller (ordre)", doorF}, {81, "enfoncer", doorF}, {226, "enfoncer (ordre)", doorF},
+        {285, "couper une serrure", doorF}, {286, "forcer une serrure", doorF}, {123, "enfoncer un portail", doorF},
+        {87, "utiliser une machine / une mine", mach}, {152, "machine automatique", mach}, {146, "tourelle", mach}, {149, "tourelle", mach},
+        {234, "tourelle (tache)", mach}, {89, "tout faire tourner (tache)", 0}, {91, "debloquer", mach}, {92, "recolter la production", mach},
+        {93, "remplir une machine", mach}, {113, "vider la sortie", mach}, {247, "recolter (materiaux)", mach}, {136, "nourrir la machine", mach},
+        {150, "prospecter", 0}, {97, "s'entrainer", bldAny}, {255, "trone", bldAny}, {275, "s'asseoir", bldAny},
+        {156, "entrer dans un batiment", bldAny}, {200, "sortir d'un batiment", 0},
+    };
+    for (const auto& u : ui)
+        for (TaskVia via : {TaskVia::AddOrder, TaskVia::NewTask, TaskVia::TaskNearest, TaskVia::AddJob}) {
+            std::string why;
+            const bool ok = TaskTargetAllowed(via, u.task, u.f, &why);
+            if (!ok) std::printf("    UI task %d (%s, via %d) refused: %s\n", u.task, u.what, int(via), why.c_str());
+            CHECK(ok);
+            CHECK(std::string(TaskLabel(u.task)) != "?");
+        }
+    // ... and the dangerous ones stay refused: a building job on a character, a machine job on an
+    // NPC, an attack on oneself, talk to a squad mate, dismantling someone else's building
+    CHECK(!TaskTargetAllowed(TaskVia::AddOrder, 16, F | kTgtCharacter | kTgtDead | kTgtDown, nullptr));
+    CHECK(!TaskTargetAllowed(TaskVia::AddOrder, 96, bldAny, nullptr) && !TaskTargetAllowed(TaskVia::AddOrder, 96, npcUp, nullptr));
+    CHECK(!TaskTargetAllowed(TaskVia::AddJob, 71, npcUp, nullptr) && !TaskTargetAllowed(TaskVia::AddJob, 92, npcUp, nullptr));
+    CHECK(!TaskTargetAllowed(TaskVia::AddOrder, 5, me, nullptr) && !TaskTargetAllowed(TaskVia::AddOrder, 12, mateUp, nullptr));
+    CHECK(!TaskTargetAllowed(TaskVia::AddOrder, 98, npcUp, nullptr) && !TaskTargetAllowed(TaskVia::AddOrder, 76, npcUp, nullptr));
+    CHECK(!TaskTargetAllowed(TaskVia::NewTask, 69, itemF, nullptr));
+    CHECK(TaskTargetWrongKind(TaskVia::AddJob, 92, npcUp, nullptr) && !TaskTargetWrongKind(TaskVia::AddJob, 16, npcUp, nullptr));
     // every task id: a stale or unknown subject never reaches the game; unknown ids are refused
     std::set<int> known;
     for (int task = -5; task < 600; ++task) {
@@ -3932,6 +4008,154 @@ static void TestDialogue() {
     CHECK(host.state() == SessionState::Hosting && cli.state() == SessionState::Connected);
 }
 
+// The 10 oct. session (v0.3.0): a player's own conversation never makes an NPC "busy" for them
+// (another of their characters, a conversation the game kept without a window); a talk order tells
+// them their character walks there; a recruit made in their conversation is theirs, on their screen
+// (the editor some recruits ask for too), and their copy of the NPC joins their faction.
+static void TestTalkAndRecruit() {
+    std::printf("dialogue: own conversations resumed or replaced, never busy; a recruit is its recruiter's, editor included\n");
+    FakeWorld hw, cw, cw2;
+    SetupHost(hw);
+    { FakeChar c4; c4.pos = {150, 0, 0}; c4.dest = c4.pos; hw.chars[4] = c4; }   // a second character for the client
+    for (uint32_t n : {10u, 11u, 12u, 13u, 19u}) {
+        FakeChar npc; npc.squad = false; npc.pos = {110.0f + float(n), 0, 10}; npc.dest = npc.pos;
+        hw.chars[n] = npc;
+        hw.subjectFlags[n] = kTgtCharacter | kTgtConscious;
+    }
+    AtMenu(cw);
+    AtMenu(cw2);
+    cw.moveOnRehandle = true;
+    cw2.moveOnRehandle = true;
+    cw.editorSupported = true;
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port;
+    SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    SessionConfig cc2; cc2.port = hc.port; cc2.name = "D";
+    std::vector<std::string> hostLog;
+    Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
+    Session cli(cw, cc, Now, Quiet("cli"));
+    Session cli2(cw2, cc2, Now, Quiet("cli2"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 9));
+    CHECK(cli2.Join("127.0.0.1", hc.port, &err));
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}, {&cli2, &cw2}};
+    Run(all, 10.0, [&] { return cli2.state() == SessionState::Connected && cli2.entityCount() == 9; });
+    host.Assign(FakeWorld::H(2), cli.localId());
+    host.Assign(FakeWorld::H(4), cli.localId());
+    host.Assign(FakeWorld::H(3), cli2.localId());
+    Run(all, 1.5);
+    std::map<uint32_t, uint32_t> net;
+    host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { net[h.serial] = id; });
+    const uint8_t me = cli.localId(), other = cli2.localId();
+    auto ev = [](DialogKind k, uint32_t id, uint32_t speaker, uint32_t pc, std::string text, std::vector<std::string> replies = {}) {
+        IWorld::WorldDialog d;
+        d.kind = k; d.dialogId = id; d.speaker = FakeWorld::H(speaker); d.pc = FakeWorld::H(pc); d.text = std::move(text); d.replies = std::move(replies);
+        return d;
+    };
+    auto logged = [&](const char* what) {
+        for (const auto& l : hostLog) if (l.find(what) != std::string::npos) return true;
+        return false;
+    };
+    auto talk = [&](uint8_t from, uint32_t seq, uint32_t actor, uint32_t npc) {
+        Command c; c.seq = seq; c.netId = net[actor]; c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = kTaskTalk; c.subject = FakeWorld::H(npc);
+        Writer w; Encode(w, c); CHECK(host.InjectForTest(from, w));
+    };
+    auto busyFor = [](Session& c, uint32_t seq) {
+        for (const auto& r : c.results()) if (r.seq == seq && r.state == ResultState::Rejected && r.reason == ResultReason::Busy) return true;
+        return false;
+    };
+
+    // 1. the client's character 4 talks with NPC 11; its character 2 asks to talk with the same NPC:
+    //    not "busy with" itself (the 10 oct. refusal "Marchand Ruche is busy talking with rob"): the old
+    //    conversation ends, its window closes, the new one runs
+    hw.dialogEvents.push_back(ev(DialogKind::Open, 5, 11, 4, "Marchand"));
+    hw.dialogEvents.push_back(ev(DialogKind::Text, 5, 11, 4, "Tu veux acheter ?", {"Oui", "Non"}));
+    Run(all, 2.0, [&] { return cli.dialog().id == 5 && cli.dialog().turn == 1; });
+    CHECK(cli.dialog().open && cli.dialog().id == 5);
+    int run0 = hw.tasksRun;
+    talk(me, 1100, 2, 11);
+    Run(all, 1.5, [&] { return !cli.dialog().open; });
+    CHECK(!busyFor(cli, 1100));
+    CHECK(hw.tasksRun == run0 + 1);
+    CHECK(std::find(hw.ended.begin(), hw.ended.end(), 5u) != hw.ended.end());
+    CHECK(!cli.dialog().open);
+    CHECK(host.dialogBusyRefusals() == 0 && logged("ends first"));
+    // ... the other player is still refused while the game has NPC 11 talking with the client's character
+    hw.talking[11] = 2;
+    talk(other, 1101, 3, 11);
+    Run(all, 1.5, [&] { return busyFor(cli2, 1101); });
+    CHECK(busyFor(cli2, 1101) && host.dialogBusyRefusals() == 1);
+
+    // 2. the same character clicks "talk" again on the NPC of its open conversation (its window was
+    //    closed on its screen, or a click while walking there): shown again, never busy
+    hw.dialogEvents.push_back(ev(DialogKind::Open, 6, 12, 2, "Garde"));
+    hw.dialogEvents.push_back(ev(DialogKind::Text, 6, 12, 2, "Halte !", {"Bonjour"}));
+    Run(all, 2.0, [&] { return cli.dialog().id == 6 && cli.dialog().turn == 1; });
+    hw.talking[12] = 2;
+    run0 = hw.tasksRun;
+    talk(me, 1102, 2, 12);
+    Run(all, 1.5, [&] { return logged("is shown again"); });
+    CHECK(!busyFor(cli, 1102) && logged("is shown again"));
+    CHECK(cli.dialog().open && cli.dialog().id == 6 && cli.dialog().text == "Halte !" && cli.dialog().replies.size() == 1);
+    CHECK(std::find(hw.ended.begin(), hw.ended.end(), 6u) == hw.ended.end());
+
+    // 3. the game still has NPC 13 talking with the client's character 4, with no window anywhere
+    //    (the 10 oct. "talk -> ok" that opened nothing): ended first, the new talk runs
+    hw.talking[13] = 4;
+    run0 = hw.tasksRun;
+    talk(me, 1103, 2, 13);
+    Run(all, 1.5, [&] { return hw.tasksRun > run0; });
+    CHECK(!busyFor(cli, 1103) && hw.tasksRun == run0 + 1);
+    CHECK(std::find(hw.endedConversations.begin(), hw.endedConversations.end(), 13u) != hw.endedConversations.end());
+    CHECK(logged("stale conversation"));
+
+    // 4. a talk order of the client's own: it is told its character walks there
+    cw.localOrders.push_back({FakeWorld::H(2), [] { Command c; c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = kTaskTalk; c.subject = FakeWorld::H(10); return c; }()});
+    Run(all, 1.0);
+    bool told = false;
+    for (const auto& l : cli.chatLog()) told |= l.find("va parler") != std::string::npos;
+    CHECK(told);
+    const size_t chat0 = cli.chatLog().size();
+    cw.localOrders.push_back({FakeWorld::H(2), [] { Command c; c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = kTaskTalk; c.subject = FakeWorld::H(10); return c; }()});
+    Run(all, 0.5);
+    CHECK(cli.chatLog().size() == chat0);   // once per NPC every few seconds
+
+    // 5. a recruit in the client's conversation with NPC 19 (a "join with edit" line): the host's game
+    //    recruits it without the editor (the hook), the newcomer joins the squad under a new handle (20),
+    //    it is the client's at once, the clients know it is their NPC 19, the client's copy joins its
+    //    faction, and the editor opens on the client's screen only
+    hw.dialogEvents.push_back(ev(DialogKind::Open, 7, 19, 2, "Hep"));
+    hw.dialogEvents.push_back(ev(DialogKind::Text, 7, 19, 2, "Je me joins a toi ?", {"Oui", "Non"}));
+    Run(all, 1.5, [&] { return cli.dialog().id == 7; });
+    hw.recruits.push_back({FakeWorld::H(19), 0x1000 + 20, FakeWorld::H(2), true});
+    FakeChar hep = hw.chars[19];
+    hep.squad = true;
+    hw.chars.erase(19);
+    hw.chars[20] = hep;
+    hw.dialogEvents.push_back(ev(DialogKind::Close, 7, 19, 2, ""));
+    Run(all, 4.0, [&] { return cw.editorOpened > 0 && std::count(cw.recruitsAdopted.begin(), cw.recruitsAdopted.end(), 20u) > 0; });
+    uint32_t hepNet = 0;
+    uint8_t hepOwner = 0;
+    host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t owner, bool, bool) { if (h.serial == 20) { hepNet = id; hepOwner = owner; } });
+    CHECK(hepNet != 0 && hepOwner == me);
+    CHECK(host.CheckActor(me, hepNet) == Session::ActorVerdict::Ok);
+    CHECK(host.CheckActor(other, hepNet) != Session::ActorVerdict::Ok);
+    CHECK(logged("who recruited it"));
+    CHECK(hw.editorOpened == 0);                         // never on the host's screen
+    CHECK(cw.editorOpened == 1 && cw2.editorOpened == 0);
+    CHECK(std::find(cw.rehandles.begin(), cw.rehandles.end(), std::make_pair(FakeWorld::H(19), FakeWorld::H(20))) != cw.rehandles.end());
+    CHECK(std::count(cw.recruitsAdopted.begin(), cw.recruitsAdopted.end(), 20u) == 1);
+    CHECK(std::count(cw2.recruitsAdopted.begin(), cw2.recruitsAdopted.end(), 20u) == 1);
+    Run(all, 1.5, [&] { return std::find_if(cw.controllable.begin(), cw.controllable.end(), [](const Handle& h) { return h.serial == 20; }) != cw.controllable.end(); });
+    CHECK(std::find_if(cw.controllable.begin(), cw.controllable.end(), [](const Handle& h) { return h.serial == 20; }) != cw.controllable.end());
+    bool personalise = false;
+    for (const auto& l : cli.chatLog()) personalise |= l.find("Personnalise ta recrue") != std::string::npos;
+    CHECK(personalise);
+    cw.editorOpen = false;
+    Run(all, 0.5);
+    CHECK(host.state() == SessionState::Hosting && cli.state() == SessionState::Connected && cli2.state() == SessionState::Connected);
+}
+
 // Every message has exactly one authority rule; PeekType accepts exactly the messages; host->client
 // messages sent by a client are refused; a client's map pings are rate-limited by their rule.
 // Workshop: the research, the crafting benches, the machines and the towns' power are the host's;
@@ -3986,6 +4210,24 @@ static void TestWorkshop() {
     hw.machines["bench"].ops = {FakeWorld::H(1)};
     Run(all, 3.0, [&] { return cw.machines["bench"].ops.size() == 1; });
     CHECK(cw.machines["bench"].s.operatorCount == 1 && cw.machines["bench"].ops.size() == 1 && cw.machines["bench"].ops[0] == FakeWorld::H(1));
+    // a mine (a natural node) becomes the player faction's on the host once a player character works
+    // it (the game's Task_OperateMachine): the client is told, so that its copy is the player's too and
+    // the game opens its output window there (Building::select: only for a building of the player
+    // faction; the 10 oct. "mine output window invisible on clients")
+    CHECK(!(cw.machines["bench"].s.flags & kMachOurs));
+    hw.machines["bench"].s.flags |= kMachOurs;
+    Run(all, 3.0, [&] { return (cw.machines["bench"].s.flags & kMachOurs) != 0; });
+    CHECK((cw.machines["bench"].s.flags & kMachOurs) != 0);
+    {
+        MachinesMsg m;
+        MachineState ms; ms.sid = "iron node"; ms.pos = {1, 2, 3}; ms.flags = kMachOurs | kMachPowerOn; ms.maxOperators = 3;
+        m.machines.push_back(ms);
+        Writer w;
+        Encode(w, m);
+        Reader r(w.data(), w.size());
+        MachinesMsg back;
+        CHECK(PeekType(r) == Msg::Machines && Decode(r, back) && back.machines.size() == 1 && back.machines[0].flags == (kMachOurs | kMachPowerOn));
+    }
     // 2. a client queues a tech without the artifacts: refused, nothing paid, the reason in French
     auto ask = [&](ResearchAction a, const std::string& sid) {
         IWorld::LocalResearchAsk r;
@@ -4474,6 +4716,7 @@ int main() {
     TestActorSafety();
     TestGuiToDisplay();
     TestDialogue();
+    TestTalkAndRecruit();   // 10 oct. session: talk busy with oneself, recruits
     TestMap();
     TestManyPlayers();
     TestJoinQueue();

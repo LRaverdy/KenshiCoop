@@ -458,6 +458,9 @@ bool ReadInSomething(Character* c, int& v);   // 0 nothing, 1 in bed, 2 in a cag
 void* FurnitureParent(void* furniture);       // the building a piece of furniture belongs to (or null)
 // A new member of the player's squad, of the same kind as `model`, named `name` (15 chars max).
 Character* CreateRecruit(Character* model, const std::string& name, const kc::Vec3& pos, std::string* err);
+// PlayerInterface::recruit(c, editor = false): an existing character joins the player faction (a
+// client's copy of a recruit the host's game made). False when the call faulted.
+bool RecruitCharacter(Character* c);
 bool CharacterName(const Character* c, std::string& out);
 std::string ClassRvas(const Character* c);   // tests: "<character vtable>/<movement vtable>" as RVAs
 void SelectedHandles(std::vector<kc::Handle>& out);

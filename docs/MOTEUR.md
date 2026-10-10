@@ -70,7 +70,7 @@ Les signatures sont celles du commentaire du code.
 | 26 | `FnCreateItem` | `RootObjectFactory::createItem` | `0x580750` | — | Item* RootObjectFactory::createItem(GameData*, const hand&, GameData* company, GameData* material, int level, Faction*) |
 | 27 | `FnShowTradeWindow` | `ForgottenGUI::showTradeWindow` | `0x791830` | — | void ForgottenGUI::showTradeWindow(const hand& a, const hand& b, TradeWindowType) (différé) |
 | 28 | `FnIsRagdoll` | `Character::isRagdoll` | `0x7D1440` | — | bool Character::isRagdoll() const (au sol en ragdoll, ou porté) |
-| 29 | `FnRecruit` | `PlayerInterface::recruit` | `0x692820` | — | bool PlayerInterface::recruit(Character*, bool editor) |
+| 29 | `FnRecruit` | `PlayerInterface::recruit` | `0x692820` | oui | bool PlayerInterface::recruit(Character*, bool editor) (éditeur : la ligne de dialogue « rejoindre avec édition », action 3 de `_doActions` `0x683775`) |
 | 30 | `FnAddTaskNearest` | `PlayerInterface::addTaskNearestSelectedCharacter` | `0x7FAE70` | oui | void PlayerInterface::addTaskNearestSelectedCharacter(Building*, TaskType, RootObject*, bool shift, const Vector3&, bool noAnimals) |
 | 31 | `FnAddJobSelected` | `PlayerInterface::addJobSelectedCharacters` | `0x7F5A90` | oui | void PlayerInterface::addJobSelectedCharacters(TaskType, RootObject*, bool shift, bool add, const Vector3&) |
 | 32 | `FnEffectHandlerCtor` | `EffectHandler::EffectHandler` | `0x1034F0` | oui | EffectHandler::EffectHandler(GameData* effect, AreaBiomeGroup*, const Vector3& pos) |
@@ -639,6 +639,19 @@ les flèches d'allure appellent `setOrderSelectedCharacters` ; MEDIC (`0x7FAC20`
 comportement (AGRESSIVE / CONFIDENT / SUBMISSIVE) existe dans la mise en page mais est caché.
 
 ### Tâches (`TaskType`, celles que le mod nomme dans le journal)
+La numérotation complète est celle du jeu lui-même : `fcs_enums.def` (dossier de Kenshi), `enum
+taskType`, numérotée depuis 0 (289 valeurs, `NULL_TASK` à `PROTECT_ALLIES_STAY_IN_TOWN`) ; elle
+concorde avec toutes les valeurs relevées au désassemblage. Les tâches qu'un client peut envoyer
+et leur cible : `kc::TaskTargetAllowed` (protocol.cpp), revue le 11/10 contre les constantes passées
+aux quatre fonctions d'ordres (`addOrderSelectedCharacters` 0x7F9E20, `newPlayerTaskSelectedCharacters`
+0x7FA650, `addTaskNearestSelectedCharacter` 0x7FAE70, `addJobSelectedCharacters` 0x7F5A90, appelées
+par des sauts `0x37DAD`, `0x272FA`, `0x311C4`, `0x53323`) et la tâche par défaut de chaque classe de
+bâtiment (vtable +0x418 : `Building` 29 ; `Production`, `Crafting`, `Farm`, `Generator`,
+`WindGenerator`, `RainCollector`, `Torture` 87, ou 152 sans place d'opérateur (+0x3AC) ;
+`ResearchBuilding` 87 ; `StorageBuilding` et `FurnaceBuilding` 26 ; `TurretBuilding` 146 ;
+`UseableStuff` et `LightBuilding` voir plus bas). Le clic droit sur un ennemi (`0x7FBB5C`) : 235 au
+mode tir, sinon 5 puis **16** (`ATTACK_ENEMIES`) ajouté derrière, même cible.
+
 | Valeur | Tâche |
 |---|---|
 | 2 | construire |
@@ -656,7 +669,16 @@ comportement (AGRESSIVE / CONFIDENT / SUBMISSIVE) existe dans la mise en page ma
 | 55 | recruter (centre d'emploi) |
 | 57 | réparer un robot |
 | 58 | médecin (métier) |
-| 60, 61 | premiers soins (robot) |
+| 9, 10, 11, 13, 15, 16 | se battre contre les ennemis alentour, défendre (16 : après l'attaque du clic droit) |
+| 31 / 45 | rester près / garde du corps |
+| 60 | premiers soins (robot) |
+| 61 | attaque sans provocation (`UNPROVOKED_FOCUSED_MELEE_ATTACK`) |
+| 71 | apporter les matériaux à un chantier |
+| 88 à 94, 113, 151, 247 | transporter, tout faire tourner, débloquer, récolter la sortie, remplir, vider une machine |
+| 125 | bâtisseur (métier) |
+| 150 | prospecter |
+| 166 | enchaîner |
+| 185, 186, 201, 219 | couper, forcer, crocheter des chaînes ; ôter les siennes |
 | 68, 225 | porter quelqu'un |
 | 69 | déposer |
 | 70 | déposer dans un lit |
@@ -694,6 +716,16 @@ comportement (AGRESSIVE / CONFIDENT / SUBMISSIVE) existe dans la mise en page ma
 | 285 | couper une serrure |
 | 286 | forcer une serrure |
 | 290 | enfoncer un portail |
+
+**Panneau d'inventaire d'un bâtiment** : `Building::select` (vtable +0x130, `0x5504A0`, commun à
+toutes les classes de bâtiment) joue le son du bâtiment puis appelle `showInventoryBuilding` **seulement
+si** son chantier est fini (`getBuildState()` +0x228, octet 0) **et** sa faction (+0x58) est celle du
+joueur (`Faction`+0x250 non nul). Un filon ou une mine (fonctions 27 et 1) n'a pas de propriétaire
+tant que personne ne le travaille : `Task_OperateMachine` (vtable +0x8, `0x35BA3E`) appelle
+`Building::setFaction(faction de l'ouvrier, nullptr)` (vtable +0xA0, `0x557950` ; pour les fonctions
+1 et 27 il inscrit aussi le bâtiment dans la zone quand il passe de « personne » à une faction, puis
+propage aux meubles et à l'intérieur). Chez un client, où la tâche ne tourne pas, le mod impose le
+propriétaire de l'hôte (`kMachOurs`, `KenshiWorld::SetBuildingOurs`).
 
 Tâches par défaut d'un clic droit sur un meuble, selon la recherche :
 - `StorageBuilding` : toujours 26 ;

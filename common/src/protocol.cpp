@@ -533,6 +533,8 @@ void Encode(Writer& w, const EditCharacter& m) {
     w.u8(uint8_t(Msg::EditCharacter));
     w.varint(m.netId);
 }
+// Names from the game's TaskType enum (Kenshi's own list: fcs_enums.def, enum taskType, numbered
+// from 0; the numbers match the disassembly of the orders the UI gives).
 const char* TaskLabel(int task) {
     switch (task) {
     case 2: return "build";
@@ -540,58 +542,111 @@ const char* TaskLabel(int task) {
     case 4: case 5: return "attack";
     case 6: return "equip weapon";
     case 7: return "put weapon away";
+    case 9: case 10: case 11: case 13: return "attack (attackers)";
     case 12: return "talk";
+    case 15: return "protect allies";
+    case 16: return "attack enemies";
     case 25: return "first aid";
     case 26: return "loot";
     case 27: return "crouch";
     case 28: return "stand up";
     case 29: return "go to";
     case 30: return "hold position";
+    case 31: return "stay close";
+    case 40: return "get near";
     case 44: return "follow";
+    case 45: return "bodyguard";
     case 54: return "rest";
     case 55: return "recruit";
     case 57: return "repair robot";
     case 58: return "medic (job)";
-    case 105: case 142: case 148: return "rescue (job)";
-    case 60: case 61: return "first aid (robot)";
+    case 60: return "first aid (robot)";
+    case 61: return "attack (unprovoked)";
+    case 62: return "stand still";
+    case 63: return "wait for me";
+    case 65: return "get up";
     case 68: case 225: return "carry someone";
     case 69: return "put down";
     case 70: return "put down in a bed";
-    case 72: return "open door";
-    case 73: return "close door";
+    case 71: return "add materials";
+    case 72: case 74: return "open door";
+    case 73: case 75: return "close door";
     case 76: return "pick lock";
-    case 77: return "lock";
-    case 78: return "unlock";
-    case 81: case 226: return "bash door";
+    case 77: case 79: case 162: case 198: return "lock";
+    case 78: case 80: case 140: return "unlock";
+    case 81: case 226: case 287: return "bash door";
     case 87: return "operate machine";
+    case 88: return "haul resources";
+    case 89: return "keep machines running";
+    case 90: case 91: return "unjam machine";
+    case 92: case 247: return "collect output";
+    case 93: case 94: return "fill machine";
     case 95: return "repair";
     case 96: return "dismantle";
     case 97: return "train";
     case 98: case 258: return "sleep";
     case 99: return "put someone in a bed";
+    case 100: return "get put in a bed";
+    case 105: case 142: case 148: return "rescue (job)";
+    case 106: return "find a bed and put in";
     case 107: return "get in a cage";
     case 108: return "put in a cage";
-    case 110: return "free a prisoner";
-    case 116: case 257: return "get out of bed";
+    case 109: return "knock out a prisoner";
+    case 110: case 111: return "free a prisoner";
+    case 112: case 281: return "find a cage and put in";
+    case 113: case 151: return "empty machine";
+    case 114: case 242: return "drop resources";
+    case 115: return "find building materials";
+    case 116: case 208: case 257: return "get out of bed";
     case 118: case 119: return "trade";
+    case 120: case 156: return "enter building";
+    case 121: case 122: return "open gate";
+    case 123: case 290: return "bash gate";
     case 124: return "open storage";
+    case 125: return "builder (job)";
     case 126: return "talk (nearest)";
-    case 146: case 149: case 234: return "man a turret";
+    case 131: case 243: return "fetch food";
+    case 133: case 207: case 256: return "get out of a cage";
+    case 134: return "kill a prisoner";
+    case 136: return "feed corpse into machine";
+    case 141: return "follow the leader";
+    case 146: case 149: case 222: case 234: return "man a turret";
+    case 150: return "prospect";
     case 152: return "operate automatic machine";
+    case 153: return "go to bed";
+    case 164: return "follow while talking";
+    case 166: return "chain";
+    case 175: return "sleep on the floor";
+    case 177: return "loot the dead";
+    case 180: return "man the gate";
+    case 184: case 241: return "haul loot";
+    case 185: return "cut shackles";
+    case 186: return "force shackles";
+    case 200: return "leave building";
+    case 201: return "pick shackles";
+    case 213: case 240: return "carry someone";
+    case 219: return "take off shackles";
+    case 221: return "operate machine (idle)";
+    case 227: return "attack animal";
     case 228: return "knock out (stealth)";
     case 229: return "kill (stealth)";
     case 231: return "eat crops";
-    case 235: case 262: case 263: return "shoot";
+    case 232: return "find crops to eat";
+    case 235: case 262: case 263: case 266: return "shoot";
+    case 238: return "loot animals (job)";
     case 244: return "grab food";
     case 246: return "kidnap";
     case 249: case 250: return "splint";
     case 255: return "sit on the throne";
     case 259: return "eat";
+    case 264: return "equip crossbow";
+    case 265: return "put crossbow away";
+    case 267: return "move in bow range";
     case 269: return "heal legs";
+    case 275: return "sit";
     case 284: return "loot container";
     case 285: return "cut lock";
     case 286: return "force lock";
-    case 290: return "bash gate";
     default: return task < 0 ? "mode" : "?";
     }
 }
@@ -619,12 +674,17 @@ const char* StandingOrderLabel(int order) {
     }
 }
 
+// Every task a player can give from the game's UI (right click on the ground, a character, an item,
+// a building or a piece of furniture; the orders bar; the Taches panel; the building window), with
+// the kind of subject it needs. Found in the 1.0.68 disassembly (the constants handed to the four
+// order functions, the default task of each building class at vtable +0x418) and in the game's own
+// TaskType list (fcs_enums.def). A task id not listed here is refused (logged with its id).
 bool TaskTargetAllowed(TaskVia via, int task, uint32_t t, std::string* why) {
     auto fail = [&](const char* need) {
         if (why) *why = "task " + std::to_string(task) + " (" + TaskLabel(task) + ") needs " + need;
         return false;
     };
-    // the Tâches panel and the squad bar act on the actor itself, with no subject
+    // the Taches panel and the squad bar act on the actor itself, with no subject
     if (via == TaskVia::RemovePermajob || via == TaskVia::MovePermajob || via == TaskVia::RemoveJob)
         return task >= 0 && task < 512 ? true : fail("a job kind (0-511)");
     if (via == TaskVia::SetOrder) return task >= 0 && task <= 17 ? true : fail("a squad bar toggle (0-17)");
@@ -643,57 +703,123 @@ bool TaskTargetAllowed(TaskVia via, int task, uint32_t t, std::string* why) {
     const bool bld = !ch && (t & kTgtBuilding);
     const bool cont = !ch && (t & kTgtContainer);
     const bool item = !ch && (t & kTgtItem);
+    const bool machine = !ch && (t & kTgtMachine);
+    const bool cage = !ch && (t & kTgtCage);
+    const bool bed = !ch && (t & kTgtBed);
+    const bool door = !ch && (t & kTgtDoor);
+    const bool site = bld && (t & kTgtUnfinished);
+    const bool ours = bld && (t & kTgtOurs);
     switch (task) {
+    // ---- building: a construction site, repairs, dismantling
     case 2:   // build: a construction site of the player faction
-        return bld && (t & kTgtUnfinished) && (t & kTgtOurs) ? true : fail("an unfinished building of the player faction");
-    case 95: case 96:   // repair, dismantle
-        return bld && (t & kTgtOurs) ? true : fail("a building of the player faction");
+        return site && ours ? true : fail("an unfinished building of the player faction");
+    case 71:   // add materials to a site
+        return site ? true : fail("an unfinished building");
+    case 125:   // builder (job)
+        return none || (site && ours) ? true : fail("no subject or an unfinished building of the player faction");
+    case 115:   // find building materials
+        return none || cont || bld ? true : fail("no subject, a container or a building");
+    case 95: case 96:   // repair, dismantle: a building of the player faction, finished or still a site
+        return ours ? true : fail("a building of the player faction");
+    // ---- items, food
     case 3: case 259:   // pick up, eat
         return item || (task == 259 && (none || self)) ? true : fail("an item");
-    case 4: case 5: case 235: case 262: case 263:   // attack, shoot
+    case 244:   // grab food
+        return cont || item || bld ? true : fail("food (an item or a container)");
+    case 131: case 243:   // fetch food (jobs)
+        return none || cont || bld || item ? true : fail("no subject, food or a container");
+    case 231:   // eat crops
+        return bld ? true : fail("a building");
+    case 232:   // find crops to eat
+        return none || self || bld ? true : fail("no subject or a farm");
+    // ---- fighting
+    case 4: case 5: case 61: case 227: case 235: case 262: case 263: case 266: case 267:   // attack, shoot, move in bow range
         return other && !dead ? true : fail("another living character");
+    case 9: case 10: case 11: case 13: case 15: case 16:   // fight the enemies around (16: queued by the right click's attack), defend
+        return none || self || (other && !dead) ? true : fail("no subject or another living character");
     case 228: case 229:   // stealth knock out / kill
         return other && standing ? true : fail("another character standing");
     case 246:   // kidnap
         return other && lying && !dead ? true : fail("another character knocked out");
-    case 6: case 7: case 27: case 28: case 30: case 54: case 69: case 116: case 257:   // the actor alone
+    case 109: case 134:   // knock out / kill a prisoner
+        return cage || (other && living) ? true : fail("a cage or a prisoner");
+    // ---- the actor alone
+    case 6: case 7: case 27: case 28: case 30: case 54: case 62: case 63: case 65: case 116: case 153: case 175: case 208: case 242:
+    case 257: case 264: case 265:
         return none || self ? true : fail("no subject");
-    case 29:   // go to
-        return none || self || bld || ch ? true : fail("a place, a building or a character");
+    // ---- moving
+    case 29: case 40:   // go to, get near: a place, or anything found there (an item, a body, a building)
+        return true;
+    case 120: case 156: case 200:   // enter / leave a building
+        return none || self || bld ? true : fail("no subject or a building");
+    case 31: case 44: case 45: case 141: case 164:   // stay close, follow, bodyguard
+        return other && !dead ? true : fail("another living character");
     case 12: case 126:   // talk
         return other && standing && !(t & kTgtSquad) ? true : fail("a living NPC");
-    case 25: case 57: case 60: case 61: case 249: case 250: case 269:   // first aid, repair a robot, splint, heal legs
+    // ---- medicine
+    case 25: case 57: case 60: case 249:   // first aid, repair a robot, splint
         return living ? true : fail("a living character");
-    case 58:   // medic (job)
+    case 58: case 250: case 269:   // medic (job), splint (job), heal legs
         return none || living ? true : fail("no subject or a living character");
     case 105: case 142: case 148:   // find and rescue (the orders panel's RESCUE button: 148)
         return none || living ? true : fail("no subject or a living character");
-    case 26:   // loot: a body, a container, or a merchant standing there (the game's trade)
+    // ---- looting, stealing, hauling
+    case 26:   // loot (a body, a container), steal (a shop's counter), or a merchant standing there (the game's trade)
         return other || cont ? true : fail("a character or a container");
     case 284:   // loot a container
         return cont ? true : fail("a container");
-    case 31: case 44:   // follow (job), follow
-        return other && !dead ? true : fail("another living character");
-    case 68: case 225:   // carry someone
+    case 177: case 238:   // loot the dead, loot animals (jobs)
+        return none || other ? true : fail("no subject or a character");
+    case 88: case 114: case 184: case 241:   // haul resources and loot to storage
+        return none || cont || bld || item ? true : fail("no subject, an item, a container or a building");
+    // ---- carrying people
+    case 68: case 213: case 225: case 240:   // carry someone
         return other && lying ? true : fail("another character lying on the ground");
-    case 70: case 98: case 258:   // put down in a bed, sleep
-        return (t & kTgtBed) && !ch ? true : fail("a bed");
+    case 69:   // put down what is carried (on the ground, by someone, in a building)
+        return none || ch || bld ? true : fail("no subject, a character or a building");
+    // ---- beds
+    case 70: case 98: case 100: case 258:   // put down in a bed, sleep, get put in a bed
+        return bed ? true : fail("a bed");
     case 99:   // put someone in a bed
-        return ((t & kTgtBed) && !ch) || (other && lying) ? true : fail("a bed or a body");
-    case 72: case 73: case 76: case 77: case 78: case 81: case 226: case 285: case 286: case 290:   // doors and locks
-        return (t & kTgtDoor) && !ch ? true : fail("a door or a lock");
-    case 87: case 146: case 149: case 152: case 234:   // operate a machine, man a turret
-        return (t & kTgtMachine) && !ch ? true : fail("a machine");
-    case 97: case 231: case 255:   // train, eat crops, sit on the throne
-        return bld ? true : fail("a building");
+        return bed || (other && lying) ? true : fail("a bed or a body");
+    case 106:   // find a bed and put in
+        return none || (other && lying) ? true : fail("no subject or a body");
+    // ---- cages, shackles
     case 107:   // get in a cage
-        return (t & kTgtCage) && !ch ? true : fail("a cage");
+        return cage ? true : fail("a cage");
     case 108:   // put in a cage
-        return ((t & kTgtCage) && !ch) || (other && lying) ? true : fail("a cage or a body");
-    case 110:   // free a prisoner
-        return ((t & kTgtCage) && !ch) || other ? true : fail("a cage or a prisoner");
-    case 244:   // grab food
-        return cont || item || bld ? true : fail("food (an item or a container)");
+        return cage || (other && lying) ? true : fail("a cage or a body");
+    case 112: case 281:   // find a cage and put in
+        return none || (other && lying) ? true : fail("no subject or a body");
+    case 110: case 111:   // free a prisoner
+        return cage || other ? true : fail("a cage or a prisoner");
+    case 133: case 207: case 256:   // get out of a cage
+        return none || self || cage ? true : fail("no subject or a cage");
+    case 166:   // chain someone
+        return other && !dead ? true : fail("another living character");
+    case 185: case 186: case 201: case 219:   // cut, force or pick shackles; take off one's own
+        return none || (ch && !dead) || cage ? true : fail("a shackled character");
+    // ---- doors and locks (a locked cage too: its right click picks the lock)
+    case 72: case 73: case 74: case 75: case 77: case 79: case 81: case 162: case 198: case 226: case 287:
+        return door ? true : fail("a door or a lock");
+    case 76: case 78: case 80: case 140: case 285: case 286:   // pick, unlock, cut, force a lock
+        return door || cage ? true : fail("a door, a lock or a cage");
+    case 121: case 122: case 123: case 180: case 290:   // gates
+        return door || bld ? true : fail("a gate");
+    // ---- machines: mines, farms, crafting and research benches, generators, turrets
+    case 87: case 146: case 149: case 152: case 222: case 234:   // operate a machine, man a turret
+        return machine ? true : fail("a machine");
+    case 89: case 90: case 91: case 92: case 93: case 94: case 113: case 151: case 221: case 247:   // keep running, unjam, collect, fill, empty
+        return none || machine || cont || bld ? true : fail("no subject or a machine");
+    case 136:   // feed a corpse into a machine
+        return machine || (other && dead) ? true : fail("a machine or a body");
+    case 150:   // prospect (the PROSPECT window, then the place)
+        return none || self || bld ? true : fail("no subject");
+    // ---- furniture
+    case 97: case 255:   // train, sit on the throne
+        return bld ? true : fail("a building");
+    case 275:   // sit
+        return none || self || bld ? true : fail("no subject or a seat");
     case 55: case 118: case 119: case 124:
         return fail("a window the host would open (not available to client players)");
     default:

@@ -163,6 +163,23 @@ public:
     // Host: the character `npc` is in a conversation now, with `other` (any conversation: the host's
     // own, NPCs among themselves); false when it is free.
     virtual bool TalkingWith(const Handle& npc, Handle& other) { (void)npc; (void)other; return false; }
+    // Host: end the conversation the game still has for that NPC (a stale one with a player's own
+    // character, which made a new "talk" do nothing).
+    virtual void EndConversationOf(const Handle& npc) { (void)npc; }
+    // Host: recruitments the game made in a client's conversation (PlayerInterface::recruit for the
+    // NPC of a conversation shown on a player's screen): the NPC's handle before it joined (its handle
+    // changes with its squad), its identity, the player character it talked with, and whether the game
+    // asked for its character editor (never shown on the host: the player who recruited it gets it).
+    struct WorldRecruit {
+        Handle before;
+        uint64_t identity = 0;
+        Handle pc;
+        bool editor = false;
+    };
+    virtual void TakeRecruits(std::vector<WorldRecruit>& out) { out.clear(); }
+    // Client: our copy of a character the host recruited is still the NPC it was here: it joins our
+    // player faction too (the game's own recruit, without the editor). True once it is in it.
+    virtual bool AdoptRecruit(const Handle& h) { (void)h; return true; }
     // Squads of the player faction. Host: each squad's name and members (in squad order).
     // Client: split the local characters the same way.
     struct WorldSquad {
@@ -654,6 +671,8 @@ private:
         bool container = false;              // a container a player has open (no character)
         bool bag = false;                    // a worn backpack (also `container`): its wearer is bagOwner
         bool machine = false;                // a player machine's inventory (also `container`): synced to every player while tracked
+        bool adopt = false;                  // client: a recruit announced with its NPC handle: our copy joins the player faction
+        uint8_t adoptTries = 0;
         uint32_t bagOwner = 0;
         std::string bagSid;
         std::set<uint8_t> openBy;            // host: players who have it open
@@ -795,10 +814,23 @@ private:
     // host: who each player answered lately (a recruit or an animal bought in that conversation is theirs)
     struct RecentPartner { uint8_t player = 0; uint64_t identity = 0; double at = 0; };
     std::vector<RecentPartner> recentPartners_;
+    // host: recruitments made in a player's conversation, until the recruit shows up in the squad
+    struct PendingRecruit { uint8_t player = 0; uint64_t identity = 0; Handle before; bool editor = false; double at = 0; };
+    std::vector<PendingRecruit> pendingRecruits_;
+    std::vector<IWorld::WorldRecruit> scratchRecruits_;
+    void TakeRecruits();                                     // host: the game's recruitments, owner known
+    const PendingRecruit* RecruitOf(const Handle& h);        // host: the pending recruitment of that newcomer
+    void RecruitJoined(Entity& e, const PendingRecruit& r);  // host: it is that player's; their editor if the game wanted one
     uint32_t dialogBusy_ = 0;
-    // Host: `npc` is in someone else's conversation (a client's shown here, or any in the game) than
-    // the actor's: who it talks with.
-    bool TalkTargetBusy(uint32_t actorNetId, const Handle& actor, const Handle& npc, std::string& with);
+    // Host: `npc` is in another player's conversation (a client's shown here, or any in the game):
+    // who it talks with. Never busy for the player `from` themselves: their own conversation with it
+    // (`own`: its id, 0 when none is shown) is resumed or replaced by the caller, and a conversation
+    // the game still has between that NPC and one of their characters (`ownStale`) is ended.
+    bool TalkTargetBusy(uint8_t from, uint32_t actorNetId, const Handle& actor, const Handle& npc, std::string& with, uint32_t& own,
+                        bool& ownStale);
+    // Host: shows that conversation again on its player's screen (the window and its current line).
+    void ResendDialog(uint32_t dialogId);
+    std::map<uint32_t, double> talkToldAt_;   // client: when we last said "goes to talk to" that NPC (by its handle)
     std::vector<IWorld::WorldDialog> scratchDialogs_;
     std::vector<DialogReply> pendingAnswers_;   // host
     struct PendingContainer { uint8_t player; uint32_t looter; uint32_t netId; double until; };

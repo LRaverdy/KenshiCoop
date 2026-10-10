@@ -1274,6 +1274,7 @@ enum MachineFlags : uint8_t {
     kMachRepeat = 8,             // the bench repeats its orders
     kMachGenerator = 16,
     kMachBattery = 32,
+    kMachOurs = 64,              // of the player faction on the host (a mine or a node: once a player character works it)
 };
 struct MachineState {
     std::string sid;             // kind and place: buildings have another handle on every machine

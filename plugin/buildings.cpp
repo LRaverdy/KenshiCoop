@@ -29,7 +29,8 @@ constexpr uintptr_t LA_building = 0x90;             // Layout: the building it b
 constexpr uintptr_t CS_complete = 0x0, CS_paused = 0x1, CS_dismantled = 0x2, CS_progress = 0x4, CS_total = 0x28;   // ConstructionState
 // Building vtable
 constexpr uintptr_t BV_getFaction = 0x58, BV_getBuildState = 0x228, BV_setConstructionProgress = 0x238,
-                    BV_notifyConstructionComplete = 0x240, BV_isForSale = 0x2C0, BV_setupMiningResourceLevel = 0x2D8;
+                    BV_notifyConstructionComplete = 0x240, BV_isForSale = 0x2C0, BV_setupMiningResourceLevel = 0x2D8,
+                    BV_setFaction = 0xA0;
 constexpr uintptr_t LV_floorLayout = 0x40;          // Layout vtable: the layout build mode uses for an upper floor (see createBuildings)
 constexpr uintptr_t PI_faction = 0x2A0;             // PlayerInterface: the player faction
 constexpr uintptr_t kSnapCallbackVt = 0x16DFB00;    // build mode's callback for a building snapped to another one: {vt, PlayerInterface*, Building* snappedTo}
@@ -84,6 +85,9 @@ bool IntArgSeh(void* fn, void* self, int v) {
 }
 void* AllocSeh(size_t n) {
     __try { return reinterpret_cast<FnAllocSig>(kenshi::Addr(kGameAlloc))(n); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+bool SetFactionSeh(void* fn, void* b, void* faction) {
+    __try { reinterpret_cast<void (*)(void*, void*, void*)>(fn)(b, faction, nullptr); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 void FreeSeh(void* p) {
     __try { reinterpret_cast<FnVoidSig>(kenshi::Addr(kGameFree))(p); } __except (EXCEPTION_EXECUTE_HANDLER) {}
@@ -551,6 +555,24 @@ void KenshiWorld::ConstructionSitesNear(const std::vector<kc::Vec3>& centers, fl
 // the players' buildings are built, repaired and finished by the host.
 bool KenshiWorld::IsPlayerBuilding(void* b) {
     return IsBuilding(b) && IsOurs(b);
+}
+
+// Building::setFaction(Faction*, ActivePlatoon*) (vtable +0xA0, 0x557950), as Task_OperateMachine
+// calls it (platoon null): the player faction, or nobody's (null: the game's default faction). Only
+// a mine or a natural node goes back to nobody (the others keep their owner).
+bool KenshiWorld::SetBuildingOurs(void* b, bool ours) {
+    void* fn = IsBuilding(b) ? Slot(b, BV_setFaction) : nullptr;
+    void* f = ours ? PlayerFaction() : nullptr;
+    if (!fn || (ours && !f)) return false;
+    if (!ours) {
+        const int kind = kenshi::BuildingFunctionOf(b);
+        if (kind != 1 && kind != 27) return false;   // 1 a mine, 27 a natural deposit
+    }
+    const bool ok = SetFactionSeh(fn, b, f);
+    std::string sid;
+    kenshi::ObjectTemplate(b, sid);
+    Log("building %s: %s as on the host (%s)", TemplateName(sid).c_str(), ours ? "the player faction's" : "nobody's", ok ? "ok" : "faulted");
+    return ok && IsOurs(b) == ours;
 }
 
 bool KenshiWorld::IsBuildingForSale(void* b) { return ForSale(b); }

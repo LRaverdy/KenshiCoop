@@ -81,7 +81,8 @@ Raccourcis (Kenshi au premier plan) :
 
 Chacun ne peut commander que ses personnages. Côté client, **tous les ordres** sont transmis à
 l'hôte, qui les fait exécuter par le personnage concerné : déplacement, fouille, premiers soins,
-porter, dormir, portes, machines, parler… Exceptions pour l'instant : le **commerce** et le
+porter, dormir, portes, machines et mines (avec leur fenêtre de production), démonter, parler…
+Exceptions pour l'instant : le **commerce** et le
 recrutement au centre d'emploi, refusés avec un message.
 
 **Outils de l'hôte**, dans la fenêtre Multijoueur ou la console :
@@ -144,7 +145,9 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
 - **Dialogues** : les bulles chez tout le monde ; une conversation avec un PNJ (qu'on lui parle ou
   qu'il nous aborde : garde, mendiant, chasseur de primes...) s'ouvre chez le joueur concerné
   seulement (fenêtre du mod, bouton « Partir »), qui choisit ses réponses ; le jeu ne se met pas en
-  pause pour une conversation. Un PNJ ne parle qu'à un joueur à la fois (« occupé »).
+  pause pour une conversation. Un PNJ ne parle qu'à un joueur à la fois (« occupé »), jamais
+  « occupé » pour ses propres conversations. Une recrue gagnée dans ta conversation est à toi (et
+  son éditeur de perso, quand le jeu en propose un, s'ouvre chez toi, pas chez l'hôte).
 - **Heure, vitesse et pause** : celles de l'hôte, imposées en permanence. Les clients ne peuvent
   pas les changer ; un client figé un moment (une zone qui charge) est remis à l'heure de l'hôte
   d'un coup.

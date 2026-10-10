@@ -14,8 +14,16 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   le monde envoyé.
 - **Recrutement par un client** : c'est l'hôte qui a eu la fenêtre pour accepter ; le perso
   recruté est bien arrivé dans l'escouade (chez l'hôte) mais le client ne le voit pas.
+  **Corrigé (non vérifié en jeu)** : la fenêtre était l'éditeur de perso (`recruit(perso, true)`,
+  ligne « rejoindre avec édition ») ; la recrue arrivait sous un nouveau handle sans que les clients
+  sachent quel PNJ c'était. Recrutée sans éditeur chez l'hôte, donnée au joueur, `Bind` avec l'ancien
+  handle, adoptée chez chaque client, éditeur ouvert chez le joueur (voir CHANGELOG).
 - **Fenêtre de sortie des mines invisible chez les clients** (l'inventaire de production). Vérifier
   tous les types de mines et d'ateliers / bâtiments de production.
+  **Corrigé (non vérifié en jeu)** : `Building::select` n'ouvre le panneau que pour un bâtiment fini
+  du joueur ; un filon devient au joueur quand on le travaille, chez l'hôte seulement. L'hôte envoie
+  le propriétaire (`kMachOurs`), le client l'impose. Même règle pour tous les bâtiments : ceux du
+  joueur l'étaient déjà des deux côtés ; seuls mines et filons changent de propriétaire en jeu.
 - **Objet glissé au sol par le client 2 disparu** : il n'est pas apparu au sol, il a disparu (pas
   à chaque fois). Perte d'objet : prioritaire.
 - **Joueur 3 dans une ville voisine : parler aux PNJ ne fait rien** (aucune fenêtre de dialogue).
@@ -39,6 +47,13 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   pas dans la liste des tâches qu'un client peut envoyer (`kc::TaskTargetAllowed`, protocol.cpp) :
   l'ajouter, cible = bâtiment du joueur (fini ou en chantier). Revoir toute la liste pour
   d'autres tâches légitimes manquantes (réparer, etc.).
+  **Revu** : la tâche 16 n'est pas démanteler mais `ATTACK_ENEMIES` (numérotation du jeu dans
+  `fcs_enums.def`), ajoutée par le clic droit d'attaque : ajoutée à la liste, comme toutes les tâches
+  de l'interface (voir CHANGELOG). Démanteler (96) était déjà permis sur un bâtiment du joueur, et
+  **aucune** demande de démontage de rob n'est arrivée à l'hôte (ni `confirmDismantle`, ni tâche 96
+  dans le journal) : son jeu ne lui proposait sans doute pas le bouton. Même règle que la fenêtre des
+  mines (`Building::select` : bâtiment fini **du joueur**) : à vérifier avec la correction de la
+  collision (bâtiment fini par la synchro sans être un vrai bâtiment fini du joueur chez le client).
 - **Commerce du joueur 3 (rob) : fenêtre qui clignote et vide** (23:07). Journal de l'hôte :
   « trade window open: 31 shop counters holding 136 stacks », puis « trade window shows none of
   the shop's 136 stacks: opened again (1..3) » et « still shows none … after 3 tries ». Le
@@ -78,6 +93,10 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   précédente pas encore fermée côté hôte). Le refus « occupé » ne doit jamais viser le même
   joueur : il doit reprendre ou remplacer sa propre conversation. Voir aussi les ordres « parler »
   acceptés (« -> ok ») qui n'ont rien ouvert (23:14:02, 23:14:04).
+  **Corrigé (non vérifié en jeu)** : jamais « occupé » pour le joueur lui-même (conversation renvoyée
+  sur son écran, ou l'ancienne terminée) ; une conversation que le jeu garde entre ce PNJ et un perso
+  du joueur sans fenêtre (cause probable des « -> ok » sans rien) est terminée avant l'ordre ; le
+  client affiche « X va parler à Y » pendant que son perso marche.
 - **rob se désynchronise peu à peu** ; un « Resynchroniser tout le monde » de l'hôte l'a remis
   d'aplomb. Bilans périodiques de son client (`[rob] sync:`) : jusqu'à 41 puis 69 « NPCs not there
   yet » (PNJ de l'hôte jamais apparus chez lui, 23:13-23:18, ville bondée), 288-315 persos suivis.
