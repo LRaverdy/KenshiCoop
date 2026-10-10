@@ -23,5 +23,6 @@ bool MapOverlayHoldsMouse();
 // Back buffer pixels per window client pixel (set by the overlay each frame).
 void MapOverlaySetCursorScale(float sx, float sy);
 void MapOverlayRelease();   // the D3D texture
+MapDrawn MapOverlayLastDrawn();   // what the last frame drew (tests)
 
 } // namespace kcp

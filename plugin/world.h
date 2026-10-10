@@ -1,6 +1,7 @@
 // IWorld implementation backed by the running Kenshi game, plus the state the hooks consult.
 #pragma once
 #include <atomic>
+#include <iosfwd>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -116,6 +117,26 @@ public:
     bool SetFactionPair(const std::string& fromSid, const std::string& toSid, const kc::RelationState& rel);
     bool SetUniqueState(const std::string& sid, uint8_t state, bool byPlayer);
     bool SetTownOwner(const std::string& townSid, const std::string& factionSid);
+    // ---- workshop: research, crafting benches, machines, power (plugin/workshop.cpp)
+    bool ReadResearch(kc::ResearchState& out) override;
+    bool ExecuteResearchRequest(const kc::ResearchRequest& r, const kc::Handle& actor, std::string& refusedFr) override;
+    size_t ApplyResearch(const kc::ResearchState& s) override;
+    void ReadMachines(const std::vector<kc::Vec3>& centers, float radius, std::vector<WorldMachine>& out, std::vector<kc::TownPower>& towns) override;
+    bool ExecuteMachineRequest(const kc::MachineRequest& r, const kc::Handle& actor, std::string& refusedFr) override;
+    bool ApplyMachine(const kc::MachineState& s, const std::vector<kc::Handle>& operators) override;
+    bool ApplyTownPower(const kc::TownPower& t) override;
+    void TakeWorkshopAsks(std::vector<LocalResearchAsk>& research, std::vector<LocalMachineAsk>& machines) override;
+    // hooks (client): a research window button, a blueprint read, a crafting window / building panel
+    // button the local player used (never run here); host: a crafting order the game made (what the
+    // window asked for); is this town's power the host's (its own grid update is then skipped)
+    void QueueResearchAsk(kc::ResearchAction a, void* gameData);
+    void QueueBlueprintAsk(void* item);
+    void QueueMachineAsk(void* building, kc::MachineAction a, void* base, void* material, int index, bool value);
+    void NoteCraftAdded(void* craftingItem, void* base, void* material);
+    bool TownPowerFromHost(void* town);
+    // tests: a machine of ours near that point, by name part ("sid@x,y,z" key; null: none); its state here
+    void* NearestMachine(const kc::Vec3& from, const std::string& part, float radius);
+    bool ReadMachineState(void* building, kc::MachineState& out, std::vector<kc::Handle>* operators);
     // ---- lot A: doors and locks (plugin/doors.cpp)
     void ReadDoors(const std::vector<kc::Vec3>& centers, float radius, std::vector<kc::DoorState>& out) override;
     bool ContainerLocked(const kc::Handle& container) override;
@@ -307,6 +328,16 @@ public:
     void TakeDialogEvents(std::vector<WorldDialog>& out) override;
     void ApplySay(const kc::Handle& speaker, const std::string& text, bool shout) override;
     void DialogAnswer(uint32_t dialogId, int index) override;
+    void EndDialog(uint32_t dialogId) override;
+    bool TalkingWith(const kc::Handle& npc, kc::Handle& other) override;
+    // Host, any thread (Dialogue::startConversation / startPlayerConversation): false when `dialogue`
+    // starting a conversation with `target` would take an NPC out of another player's conversation
+    // (one conversation at a time per NPC); the character asking is told "occupé".
+    bool ConversationAllowed(void* dialogue, void* target);
+    // Host (tests): conversations shown on clients' screens, and talks refused because the NPC was busy.
+    struct RemoteDialogInfo { uint32_t id; std::string pc, other; };
+    std::vector<RemoteDialogInfo> RemoteDialogList();
+    int dialogsBusyRefused = 0, dialogsSwept = 0, hostDialogUnpaused = 0;
     int saysApplied = 0;          // tests (client): speech bubbles replayed
     std::string lastSay;
     // Client: the player dropped it from that character or that building's inventory (any thread).
@@ -489,6 +520,12 @@ private:   // first few lifecycle events (tests)
     std::vector<TradeRequest> tradeReqs_;            // host, under tradeMutex_
     kc::Handle hostTradeLooter_, hostTradeTrader_;   // host: our own last trade window (under tradeMutex_)
     // ---- lot E: buildings (under buildMutex_)
+    // ---- workshop (plugin/workshop.cpp)
+    std::mutex workshopMutex_;
+    std::vector<LocalResearchAsk> researchAsks_;          // client, under workshopMutex_
+    std::vector<LocalMachineAsk> machineAsks_;            // client, under workshopMutex_
+    std::unordered_map<const void*, std::pair<std::string, std::string>> craftMeta_;   // host: CraftingItem -> what the window asked (base, material)
+    std::unordered_set<const void*> hostPoweredTowns_;    // client: towns whose power is the host's
     std::mutex buildMutex_;
     std::vector<LocalPlacement> localPlacements_;
     std::vector<kc::BuildAction> localBuildActions_;
@@ -515,8 +552,26 @@ private:
     bool pauseRefusedLogged_ = false;
     std::mutex dialogMutex_;
     std::vector<WorldDialog> dialogEvents_;                 // host, under dialogMutex_
-    std::unordered_map<void*, uint32_t> remoteDialogs_;    // host: Dialogue* shown to another player -> id
+    // host: Dialogue* shown to another player -> its id, the player's character and who it talks with
+    struct RemoteDialog {
+        uint32_t id = 0;
+        kenshi::Character* pc = nullptr;
+        kenshi::Character* other = nullptr;
+        // where both stood at the last sweep, and how far apart when it was first seen (a conversation
+        // can start from afar: a shout, a forced event); a teleport is a jump, not a distance
+        bool placed = false;
+        kc::Vec3 pcAt, otherAt;
+        float startDist = 0;
+        kc::Handle pcH, otherH;
+    };
+    std::unordered_map<void*, RemoteDialog> remoteDialogs_;
     uint32_t nextDialogId_ = 1;
+    double nextDialogSweep_ = 0;
+    std::unordered_map<const void*, double> busyToldAt_;   // host: character -> last "occupé" (rate limit)
+    // host (game thread): conversations whose game side ended without a Close (a fight, a teleport, a
+    // knock out, a character gone) are ended and closed
+    void SweepDialogs();
+    RemoteDialog& Remember(void* dialogue, kenshi::Character* pc, kenshi::Character* other);
     // the other player's character in it (and who it talks with), or false
     bool RemoteDialogParties(void* dialogue, kenshi::Character*& pc, kenshi::Character*& other);
     // gameOrder: the game's own pick up order was given (we only watch it, and walk the character
@@ -532,5 +587,7 @@ private:
 };
 
 KenshiWorld* TheWorld();   // set by the plugin entry point
+// Test commands of the workshop (research, crafting benches, machines, power): plugin/workshop.cpp.
+std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& in, const std::string& cmd, bool& handled);
 
 } // namespace kcp

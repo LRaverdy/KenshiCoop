@@ -28,6 +28,7 @@ protocole 33, environ 25 500 lignes). L'état de chaque fonctionnalité au sens 
 | Objets au sol | hooks PickupItem, GiveItem, DropItemHuman ; Ground | vérifié en jeu |
 | Inventaires, fouille | Inventory/InvOp, `world.cpp` | vérifié en jeu, bug d'ordre des échanges |
 | Contenants, vol | ContainerOpen/Opened/Close, `kenshi.cpp` (ImStealin, notifyTheftFrom) | vérifié en jeu, vol 🟡 |
+| Atelier : recherche, établis, machines et mines, énergie | `common/src/session_workshop.cpp` (Research/ResearchRequest, Machines/MachineRequest, entités `machine`), `plugin/workshop.cpp` (hooks startResearch, stopResearch, payCosts, progressResearch, learnResearch, _addCraft, _removeCraft, CraftingQueue, updatePowerGrid, togglePowerButton, toggleBattButton) | testé unitairement, jamais testé en partie |
 | Panneau d'inventaire d'un bâtiment (mine) | hook ShowInventoryBuilding (`hooks.cpp`) | harnais `mine` seulement |
 | Commerce | hook ShowTradeWindow, TradeOpen, `kenshi.cpp`:2060-2066 | vérifié en jeu (9/10) |
 | Heure, vitesse, pause | TimeState | vérifié en jeu |
@@ -105,7 +106,7 @@ chez l'hôte, il observe et diffuse.
   contenu réel à l'hôte).
 - **Prisons** : SetPrisonMode, SetChainedMode, SetSlaveState.
 - **Dialogues** : Say, SetInDialog, SetResponses, SetReplyText, SendEvent, SendEventOverride,
-  StartConversation, StartPlayerConversation, DoActions.
+  StartConversation, StartPlayerConversation, DoActions ; EndDialogue (appelée seulement).
 - **IA, factions** : SensoryDialogAssessment, SensoryAssessCrimes, BlackboardUpdate,
   BlackboardPeriodic, FactionWarPeriodic, UniqueSquadPeriodic, AffectRelationsAmount,
   AffectRelationsEvent, SetRelation, SetCrime, AssignBounty.
@@ -229,7 +230,7 @@ hk_medKnockout) ; `ReadOperatorCount` +0x3E0 ; CharBody +0x648 / Tasker +0x68 / 
   invmove, loot, lootorder, containerreq, contake, contcount, minereq.
 - **Commerce** : merchants, shopcounters, tradegui, tradelist, tradeopen, tradebuy, tradesell,
   tradestate, closewindows.
-- **Dialogues** : say, says, dialog, convo, answer, talkreq.
+- **Dialogues** : say, says, dialog, convo, answer (dont `answer leave`), talkreq, talkto, npcevent, dialogs.
 - **Ordres** : orderreq, taskreq, bedreq, carryreq, carrying.
 - **Éditeur** : editchar, editdone.
 - **Monde** : hours, pause, paused, speed, weathers, setweather, rollweather, fxhurry.

@@ -20,6 +20,7 @@
 #include "kc/admin.h"
 #include "kc/protocol.h"
 #include "kc/session.h"
+#include "../plugin/map_view.h"
 
 using namespace kc;
 
@@ -383,6 +384,22 @@ struct FakeWorld : IWorld {
         return it == chars.end() ? 1e9f : Dist(it->second.pos, pos);
     }
     std::string CharacterNameOf(const Handle& h) override { return "npc-" + std::to_string(h.serial); }
+    // conversations: what the host's game reports, answers and ends asked of it, who talks with whom
+    std::vector<WorldDialog> dialogEvents;
+    void TakeDialogEvents(std::vector<WorldDialog>& out) override { out.swap(dialogEvents); dialogEvents.clear(); }
+    std::vector<std::pair<uint32_t, int>> answers;
+    void DialogAnswer(uint32_t dialogId, int index) override { answers.emplace_back(dialogId, index); }
+    std::vector<uint32_t> ended;
+    void EndDialog(uint32_t dialogId) override { ended.push_back(dialogId); }
+    std::map<uint32_t, uint32_t> talking;   // npc serial -> serial of who it talks with
+    bool TalkingWith(const Handle& npc, Handle& other) override {
+        auto it = talking.find(npc.serial);
+        if (it == talking.end()) return false;
+        other = H(it->second);
+        return true;
+    }
+    int saysShown = 0;
+    void ApplySay(const Handle&, const std::string&, bool) override { ++saysShown; }
     std::vector<MapThreat> threats;   // map: what ReadMapThreats answers
     size_t threatCalls = 0;
     void ReadMapThreats(const std::vector<Vec3>& centers, float radius, std::vector<MapThreat>& out) override {
@@ -752,6 +769,116 @@ struct FakeWorld : IWorld {
     bool ContainerLocked(const Handle& h) override { return h.type == 0 && lockedBoxes.count(h.serial) != 0; }
     void TakeContainerRequests(std::vector<ContainerRequest>& out) override { out.swap(containerReqs); containerReqs.clear(); }
     // ---- end lot A
+    // ---- workshop: research (techs "tech-*"; one artifact pays a tech once), machines by sid
+    ResearchState research;
+    int artifacts = 0;
+    std::set<std::string> paid;
+    int researchApplies = 0, researchPays = 0;
+    std::vector<LocalResearchAsk> researchAsks;
+    std::vector<LocalMachineAsk> machineAsks;
+    struct FakeMachine { MachineState s; uint32_t box = 0; std::vector<Handle> ops; };
+    std::map<std::string, FakeMachine> machines;
+    std::vector<TownPower> townPower;
+    int machineApplies = 0;
+    std::map<uint32_t, std::vector<float>> skills;   // ReadProgress: stats per character serial
+    bool ReadProgress(const Handle& h, std::vector<float>& stats, uint16_t& modes, uint8_t& style) override {
+        modes = 0; style = 0;
+        auto it = skills.find(h.serial);
+        if (it == skills.end()) { stats.clear(); return false; }
+        stats = it->second;
+        return true;
+    }
+    bool ReadResearch(ResearchState& out) override {
+        out = research;
+        std::sort(out.finished.begin(), out.finished.end());
+        return true;
+    }
+    bool ExecuteResearchRequest(const ResearchRequest& r, const Handle& actor, std::string& why) override {
+        auto inQueue = [&](const std::string& s) { for (auto& q : research.queue) if (q.sid == s) return true; return false; };
+        auto finished = [&](const std::string& s) { return std::find(research.finished.begin(), research.finished.end(), s) != research.finished.end(); };
+        if (r.action == ResearchAction::LearnBlueprint) {
+            auto* items = ItemsOf(actor);
+            if (!items) { why = "pas de personnage"; return false; }
+            for (size_t i = 0; i < items->size(); ++i)
+                if ((*items)[i].templateSid == r.sid) {
+                    items->erase(items->begin() + ptrdiff_t(i));
+                    research.finished.push_back("tech-of-" + r.sid);
+                    return true;
+                }
+            why = "pas de plan";
+            return false;
+        }
+        if (r.action == ResearchAction::Cancel) {
+            for (size_t i = 0; i < research.queue.size(); ++i)
+                if (research.queue[i].sid == r.sid) { research.queue.erase(research.queue.begin() + ptrdiff_t(i)); return true; }
+            why = "pas dans la file";
+            return false;
+        }
+        if (finished(r.sid)) { why = "deja recherchee"; return false; }
+        if (inQueue(r.sid)) { why = "deja dans la file"; return false; }
+        if (!paid.count(r.sid)) {
+            if (artifacts <= 0) { why = "artefacts manquants"; return false; }
+            --artifacts;
+            ++researchPays;
+            paid.insert(r.sid);
+        }
+        research.queue.push_back({r.sid, 0});
+        return true;
+    }
+    size_t ApplyResearch(const ResearchState& s) override {
+        if (s == research) return 0;
+        research = s;
+        ++researchApplies;
+        return 1;
+    }
+    void ReadMachines(const std::vector<Vec3>& centers, float radius, std::vector<WorldMachine>& out, std::vector<TownPower>& towns) override {
+        out.clear();
+        for (auto& [sid, m] : machines)
+            for (auto& c : centers)
+                if (Dist(c, m.s.pos) <= radius) {
+                    WorldMachine w;
+                    w.state = m.s;
+                    w.state.operatorCount = uint8_t(m.ops.size());
+                    w.handle = m.box ? B(m.box) : Handle{};
+                    w.operators = m.ops;
+                    out.push_back(w);
+                    break;
+                }
+        towns = townPower;
+    }
+    bool ExecuteMachineRequest(const MachineRequest& r, const Handle&, std::string& why) override {
+        auto it = machines.find(r.sid);
+        if (it == machines.end()) { why = "introuvable"; return false; }
+        MachineState& s = it->second.s;
+        switch (r.action) {
+        case MachineAction::AddCraft: s.crafts.push_back({r.baseSid, r.materialSid, "item-" + r.baseSid, 0}); return true;
+        case MachineAction::RemoveCraft:
+            if (r.index < 0 || size_t(r.index) >= s.crafts.size()) { why = "plus la"; return false; }
+            s.crafts.erase(s.crafts.begin() + r.index);
+            return true;
+        case MachineAction::SetRepeat: s.flags = uint8_t(r.value ? (s.flags | kMachRepeat) : (s.flags & ~kMachRepeat)); return true;
+        case MachineAction::SetPower: s.flags = uint8_t(r.value ? (s.flags | kMachPowerOn) : (s.flags & ~kMachPowerOn)); return true;
+        case MachineAction::SetBattery: s.flags = uint8_t(r.value ? (s.flags | kMachBatteryOn) : (s.flags & ~kMachBatteryOn)); return true;
+        }
+        return false;
+    }
+    bool ApplyMachine(const MachineState& s, const std::vector<Handle>& operators) override {
+        auto it = machines.find(s.sid);
+        if (it == machines.end()) return false;
+        it->second.s = s;
+        it->second.ops = operators;
+        ++machineApplies;
+        return true;
+    }
+    bool ApplyTownPower(const TownPower& t) override {
+        for (auto& p : townPower) if (p.sid == t.sid) { p = t; return true; }
+        townPower.push_back(t);
+        return true;
+    }
+    void TakeWorkshopAsks(std::vector<LocalResearchAsk>& r, std::vector<LocalMachineAsk>& m) override {
+        r.swap(researchAsks); researchAsks.clear();
+        m.swap(machineAsks); machineAsks.clear();
+    }
     std::vector<RegionWeather> weather;
     void ReadWeather(std::vector<RegionWeather>& out) override { out = weather; }
     void ApplyWeather(const std::vector<RegionWeather>& r) override { weather = r; }
@@ -1015,10 +1142,35 @@ static void TestWire() {
         DialogMsg dm2; CHECK(Decode(dr, dm2));
         CHECK(dm2.events.size() == 2 && dm2.events[0].shout && dm2.events[0].text == say.text && dm2.events[1].dialogId == 3 &&
               dm2.events[1].replies.size() == 2 && dm2.events[1].replies[1] == "Join me");
-        DialogReply rep; rep.dialogId = 3; rep.index = 1;
+        DialogReply rep; rep.dialogId = 3; rep.actor = 9; rep.turn = 4; rep.index = 1;
         Writer rw; Encode(rw, rep);
         Reader rr(rw.data(), rw.size()); CHECK(PeekType(rr) == Msg::DialogReply);
-        DialogReply rep2; CHECK(Decode(rr, rep2) && rep2.dialogId == 3 && rep2.index == 1);
+        DialogReply rep2; CHECK(Decode(rr, rep2) && rep2.dialogId == 3 && rep2.actor == 9 && rep2.turn == 4 && rep2.index == 1);
+        // the actor, the line and the "busy" kind travel; an answer naming no actor is not read
+        DialogEvent busy; busy.kind = DialogKind::Busy; busy.netId = 5; busy.pcNetId = 9; busy.text = "Garde";
+        txt.pcNetId = 9; txt.turn = 7;
+        DialogMsg dm3; dm3.events = {txt, busy};
+        Writer bw; Encode(bw, dm3);
+        Reader br(bw.data(), bw.size()); CHECK(PeekType(br) == Msg::Dialog);
+        DialogMsg dm4; CHECK(Decode(br, dm4));
+        CHECK(dm4.events.size() == 2 && dm4.events[0].pcNetId == 9 && dm4.events[0].turn == 7 && dm4.events[1].kind == DialogKind::Busy &&
+              dm4.events[1].pcNetId == 9);
+        DialogReply noActor; noActor.dialogId = 3; noActor.index = 0;
+        Writer nw; Encode(nw, noActor);
+        Reader nr(nw.data(), nw.size()); CHECK(PeekType(nr) == Msg::DialogReply);
+        DialogReply na2; CHECK(!Decode(nr, na2));
+        DialogReply leave; leave.dialogId = 3; leave.actor = 9; leave.index = kDialogLeave;
+        Writer lw; Encode(lw, leave);
+        Reader lr(lw.data(), lw.size()); CHECK(PeekType(lr) == Msg::DialogReply);
+        DialogReply lv2; CHECK(Decode(lr, lv2) && lv2.index == kDialogLeave);
+        DialogReply bad; bad.dialogId = 3; bad.actor = 9; bad.index = -2;
+        Writer xw; Encode(xw, bad);
+        Reader xr(xw.data(), xw.size()); CHECK(PeekType(xr) == Msg::DialogReply);
+        DialogReply bad2; CHECK(!Decode(xr, bad2));
+        Result rb; rb.seq = 3; rb.state = ResultState::Rejected; rb.reason = ResultReason::Busy; rb.text = "Garde est occupé";
+        Writer rbw; Encode(rbw, rb);
+        Reader rbr(rbw.data(), rbw.size()); CHECK(PeekType(rbr) == Msg::Result);
+        Result rb2; CHECK(Decode(rbr, rb2) && rb2.reason == ResultReason::Busy && rb2.text == rb.text);
     }
     {   // a character's looks
         AppearanceMsg look; look.netId = 7; look.name = "Nassim";
@@ -1045,6 +1197,42 @@ static void TestWire() {
         Reader er(ew.data(), ew.size()); CHECK(PeekType(er) == Msg::EditState);
         EditState es; CHECK(Decode(er, es) && es.editing);
         CHECK(std::string(TaskLabel(258)) == "sleep" && std::string(TaskLabel(9999)) == "?");
+    }
+    {   // ---- workshop: research, requests, machines
+        ResearchState rs; rs.deskLevel = 3; rs.finished = {"tech-a", "tech-b"}; rs.queue = {{"tech-c", 12.5f}, {"tech-d", 0}};
+        Writer rsw; Encode(rsw, rs);
+        Reader rsr(rsw.data(), rsw.size()); CHECK(PeekType(rsr) == Msg::Research);
+        ResearchState rs2; CHECK(Decode(rsr, rs2) && rs2 == rs);
+        ResearchRequest rq; rq.seq = 7; rq.actorNetId = 12; rq.action = ResearchAction::LearnBlueprint; rq.sid = "bp-1";
+        rq.item.templateSid = "bp-1"; rq.item.section = "main"; rq.item.x = 2; rq.item.y = 3;
+        Writer qw; Encode(qw, rq);
+        Reader qr(qw.data(), qw.size()); CHECK(PeekType(qr) == Msg::ResearchRequest);
+        ResearchRequest rq2; CHECK(Decode(qr, rq2) && rq2.seq == 7 && rq2.actorNetId == 12 && rq2.action == ResearchAction::LearnBlueprint &&
+                                   rq2.item.section == "main" && rq2.item.x == 2 && rq2.item.y == 3);
+        rq.actorNetId = 0;   // no actor named: refused
+        Writer qw2; Encode(qw2, rq);
+        Reader qr2(qw2.data(), qw2.size()); PeekType(qr2);
+        ResearchRequest rq3; CHECK(!Decode(qr2, rq3));
+        MachinesMsg mm; mm.full = true;
+        MachineState ms; ms.sid = "bench"; ms.pos = {1, 2, 3}; ms.netId = 44; ms.flags = kMachCrafting | kMachPowerOn; ms.maxOperators = 3; ms.operatorCount = 2;
+        ms.operators = {5, 6}; ms.power = 1.5f; ms.stored = 20; ms.progress = 0.25f; ms.production = 3;
+        ms.crafts = {{"sword", "iron", "item-sword", 0.5f}};
+        mm.machines = {ms};
+        TownPower tp; tp.sid = "bench"; tp.pos = {1, 2, 3}; tp.values[0] = 10; tp.values[7] = 4; tp.onBattery = true;
+        mm.towns = {tp};
+        Writer mw; Encode(mw, mm);
+        Reader mr(mw.data(), mw.size()); CHECK(PeekType(mr) == Msg::Machines);
+        MachinesMsg mm2; CHECK(Decode(mr, mm2) && mm2.full && mm2.machines.size() == 1 && mm2.machines[0].sameState(ms) && mm2.machines[0].sid == "bench" &&
+                               mm2.towns.size() == 1 && mm2.towns[0] == tp);
+        MachineRequest mq; mq.seq = 3; mq.actorNetId = 9; mq.action = MachineAction::AddCraft; mq.sid = "bench"; mq.pos = {1, 2, 3}; mq.baseSid = "sword";
+        Writer xw; Encode(xw, mq);
+        Reader xr(xw.data(), xw.size()); CHECK(PeekType(xr) == Msg::MachineRequest);
+        MachineRequest mq2; CHECK(Decode(xr, mq2) && mq2.action == MachineAction::AddCraft && mq2.baseSid == "sword" && mq2.actorNetId == 9);
+        mq.baseSid.clear();   // an order for nothing
+        Writer xw2; Encode(xw2, mq);
+        Reader xr2(xw2.data(), xw2.size()); PeekType(xr2);
+        MachineRequest mq3; CHECK(!Decode(xr2, mq3));
+        CHECK(std::string(StatNameFr(3)) == "Science" && std::string(StatNameFr(999)) == "?");
     }
     {   // ---- lot A: doors and locks
         DoorsMsg dm; dm.full = true;
@@ -2606,6 +2794,41 @@ static void TestCaptives() {
     CHECK(cw.captiveApplies == applies);
 }
 
+// The overlay's GUI -> display conversion (plugin/map_view.h): MyGUI view pixels to back buffer pixels.
+static void TestGuiToDisplay() {
+    std::printf("overlay: MyGUI coordinates converted to the display, per axis, every frame\n");
+    using kcp::MapScene;
+    // same size: unchanged
+    auto g = kcp::MakeGuiToDisplay(844, 774, 844, 774);
+    CHECK(g.known && g.fx == 1.0f && g.fy == 1.0f);
+    // the window was resized, the GUI still has its old view: stretched per axis
+    g = kcp::MakeGuiToDisplay(1280, 720, 640, 540);
+    CHECK(g.known && std::fabs(g.fx - 0.5f) < 1e-6f && std::fabs(g.fy - 0.75f) < 1e-6f);
+    const kcp::SceneRect r = kcp::GuiRectToDisplay({100, 600, 60, 60, 2}, g);
+    CHECK(std::fabs(r.x - 50) < 1e-4f && std::fabs(r.y - 450) < 1e-4f && std::fabs(r.w - 30) < 1e-4f && std::fabs(r.h - 45) < 1e-4f && r.owner == 2);
+    // unknown or absurd sizes: 1:1
+    g = kcp::MakeGuiToDisplay(0, 0, 800, 600);
+    CHECK(!g.known && g.fx == 1.0f && g.fy == 1.0f);
+    g = kcp::MakeGuiToDisplay(1280, 720, 0, 600);
+    CHECK(!g.known);
+    // a scene: map image, its visible part and the frames move together, once only
+    MapScene s;
+    s.guiW = 1600; s.guiH = 900;
+    s.mapOpen = true; s.boundsOk = true;
+    s.minX = 0; s.minZ = 0; s.sizeX = 1000; s.sizeZ = 1000;
+    s.imgX = 400; s.imgY = 100; s.imgW = 800; s.imgH = 800;
+    s.clipX0 = 400; s.clipY0 = 100; s.clipX1 = 1200; s.clipY1 = 900;
+    s.portraits.push_back({800, 850, 40, 40, 1});
+    kcp::SceneToDisplay(s, 800, 450);
+    CHECK(s.inDisplay && s.imgX == 200 && s.imgY == 50 && s.imgW == 400 && s.imgH == 400 && s.clipX1 == 600 && s.clipY1 == 450);
+    CHECK(s.portraits[0].x == 400 && s.portraits[0].y == 425 && s.portraits[0].w == 20 && s.portraits[0].h == 20);
+    kcp::SceneToDisplay(s, 800, 450);   // a second call changes nothing
+    CHECK(s.imgX == 200 && s.portraits[0].x == 400);
+    // the world point at the image's centre lands at the centre of the converted image
+    float sx = 0, sy = 0;
+    CHECK(kcp::WorldToMapScreen(s, {500, 0, 500}, sx, sy) && std::fabs(sx - 400) < 1e-3f && std::fabs(sy - 250) < 1e-3f);
+}
+
 static void TestMap() {
     std::printf("session: map markers (players' characters, hostile squads) and pings reach every player\n");
     FakeWorld hw;
@@ -3251,8 +3474,320 @@ static void TestActorSafety() {
     CHECK(host.state() == SessionState::Hosting && cli.state() == SessionState::Connected);   // everyone alive
 }
 
+// Conversations: the window of a client's character opens on that client only, its answers name
+// their actor and line and reach the host's game once; one conversation per NPC ("occupé"); walking
+// away, a player leaving, a recruit given to the player who recruited it.
+static void TestDialogue() {
+    std::printf("dialogue: windows on their player's screen, answers with their actor, one conversation per NPC\n");
+    FakeWorld hw, cw, cw2;
+    SetupHost(hw);
+    for (uint32_t n : {10u, 11u, 12u}) {
+        FakeChar npc; npc.squad = false; npc.pos = {110.0f + float(n), 0, 10}; npc.dest = npc.pos;
+        hw.chars[n] = npc;
+    }
+    AtMenu(cw);
+    AtMenu(cw2);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port;
+    SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    SessionConfig cc2; cc2.port = hc.port; cc2.name = "D";
+    std::vector<std::string> hostLog;
+    Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
+    Session cli(cw, cc, Now, Quiet("cli"));
+    Session cli2(cw2, cc2, Now, Quiet("cli2"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 6));
+    CHECK(cli2.Join("127.0.0.1", hc.port, &err));
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}, {&cli2, &cw2}};
+    Run(all, 10.0, [&] { return cli2.state() == SessionState::Connected && cli2.entityCount() == 6; });
+    host.Assign(FakeWorld::H(2), cli.localId());
+    host.Assign(FakeWorld::H(3), cli2.localId());
+    Run(all, 1.5);
+    std::map<uint32_t, uint32_t> net;
+    host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { net[h.serial] = id; });
+    CHECK(net.size() == 6);
+    const uint8_t me = cli.localId(), other = cli2.localId();
+    auto ev = [](DialogKind k, uint32_t id, uint32_t speaker, uint32_t pc, std::string text, std::vector<std::string> replies = {}) {
+        IWorld::WorldDialog d;
+        d.kind = k; d.dialogId = id; d.speaker = FakeWorld::H(speaker); d.pc = FakeWorld::H(pc); d.text = std::move(text); d.replies = std::move(replies);
+        return d;
+    };
+    auto has = [](const std::deque<std::string>& lines, const char* what) {
+        for (const auto& l : lines) if (l.find(what) != std::string::npos) return true;
+        return false;
+    };
+
+    // 1. a guard (NPC 10) stops the client's character: its window opens on that client only, with the
+    //    host's line and answers, named after the client's own character; the bubble goes to everyone
+    hw.dialogEvents.push_back(ev(DialogKind::Open, 1, 10, 2, "Garde"));
+    hw.dialogEvents.push_back(ev(DialogKind::Text, 1, 10, 2, "Halte ! Qui va la ?", {"Un voyageur", "Ca ne te regarde pas"}));
+    IWorld::WorldDialog say = ev(DialogKind::Say, 0, 10, 0, "Halte !");
+    hw.dialogEvents.push_back(say);
+    Run(all, 2.0, [&] { return cli.dialog().open && !cli.dialog().replies.empty() && cw2.saysShown > 0; });
+    CHECK(cli.dialog().open && cli.dialog().id == 1 && cli.dialog().name == "Garde" && cli.dialog().replies.size() == 2);
+    CHECK(cli.dialog().actor == net[2] && cli.dialog().turn == 1);
+    CHECK(!cli2.dialog().open);                       // not on the other player's screen
+    CHECK(cw.saysShown == 1 && cw2.saysShown == 1);   // the bubble: everyone
+    CHECK(host.openDialogs() == 1);
+
+    // 2. answers that are not the client's: another player answering it, a forged actor (the host's
+    //    character, the other player's, none): refused before the host's game sees them
+    const uint32_t r0 = host.actorRefusals();
+    { DialogReply a; a.dialogId = 1; a.actor = net[3]; a.turn = 1; a.index = 0; Writer w; Encode(w, a); CHECK(host.InjectForTest(other, w)); }
+    { DialogReply a; a.dialogId = 1; a.actor = net[2]; a.turn = 1; a.index = 0; Writer w; Encode(w, a); CHECK(host.InjectForTest(other, w)); }
+    { DialogReply a; a.dialogId = 1; a.actor = net[1]; a.turn = 1; a.index = 0; Writer w; Encode(w, a); CHECK(host.InjectForTest(me, w)); }
+    { DialogReply a; a.dialogId = 1; a.actor = net[3]; a.turn = 1; a.index = 0; Writer w; Encode(w, a); CHECK(host.InjectForTest(me, w)); }
+    { DialogReply a; a.dialogId = 1; a.actor = 0; a.turn = 1; a.index = 0; Writer w; Encode(w, a); CHECK(host.InjectForTest(me, w)); }
+    Run(all, 1.0);
+    CHECK(hw.answers.empty());
+    CHECK(host.actorRefusals() >= r0 + 5);
+
+    // 3. the client answers: once, on the host, as its own character
+    cli.AnswerDialog(1);
+    CHECK(cli.dialog().waiting);
+    Run(all, 2.0, [&] { return !hw.answers.empty(); });
+    CHECK((hw.answers == std::vector<std::pair<uint32_t, int>>{{1u, 1}}));
+    cli.AnswerDialog(0);   // waiting for the next line: not sent twice
+    Run(all, 0.5);
+    CHECK(hw.answers.size() == 1);
+    // ... an answer to an older line (the conversation moved on: speed 3) is ignored
+    hw.dialogEvents.push_back(ev(DialogKind::Text, 1, 10, 2, "Bon, circule.", {"Merci"}));
+    Run(all, 2.0, [&] { return cli.dialog().turn == 2; });
+    CHECK(cli.dialog().turn == 2 && !cli.dialog().waiting && cli.dialog().replies.size() == 1);
+    // the game fills the window twice per line: the same line again is not a new turn
+    hw.dialogEvents.push_back(ev(DialogKind::Text, 1, 10, 2, "Bon, circule.", {"Merci"}));
+    Run(all, 1.0);
+    CHECK(cli.dialog().turn == 2);
+    { DialogReply a; a.dialogId = 1; a.actor = net[2]; a.turn = 1; a.index = 0; Writer w; Encode(w, a); CHECK(host.InjectForTest(me, w)); }
+    { DialogReply a; a.dialogId = 1; a.actor = net[2]; a.turn = 2; a.index = 5; Writer w; Encode(w, a); CHECK(host.InjectForTest(me, w)); }   // not offered
+    Run(all, 1.0);
+    CHECK(hw.answers.size() == 1);
+
+    // 4. one conversation per NPC: the other player's character asking the guard to talk is refused
+    //    ("occupé"); the client's own character may; an NPC the game has talking with the host's
+    //    character too
+    hw.subjectFlags[10] = kTgtCharacter | kTgtConscious;
+    hw.subjectFlags[11] = kTgtCharacter | kTgtConscious;
+    const int run0 = hw.tasksRun;
+    { Command c; c.seq = 900; c.netId = net[3]; c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = kTaskTalk; c.subject = FakeWorld::H(10); Writer w; Encode(w, c); CHECK(host.InjectForTest(other, w)); }
+    Run(all, 1.5);
+    CHECK(hw.tasksRun == run0);
+    bool busy = false;
+    for (const auto& r : cli2.results()) busy |= r.seq == 900 && r.state == ResultState::Rejected && r.reason == ResultReason::Busy && r.text.find("occupé") != std::string::npos;
+    CHECK(busy);
+    CHECK(has(cli2.chatLog(), "occupé"));
+    CHECK(host.dialogBusyRefusals() == 1);
+    { Command c; c.seq = 901; c.netId = net[2]; c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = kTaskTalk; c.subject = FakeWorld::H(10); Writer w; Encode(w, c); CHECK(host.InjectForTest(me, w)); }
+    Run(all, 1.0);
+    CHECK(hw.tasksRun == run0 + 1);
+    hw.talking[11] = 1;   // the host's character talks with NPC 11
+    { Command c; c.seq = 902; c.netId = net[3]; c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = kTaskTalkNearest; c.subject = FakeWorld::H(11); Writer w; Encode(w, c); CHECK(host.InjectForTest(other, w)); }
+    Run(all, 1.5);
+    CHECK(hw.tasksRun == run0 + 1 && host.dialogBusyRefusals() == 2);
+    hw.talking.clear();
+    // ... and the host's game refusing a conversation because the NPC is busy tells that player
+    const size_t chat2 = cli2.chatLog().size();
+    hw.dialogEvents.push_back(ev(DialogKind::Busy, 0, 10, 3, "Garde"));
+    Run(all, 2.0, [&] { return cli2.chatLog().size() > chat2; });
+    CHECK(cli2.chatLog().size() > chat2 && has(cli2.chatLog(), "Garde est occupé"));
+    CHECK(!cli.chatLog().empty() ? !has(cli.chatLog(), "Garde est occupé") : true);
+    const size_t hostChat = host.chatLog().size();
+    hw.dialogEvents.push_back(ev(DialogKind::Busy, 0, 10, 1, "Garde"));   // the host's own character: on the host's screen
+    Run(all, 1.0, [&] { return host.chatLog().size() > hostChat; });
+    CHECK(host.chatLog().size() > hostChat && has(host.chatLog(), "occupé"));
+
+    // 5. a recruit: the NPC the client was talking with joins the player faction; it is the client's,
+    //    even though the other player answered a conversation meanwhile
+    hw.dialogEvents.push_back(ev(DialogKind::Open, 2, 11, 3, "Mercenaire"));
+    hw.dialogEvents.push_back(ev(DialogKind::Text, 2, 11, 3, "Tu cherches du travail ?", {"Non"}));
+    hw.dialogEvents.push_back(ev(DialogKind::Open, 3, 12, 2, "Vagabond"));
+    hw.dialogEvents.push_back(ev(DialogKind::Text, 3, 12, 2, "Je peux te suivre ?", {"Oui, rejoins-nous", "Non"}));
+    Run(all, 2.0, [&] { return cli2.dialog().id == 2 && cli2.dialog().turn == 1 && cli.dialog().id == 3 && cli.dialog().turn == 1; });
+    CHECK(cli2.dialog().open && cli2.dialog().actor == net[3] && cli.dialog().id == 3);
+    cli2.AnswerDialog(0);
+    cli.AnswerDialog(0);
+    Run(all, 2.0, [&] { return hw.answers.size() == 3; });
+    CHECK(hw.answers.size() == 3);
+    hw.chars[12].squad = true;   // recruited
+    Run(all, 3.0, [&] { return std::find_if(cw.controllable.begin(), cw.controllable.end(), [](const Handle& h) { return h.serial == 12; }) != cw.controllable.end(); });
+    CHECK(std::find_if(cw.controllable.begin(), cw.controllable.end(), [](const Handle& h) { return h.serial == 12; }) != cw.controllable.end());
+    CHECK(std::find_if(cw2.controllable.begin(), cw2.controllable.end(), [](const Handle& h) { return h.serial == 12; }) == cw2.controllable.end());
+    CHECK(host.CheckActor(me, net[12]) == Session::ActorVerdict::Ok);
+
+    // 6. walking away: the host ends it in its game; the game's Close shuts the window
+    cli.LeaveDialog();
+    Run(all, 2.0, [&] { return !hw.ended.empty(); });
+    CHECK((hw.ended == std::vector<uint32_t>{3}));
+    hw.dialogEvents.push_back(ev(DialogKind::Close, 3, 12, 2, ""));
+    Run(all, 2.0, [&] { return !cli.dialog().open; });
+    CHECK(!cli.dialog().open);
+    // the first conversation closes too
+    hw.dialogEvents.push_back(ev(DialogKind::Close, 1, 10, 2, ""));
+    Run(all, 1.0);
+    CHECK(host.openDialogs() == 1);   // the other player's
+
+    // 7. a player leaving mid-conversation: it ends in the host's game, nothing stays open
+    cli2.Leave();
+    Run(all, 3.0, [&] { return hw.ended.size() == 2; });
+    CHECK((hw.ended == std::vector<uint32_t>{3, 2}));
+    CHECK(host.openDialogs() == 0);
+    bool cleaned = false;
+    for (const auto& l : hostLog) cleaned |= l.find("1 conversation(s)") != std::string::npos;
+    CHECK(cleaned);
+    CHECK(host.state() == SessionState::Hosting && cli.state() == SessionState::Connected);
+}
+
 // Every message has exactly one authority rule; PeekType accepts exactly the messages; host->client
 // messages sent by a client are refused; a client's map pings are rate-limited by their rule.
+// Workshop: the research, the crafting benches, the machines and the towns' power are the host's;
+// a client's requests run on the host (in order, paid once, last writer wins) and everyone follows.
+static void TestWorkshop() {
+    std::printf("session: research, crafting benches, machines and power follow the host; requests run there once\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);   // squad at x = 100, 200, 300
+    auto item = [](const char* sid, int qty) { ItemState s; s.templateSid = sid; s.quantity = qty; s.section = "main"; return s; };
+    hw.research.deskLevel = 2;
+    hw.research.finished = {"tech-a"};
+    hw.research.queue = {{"tech-b", 5.0f}};
+    hw.boxes[800] = {"bench", {150, 0, 0}, {item("iron plates", 4)}};
+    FakeWorld::FakeMachine bench;
+    bench.s.sid = "bench"; bench.s.pos = {150, 0, 0}; bench.s.flags = kMachCrafting | kMachPowerOn; bench.s.maxOperators = 3;
+    bench.s.crafts = {{"sword", "iron", "item-sword", 0.25f}};
+    bench.box = 800;
+    bench.ops = {FakeWorld::H(1), FakeWorld::H(2)};
+    hw.machines["bench"] = bench;
+    FakeWorld::FakeMachine far = bench;
+    far.s.sid = "far-bench"; far.s.pos = {9000, 0, 9000}; far.box = 0; far.ops.clear();
+    hw.machines["far-bench"] = far;
+    TownPower tp; tp.sid = "bench"; tp.pos = {150, 0, 0}; tp.values[0] = 12; tp.values[3] = 7; tp.onBattery = false;
+    hw.townPower = {tp};
+    std::vector<float> st(kStatCount, 1.0f);
+    st[3] = 5.5f;   // science
+    hw.skills[2] = st;
+    AtMenu(cw);
+    cw.boxes = hw.boxes;
+    cw.boxes[800].items = {item("iron plates", 1)};   // the client's copy of the bench is behind
+    cw.machines["bench"].s.sid = "bench";
+    cw.machines["bench"].s.pos = bench.s.pos;
+    cw.machines["far-bench"].s.sid = "far-bench";
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    std::vector<std::string> hostLog;
+    Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    host.Assign(FakeWorld::H(2), cli.localId());
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}};
+    Run(all, 3.0, [&] { return cw.research == hw.research && cw.machineApplies > 0 && cw.boxes[800].items == hw.boxes[800].items; });
+    // 1. the research, the machine (operators, crafts, power) and its inventory: the host's, unopened
+    CHECK(cw.research == hw.research);
+    CHECK(cw.machines["bench"].s.operatorCount == 2 && cw.machines["bench"].ops.size() == 2 && cw.machines["bench"].s.crafts.size() == 1 &&
+          cw.machines["bench"].s.crafts[0].progress == 0.25f);
+    CHECK(cw.machines["far-bench"].s.crafts.empty());   // far from every player: not sent
+    CHECK(cw.boxes[800].items == hw.boxes[800].items);
+    CHECK(!cw.townPower.empty() && cw.townPower[0] == tp);
+    // a worker leaves: everyone sees it
+    hw.machines["bench"].ops = {FakeWorld::H(1)};
+    Run(all, 3.0, [&] { return cw.machines["bench"].ops.size() == 1; });
+    CHECK(cw.machines["bench"].s.operatorCount == 1 && cw.machines["bench"].ops.size() == 1 && cw.machines["bench"].ops[0] == FakeWorld::H(1));
+    // 2. a client queues a tech without the artifacts: refused, nothing paid, the reason in French
+    auto ask = [&](ResearchAction a, const std::string& sid) {
+        IWorld::LocalResearchAsk r;
+        r.req.action = a;
+        r.req.sid = sid;
+        cw.researchAsks.push_back(r);
+    };
+    size_t refusedBefore = host.workshopView().requestsRefused;
+    ask(ResearchAction::Queue, "tech-c");
+    Run(all, 2.0, [&] { return host.workshopView().requestsRefused > refusedBefore; });
+    CHECK(host.workshopView().requestsRefused == refusedBefore + 1 && hw.research.queue.size() == 1);
+    // 3. with one artifact, the same tech asked twice at once: queued once, paid once
+    hw.artifacts = 1;
+    ask(ResearchAction::Queue, "tech-c");
+    ask(ResearchAction::Queue, "tech-c");
+    Run(all, 3.0, [&] { return cw.research.queue.size() == 2; });
+    CHECK(hw.research.queue.size() == 2 && hw.researchPays == 1 && hw.artifacts == 0 && cw.research == hw.research);
+    // cancelled, then asked again: back in the queue without paying a second time
+    ask(ResearchAction::Cancel, "tech-c");
+    Run(all, 3.0, [&] { return cw.research.queue.size() == 1; });
+    ask(ResearchAction::Queue, "tech-c");
+    Run(all, 3.0, [&] { return cw.research.queue.size() == 2; });
+    CHECK(hw.researchPays == 1 && cw.research == hw.research);
+    // a local change on the client is undone by the host's research
+    cw.research.queue.clear();
+    Run(all, 5.0, [&] { return cw.research == hw.research; });
+    CHECK(cw.research == hw.research);
+    // 4. a blueprint the client's character carries: learnt on the host, used up, known everywhere
+    hw.chars[2].items.push_back(item("bp-forge", 1));
+    Run(all, 2.0, [&] { return !cw.chars[2].items.empty(); });
+    IWorld::LocalResearchAsk bp;
+    bp.req.action = ResearchAction::LearnBlueprint;
+    bp.req.sid = "bp-forge";
+    bp.req.item = item("bp-forge", 1);
+    bp.actor = FakeWorld::H(2);
+    cw.researchAsks.push_back(bp);
+    Run(all, 3.0, [&] { return std::count(cw.research.finished.begin(), cw.research.finished.end(), "tech-of-bp-forge") == 1 && cw.chars[2].items.empty(); });
+    CHECK(std::count(hw.research.finished.begin(), hw.research.finished.end(), "tech-of-bp-forge") == 1 && hw.chars[2].items.empty() && cw.chars[2].items.empty());
+    // 5. a blueprint "carried" by the host's character: refused by the central check, nothing learnt
+    hw.chars[1].items.push_back(item("bp-other", 1));
+    const uint64_t refusals = host.actorRefusals();
+    bp.actor = FakeWorld::H(1);
+    bp.req.sid = "bp-other";
+    bp.req.item = item("bp-other", 1);
+    cw.researchAsks.push_back(bp);
+    Run(all, 2.0);
+    CHECK(hw.chars[1].items.size() == 1 && host.actorRefusals() == refusals);   // never sent: the client's own check (ClientMaySend)
+    ResearchRequest forged; forged.seq = 99; forged.actorNetId = 0; forged.action = ResearchAction::LearnBlueprint; forged.sid = "bp-other";
+    host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { if (h == FakeWorld::H(1)) forged.actorNetId = id; });
+    forged.item = item("bp-other", 1);
+    Writer fw; Encode(fw, forged);
+    CHECK(host.InjectForTest(cli.localId(), fw));
+    Run(all, 1.0);
+    CHECK(hw.chars[1].items.size() == 1 && host.actorRefusals() == refusals + 1);
+    // 6. crafting orders: added by the client, run on the host, seen by everyone; two orders at once
+    //    on the same bench: the last one wins everywhere
+    auto order = [&](MachineAction a, const std::string& base, int index, bool value) {
+        IWorld::LocalMachineAsk m;
+        m.req.action = a; m.req.sid = "bench"; m.req.pos = {150, 0, 0}; m.req.baseSid = base; m.req.index = index; m.req.value = value;
+        cw.machineAsks.push_back(m);
+    };
+    order(MachineAction::AddCraft, "helmet", 0, false);
+    Run(all, 3.0, [&] { return cw.machines["bench"].s.crafts.size() == 2; });
+    CHECK(hw.machines["bench"].s.crafts.size() == 2 && hw.machines["bench"].s.crafts[1].baseSid == "helmet" && cw.machines["bench"].s.crafts.size() == 2);
+    order(MachineAction::SetRepeat, "", 0, true);
+    order(MachineAction::SetRepeat, "", 0, false);
+    Run(all, 3.0, [&] { return host.workshopView().requestsDone >= 7; });
+    Run(all, 1.5);
+    CHECK(!(hw.machines["bench"].s.flags & kMachRepeat) && !(cw.machines["bench"].s.flags & kMachRepeat));
+    order(MachineAction::RemoveCraft, "", 0, false);
+    order(MachineAction::RemoveCraft, "", 5, false);   // gone already: refused, nothing else touched
+    Run(all, 3.0, [&] { return cw.machines["bench"].s.crafts.size() == 1; });
+    CHECK(hw.machines["bench"].s.crafts.size() == 1 && hw.machines["bench"].s.crafts[0].baseSid == "helmet" && cw.machines["bench"].s.crafts.size() == 1);
+    // 7. power: switched off by the client, off everywhere; the town panel follows the host
+    order(MachineAction::SetPower, "", 0, false);
+    hw.townPower[0].values[0] = 0;
+    Run(all, 3.0, [&] { return !(cw.machines["bench"].s.flags & kMachPowerOn) && cw.townPower[0].values[0] == 0; });
+    CHECK(!(hw.machines["bench"].s.flags & kMachPowerOn) && !(cw.machines["bench"].s.flags & kMachPowerOn) && cw.townPower[0].values[0] == 0);
+    // 8. a request from a character far from the machine: refused
+    hw.chars[2].pos = {5000, 0, 5000};
+    hw.chars[2].dest = hw.chars[2].pos;
+    const size_t crafts = hw.machines["bench"].s.crafts.size();
+    order(MachineAction::AddCraft, "axe", 0, false);
+    Run(all, 2.0);
+    CHECK(hw.machines["bench"].s.crafts.size() == crafts);
+    // 9. learning by doing: the host's level up is told to the player (its game gains nothing itself)
+    const size_t chat0 = cli.chatLog().size();
+    hw.skills[2][3] = 6.25f;
+    Run(all, 4.0, [&] { for (auto& l : cli.chatLog()) if (l.find("Science 5 -> 6") != std::string::npos) return true; return false; });
+    bool told = false;
+    for (size_t i = chat0; i < cli.chatLog().size(); ++i) told |= cli.chatLog()[i].find("Science 5 -> 6") != std::string::npos;
+    CHECK(told);
+    bool logged = false;
+    for (auto& l : hostLog) logged |= l.find("research: queue tech-c") != std::string::npos;
+    CHECK(logged);
+}
+
 static void TestMessageRules() {
     std::printf("authority: every message type has its rule; host-only ones refused from clients; pings rate-limited\n");
     size_t n = 0;
@@ -3621,9 +4156,12 @@ int main() {
     TestAdmin();
     TestTaskTargets();   // actor safety
     TestActorSafety();
+    TestGuiToDisplay();
+    TestDialogue();
     TestMap();
     TestManyPlayers();
     TestJoinQueue();
+    TestWorkshop();   // research, crafting benches, machines, power
     TestMessageRules();   // the authority table covers every message
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

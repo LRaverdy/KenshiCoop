@@ -141,6 +141,12 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 | `[X] move -> FAILED` | un déplacement n'est journalisé qu'en cas d'échec |
 | `client task N: subject NOT found by kind and place` | l'hôte ne trouve pas l'objet visé (meuble, machine) au même endroit |
 | `[X] conversation with Y` / `[X] they say: "…"  answers: 1. … \| 2. …` / `[X] answers: "…"` / `[X] conversation over` | conversation d'un client, réplique par réplique |
+| `[X] answer to an older line ignored (line a, now b)` | la conversation avait avancé (vitesse 3) : la réponse est ignorée |
+| `[X] walks away from the conversation with Y` / `conversation N ended by the mod (ok)` | le joueur part : l'hôte termine la conversation |
+| `conversation N ends: <raison>` | fermeture forcée (combat, TP, K.-O., perso disparu, fin sans fermeture) |
+| `[X] order "talk" (12) -> refused: Y is busy talking with Z` / `conversation refused: that NPC is in conversation N with another player's character` | une conversation à la fois par PNJ (« occupé ») |
+| `the host's own conversation: the game is not paused in co-op` | la pause que le jeu met en ouvrant la fenêtre de l'hôte est levée |
+| `NPC Y joined the player faction: a squad character now` / `a new squad character (Y) goes to X, who was talking with it (recruited)` | recrue d'une conversation |
 | `[X] goes to look into Y` → `[X] opens Y` → `[X] closes the container` | contenant |
 | `[X] steals Y (unseen)` / `[X] caught stealing Y` | vol réussi / vol repéré (la fenêtre se ferme) |
 | `client item move done: …` / `client item move refused: …` | déplacement d'objet demandé par un client |

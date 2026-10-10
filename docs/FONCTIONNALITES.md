@@ -283,6 +283,11 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   d'expérience eux-mêmes : tout gain passe par `increaseStat`, refusé chez eux, et les valeurs de
   l'hôte arrivent chaque seconde.
 - Vérifié par la suite (« XP », « argent »).
+- Apprendre en travaillant (construire, fabriquer, rechercher, miner, cultiver, cuisiner) : le
+  gain est calculé une seule fois, chez l'hôte ; ses 34 compétences arrivent chez le client (science,
+  ingénierie, forge d'armes et d'armures, arbalètes, travail de force, agriculture, cuisine
+  comprises). Le client annonce lui-même les passages de niveau de ses persos (« * Nom : Science 5
+  -> 6 »), son jeu n'en faisant plus. 🟡 annonce à vérifier en jeu.
 
 ---
 
@@ -292,13 +297,77 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
 - **Le joueur** voit, chez tout le monde, ce qu'un personnage dit à voix haute.
 - Vérifié par la suite.
 
-### Conversations ✅
-- **Le joueur** voit la fenêtre de conversation d'un PNJ qui parle à son personnage s'ouvrir
-  **chez lui seulement** (fenêtre de l'overlay) : texte, puis réponses numérotées. Sa réponse
-  part à l'hôte, qui fait avancer la conversation. Chez l'hôte, la fenêtre reste fermée.
+### Conversations ✅ / 🟡 (audit du 10/10 : expérience `dialogue` pas encore lancée en jeu)
+- **Le joueur** voit la fenêtre de conversation de son personnage s'ouvrir **chez lui seulement**
+  (fenêtre de l'overlay) : texte, puis réponses numérotées, et un bouton « Partir ». Qu'il ait parlé
+  le premier (clic droit « parler ») ou qu'un PNJ l'aborde. Sa réponse part à l'hôte, qui fait
+  avancer la conversation avec le code du jeu (`Dialogue::replyClicked`).
 - **Fonctionnement** : toutes les conversations se déroulent dans le monde de l'hôte. Les clients
-  ne montrent jamais la fenêtre de dialogue du jeu.
+  ne montrent jamais la fenêtre de dialogue du jeu, et leur jeu ne décide rien (`sendEvent`,
+  `startConversation`, `_doActions` refusés chez eux).
 - Vérifié en ville (`kctest_town`, conversation avec le chef des voleurs Shinobi).
+
+**Qui parle.** L'ordre « parler » d'un client nomme son personnage ; l'hôte vérifie qu'il est à ce
+joueur (contrôle central) puis le donne à **ce personnage seul** (sécurité des acteurs : jamais un
+perso de l'hôte). Chaque réponse nomme aussi son acteur : le perso du joueur dans **cette**
+conversation ; une réponse au nom d'un autre perso, ou à la conversation d'un autre joueur, est
+refusée et journalisée.
+
+**Ce que produisent les réponses** : appliqué **une seule fois**, chez l'hôte (`_doActions` ne tourne
+que là), puis répliqué par les synchronisations existantes :
+
+| Issue | Comment elle arrive chez les joueurs | État |
+|---|---|---|
+| recrutement | le PNJ entre dans la faction du joueur : l'hôte en fait un perso d'escouade (il était suivi comme PNJ : il ne le devenait jamais avant) et le donne au joueur **qui lui parlait** (par identité), même si un autre joueur répondait à une conversation au même moment ; sinon la règle « un seul joueur venait de répondre » | 🟡 tests unitaires |
+| commerce | « commerçons » : fenêtre de commerce chez le joueur (déjà là, voir Commerce) | ✅ |
+| quêtes, états du monde | `Diplomacy` (états du monde, personnages uniques) | 🟡 |
+| relations, primes | `Factions` (relations de la faction du joueur, primes) | ✅ |
+| objets et argent donnés ou pris | inventaires et argent de l'hôte | ✅ |
+| combat déclenché | IA et combat de l'hôte | ✅ |
+| rejoindre l'escouade | voir recrutement | 🟡 |
+| quitter l'escouade | **pas géré** : un perso qui quitte la faction du joueur reste « d'escouade » pour le mod jusqu'à ce qu'il sorte du rayon. Pas fait volontairement : l'esclavage et les prisons font aussi sortir des persos de la faction, et ce changement touche au lot escouades | ❌ |
+
+**PNJ qui parlent aux joueurs** (garde qui contrôle, mendiant, esclavagiste, chasseur de primes,
+interrogatoire de la Nation Sainte) : la conversation que le jeu de l'hôte lance avec le perso d'un
+client s'ouvre chez **ce** client. Les bulles au-dessus des têtes sont montrées à tous.
+
+**Une conversation à la fois par PNJ.**
+- Ordre « parler » (12 et 126) d'un joueur vers un PNJ déjà en conversation avec quelqu'un d'autre
+  (un autre joueur, l'hôte, un PNJ) : refusé avant d'être donné, `Result` « Busy », message
+  « *Nom* est occupé : il parle déjà avec *X*. ».
+- Au moment où le jeu de l'hôte lancerait la conversation (`startConversation`,
+  `startPlayerConversation`), un PNJ pris dans la conversation d'un client ne peut ni en commencer
+  une autre ni y être entraîné ; celui qui demandait voit « *Nom* est occupé : il parle déjà avec
+  quelqu'un. » (chez lui, ou chez l'hôte). La conversation qui continue (un chef qui prend la suite)
+  reste permise.
+
+**Fin propre.**
+- **Partir** (bouton de la fenêtre) : l'hôte termine la conversation dans son jeu
+  (`Dialogue::endDialogue`), la fenêtre se ferme.
+- **Joueur qui se déconnecte** : ses conversations sont terminées chez l'hôte (rien ne reste ouvert
+  sur personne), son perso revient à l'hôte comme avant.
+- **Combat, téléportation, K.-O., mort** : toutes les 0,5 s, l'hôte termine et ferme une
+  conversation dont un personnage est à terre, mort ou disparu, que le jeu a finie sans fermer la
+  fenêtre, dont le perso n'est plus à ce joueur, dont un des deux a sauté de plus de 20 m en 0,5 s
+  (TP), ou qui se sont éloignés de 100 m de plus qu'au début. Pas de distance absolue : une
+  conversation peut commencer de loin (essai du 10/10 : le Chef Voleur aborde le perso du client à
+  plus de 40 m, et l'ancienne règle « plus de 40 m » la fermait aussitôt).
+- **Réplique en double** : le jeu remplit la fenêtre deux fois par réplique (texte, puis réponses) ;
+  la même réplique n'est envoyée et numérotée qu'une fois.
+- **Vitesse 3** : chaque réplique porte un numéro ; une réponse à une réplique déjà dépassée est
+  ignorée (journal « answer to an older line ignored »), le joueur voit la nouvelle.
+
+**Pause : décision pour la coop.** En solo, le jeu se met en pause dès qu'une fenêtre de conversation
+s'ouvre (`userPause(true)`, voir MOTEUR). En coop, **pas de pause** : une conversation ne concerne
+que son joueur, le monde continue pour les autres.
+- La conversation d'un client ne s'ouvre jamais chez l'hôte : pas de pause.
+- Celle d'un client n'ouvre pas non plus la fenêtre du jeu chez lui : sa vitesse reste celle de l'hôte.
+- La propre conversation de l'hôte, quand d'autres joueurs ont des persos : le mod lève aussitôt la
+  pause que le jeu vient de mettre (journal « the host's own conversation: the game is not paused in
+  co-op »). Seul, l'hôte garde le comportement du jeu.
+
+**Vue de l'hôte** : quand un client parle près de lui, l'hôte voit les bulles (son jeu les dit), pas
+la fenêtre du client.
 
 ---
 
@@ -841,7 +910,9 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
 - **Une couleur par joueur**, la même partout et chez tout le monde (`kc::PlayerColor`,
   `common/include/kc/colors.h`) : or (l'hôte), bleu, vert, magenta, orange, cyan, blanc, violet.
   Le rouge est réservé aux ennemis.
-- **Carte du monde (touche M)** : par-dessus la carte du jeu, chaque joueur voit **tous les persos
+- **Carte du monde** (l'onglet CARTE de la fenêtre de gestion du jeu, ouverte par son bouton « MAP »
+  à côté de la barre d'escouade ou par la touche « carte » des réglages du joueur ; le mod n'en
+  suppose aucune : dans la partie de l'utilisateur, M est la caméra libre) : par-dessus la carte du jeu, chaque joueur voit **tous les persos
   de tous les joueurs** (gros point : le perso du joueur, petit : une recrue), à la couleur de leur
   joueur, même ceux qui sont très loin de lui (hors de la zone que son jeu a chargée). En rouge,
   les **escouades hostiles qui nous visent** : un raid ou une vague d'attaque du jeu dont la cible
@@ -862,8 +933,13 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   la couleur du joueur, avec son nom, projeté avec la caméra du jeu ; rien quand le perso est hors
   de l'écran ou derrière la caméra.
 - **Barre d'escouade** : le portrait des persos des joueurs reçoit un cadre à la couleur du joueur
-  (dessiné par l'overlay sur le rectangle du portrait lu dans le jeu) ; les recrues gardent le
-  cadre normal.
+  (dessiné par l'overlay sur la partie visible du portrait, relue dans le jeu à chaque image) ; les
+  recrues gardent le cadre normal. Pas de cadre pour une case cachée (cases recyclées par la liste),
+  coupée par le défilement, ou sous une fenêtre du jeu (fenêtre de gestion, inventaire…).
+- **Fenêtre déplacée ou redimensionnée** : les rectangles lus dans l'interface du jeu (MyGUI) sont
+  convertis à chaque image de la taille de la vue MyGUI vers celle du tampon d'affichage (celle où
+  l'overlay dessine), axe par axe ; la souris, elle, va des pixels de la fenêtre (DPI compris) à ceux
+  du tampon. Aucune position n'est gardée d'une image à l'autre.
 - **Pings** : clic molette ou Alt+clic sur la carte, sur la minicarte ou sur le sol (un clic
   molette court : le clic molette tenu tourne toujours la caméra). Sans touche : « Aller ici » ;
   Maj : « Danger / ennemis » ; Ctrl : « Butin » ; Maj+Ctrl : « À l'aide ». Le ping apparaît chez
@@ -880,10 +956,14 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   chaque joueur, l'hôte compris, en sont tirés ; un perso présent dans le monde local est placé à
   sa position locale (fluide). Un ping de client part à l'hôte (`MapPing`), qui vérifie le rythme
   et le renvoie à tous. **Protocole 33.**
+- **Journal** : ouverture / fermeture de l'écran de carte (et la raison quand rien n'y est dessiné :
+  écran de gestion fermé, autre onglet, réglage…), rectangle de l'image, nombre de marqueurs dessinés,
+  nombre de cadres de la barre (cachés, coupés, sous une fenêtre), tailles du tampon, de la fenêtre,
+  de la vue MyGUI et DPI quand elles changent ; au plus une ligne par seconde ou deux.
 - **Limites / à vérifier en jeu** : tout (aucun essai en jeu encore) ; un raid lointain encore
   « abstrait » (escouade pas chargée chez l'hôte) n'est pas montré ; le sol d'un ping 3D est pris
-  plat à la hauteur du perso centré ; la vue de la caméra et l'échelle des coordonnées MyGUI sont
-  supposées (docs/MOTEUR.md § 11) ; un Alt+clic gauche ne va plus au jeu tant que les pings sont
+  plat à la hauteur du perso centré ; la vue de la caméra est supposée (docs/MOTEUR.md § 11) ; une fenêtre du jeu posée
+  sur l'écran de carte n'en cache pas les marqueurs ; un Alt+clic gauche ne va plus au jeu tant que les pings sont
   actifs ; hors session (partie solo) la minicarte montre l'escouade locale, sans ennemis ni pings.
 
 ### Précision des PNJ lointains 🟡 implémenté, à vérifier en jeu
@@ -901,8 +981,45 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
 - **Limite connue** : le jeu ne déplace les PNJ lointains que quelques fois par seconde. Ceux qui
   marchent loin des joueurs peuvent être décalés de quelques dizaines de centimètres à 1 ou 2 m.
 
+### Recherche, fabrication, mines et machines, énergie 🟡 (implémenté, protocole 34, tests unitaires ; à vérifier en jeu)
+- **Ce qui existait avant** : rien de propre à la recherche ni à la fabrication. Les ordres
+  (travailler une machine, miner) passaient déjà par l'hôte, et l'inventaire d'un établi n'était
+  synchronisé que pendant qu'un joueur l'avait ouvert. Chez le client, les opérateurs d'une mine
+  restaient à 0/3 (le jeu ne les ajoute que par l'IA, coupée chez lui) et l'énergie était calculée
+  par son propre jeu.
+- **Recherche (arbre technologique)** : une seule recherche pour la faction, celle de l'hôte :
+  technologies connues, plans lus, file dans l'ordre, avancement, niveau du banc. Le client
+  l'impose à son jeu (les technologies terminées le sont aussi chez lui : menu de construction et
+  listes de fabrication débloqués) ; son jeu ne recherche, ne paie et ne termine rien lui-même.
+  Ajouter, retirer une technologie dans la fenêtre Recherche, ou « apprendre » un plan, devient une
+  demande à l'hôte, au nom d'un perso du joueur ; l'hôte vérifie (banc assez grand, artefacts et
+  livres présents, pas déjà en file ni connue ; le plan est dans l'inventaire de ce perso) et son
+  jeu consomme une seule fois. Deux joueurs qui ajoutent la même technologie : une seule fois en
+  file, payée une fois ; le second reçoit « Cette recherche est déjà dans la file. ». Réordonner la
+  file à la souris n'est pas transmis (l'ordre de l'hôte revient).
+- **Établis** (armes, armures, arbalètes, sacs, robotique, forge) : les ordres de fabrication
+  (objet, matériau, répéter) sont ceux de l'hôte ; ajouter, retirer, répéter dans la fenêtre
+  Fabrication devient une demande, exécutée par l'hôte dans l'ordre d'arrivée (deux joueurs sur le
+  même établi : le dernier l'emporte, partout). Avancement de chaque ordre identique. Le
+  personnage qui travaille l'établi est celui du joueur, par un ordre (travail) qui passe par
+  l'hôte.
+- **Inventaires des machines** (établis, banc de recherche, mines, fermes, générateurs…) : celles
+  suivies sont synchronisées chez tous les joueurs, ouvertes ou non (entrées et sorties).
+- **Mines et machines** : qui travaille chaque machine (nombre et noms dans sa fenêtre), barre de
+  progression et quantité produite : ceux de l'hôte. Plus de joueurs que de places : le jeu de
+  l'hôte décide, tout le monde voit le même résultat.
+- **Énergie** des avant-postes : sortie de chaque générateur, marche / arrêt, consommation, charge
+  des batteries, alimenté ou non, totaux du panneau de la base : ceux de l'hôte ; le jeu du client
+  ne calcule plus le réseau d'une ville dont il a reçu les totaux. Interrupteurs marche et batterie
+  du panneau : demande à l'hôte.
+- **Pas fait** : les totaux de stockage et de nourriture / eau de la base (aucun panneau du jeu
+  trouvé pour eux ; ils se déduisent des inventaires, synchronisés) ; le choix du produit d'un
+  bâtiment de production autre qu'un établi (les bâtiments de production de Kenshi ont un produit
+  fixe).
+- Expérience `research` (« recherche : … », « fabrication : … », « mine : … », « energie : … »),
+  test unitaire `TestWorkshop`. Pas encore lancé en jeu.
+
 ### Non vérifiés
 - Recrutement par dialogue.
-- Artisanat et production des machines.
 - Ces actions tournent chez l'hôte, mais rien ne garantit encore que leur résultat apparaît
   correctement chez les clients.

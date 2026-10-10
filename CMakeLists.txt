@@ -38,6 +38,7 @@ add_library(kc_common STATIC common/src/protocol.cpp common/src/net.cpp common/s
     common/src/protocol_factions.cpp common/src/session_factions.cpp common/src/session_doors.cpp
     common/src/session_prisons.cpp common/src/protocol_ranged.cpp common/src/session_ranged.cpp
     common/src/session_buildings.cpp common/src/session_jobs.cpp common/src/admin.cpp common/src/session_authority.cpp common/src/session_diplomacy.cpp common/src/protocol_map.cpp common/src/session_map.cpp
+    common/src/protocol_workshop.cpp common/src/session_workshop.cpp
     common/src/protocol_squads.cpp common/src/session_squads.cpp)
 target_include_directories(kc_common PUBLIC common/include)
 target_link_libraries(kc_common PUBLIC enet)

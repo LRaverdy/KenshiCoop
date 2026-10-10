@@ -234,6 +234,29 @@ enum Fn : int {
     // ---- crash report
     FnWriteCrashDump,           // void writeCrashDump(EXCEPTION_POINTERS*, const char* name)   (the game's crash reporter, called from the
                                 //   catch(...) around its main loop: crashDump*.dmp and "Kenshi has crashed"; no unhandled-exception filter sees that crash)
+    // ---- conversations
+    FnDialogueEndDialogue,      // void Dialogue::endDialogue(bool definitelyTheEnd)   (ends the conversation; off the main thread: queued DT_END_DIALOG)
+    // ---- workshop: research, crafting benches, machines, power (plugin/workshop.cpp)
+    FnResearchStart,            // bool Research::startResearch(GameData*)   (level check, payCosts, then queued; the research window's only caller)
+    FnResearchStop,             // void Research::stopResearch(GameData*)   (out of the queue, back in the available list; nothing refunded)
+    FnResearchComplete,         // void Research::completeResearch(GameData*)   (finished set, upgrades, blueprints, enabled buildings and crafts)
+    FnResearchPayCosts,         // bool Research::payCosts(GameData*)   (consumes the artifacts / books; called by startResearch only)
+    FnResearchProgress,         // void Research::progressResearch(float)   (the researchers' work on the first queued tech)
+    FnResearchIsInQueue,        // bool Research::isInQueue(GameData*)
+    FnLearnResearch,            // bool Item::learnResearch()   (a blueprint read from the inventory: completeResearch of its tech)
+    FnCraftAdd,                 // CraftingItem* CraftingBuilding::_addCraft(GameData* base, GameData* material, float progress, YesNoMaybe crit)
+    FnCraftRemove,              // void CraftingBuilding::_removeCraft(int index)
+    FnCraftQueueAdd,            // void CraftingQueue::addCraftButton(MyGUI::Widget*)   (our name: the crafting window's add, reads "id"/"id2", calls _addCraft)
+    FnCraftQueueRemove,         // void CraftingQueue::removeCraftButton(MyGUI::Widget*)   (our name: the X of an order, reads "index", calls _removeCraft)
+    FnCraftQueueRemoved,        // void CraftingQueue::craftRemoved(int, const CraftItemViewData&)   (our name: an order dragged out of the list)
+    FnCraftQueueRepeat,         // void CraftingQueue::repeatButton(MyGUI::Widget*)   (our name: toggles CraftingBuilding +0x4CC)
+    FnStopOperating,            // void UseableStuff::stopOperating(const hand&)   (erases it from the operator set +0x3D0)
+    FnOperatorSetInsert,        // pair* std::set<hand>::insert(pair* ret, const hand&, bool)   (the operator set's insert, as tryOperate calls it)
+    FnUpdatePowerGrid,          // void Town::updatePowerGrid()   (Town vt 0x2B8: generators, batteries and consumers of a town, totals at +0x470)
+    FnTogglePowerButton,        // void UseableStuff::togglePowerButton(DataPanelLine*)   (the building panel's power switch)
+    FnToggleBattButton,         // void UseableStuff::toggleBattButton(DataPanelLine*)   (the building panel's battery switch, +0x3B4)
+    FnRefreshResearchList,      // void ManagementScreen::refreshResearchList()
+    FnResearchCheckRequirements, // bool Research::checkRequirements(GameData*, bool twoLevels, bool checkCost)   (tests: what can be researched now)
     // ---- squad window (plugin/squads.cpp)
     FnSquadSwapCharacters,      // void ActivePlatoon::swapCharacters(int indexA, int indexB)   (a portrait dropped on another of its squad; index 0 leads)
     FnChangePlatoonIndex,       // void Faction::changePlatoonIndex(Platoon*, int index)   (a squad dragged in the squad window: the squads' order)
@@ -523,6 +546,11 @@ bool DialogueShouting(const void* dialogue);
 void SetDialogueShouting(void* dialogue, bool shout);
 // What the other one says now and the answers the player can pick (what the window would show).
 bool ReadDialogueWindowText(const void* dialogue, std::string& text, std::vector<std::string>& replies);
+bool DialogueEnded(const void* dialogue);                // Dialogue::_hasEnded (+0x148), set by endDialogue
+bool CallEndDialogue(void* dialogue);                    // Dialogue::endDialogue(true) (main thread)
+// tests: `npc` sends that dialogue event to `pc` (EventTriggerEnum: 1 talk to me, 3 "I see a
+// neutral squad", the guards' check...), forced past the repeat timers
+bool CallDialogueEvent(Character* npc, Character* pc, int ev);
 // A std::string the game can read (const&) for as long as `s` lives; 0x28 bytes.
 void GameStringView(const std::string& s, void* out);
 // Orders: make `actors` the whole selection (exactly them: nothing else), run `fn`, then restore the
@@ -799,6 +827,7 @@ bool GameDataBoolField(const void* gd, const std::string& key, bool& out);
 bool GameDataIntField(const void* gd, const std::string& key, int& out);
 // building templates (itemType BUILDING) whose players' name contains `part` ("sid name" each)
 void BuildingTemplates(const std::string& part, std::vector<std::pair<std::string, std::string>>& out, size_t max);
+void GameDataOfType(int type, std::vector<void*>& out, size_t max);   // every game data record of that itemType (21: research), by sid
 void ItemTemplates(const std::string& part, std::vector<std::pair<std::string, std::string>>& out, size_t max);   // every non-building template by sid/name part
 bool DestroyAnyObject(void* obj);   // GameWorld::destroy for good (any RootObject)
 

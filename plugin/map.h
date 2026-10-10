@@ -18,6 +18,14 @@ const MapScene& LastMapScene();   // what the overlay was last given (game threa
 std::string DescribeMapScene(const std::string& what);
 // Tests: the game's worldToMapCoords against our projection for (x, z): "game=x,y ours=x,y".
 std::string CheckMapProjection(float x, float z);
+// The overlay, in its frame: reads the GUI rectangles (map image, squad bar frames, covered) again,
+// when it runs on the thread of the game's GUI. False when it cannot (the tick's values stay).
+bool MapRefreshGui(MapScene& s);
+// Tests ("mapconv"): MyGUI view, back buffer, window client and DPI, the factors, the portrait
+// frames read now (raw MyGUI and converted) and the ones the overlay last drew.
+std::string DescribeMapConversion();
+// Tests ("mapui open|close|maptab|state"): clicks the game's MAP button through MyGUI's input.
+std::string MapUi(const std::string& what);
 
 // Hooks on the squad bar's portraits (installed with the others in hooks.cpp).
 namespace mapmarks {

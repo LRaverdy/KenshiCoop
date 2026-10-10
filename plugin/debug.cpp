@@ -112,6 +112,11 @@ void DumpCharacter(std::ostream& o, const char* tag, KenshiWorld& w, const kc::H
 std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstream& in, const std::string& cmd) {
     std::string err;
     if (cmd == "echo") return "ok";
+    {   // workshop: research, crafting benches, machines, power (plugin/workshop.cpp)
+        bool handled = false;
+        std::string r = WorkshopCommand(s, w, in, cmd, handled);
+        if (handled) return r;
+    }
     // ---- map markers, minimap, heads, squad bar, pings (exp_map)
     if (cmd == "mapscene") {   // mapscene <carte|minicarte|tetes|barre|pings>: what this machine draws
         std::string what;
@@ -132,6 +137,12 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         o << " ;";
         for (const auto& t : m.threats) o << " threat:kind=" << int(t.kind) << ":n=" << int(t.count) << ":x=" << t.pos.x << ":z=" << t.pos.z;
         return o.str();
+    }
+    if (cmd == "mapconv") return DescribeMapConversion();   // mapconv: MyGUI view -> back buffer -> display, frames read now and drawn
+    if (cmd == "mapui") {   // mapui open|close|maptab|state: the game's map screen, through its MAP button
+        std::string what;
+        in >> what;
+        return MapUi(what.empty() ? "state" : what);
     }
     if (cmd == "mapproj") {   // mapproj <x> <z>: the game's MapScreen::worldToMapCoords against ours
         float x = 0, z = 0;
@@ -1656,15 +1667,87 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
     if (cmd == "dialog") {   // dialog: the conversation window this client shows (client)
         const auto& d = s.dialog();
         std::ostringstream o;
-        o << "ok open=" << d.open << " id=" << d.id << " waiting=" << d.waiting << " name=" << d.name << " | " << d.text << " |";
+        o << "ok open=" << d.open << " id=" << d.id << " waiting=" << d.waiting << " actor=" << d.actor << " turn=" << d.turn << " name=" << d.name << " | "
+          << d.text << " |";
         for (const auto& r : d.replies) o << " [" << r << "]";
         return o.str();
     }
-    if (cmd == "answer") {   // answer <index>: pick that answer in the conversation window (client)
-        int i = 0;
-        in >> i;
-        s.AnswerDialog(i);
+    if (cmd == "answer") {   // answer <index|leave>: pick that answer in the conversation window, or walk away (client)
+        std::string a;
+        in >> a;
+        if (a == "leave") { s.LeaveDialog(); return "ok"; }
+        s.AnswerDialog(a.empty() ? 0 : std::atoi(a.c_str()));
         return "ok";
+    }
+    if (cmd == "dialogs") {   // dialogs: (host) conversations shown on clients' screens, refusals "occupé", conversations swept, pauses undone
+        std::ostringstream o;
+        const auto list = w.RemoteDialogList();
+        o << "ok n=" << list.size() << " open=" << s.openDialogs() << " busy=" << w.dialogsBusyRefused << " orderbusy=" << s.dialogBusyRefusals()
+          << " swept=" << w.dialogsSwept << " unpaused=" << w.hostDialogUnpaused << " |";
+        for (const auto& d : list) o << " " << d.id << ":" << d.pc << ">" << d.other;
+        return o.str();
+    }
+    if (cmd == "npcevent") {   // npcevent <squadIndex> <event> [k|npc]: (host) the k-th nearest NPC (or the last spawned) sends that dialogue event to that squad member (1 talk, 3 guard check)
+        size_t sel = 0;
+        int ev = 1;
+        std::string which;
+        in >> sel >> ev >> which;
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kenshi::Character* npc = nullptr;
+        if (which == "npc") npc = w.Find(lastSpawned_);
+        else {
+            const size_t k = which.empty() ? 0 : std::strtoul(which.c_str(), nullptr, 10);
+            kc::Vec3 mp, p;
+            if (!kenshi::GetPosition(me, mp)) return "err";
+            std::vector<kenshi::Character*> all;
+            kenshi::ActiveCharacters(all);
+            std::vector<std::pair<float, kenshi::Character*>> nearby;
+            for (kenshi::Character* c : all) {
+                kc::Handle h;
+                if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsDown(c) || !kenshi::GetPosition(c, p)) continue;
+                nearby.emplace_back((p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z), c);
+            }
+            std::sort(nearby.begin(), nearby.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            if (k < nearby.size()) npc = nearby[k].second;
+        }
+        if (!npc) return "err no such NPC";
+        std::string name;
+        kenshi::CharacterName(npc, name);
+        HostCallScope scope;
+        return (kenshi::CallDialogueEvent(npc, me, ev) ? "ok " : "err ") + name;
+    }
+    if (cmd == "talkto") {   // talkto <selectIndex> <k|npc>: select that squad member alone, order it to talk to the k-th nearest NPC (npc: the last spawned, host)
+        size_t sel = 0;
+        std::string which;
+        in >> sel >> which;
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kenshi::Character* npc = nullptr;
+        if (which == "npc") npc = w.Find(lastSpawned_);
+        else {
+            const size_t k = which.empty() ? 0 : std::strtoul(which.c_str(), nullptr, 10);
+            kc::Vec3 mp, p;
+            if (!kenshi::GetPosition(me, mp)) return "err";
+            std::vector<kenshi::Character*> all;
+            kenshi::ActiveCharacters(all);
+            std::vector<std::pair<float, kenshi::Character*>> nearby;
+            for (kenshi::Character* c : all) {
+                kc::Handle h;
+                if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsDown(c) || !kenshi::GetPosition(c, p)) continue;
+                nearby.emplace_back((p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z), c);
+            }
+            std::sort(nearby.begin(), nearby.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            if (k < nearby.size()) npc = nearby[k].second;
+        }
+        if (!npc) return "err no such NPC";
+        std::string name;
+        kenshi::CharacterName(npc, name);
+        bool ok = false;
+        kenshi::WithSelection(me, [&] { ok = kenshi::CallAddTaskNearest(kc::kTaskTalk, npc); });
+        return (ok ? "ok " : "err ") + name;
     }
     if (cmd == "fxhurry") return "ok " + std::to_string(w.HurryEffects());   // fxhurry: every effect group places one now
     if (cmd == "setweather") {   // setweather <regionSid> <seasonSid> <weatherSid>

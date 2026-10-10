@@ -941,6 +941,167 @@ def exp_talk(host, cli):
             return
 
 
+# ---- dialogue: conversations of client characters, NPCs who talk to them, one conversation per NPC
+def exp_dialogue(host, cli):
+    """Sandbox (kctest_town): the host creates an NPC next to the client's character. The client's
+    character talks to it: the window opens on the client only (its own character as the actor), the host
+    is not paused and none of its characters is pulled in; an answer reaches the host. The host's own
+    character asking the same NPC is refused ("occupe"). Walking away closes it. Then the NPC starts the
+    conversation itself (event 3, a guard's check, else 1), a teleport and a fight end it cleanly, and a
+    conversation at speed 3."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    hidx = [int(x) for x in cmd(host, "ownidx 1")[1].split()[1:] if int(x) != own]
+
+    def dialog():
+        t = cmd(cli, "dialog")[1]
+        d = {}
+        for kv in t.split(" | ")[0].split()[1:]:
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                d[k] = v
+        d["raw"] = t
+        return d
+
+    def wait_open(want=True, seconds=15):
+        d = dialog()
+        for _ in range(int(seconds * 2)):
+            if (d.get("open") == "1") == want:
+                return d
+            time.sleep(0.5)
+            d = dialog()
+        return d
+
+    def dialogs():
+        t = cmd(host, "dialogs")[1]
+        return dict(kv.split("=", 1) for kv in t.split(" | ")[0].split()[1:] if "=" in kv), t
+
+    def host_states():
+        out = {}
+        for i in hidx:
+            t = cmd(host, f"charstate {i}")[1]
+            out[i] = dict(kv.split("=") for kv in t.split()[1:]) if t.startswith("ok") else {}
+        return out
+
+    def npc_opens(events=(1,)):
+        for ev in events:
+            for which in ["npc"] + [str(k) for k in range(4)]:
+                r = cmd(host, f"npcevent {own} {ev} {which}")
+                log("host: npcevent", ev, which, r)
+                if r[0]:
+                    d = wait_open(True, 8)
+                    if d.get("open") == "1":
+                        return ev, which, d
+        return None, None, dialog()
+
+    paused0 = cmd(host, "paused")[1]
+    log("host spawns an NPC next to the client's character", cmd(host, f"spawnnpc 15 15 {own}"))
+    time.sleep(3)
+    before = host_states()
+
+    # 1. the client's character talks to it (the copy may have nothing to say: then the next nearest NPCs)
+    d = dialog()
+    for k in range(4):
+        r = cmd(cli, f"talkto {own} {k}")
+        log(f"client: talk to the NPC nearest #{k}", r)
+        if not r[0]:
+            continue
+        d = wait_open(True, 15)
+        if d.get("open") == "1":
+            break
+    how = "le client parle"
+    if d.get("open") != "1":
+        log("   (no conversation from the client's order: the NPC starts it instead)")
+        ev, which, d = npc_opens((1,))
+        how = "le PNJ parle"
+    check("dialogue : la fenetre s'ouvre chez le client (" + how + ")", d.get("open") == "1", d["raw"])
+    check("dialogue : le perso du client est l'acteur", d.get("actor", "0") != "0", d["raw"])
+    ds, dt = dialogs()
+    check("dialogue : l'hote suit la conversation du client", int(ds.get("n", 0)) >= 1 and int(ds.get("open", 0)) >= 1, dt)
+    check("dialogue : l'hote n'est pas mis en pause", cmd(host, "paused")[1].split()[1] == paused0.split()[1], cmd(host, "paused")[1])
+    after = host_states()
+    check("dialogue : aucun perso de l'hote n'est entraine dans la conversation",
+          all(after[i].get("dialog") == before[i].get("dialog") for i in hidx if after.get(i) and before.get(i)), f"{before} -> {after}")
+    if d.get("open") == "1" and "[" in d["raw"]:
+        turn0 = d.get("turn")
+        cmd(cli, "answer 0")
+        for _ in range(20):
+            time.sleep(0.5)
+            d2 = dialog()
+            if d2.get("turn") != turn0 or d2.get("open") != "1":
+                break
+        check("dialogue : la reponse du client arrive a l'hote", "] answers: \"" in host_log()[-30000:], dialog()["raw"])
+
+    # 2. one conversation per NPC: the host's own character asking the same NPC
+    d = dialog()
+    if d.get("open") != "1":
+        npc_opens((1,))
+    if hidx and dialog().get("open") == "1":
+        b0 = int(dialogs()[0].get("busy", 0))
+        log("host's own character talks to the same NPC", cmd(host, f"talkto {hidx[0]} npc"))
+        busy = False
+        for _ in range(30):
+            time.sleep(0.5)
+            if int(dialogs()[0].get("busy", 0)) > b0:
+                busy = True
+                break
+        chat = cmd(host, "chatlast 5")[1]
+        check("dialogue : un PNJ deja en conversation est occupe pour un autre perso", busy and "occup" in chat, f"{dialogs()[1]} | {chat}")
+        check("dialogue : la conversation du client continue", dialog().get("open") == "1", dialog()["raw"])
+
+    # 3. walking away
+    if dialog().get("open") == "1":
+        cmd(cli, "answer leave")
+        d = wait_open(False, 10)
+        check("dialogue : partir ferme la conversation proprement", d.get("open") == "0" and dialogs()[0].get("n") == "0", f"{d['raw']} | {dialogs()[1]}")
+    time.sleep(3)
+
+    # 4. an NPC starts it: a guard's check (event 3), else "talk to me"
+    ev, which, d = npc_opens((3, 1))
+    check("dialogue : un PNJ engage la conversation avec le perso du client", d.get("open") == "1", f"event {ev} {which} | {d['raw']}")
+
+    # 5. a teleport ends it
+    if d.get("open") == "1":
+        x, y, z = vec(cmd(host, f"where {own}")[1])
+        log("host teleports the client's character away", cmd(host, f"teleport {own} {x + 1500} {y} {z + 1500}"))
+        d = wait_open(False, 10)
+        ds, dt = dialogs()
+        check("dialogue : une teleportation ferme la conversation", d.get("open") == "0" and ds.get("n") == "0", f"{d['raw']} | {dt}")
+        cmd(host, f"teleport {own} {x} {y} {z}")
+        time.sleep(4)
+
+    # 6. a fight ends it
+    ev, which, d = npc_opens((1,))
+    if d.get("open") == "1":
+        log("host: the client's character fights the NPC", cmd(host, f"fight {own}"))
+        d = wait_open(False, 15)
+        check("dialogue : un combat ferme la conversation", d.get("open") == "0" and dialogs()[0].get("n") == "0", f"{d['raw']} | {dialogs()[1]}")
+    time.sleep(5)
+
+    # 7. speed 3
+    cmd(host, "speed 3")
+    time.sleep(2)
+    log("host spawns another NPC", cmd(host, f"spawnnpc -15 15 {own}"))
+    time.sleep(2)
+    ev, which, d = npc_opens((1,))
+    if d.get("open") == "1" and "[" in d["raw"]:
+        cmd(cli, "answer 0")
+        time.sleep(4)
+        hl = host_log()[-30000:]
+        check("dialogue : vitesse 3 : la reponse est appliquee ou ignoree proprement",
+              "] answers: \"" in hl or "answer to an older line ignored" in hl or dialog().get("open") == "0", dialog()["raw"])
+    else:
+        check("dialogue : vitesse 3 : conversation ouverte", d.get("open") == "1", d["raw"])
+    cmd(cli, "answer leave")
+    time.sleep(2)
+    cmd(host, "speed 1")
+    check("dialogue : l'hote est toujours vivant", alive(host) and cmd(host, "echo")[0])
+    check("dialogue : le client est toujours vivant", alive(cli) and cmd(cli, "echo")[0])
+    summary()
+
+
 # ---- lot A: doors and locks
 def exp_doors(host, cli):
     """Doors and locks: the host's doors reach the client; the client's own game cannot open a door by
@@ -1091,10 +1252,7 @@ def exp_map(host, clis):
     hostile squads); what each machine draws is read back (mapscene); the game's map projection must
     match ours; a client's ping must show on the host and on the other client, rate-limited."""
     import re as _re
-    time.sleep(6)
-    for c in clis:
-        cmd(c, "editdone")
-    time.sleep(4)
+    time.sleep(6)   # editors already closed by setup_multi, each at its join turn
 
     def kv(text):
         return dict(p.split("=", 1) for p in text.split(";")[0].split() if "=" in p)
@@ -1179,6 +1337,85 @@ def exp_map(host, clis):
         log(f"{label} squad bar frames:", t[:300])
         frames = items(t, 1)
         check(f"barre : {label} cadres aux couleurs des joueurs seulement", all(f.get("owner") in owners for f in frames), t[:200])
+    # what the overlay converts: MyGUI view -> back buffer (ImGui display), frames as drawn
+    def conv(pid):
+        ok, t = cmd(pid, "mapconv")
+        parts = t.split(";")
+        head = kv(parts[0]) if parts else {}
+        frames, drawn = [], []
+        for tok in (parts[1].split() if len(parts) > 1 else []):
+            m = _re.search(r"owner=(\d+):raw=([-\d.,]+):conv=([-\d.,]+)", tok)
+            if m:
+                frames.append((m.group(1), [float(v) for v in m.group(3).split(",")]))
+        for tok in (parts[2].split() if len(parts) > 2 else []):
+            d = dict(x.split("=", 1) for x in tok.split(":")[1:] if "=" in x)
+            if "x" in d:
+                drawn.append((d["owner"], [float(d["x"]), float(d["y"]), float(d["w"]), float(d["h"])]))
+        return ok, head, frames, drawn, parts[3] if len(parts) > 3 else "", t
+
+    def check_frames(pid, label):
+        """Every frame the overlay drew matches a portrait widget read now (converted to the display),
+        and lies on the display."""
+        time.sleep(0.5)
+        ok, k, frames, drawn, mp, t = conv(pid)
+        log(f"{label} mapconv:", t[:500])
+        bw, bh = [float(v) for v in k.get("bb", "0x0").split("x")]
+        bad = []
+        for owner, r in drawn:
+            near = [f for o, f in frames if o == owner and max(abs(a - b) for a, b in zip(f, r)) <= 2.0]
+            if not near or r[0] < -1 or r[1] < -1 or r[0] + r[2] > bw + 1 or r[1] + r[3] > bh + 1:
+                bad.append((owner, r))
+        check(f"barre : {label} cadres dessines = portraits du jeu convertis (meme taille de fenetre)",
+              ok and len(drawn) == len(frames) and not bad and float(k.get("drawnAge", 99)) < 1.0,
+              f"{len(drawn)} dessines / {len(frames)} portraits, hors place {bad[:3]} | {t[:300]}")
+        return k
+
+    for pid, label in [(host, "hote")] + [(c, f"client {i + 1}") for i, c in enumerate(clis)]:
+        k = check_frames(pid, label)
+        check(f"tetes : {label} vue 3D non couverte (ecran de gestion ferme), reperes dessines",
+              k.get("covered") == "0" and int(k.get("heads", 0)) >= 1, k)
+    # the game's map screen, opened by its own MAP button (clicked through MyGUI's input), on client 1
+    c1 = clis[0]
+    log("map: open the map screen on client 1:", cmd(c1, "mapui open"))
+    time.sleep(1.5)
+    st = cmd(c1, "mapui state")[1]
+    if "window=1" in st and "open=0" in st:
+        log("map: window up on another tab:", st, cmd(c1, "mapui maptab"))
+        time.sleep(1.0)
+    st = cmd(c1, "mapui state")[1]
+    t = cmd(c1, "mapscene carte")[1]
+    check("carte : ecran de carte ouvert par son bouton, detecte", "open=1" in st and kv(t).get("open") == "1", f"{st} | {t[:200]}")
+    ok, k, frames, drawn, mp, t = conv(c1)
+    log("client 1 mapconv (map open):", t[:500])
+    m = _re.search(r"conv=([-\d.,]+):drawn=([-\d.,]+)", mp)
+    same = bool(m) and max(abs(float(a) - float(b)) for a, b in zip(m.group(1).split(","), m.group(2).split(","))) <= 2.0
+    check("carte : marqueurs dessines sur l'ecran de carte, image a sa place", k.get("mapDrawn") == "1" and int(k.get("markers", 0)) >= 1 and same, t[:400])
+    # the window resized mid-test: the frames follow (back buffer, MyGUI view and client may differ)
+    wins = [hw for hw, w, h in windows_of(c1) if w >= 640]
+    if wins:
+        r = wt.RECT()
+        user32.GetWindowRect(wins[0], ctypes.byref(r))
+        W, H = r.right - r.left, r.bottom - r.top
+        log("map: resize client 1's window", f"{W}x{H} ->", f"{int(W * 0.8)}x{int(H * 0.7)}")
+        user32.SetWindowPos(wins[0], 0, 0, 0, int(W * 0.8), int(H * 0.7), 0x0002 | 0x0004)   # SWP_NOMOVE | SWP_NOZORDER
+        time.sleep(3)
+        ok, k, frames, drawn, mp, t = conv(c1)
+        log("client 1 mapconv after the resize (map open):", t[:500])
+        m = _re.search(r"conv=([-\d.,]+):drawn=([-\d.,]+)", mp)
+        same = bool(m) and max(abs(float(a) - float(b)) for a, b in zip(m.group(1).split(","), m.group(2).split(","))) <= 2.0
+        check("carte : apres redimensionnement, image de la carte a sa place", k.get("mapDrawn") == "1" and same, t[:400])
+        log("map: close the map screen on client 1:", cmd(c1, "mapui close"))
+        time.sleep(1.5)
+        check("carte : ecran de carte referme", "window=0" in cmd(c1, "mapui state")[1], cmd(c1, "mapui state")[1])
+        check_frames(c1, "client 1 (fenetre redimensionnee)")
+        user32.SetWindowPos(wins[0], 0, 0, 0, int(W * 0.6), int(H * 0.9), 0x0002 | 0x0004)
+        time.sleep(3)
+        check_frames(c1, "client 1 (redimensionnee encore)")
+        arrange_grid([host] + clis)   # back to the grid the user watches
+        time.sleep(2)
+    else:
+        log("map: client 1's window not found, no resize")
+        cmd(c1, "mapui close")
     # pings: client 1 pings, the host and client 2 see it in its name
     px, pz = (float(hchars[0]["x"]) + 50, float(hchars[0]["z"]) + 50) if hchars else (0.0, 0.0)
     r1 = cmd(clis[0], f"ping {px} {pz} 1")
@@ -4937,6 +5174,282 @@ def exp_stress4(host, clis, ids, minutes=15, hop_seconds=180, seed=4242):
     summary()
 
 
+# ---- workshop: research, crafting benches, mines and machines, power
+def mfields(t):
+    """'ok key ops=a/b names=.. flags=.. power=.. ...' (debug 'machine') -> dict (empty on error)."""
+    if not t or not t.startswith("ok "):
+        return {}
+    parts = t.split()
+    d = {"key": parts[1]}
+    for p in parts[2:]:
+        k, _, v = p.partition("=")
+        d[k] = v
+    return d
+
+
+def same_machine(h, c, floats=("power", "stored", "prog", "prod"), tol=0.15):
+    """Same workers, switches and crafting orders; the numbers within a small margin (they move while
+    the message travels)."""
+    if not h or not c:
+        return False, "missing"
+    for k in ("ops", "flags"):
+        if h.get(k) != c.get(k):
+            return False, f"{k}: {h.get(k)} / {c.get(k)}"
+    hc = [x.split(":")[0] for x in h.get("crafts", "").split(",") if x]
+    cc = [x.split(":")[0] for x in c.get("crafts", "").split(",") if x]
+    if hc != cc:
+        return False, f"crafts: {hc} / {cc}"
+    for k in floats:
+        a, b = float(h.get(k, 0)), float(c.get(k, 0))
+        if abs(a - b) > max(tol * max(abs(a), abs(b)), 0.6):
+            return False, f"{k}: {a} / {b}"
+    return True, ""
+
+
+def machine_both(host, cli, part, label, tries=8, **kw):
+    """The same machine on both sides (a few tries: the host sends every second)."""
+    last = ("", "")
+    for _ in range(tries):
+        h, c = cmd(host, f"machine {part}")[1], cmd(cli, f"machine {part}")[1]
+        ok, why = same_machine(mfields(h), mfields(c), **kw)
+        last = (h, c, why)
+        if ok:
+            return True, last
+        time.sleep(1.5)
+    log(label, "host:", last[0], "| client:", last[1], "|", last[2])
+    return False, last
+
+
+def find_template(pid, parts):
+    """The first building template whose name holds one of the parts ('sid', 'name')."""
+    for p in parts:
+        t = cmd(pid, f"buildtypes {p}")[1]
+        bits = t.split()
+        if t.startswith("ok") and len(bits) > 2:
+            sid, _, name = bits[2].partition("=")
+            return sid, name
+    return None, None
+
+
+def sandbox_building(host, sid, dx, dz, label):
+    """Placed by the host next to squad member 0 and finished at once (sandbox): True when built."""
+    ok, t, spot = place_valid(host, sid, 0, dx, dz)
+    log(label, "placed:", ok, t, spot)
+    if not ok:
+        return False
+    time.sleep(2)
+    log(label, "finished:", cmd(host, f"buildprogress {sid} 100000"))
+    time.sleep(2)
+    return True
+
+
+def exp_research(host, cli):
+    """Workshop: the research (tech tree), the crafting benches, the mines and machines and the power of
+    the players' outpost are the host's. The client researches, builds what it unlocked and crafts
+    with it through requests the host runs; skills, workers, outputs and power show the same on both
+    sides. The save may lack benches and materials: the host's sandbox commands set them up."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    log("client's own character: squad index", own)
+    cmd(host, "console xp all 60")   # faster researchers, builders and miners
+    time.sleep(2)
+    # ---- sandbox: a research bench, a crafting bench, a generator, a battery, a light
+    rb_sid, rb_name = find_template(host, ("recherche", "Research", "Recherche"))
+    cb_sid, cb_name = find_template(host, ("tabli", "Workbench", "Fabrication", "Bench", "Forge"))
+    gen_sid, gen_name = find_template(host, ("olienne", "Wind", "nérateur", "Generator"))
+    bat_sid, bat_name = find_template(host, ("Batterie", "Battery"))
+    light_sid, light_name = find_template(host, ("Lampe", "Lumi", "Light"))
+    log("templates:", rb_sid, rb_name, "|", cb_sid, cb_name, "|", gen_sid, gen_name, "|", bat_sid, bat_name, "|", light_sid, light_name)
+    check("recherche : un banc de recherche existe dans les modeles", rb_sid is not None, rb_name)
+    rb_ok = rb_sid is not None and sandbox_building(host, rb_sid, 60, 0, "research bench")
+    cb_ok = cb_sid is not None and sandbox_building(host, cb_sid, -60, 0, "crafting bench")
+    time.sleep(4)
+    rb_part = (rb_name or "").split("_")[0] or "any"
+    cb_part = (cb_name or "").split("_")[0] or "any"
+    if rb_ok:
+        for what in ("Livres", "Book", "Artefact", "Artifact", "Engineering", "Ingénierie"):
+            log("sandbox: into the research bench", what, cmd(host, f"machinegive {rb_part} {what} 20"))
+    if cb_ok:
+        for what in ("Fer", "Iron", "Cuir", "Leather", "Tissu", "Fabric", "Acier", "Steel"):
+            log("sandbox: into the crafting bench", what, cmd(host, f"machinegive {cb_part} {what} 20"))
+    time.sleep(3)
+
+    # ---- research: the same state on both sides
+    def rstate(pid):
+        t = cmd(pid, "research")[1]
+        d = dict(p.split("=", 1) for p in t.split()[1:] if "=" in p) if t.startswith("ok") else {}
+        d["queue_sids"] = [q.split(":")[0] for q in d.get("queue", "").split("|") if q]
+        return d
+    rh, rc = rstate(host), rstate(cli)
+    log("research host:", rh, "| client:", rc)
+    check("recherche : technologies connues identiques au depart", rh.get("fh") and rh.get("fh") == rc.get("fh"), f"{rh.get('finished')} / {rc.get('finished')}")
+    enabled0 = cmd(cli, "researchenabled 0")[1].split()[3:]
+    crafts0 = set(x.split("=")[0] for x in cmd(cli, "craftlist 2000")[1].split()[2:])
+    stats0 = (cmd(host, f"stats {own}")[1], cmd(cli, f"stats {own}")[1])
+    # the client queues a tech from its research window: a request the host runs
+    picks = [p.split("=")[0] for p in cmd(cli, "researchpick 6")[1].split()[1:]]
+    log("techs the client may research:", picks)
+    tech = None
+    for sid in picks:
+        log("client queues", sid, cmd(cli, f"researchreq queue {sid}"))
+        for _ in range(8):
+            time.sleep(0.5)
+            if sid in rstate(host)["queue_sids"]:
+                tech = sid
+                break
+        if tech:
+            break
+    check("recherche : demande du client mise en file par l'hote", tech is not None, picks)
+    if tech:
+        time.sleep(3)
+        rh, rc = rstate(host), rstate(cli)
+        check("recherche : meme file et meme avancement partout", rh["queue_sids"] == rc["queue_sids"], f"{rh.get('queue')} / {rc.get('queue')}")
+        # asked twice (a double click, or two players at once): queued once, paid once
+        before = cmd(host, f"machineinv {rb_part}")[1] if rb_ok else ""
+        log("client queues it again", cmd(cli, f"researchreq queue {tech}"))
+        log("host player queues it too", cmd(host, f"researchreq queue {tech}"))
+        time.sleep(3)
+        rh = rstate(host)
+        check("recherche : une seule fois dans la file malgre deux demandes", rh["queue_sids"].count(tech) == 1, rh.get("queue"))
+        if rb_ok:
+            after = cmd(host, f"machineinv {rb_part}")[1]
+            check("recherche : rien n'est consomme deux fois", before == after, f"{before} -> {after}")
+            check("recherche : inventaire du banc identique partout", cmd(cli, f"machineinv {rb_part}")[1] == after, cmd(cli, f"machineinv {rb_part}")[1])
+        # cancelled by the client, then queued again
+        log("client cancels", cmd(cli, f"researchreq cancel {tech}"))
+        time.sleep(3)
+        check("recherche : annulation du client vue partout", tech not in rstate(host)["queue_sids"] and tech not in rstate(cli)["queue_sids"],
+              f"{rstate(host).get('queue')} / {rstate(cli).get('queue')}")
+        log("client queues it again", cmd(cli, f"researchreq queue {tech}"))
+        time.sleep(3)
+        # the researchers' work, sped up on the host: finished, known everywhere
+        for _ in range(10):
+            log("host research progress", cmd(host, "researchprogress 100000"))
+            time.sleep(2)
+            if cmd(host, f"researchknown {tech}")[1] == "ok 1":
+                break
+        time.sleep(4)
+        check("recherche : technologie terminee chez l'hote", cmd(host, f"researchknown {tech}")[1] == "ok 1", rstate(host).get("queue"))
+        check("recherche : et connue chez le client", cmd(cli, f"researchknown {tech}")[1] == "ok 1", rstate(cli).get("queue"))
+        rh, rc = rstate(host), rstate(cli)
+        check("recherche : arbre technologique identique partout", rh.get("fh") == rc.get("fh") and rh["queue_sids"] == rc["queue_sids"], f"{rh} / {rc}")
+        eh, ec = cmd(host, "researchenabled 0")[1], cmd(cli, "researchenabled 0")[1]
+        check("recherche : menu de construction debloque pareil chez le client", eh.split()[2:3] == ec.split()[2:3], f"{eh[:120]} / {ec[:120]}")
+    # ---- the client builds what it unlocked, then crafts with it
+    new_buildings = [s for s in cmd(cli, "researchenabled 0")[1].split()[3:] if s not in enabled0]
+    log("buildings unlocked for the client:", new_buildings[:10])
+    if new_buildings:
+        sid = new_buildings[0]
+        ok, t, spot = place_valid(cli, sid, own, 50, 50)
+        log("client places the unlocked building", sid, ok, t)
+        time.sleep(4)
+        built_h = [e for e in cmd(host, f"buildlist {sid}")[1].split()[2:] if e.startswith(sid + "@")]
+        check("recherche : le client pose le batiment debloque", ok and bool(built_h), f"{t} | {built_h}")
+        log("host workers finish it", cmd(host, f"buildprogress {sid} 100000"))
+        time.sleep(3)
+        bh = [e for e in cmd(host, f"buildlist {sid}")[1].split()[2:] if e.startswith(sid + "@")]
+        bc = [e for e in cmd(cli, f"buildlist {sid}")[1].split()[2:] if e.startswith(sid + "@")]
+        check("recherche : batiment debloque construit partout", bh and bc and sorted(x.split(":")[-1] for x in bh) == sorted(x.split(":")[-1] for x in bc),
+              f"{bh} / {bc}")
+    else:
+        log("SKIP: the tech researched unlocked no building (only crafts or upgrades)")
+    new_crafts = sorted(set(x.split("=")[0] for x in cmd(cli, "craftlist 2000")[1].split()[2:]) - crafts0)
+    craftable = new_crafts or sorted(crafts0)
+    log("crafts for the client:", len(crafts0), "->", len(craftable), new_crafts[:6])
+    if cb_ok and craftable:
+        m0 = mfields(cmd(host, f"machine {cb_part}")[1])
+        n0 = len([x for x in m0.get("crafts", "").split(",") if x])
+        base = craftable[0]
+        log("client orders a craft", base, cmd(cli, f"machinereq {cb_part} addcraft {base}"))
+        time.sleep(4)
+        m1 = mfields(cmd(host, f"machine {cb_part}")[1])
+        n1 = len([x for x in m1.get("crafts", "").split(",") if x])
+        check("fabrication : ordre du client execute par l'hote", n1 == n0 + 1, f"{m0.get('crafts')} -> {m1.get('crafts')}")
+        ok, last = machine_both(host, cli, cb_part, "crafting bench")
+        check("fabrication : meme file de fabrication partout", ok, last[2] if len(last) > 2 else last)
+        # the host player and the client change the same bench at once: the last order wins everywhere
+        log("host sets repeat on", cmd(host, f"machinereq {cb_part} repeat 1"))
+        log("client sets repeat off", cmd(cli, f"machinereq {cb_part} repeat 0"))
+        time.sleep(4)
+        ok, last = machine_both(host, cli, cb_part, "crafting bench repeat")
+        check("fabrication : deux ordres en meme temps, meme resultat partout", ok, last[2] if len(last) > 2 else last)
+        check("fabrication : inventaire de l'etabli identique partout", cmd(host, f"machineinv {cb_part}")[1] == cmd(cli, f"machineinv {cb_part}")[1],
+              f"{cmd(host, f'machineinv {cb_part}')[1]} / {cmd(cli, f'machineinv {cb_part}')[1]}")
+        # the client's own character works the bench (a job: the host's game makes it craft)
+        log("client works the bench", cmd(cli, f"objreq {own} 87 {cb_part}"))
+        time.sleep(30)
+        ok, last = machine_both(host, cli, cb_part, "crafting bench worked")
+        check("fabrication : le perso du client travaille l'etabli, vu pareil partout", ok, last[2] if len(last) > 2 else last)
+        log("client removes the order", cmd(cli, f"machinereq {cb_part} removecraft 0"))
+        time.sleep(4)
+        ok, last = machine_both(host, cli, cb_part, "crafting bench order removed")
+        check("fabrication : ordre retire par le client, retire partout", ok, last[2] if len(last) > 2 else last)
+    else:
+        check("fabrication : un etabli et un objet a fabriquer", False, f"bench {cb_sid} ok={cb_ok}, crafts {len(craftable)}")
+    # learning by doing: computed once on the host, the same on the client
+    time.sleep(3)
+    sh, sc = cmd(host, f"stats {own}")[1].split()[1], cmd(cli, f"stats {own}")[1].split()[1]
+    log("skills before:", stats0[0][:80], "| after host:", sh[:80], "client:", sc[:80])
+    check("fabrication : competences du perso du client identiques partout", sh == sc, f"{sh[:120]} / {sc[:120]}")
+
+    # ---- mine: three characters, the host's and the client's, work the same iron node
+    log("objects around (host):", cmd(host, f"objnear {own} 3000")[1][:300])
+    r = cmd(cli, f"objreq {own} 87 Ressource_Fer")
+    log("client's character mines:", r)
+    others = [i for i in range(3) if i != own][:2]
+    for i in others:
+        log("host's character", i, "mines:", cmd(host, f"minereq {i}"))
+    time.sleep(45)
+    ok, last = machine_both(host, cli, "Fer", "mine", floats=("prog", "prod"), tol=0.3)
+    mh = mfields(cmd(host, "machine Fer")[1])
+    check("mine : nombre de mineurs identique partout", ok, last[2] if len(last) > 2 else last)
+    check("mine : trois mineurs (hote et client melanges)", mh.get("ops", "").startswith("3/"), mh.get("ops"))
+    ih = cmd(host, "machineinv Fer")[1]
+    time.sleep(2)
+    ic = cmd(cli, "machineinv Fer")[1]
+    ih2 = cmd(host, "machineinv Fer")[1]
+    check("mine : meme minerai produit partout", ic in (ih, ih2), f"{ih} / {ic}")
+    if others:
+        log("host's character", others[0], "stops mining", cmd(host, f"moverel {others[0]} 200 0"))
+        time.sleep(8)
+        ok, last = machine_both(host, cli, "Fer", "mine after a worker left", floats=("prog", "prod"), tol=0.3)
+        mh2 = mfields(cmd(host, "machine Fer")[1])
+        check("mine : un mineur retire, vu partout", ok and mh2.get("ops") != mh.get("ops"), f"{mh.get('ops')} -> {mh2.get('ops')} | {last[2] if len(last) > 2 else ''}")
+
+    # ---- power: a generator, a battery and a consumer
+    built = {}
+    for sid, name, dx, dz, label in ((gen_sid, gen_name, 0, 90, "generator"), (bat_sid, bat_name, 40, 90, "battery"), (light_sid, light_name, -40, 90, "light")):
+        if sid:
+            built[label] = (name or "").split("_")[0] if sandbox_building(host, sid, dx, dz, label) else None
+    gen_part = built.get("generator")
+    check("energie : un generateur pose dans le bac a sable", bool(gen_part), gen_sid)
+    if gen_part:
+        time.sleep(6)
+        for label, part in built.items():
+            if not part:
+                continue
+            ok, last = machine_both(host, cli, part, label)
+            check(f"energie : {label} identique partout (sortie, charge, consommation)", ok, last[2] if len(last) > 2 else last)
+        th, tc = mfields(cmd(host, f"machine {gen_part}")[1]).get("town"), mfields(cmd(cli, f"machine {gen_part}")[1]).get("town")
+        log("town power host:", th, "client:", tc)
+        if th:
+            close = tc and all(abs(float(a) - float(b)) <= max(0.15 * max(abs(float(a)), abs(float(b))), 0.6) for a, b in zip(th.split(","), tc.split(",")))
+            check("energie : totaux du panneau de la base identiques", close, f"{th} / {tc}")
+        log("client switches the generator off", cmd(cli, f"machinereq {gen_part} power 0"))
+        time.sleep(4)
+        fh = int(mfields(cmd(host, f"machine {gen_part}")[1]).get("flags", "1"))
+        fc = int(mfields(cmd(cli, f"machine {gen_part}")[1]).get("flags", "1"))
+        check("energie : generateur coupe par le client, coupe partout", not (fh & 1) and not (fc & 1), f"host {fh} client {fc}")
+        time.sleep(4)
+        for label, part in built.items():
+            if part and label != "generator":
+                ok, last = machine_both(host, cli, part, label + " after the generator went off")
+                check(f"energie : {label} apres la coupure, identique partout", ok, last[2] if len(last) > 2 else last)
+    summary()
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="what", required=True)
@@ -5044,6 +5557,9 @@ def main():
     tk = sub.add_parser("talk")
     tk.add_argument("--save", default="kctest_base")
     tk.add_argument("--keep", action="store_true")
+    dl_ = sub.add_parser("dialogue", help="conversations: the client's own, an NPC's (guard check), one per NPC (occupe), leave, teleport, fight, speed 3")
+    dl_.add_argument("--save", default="kctest_town")
+    dl_.add_argument("--keep", action="store_true")
     rg = sub.add_parser("ranged", help="lot C: a crossbowman shoots at the squad, turrets turn: same on the client")
     rg.add_argument("--save", default="kctest_base")
     rg.add_argument("--keep", action="store_true")
@@ -5089,6 +5605,9 @@ def main():
     fo = sub.add_parser("four", help="1 host + 3 clients")
     fo.add_argument("--save", default="kctest_base")
     fo.add_argument("--clients", type=int, default=3)
+    rs = sub.add_parser("research", help="workshop: research, crafting benches, mines, power (sandbox set up by the host)")
+    rs.add_argument("--save", default="kctest_base")
+    rs.add_argument("--keep", action="store_true")
     pg = sub.add_parser("progress")
     pg.add_argument("--save", default="kctest_base")
     pg.add_argument("--keep", action="store_true")
@@ -5149,7 +5668,9 @@ def main():
                 kill_launched()
         return
     if a.what == "map":
-        host, clis = setup_many(a.save, max(2, a.clients))
+        # setup_multi: each client closes its character editor when its join turn comes (with the
+        # join queue, the next client waits until then)
+        host, clis, _ids = setup_multi(a.save, max(2, a.clients))
         arrange_grid([host] + clis)
         try:
             exp_map(host, clis)
@@ -5189,6 +5710,8 @@ def main():
             exp_talk(host, cli)
         elif a.what == "actorsafety":
             exp_actorsafety(host, cli)
+        elif a.what == "dialogue":
+            exp_dialogue(host, cli)
         elif a.what == "stuck":
             exp_stuck(host, cli)
         elif a.what == "farnpc":
@@ -5231,6 +5754,8 @@ def main():
             exp_placevalid(host, cli)
         elif a.what == "mine":
             exp_mine(host, cli)
+        elif a.what == "research":
+            exp_research(host, cli)
         elif a.what == "admin":
             exp_admin(host, cli)
         elif a.what == "caravan":

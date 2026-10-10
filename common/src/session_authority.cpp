@@ -139,16 +139,31 @@ bool Session::Authorize(RemotePlayer& pl, Msg type, Reader r) {
             AppearanceMsg m;
             if (!Decode(r, m)) return malformed();
             actor = m.netId;
+        } else if (type == Msg::ResearchRequest) {   // workshop: the character asking (a blueprint: the one carrying it)
+            ResearchRequest m;
+            if (!Decode(r, m)) return malformed();
+            actor = m.actorNetId;
+            seq = m.seq;
+        } else if (type == Msg::MachineRequest) {
+            MachineRequest m;
+            if (!Decode(r, m)) return malformed();
+            actor = m.actorNetId;
+            seq = m.seq;
         }
         return AdmitActor(pl.id, actor, rule->name, type, seq);
     }
-    case AuthSubject::OwnConversation: {
+    case AuthSubject::OwnConversation: {   // the answer names its actor: the sender's character in the sender's conversation
         DialogReply a;
         if (!Decode(r, a)) return malformed();
-        auto o = dialogOwner_.find(a.dialogId);
-        if (o != dialogOwner_.end() && o->second == pl.id) return true;
-        Refuse(pl.id, type, 0, 0, ResultReason::NotYourCharacter, "own conversation",
-               "conversation " + std::to_string(a.dialogId) + (o == dialogOwner_.end() ? " unknown" : " is player " + std::to_string(o->second) + "'s"), {});
+        if (!AdmitActor(pl.id, a.actor, rule->name, type, 0)) return false;
+        auto o = hostDialogs_.find(a.dialogId);
+        if (o != hostDialogs_.end() && o->second.owner == pl.id && o->second.pc == a.actor) return true;
+        Refuse(pl.id, type, 0, a.actor, ResultReason::NotYourCharacter, "own conversation",
+               "conversation " + std::to_string(a.dialogId) +
+                   (o == hostDialogs_.end() ? " unknown"
+                    : o->second.owner != pl.id ? " is player " + std::to_string(o->second.owner) + "'s"
+                                               : " is character " + std::to_string(o->second.pc) + "'s, not " + std::to_string(a.actor) + "'s"),
+               {});
         return false;
     }
     case AuthSubject::Inventory: {
@@ -177,7 +192,8 @@ bool Session::InjectForTest(uint8_t playerId, const Writer& w) {
 bool Session::ClientMaySend(Msg type, uint32_t netId, const char* what) {
     const MessageRule* rule = MessageRuleFor(type);
     if (!rule || rule->role == AuthRole::HostOnly || rule->role == AuthRole::Handshake) return false;
-    if (rule->subject != AuthSubject::OwnCharacter && !(rule->subject == AuthSubject::Inventory && netId)) return true;
+    if (rule->subject != AuthSubject::OwnCharacter && rule->subject != AuthSubject::OwnConversation && !(rule->subject == AuthSubject::Inventory && netId))
+        return true;
     const ActorVerdict v = CheckActor(localId_, netId);
     if (v == ActorVerdict::Ok) return true;
     std::string owner;

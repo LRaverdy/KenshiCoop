@@ -141,8 +141,10 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
 - **Chacun commande ses persos** : un ordre d'un joueur (dormir, parler, piller, construire…) n'est
   exécuté que par **ses** personnages, jamais par ceux de l'hôte ou d'un autre joueur ; un ordre
   impossible (mauvaise cible) est refusé avec un message, sans rien faire.
-- **Dialogues** : les bulles chez tout le monde ; une conversation avec un PNJ s'ouvre chez le
-  joueur concerné (fenêtre du mod), qui choisit ses réponses.
+- **Dialogues** : les bulles chez tout le monde ; une conversation avec un PNJ (qu'on lui parle ou
+  qu'il nous aborde : garde, mendiant, chasseur de primes...) s'ouvre chez le joueur concerné
+  seulement (fenêtre du mod, bouton « Partir »), qui choisit ses réponses ; le jeu ne se met pas en
+  pause pour une conversation. Un PNJ ne parle qu'à un joueur à la fois (« occupé »).
 - **Heure, vitesse et pause** : celles de l'hôte, imposées en permanence. Les clients ne peuvent
   pas les changer.
 - **Météo** (pluie, tempêtes, éclairs, nuages de gaz…) : celle de l'hôte, région par région.
@@ -154,7 +156,7 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
   Si on te voit, la fenêtre se ferme et l'objet reste.
 - **Objets au sol** : posés et ramassés, au même endroit pour tout le monde.
 - **Cadavres** : restent synchronisés et se fouillent, près des joueurs.
-- **Carte et repères** : sur la carte du jeu (M), tous les persos de tous les joueurs à la couleur
+- **Carte et repères** : sur la carte du jeu (onglet CARTE de la fenêtre de gestion, bouton MAP), tous les persos de tous les joueurs à la couleur
   de leur joueur et les escouades hostiles qui nous visent en rouge ; une minicarte ronde ; un
   repère au-dessus de la tête des persos des joueurs ; leur cadre de portrait coloré ; des pings
   partagés. Réglages : fenêtre Multijoueur, « Affichage ».
@@ -171,7 +173,9 @@ Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui
   - prisons et esclavage ;
   - combat à distance (projectiles, tourelles) ;
   - relations de factions, primes et diplomatie (guerres entre factions, chefs, villes) :
-    implémentés, à vérifier en jeu ; leur état chez l'hôte est dans la fenêtre Diplomatie (Ctrl+Shift+F).
+    implémentés, à vérifier en jeu ; leur état chez l'hôte est dans la fenêtre Diplomatie (Ctrl+Shift+F) ;
+  - recherche, établis de fabrication, mines et machines, énergie des avant-postes : implémentés
+    (l'hôte décide, les boutons d'un client deviennent des demandes), à vérifier en jeu.
 - Côté client, ne pas poser de bâtiment pour l'instant : il n'existerait probablement que chez
   toi. (Une pose qu'un client fait quand même est vérifiée par l'hôte comme le mode construction
   vérifie un endroit : dans l'eau ou l'acide, trop près d'une ville… elle est refusée et le

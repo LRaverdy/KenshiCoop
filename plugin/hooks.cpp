@@ -536,7 +536,20 @@ void hk_setInDialog(void* d, bool on) {
     if (v->active && v->client && on && !g_hostCall) return;
     // another player's conversation: it opens on their screen, not on the host's
     if (v->active && !v->client) {   // any thread: the game prepares conversations on worker threads too
-        if (KenshiWorld* w = TheWorld(); w && w->NoteDialogWindow(d, on)) return;
+        KenshiWorld* w = TheWorld();
+        if (w && w->NoteDialogWindow(d, on)) return;
+        // The host's own conversation: in single player the game pauses while its window is open
+        // (userPause(true) when the window opens, 0x727875). With other players in the game it does
+        // not: the world goes on for everyone (off the main thread the call is only queued, nothing changes).
+        if (on && w && !v->squadForeign.empty()) {
+            const bool before = kenshi::GetPaused();
+            o_setInDialog(d, on);
+            if (!before && kenshi::GetPaused() && kenshi::CallUserPause(false)) {
+                ++w->hostDialogUnpaused;
+                Log("the host's own conversation: the game is not paused in co-op");
+            }
+            return;
+        }
     }
     o_setInDialog(d, on);
 }
@@ -566,10 +579,24 @@ SendEventOverrideFn o_sendEventOverride = nullptr;
 bool hk_sendEventOverride(void* d, void* who, int ev, bool force) { return ClientRefuses() ? false : o_sendEventOverride(d, who, ev, force); }
 using StartConvFn = bool (*)(void* d, void* target, void* line, int ev, bool force);
 StartConvFn o_startConv = nullptr;
-bool hk_startConv(void* d, void* target, void* line, int ev, bool force) { return ClientRefuses() ? false : o_startConv(d, target, line, ev, force); }
+// Host: one conversation at a time per NPC. An NPC in another player's conversation does not start
+// another one (nor is it pulled into one): the character asking is told "occupé".
+bool HostRefusesConversation(void* d, void* target) {
+    auto v = KenshiWorld::View();
+    if (!v->active || v->client) return false;
+    KenshiWorld* w = TheWorld();
+    return w && !w->ConversationAllowed(d, target);
+}
+bool hk_startConv(void* d, void* target, void* line, int ev, bool force) {
+    if (ClientRefuses() || HostRefusesConversation(d, target)) return false;
+    return o_startConv(d, target, line, ev, force);
+}
 using StartPlayerConvFn = bool (*)(void* d, void* target, void* line);
 StartPlayerConvFn o_startPlayerConv = nullptr;
-bool hk_startPlayerConv(void* d, void* target, void* line) { return ClientRefuses() ? false : o_startPlayerConv(d, target, line); }
+bool hk_startPlayerConv(void* d, void* target, void* line) {
+    if (ClientRefuses() || HostRefusesConversation(d, target)) return false;
+    return o_startPlayerConv(d, target, line);
+}
 using PtrFn = void (*)(void* self, void* p);
 PtrFn o_doActions = nullptr, o_assessCrimes = nullptr, o_assignBounty = nullptr;
 void hk_doActions(void* d, void* line) { if (!ClientRefuses()) o_doActions(d, line); }
@@ -1446,6 +1473,37 @@ extern void (*o_openButton)(void*, void*);
 extern void (*o_lockButton)(void*, void*);
 } // namespace doorhooks
 // ---- end lot A
+// ---- workshop (plugin/workshop.cpp)
+namespace workshophooks {
+bool hk_start(void*, void*);
+void hk_stop(void*, void*);
+bool hk_pay(void*, void*);
+void hk_progress(void*, float);
+bool hk_learn(void*);
+void* hk_addCraft(void*, void*, void*, float, int);
+void hk_removeCraft(void*, int);
+void hk_queueAdd(void*, void*);
+void hk_queueRemove(void*, void*);
+void hk_queueRemoved(void*, int, void*);
+void hk_queueRepeat(void*, void*);
+void hk_grid(void*);
+void hk_power(void*, void*);
+void hk_batt(void*, void*);
+extern bool (*o_start)(void*, void*);
+extern void (*o_stop)(void*, void*);
+extern bool (*o_pay)(void*, void*);
+extern void (*o_progress)(void*, float);
+extern bool (*o_learn)(void*);
+extern void* (*o_addCraft)(void*, void*, void*, float, int);
+extern void (*o_removeCraft)(void*, int);
+extern void (*o_queueAdd)(void*, void*);
+extern void (*o_queueRemove)(void*, void*);
+extern void (*o_queueRemoved)(void*, int, void*);
+extern void (*o_queueRepeat)(void*, void*);
+extern void (*o_grid)(void*);
+extern void (*o_power)(void*, void*);
+extern void (*o_batt)(void*, void*);
+} // namespace workshophooks
 
 bool InstallHooks(TickFn tick, std::string* err) {
     g_tick = tick;
@@ -1558,6 +1616,21 @@ bool InstallHooks(TickFn tick, std::string* err) {
         // ---- map markers: the squad bar's portraits
         {kenshi::FnPortraitCellUpdate, reinterpret_cast<void*>(&mapmarks::hk_portraitUpdate), reinterpret_cast<void**>(&mapmarks::o_portraitUpdate)},
         {kenshi::FnPortraitCellDtor, reinterpret_cast<void*>(&mapmarks::hk_portraitDtor), reinterpret_cast<void**>(&mapmarks::o_portraitDtor)},
+        // ---- workshop: research, crafting benches, power
+        {kenshi::FnResearchStart, reinterpret_cast<void*>(&workshophooks::hk_start), reinterpret_cast<void**>(&workshophooks::o_start)},
+        {kenshi::FnResearchStop, reinterpret_cast<void*>(&workshophooks::hk_stop), reinterpret_cast<void**>(&workshophooks::o_stop)},
+        {kenshi::FnResearchPayCosts, reinterpret_cast<void*>(&workshophooks::hk_pay), reinterpret_cast<void**>(&workshophooks::o_pay)},
+        {kenshi::FnResearchProgress, reinterpret_cast<void*>(&workshophooks::hk_progress), reinterpret_cast<void**>(&workshophooks::o_progress)},
+        {kenshi::FnLearnResearch, reinterpret_cast<void*>(&workshophooks::hk_learn), reinterpret_cast<void**>(&workshophooks::o_learn)},
+        {kenshi::FnCraftAdd, reinterpret_cast<void*>(&workshophooks::hk_addCraft), reinterpret_cast<void**>(&workshophooks::o_addCraft)},
+        {kenshi::FnCraftRemove, reinterpret_cast<void*>(&workshophooks::hk_removeCraft), reinterpret_cast<void**>(&workshophooks::o_removeCraft)},
+        {kenshi::FnCraftQueueAdd, reinterpret_cast<void*>(&workshophooks::hk_queueAdd), reinterpret_cast<void**>(&workshophooks::o_queueAdd)},
+        {kenshi::FnCraftQueueRemove, reinterpret_cast<void*>(&workshophooks::hk_queueRemove), reinterpret_cast<void**>(&workshophooks::o_queueRemove)},
+        {kenshi::FnCraftQueueRemoved, reinterpret_cast<void*>(&workshophooks::hk_queueRemoved), reinterpret_cast<void**>(&workshophooks::o_queueRemoved)},
+        {kenshi::FnCraftQueueRepeat, reinterpret_cast<void*>(&workshophooks::hk_queueRepeat), reinterpret_cast<void**>(&workshophooks::o_queueRepeat)},
+        {kenshi::FnUpdatePowerGrid, reinterpret_cast<void*>(&workshophooks::hk_grid), reinterpret_cast<void**>(&workshophooks::o_grid)},
+        {kenshi::FnTogglePowerButton, reinterpret_cast<void*>(&workshophooks::hk_power), reinterpret_cast<void**>(&workshophooks::o_power)},
+        {kenshi::FnToggleBattButton, reinterpret_cast<void*>(&workshophooks::hk_batt), reinterpret_cast<void**>(&workshophooks::o_batt)},
         // ---- crash report
         {kenshi::FnWriteCrashDump, reinterpret_cast<void*>(&hk_writeCrashDump), reinterpret_cast<void**>(&o_writeCrashDump)},
     };
