@@ -3485,13 +3485,22 @@ bool GameDataSidOf(const void* gd, std::string& out) { return GameDataSid(gd, ou
 void ItemTemplates(const std::string& part, std::vector<std::pair<std::string, std::string>>& out, size_t max) {
     out.clear();
     if (!g_gameDataBuilt) BuildGameDataIndex();
+    // Many records share a name with an item (a research, a dialogue line... "Building Materials"
+    // is also type 49, which the item factory refuses): weapons, armour and items (itemType 2, 3, 4)
+    // first, exact names first among them.
+    std::vector<std::tuple<int, std::string, std::string>> all;
     for (const auto& [sid, gd] : g_gameDataBySid) {
         int type = -1;
         std::string name;
         if (!Rd(gd, off::GD_type, type) || type == 0 || !TemplateDisplayName(sid, name)) continue;   // not a BUILDING
         if (!part.empty() && name.find(part) == std::string::npos && sid != part) continue;
-        out.emplace_back(sid, name);
+        const int rank = (type >= 2 && type <= 4 ? 0 : 2) + (name == part || sid == part ? 0 : 1);
+        all.emplace_back(rank, sid, name);
+    }
+    std::stable_sort(all.begin(), all.end(), [](const auto& a, const auto& b) { return std::get<0>(a) < std::get<0>(b); });
+    for (auto& [rank, sid, name] : all) {
         if (out.size() >= max) break;
+        out.emplace_back(std::move(sid), std::move(name));
     }
 }
 

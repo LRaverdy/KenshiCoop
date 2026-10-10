@@ -1330,10 +1330,12 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         if (!best) return "err no such door around";
         auto describe = [&](void* o) {
             kc::DoorState d;
+            kc::Vec3 at{};
             kenshi::ReadDoor(o, d);
-            char b[160];
-            snprintf(b, sizeof(b), "ok %s kind=%d state=%d flags=%d level=%d amount=%.2f", bestName.c_str(), int(d.kind), int(d.state), int(d.flags),
-                     d.lockLevel, double(d.openAmount));
+            kenshi::ObjectPosition(o, at);
+            char b[200];
+            snprintf(b, sizeof(b), "ok %s kind=%d state=%d flags=%d level=%d amount=%.2f at=%.1f,%.1f,%.1f", bestName.c_str(), int(d.kind), int(d.state),
+                     int(d.flags), d.lockLevel, double(d.openAmount), at.x, at.y, at.z);
             return std::string(b);
         };
         if (cmd == "doorstate") return describe(best);
@@ -1539,16 +1541,22 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         std::replace(what.begin(), what.end(), '_', ' ');
         auto squad = SortedSquad(w);
         if (idx >= squad.size()) return "err no such squad member";
-        std::string sid = what;
-        if (!kenshi::GameDataBySid(sid)) {
-            std::vector<std::pair<std::string, std::string>> found;
-            kenshi::ItemTemplates(what, found, 1);
-            if (found.empty()) return "err unknown item " + what;
-            sid = found[0].first;
-        }
-        std::string why;
+        // a name can belong to several records (the item, and e.g. a research or a dialogue line called
+        // "Building Materials", which the item factory refuses): items first (ItemTemplates), then
+        // each candidate until one is an item the factory makes
+        std::vector<std::string> cands;
+        if (kenshi::GameDataBySid(what)) cands.push_back(what);
+        std::vector<std::pair<std::string, std::string>> found;
+        kenshi::ItemTemplates(what, found, 64);
+        for (const auto& f : found) cands.push_back(f.first);
+        if (cands.empty()) return "err unknown item " + what;
+        std::string why, all;
         HostCallScope scope;
-        return kenshi::GiveNewItem(w.FindSquad(squad[idx]), sid, n, &why) ? "ok " + sid + " x" + std::to_string(n) : "err " + why;
+        for (const auto& sid : cands) {
+            if (kenshi::GiveNewItem(w.FindSquad(squad[idx]), sid, n, &why)) return "ok " + sid + " x" + std::to_string(n);
+            if (all.size() < 400) all += (all.empty() ? "" : "; ") + why;
+        }
+        return "err " + all;
     }
     if (cmd == "invcount") {   // invcount <squadIndex|all> <templateSid|name part>: how many of those items that member (or the whole squad) carries
         std::string who, part;

@@ -1391,7 +1391,12 @@ def find_material(pid, name=None):
         log("item templates", part, ":", t[:300])
         parts = t.split()
         if t.startswith("ok") and len(parts) > 2:
-            return parts[2].split("=")[0]
+            # the plugin lists items first; among them the building materials themselves, not a kit
+            names = [p.split("=", 1) for p in parts[2:] if "=" in p]
+            for sid, nm in names:
+                if nm.lower().startswith(("mat", "building_mat")):
+                    return sid
+            return names[0][0] if names else None
     return None
 
 
@@ -1440,7 +1445,7 @@ def order_build(pid, idx, sid, site_pos, tasks, host):
         log(f"build order task {task} from {pid}:", r)
         if not r[0]:
             continue
-        for _ in range(16):
+        for _ in range(40):   # the builder walks to the site and starts (20 s)
             time.sleep(0.5)
             now = site_at(host, sid, site_pos)
             if before and now and (now[1] > before[1] or now[2] & 1):
@@ -1637,16 +1642,34 @@ def exp_buyhouse(host, cli):
     time.sleep(4)
     log("doors around the client's character:", cmd(cli, f"doors {own}")[1][:200])
     d0 = cmd(host, f"doorstate {own} door")[1]
+    # doors are synced within 40 m of a character (kDoorRadius 400): the nearest door can be further
+    # (a house's door is not at its centre); the client's character goes next to it first
+    if "at=" in d0:
+        dx, dy, dz = map(float, d0.split("at=")[1].split()[0].split(","))
+        cmd(host, f"teleport {own} {dx + 4} {dy} {dz + 4}")
+        time.sleep(4)
+        d0 = cmd(host, f"doorstate {own} door")[1]
     log("client opens the door:", cmd(cli, f"doorbutton {own} door open"))
     time.sleep(4)
     d1h, d1c = cmd(host, f"doorstate {own} door")[1], cmd(cli, f"doorstate {own} door")[1]
     log("door host", d0, "->", d1h, "| client", d1c)
     st = lambda t: t.split("state=")[1].split()[0] if "state=" in t else None
-    check("achat [client] : la porte s'ouvre", st(d1h) is not None and st(d1h) != st(d0), f"{d0} -> {d1h}")
-    check("achat [client] : porte identique chez le client", st(d1h) == st(d1c), f"{d1h} / {d1c}")
+    # open/closed: 1 or 2 (opening) is open, 0 or 3 (closing) closed; the client follows within a second or two
+    opened = lambda t: st(t) in ("1", "2")
+    for _ in range(10):
+        if st(d1h) is not None and opened(d1h) == opened(d1c):
+            break
+        time.sleep(0.5)
+        d1h, d1c = cmd(host, f"doorstate {own} door")[1], cmd(cli, f"doorstate {own} door")[1]
+    check("achat [client] : la porte s'ouvre", st(d1h) is not None and opened(d1h) != opened(d0), f"{d0} -> {d1h}")
+    check("achat [client] : porte identique chez le client", st(d1h) is not None and opened(d1h) == opened(d1c), f"{d1h} / {d1c}")
     log("client opens a container:", cmd(cli, f"containerreq {own} any"))
-    time.sleep(6)
-    cc = cmd(cli, "contcount any")[1]
+    cc = ""
+    for _ in range(20):   # the character walks to it first (it can be tens of metres away)
+        time.sleep(1)
+        cc = cmd(cli, "contcount any")[1]
+        if "windows=" in cc and cc.split("windows=")[1] != "0":
+            break
     log("client container window:", cc)
     check("achat [client] : un conteneur s'ouvre chez le client", "windows=" in cc and cc.split("windows=")[1] != "0", cc)
     cmd(cli, "closewindows")
@@ -1656,6 +1679,8 @@ def exp_buyhouse(host, cli):
     log("next for sale:", where2, price2)
     check("achat [hote] : un autre batiment a vendre", where2 is not None and where2 != where, where2)
     if where2 and where2 != where:
+        cmd(host, f"money {price2 + 1000}")   # what is left after the first purchase may not cover this one
+        time.sleep(2)
         m0h = money(host)
         log("host buys", where2, cmd(host, "buildbuy"))
         time.sleep(5)
@@ -1723,6 +1748,8 @@ def exp_farlong(host, cli, seconds=300, kinds=("Tente", "Feu", "Coffre", "Lit", 
         log("client places", sid, "far away:", cmd(cli, f"buildplace {sid} -40 30 0 {own}"))
     t0 = time.time()
     worst = []
+    NEAR_SEEN, NEAR_POS = 1000.0, 300.0   # what the client's player sees; the range the plugin pulls characters in
+    prev_miss, prev_off, persist_miss, persist_off = set(), set(), set(), set()
     npc_moves, npc_last = 0, None
     host_dir = 1
     rounds = max(1, int(seconds // 30))
@@ -1747,14 +1774,30 @@ def exp_farlong(host, cli, seconds=300, kinds=("Tente", "Feu", "Coffre", "Lit", 
             f"extra {rep['extra_on_client']} pos_err_max {rep['pos_err_max']} over_tol {rep['pos_err_over_tol']} vitals {rep['vital_flag_mismatch']} "
             f"inv {rep['inventory_mismatch']} | round trips host {lat[0]} client {lat[1]} | client {st.get('state')} missingNpcs {st.get('missingNpcs')}")
         worst.append((rep["missing_on_client"], rep["pos_err_over_tol"], rep["vital_flag_mismatch"], rep["inventory_mismatch"], lat))
+        # what the client's player can see: characters near its own (far) character. Away from it the
+        # client has not streamed the zone in (NPCs walking around the host's squad, 1700-2900 units
+        # away, stay "missing" there: the client cannot create them in an unloaded zone) and the
+        # plugin does not pull far characters (kSeenRange 300): those counts come and go with traffic.
+        me = vec(cmd(host, f"where {own}")[1])
+        near_miss = {k for k in set(h["char"]) - set(c["char"]) if "pos" in h["char"][k] and dist(h["char"][k]["pos"], me) < NEAR_SEEN
+                     and not int(h["char"][k].get("flags", "0")) & 8}
+        near_off = {k for k in set(h["char"]) & set(c["char"]) if "pos" in h["char"][k] and "pos" in c["char"][k]
+                    and dist(h["char"][k]["pos"], me) < NEAR_POS and dist(h["char"][k]["pos"], c["char"][k]["pos"]) > 3.0}
+        persist_miss |= near_miss & prev_miss
+        persist_off |= near_off & prev_off
+        prev_miss, prev_off = near_miss, near_off
+        log(f"   near the client's character: missing {len(near_miss)} off {len(near_off)} | still so since the last sample: missing {len(near_miss & persist_miss)} off {len(near_off & persist_off)}")
         if st.get("state") != "connected":
             break
     check("loin longtemps : le client reste connecte", status(cli).get("state") == "connected", status(cli))
     check("loin longtemps : l'hote simule la zone du client (le PNJ bouge chez l'hote)", npc is not None and npc_moves >= 2,
           f"pnj {npc}, {npc_moves} deplacements vus")
     tail = worst[len(worst) // 2:] or worst
-    check("loin longtemps : pas de PNJ manquant qui s'accumule", all(w[0] <= max(2, worst[0][0]) for w in tail), [w[0] for w in worst])
-    check("loin longtemps : pas d'ecart de position qui s'accumule", all(w[1] <= max(3, worst[0][1]) for w in tail), [w[1] for w in worst])
+    # a desync is what stays: the same character missing (or off) near the client's one on two samples
+    # in a row (30 s apart); the whole-zone counts only go in the log (streaming at the edge, traffic)
+    log("whole zone (log only): missing", [w[0] for w in worst], "off", [w[1] for w in worst])
+    check("loin longtemps : pas de PNJ manquant qui dure pres du perso du client", len(persist_miss) == 0, sorted(persist_miss)[:5])
+    check("loin longtemps : pas d'ecart de position qui dure pres du perso du client", len(persist_off) == 0, sorted(persist_off)[:5])
     check("loin longtemps : sante identique", all(w[2] == 0 for w in tail), [w[2] for w in worst])
     check("loin longtemps : inventaires identiques", all(w[3] == 0 for w in tail), [w[3] for w in worst])
     check("loin longtemps : temps d'image correct (aller-retour d'une commande < 1 s)", all(w[4][0][1] < 1000 and w[4][1][1] < 1000 for w in worst),

@@ -607,6 +607,23 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     if (hostDown || hostDead || localDown) {
         lastDest_.erase(h);
         stuck_.erase(h);
+        // A knocked-out body lying well away from the host's (it fell where our copy was when the
+        // game ignored the positions written to it, far from every player: one lay 87 units off for
+        // minutes in the far-zone test): once a player comes near, it is stood up, and the posture
+        // code above puts it on the host's spot (ReadyToFall) and lays it down again. Never a dead
+        // body, never more than once every 5 s.
+        constexpr float kBodyOff = 25.0f, kBodySeen = 300.0f;
+        if (hostDown && localDown && !hostDead && !kenshi::IsDead(c) && kenshi::IsRagdoll(c) && Dist(local, target.pos) > kBodyOff &&
+            NearestSquadDistance(local) < kBodySeen) {
+            double& at = relaidAt_[h];
+            if (now - at > 5.0) {
+                at = now;
+                HostCallScope scope;
+                kenshi::SetRagdoll(c, false);
+                postureFixed_[h] = 0;
+                Log("posture: %s lies %.0f units from the host's body: stood up to fall where the host's lies", KeyOf(h).c_str(), Dist(local, target.pos));
+            }
+        }
         return;
     }
 
@@ -1000,6 +1017,7 @@ void KenshiWorld::ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& 
         fallPrep_.erase(dropped);
         lastDest_.erase(dropped);
         postureFixed_.erase(dropped);
+        relaidAt_.erase(dropped);
         Log("carry: %sputs a body down as on the host; it falls where the host's lies (ragdoll %d)", carry ? "swaps and " : "", body ? int(kenshi::IsRagdoll(body)) : -1);
     }
     if (carry && who && (!carrying || kenshi::Resolve(local) != who)) {
