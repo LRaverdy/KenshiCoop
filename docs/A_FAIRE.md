@@ -98,6 +98,13 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   (relever un corps à plus de 5 unités et le refaire tomber, censée se limiter à 3 fois) : elle
   boucle, et elle s'applique aux persos portés ou prisonniers. À corriger : ne jamais l'appliquer
   à un perso porté, attaché, en cage ou assis ; limite réelle par corps ; seuil plus large.
+- **Geoffrey bloqué avant la création de son perso** (23:36-23:37). 1er essai : son jeu a quitté
+  ou planté pendant le chargement (« left while joining (connection lost …) »). 2e essai : l'hôte
+  dit « Geoffrey is back with their character » puis « 0 character(s) they had are theirs again » :
+  il se souvient d'un perso de Geoffrey (fichier des joueurs, partie précédente ?) qui n'existe pas
+  ou plus dans ce monde, donc il ne lui ouvre pas l'éditeur ; Geoffrey entre sans aucun perso.
+  À corriger : si le perso mémorisé n'est pas dans le monde (ou n'est plus un perso du joueur),
+  le traiter comme un nouveau joueur (éditeur de perso). Contournement : l'hôte lui donne un perso.
 - **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
