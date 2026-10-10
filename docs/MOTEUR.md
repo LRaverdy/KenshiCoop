@@ -1584,6 +1584,7 @@ KenshiLib (`InventoryGUI::playSound(eventId, Item*)` dépend d'un objet) : les p
   nombre à +0x4B8, un par bloc ; `CraftingItem` : `Item*` +0, `progress01` +0xC), +0x4CC répéter.
   `Item+0xC8` : son matériau. Le bâtiment connaît sa ville par le `hand` à +0x1D0 (`Town`, vtable
   `0x1735BA8`).
+- Places des filons (vu en jeu le 10/10) : `42248-gamedata.base` « Iron Resource » (Ressource Fer) 3 opérateurs, `42249-gamedata.base` « Copper Resource » (Minerai Cuivre) 2. Modèles vanilla utiles aux tests : petit banc de recherche `1875`, établi de vêtements `2929`, établi d'armures en cuir `2262`, éolienne `1999`, banque de batteries `1855` (tous `-gamedata.base`). Les technologies que renvoie `GameDataOfType(21)` en premier sont des enregistrements `<objet>.TECH.1` (une par objet à fabriquer).
 - Les opérateurs ne sont ajoutés que par la tâche du personnage (`tryOperate`), donc par l'IA : chez
   un client (IA coupée) l'ensemble restait vide, d'où « 0/3 » dans la fenêtre de la mine.
 - **Énergie** (`Town::updatePowerGrid`) : générateurs (ensemble de `hand` à +0x408…), batteries
