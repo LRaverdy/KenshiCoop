@@ -19,6 +19,11 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
 - **Objet glissé au sol par le client 2 disparu** : il n'est pas apparu au sol, il a disparu (pas
   à chaque fois). Perte d'objet : prioritaire.
 - **Joueur 3 dans une ville voisine : parler aux PNJ ne fait rien** (aucune fenêtre de dialogue).
+- **rob (joueur 3) a planté à 22:32** (l'hôte l'a vu partir à 22:32:02). Juste avant, son jeu
+  perdait et recréait en boucle une escouade de 17 PNJ de l'hôte (`1:96:522216800:*`), toutes les
+  ~3 s (« stand-in … is gone here: it can be recreated », 467 lignes de ce genre pour lui dans la
+  session). Probable cause ou facteur : cette boucle. Demander à rob son `KenshiCoop.log` et le
+  `crashDump*.zip` de son dossier Kenshi (le vrai rapport du plantage est chez lui).
 
 ## 10 octobre 2026
 
