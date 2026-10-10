@@ -195,6 +195,14 @@ void DrawDialog(const OverlayModel& m, float w, float h) {
     }
     ImGui::EndDisabled();
     if (m.dialogReplies.empty()) ImGui::TextDisabled("(la conversation continue...)");
+    else if (m.dialogWaiting) ImGui::TextDisabled("(l'hôte fait avancer la conversation...)");
+    ImGui::Separator();
+    if (ImGui::SmallButton("Partir##kcleave")) {   // our character walks away: the host ends the conversation
+        OverlayAction a;
+        a.kind = OverlayAction::Kind::DialogAnswer;
+        a.index = -1;   // kc::kDialogLeave
+        PushAction(std::move(a));
+    }
     ImGui::End();
 }
 

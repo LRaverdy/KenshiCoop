@@ -265,7 +265,7 @@ Ordre dans `Tick()` (`main.cpp`) :
   - qu'un ordre concerne un personnage du joueur ;
   - qu'un déplacement d'objet part de ses personnages, d'un PNJ à terre ou d'un contenant qu'il a
     ouvert, et va vers ses personnages ou ce contenant ;
-  - qu'une réponse vise une conversation de ce joueur ;
+  - qu'une réponse nomme le perso de ce joueur qui est dans cette conversation ;
   - qu'une apparence est celle de son personnage.
 - **Contrôle central** (`common/src/session_authority.cpp`) : **chaque** message a sa règle dans la
   table `kMessageRules` (`protocol.cpp` : rôle requis, sujet à contrôler, intervalle minimal). Rôles :
@@ -328,8 +328,8 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | 24 | AnimFrame | H→C (non fiable) | tout ce que joue chaque personnage proche (nom, temps, poids, vitesse, horloge) |
 | 25 | Ground | H→C | objet posé au sol ou ramassé |
 | 26 | Progress | H→C | compétences, ordres permanents, style de combat, argent de la faction |
-| 27 | Dialog | H→C | bulles (à tous) ; ouverture, texte et fermeture d'une conversation (au joueur concerné) |
-| 28 | DialogReply | C→H | réponse choisie |
+| 27 | Dialog | H→C | bulles (à tous) ; ouverture, texte (numéroté) et fermeture d'une conversation, « occupé » (au joueur concerné, avec son perso) |
+| 28 | DialogReply | C→H | réponse choisie ou « partir », avec l'acteur et la réplique répondue |
 | 29 | Squads | H→C | escouades : nom et membres dans l'ordre |
 | 30 | Appearance | ⇄ | apparence complète et nom d'un personnage (éditeur) |
 | 31 | EditCharacter | H→C | ouvre l'éditeur sur ton nouveau personnage |
@@ -463,13 +463,25 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 4. Chaque ordre est journalisé : `[nom] order "..." (n) on X -> ok/FAILED`, et le client reçoit un
    `Result` (fait, ou rejeté avec la raison).
 
-### Dialogues (`SendDialogs`, `KenshiWorld::Note*`)
+### Dialogues (`SendDialogs`, `KenshiWorld::Note*`, `SweepDialogs`, `ConversationAllowed`)
 - Les bulles de l'hôte partent à tout le monde.
 - Pour la conversation d'un personnage d'un autre joueur, les hooks de la fenêtre de dialogue de
   l'hôte produisent `Open`, `Text` (texte et réponses) et `Close`, envoyés **à ce joueur
-  seulement**. La fenêtre de l'hôte reste fermée.
-- Le client affiche une fenêtre de l'overlay ; la réponse revient en `DialogReply`, que l'hôte
-  rejoue avec `Dialogue::replyClicked`.
+  seulement**, avec le perso du joueur (`pcNetId`) ; chaque `Text` porte un numéro (`turn`). La
+  fenêtre de l'hôte reste fermée (donc pas de pause).
+- La session de l'hôte garde chaque conversation affichée chez un client (`hostDialogs_` : joueur,
+  perso, PNJ et son identité, réplique, réponses).
+- Le client affiche une fenêtre de l'overlay ; la réponse revient en `DialogReply` (conversation,
+  **acteur**, réplique, réponse ou `kDialogLeave`). Contrôle central : acteur à ce joueur, et c'est le
+  perso de cette conversation. Puis : réplique dépassée ignorée ; réponse rejouée avec
+  `Dialogue::replyClicked` ; « partir » : `Dialogue::endDialogue`.
+- Une conversation par PNJ : `TalkTargetBusy` refuse l'ordre « parler » (Result `Busy`) ; le crochet
+  de `startConversation` / `startPlayerConversation` refuse chez l'hôte qu'un PNJ en conversation
+  avec un client en commence une autre (événement `Busy` vers le joueur qui demandait).
+- Départ d'un joueur : ses conversations sont terminées dans le jeu (live tick). `SweepDialogs`
+  (0,5 s, thread du jeu) ferme celles qui sont finies sans fermeture (combat, TP, K.-O.).
+- Recrue : un PNJ suivi qui entre dans la faction du joueur devient perso d'escouade (`JoinSquad`) ;
+  il va au joueur qui lui parlait (`recentPartners_`, par identité).
 
 ### Inventaires (`SendInventories`, `ClientInventoryDiff`, `HostInvOp`)
 1. L'hôte envoie l'inventaire complet de chaque entité dont l'empreinte a changé ; celui d'un

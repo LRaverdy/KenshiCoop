@@ -195,6 +195,7 @@ Les signatures sont celles du commentaire du code.
 | carte | `FnPortraitCellDtor` | `PortraitMainCellView::~PortraitMainCellView()` | `0x426450` | oui | destructeur complet (le destructeur virtuel `0x4264E0` l'appelle) : le mod oublie la cellule |
 | sol | `FnInventoryDropItem` | `Inventory::dropItem(Item*)` | `0x745D90` | oui | ce que fait une fenêtre d'inventaire d'un objet lâché sur le monde ; vt 0x38 de `Inventory` et `ShopTraderInventory` |
 | sol | `FnDropItemAnimal` | `CharacterAnimal::dropItem(RootObject*)` | `0x5CA4A0` | oui | même code que `CharacterHuman::dropItem`, pour les bêtes de somme |
+| dialogue (162) | `FnDialogueEndDialogue` | `Dialogue::endDialogue(bool definitelyTheEnd)` | `0x674830` | — | termine la conversation (voir « Dialogue ») ; le mod l'appelle quand le joueur part, quitte la partie, ou que la conversation est finie sans fermeture (combat, TP, K.-O.) |
 
 | validité | `FnTerrainHeight` | `UtilityT::getTerrainHeight(float x, float z)` | `0x9B3710` | — | le sol sous l'eau éventuelle ; -99 où aucun terrain n'est connu (saut vers `getTerrainHeightFast(x, z, nullptr)` `0x9B32F0`) |
 | validité | `FnTerrainWithWaterHeight` | `UtilityT::getTerrainWithWaterHeight(float x, float z)` | `0x9B3720` | — | max(sol, 100) : la hauteur que `createBuildings` retire à la position (appel vérifié à `0x4D7512`) |
@@ -416,9 +417,27 @@ Emplacements de vtable :
 - `AnimationData` : nom à +0x8. `CombatTechniqueData` : animation à +0x0.
 
 ### Dialogue (Character + 0x280)
-- +0x149 crie (bool) ; +0x150 `me` ; +0x158 `hand` de l'interlocuteur ; +0x258 réponses
+- +0x80 messages en attente des threads de travail (`vector<DT_MSG>` : 1 fin, 2 ouvrir la fenêtre,
+  3 la fermer, 4 vider les réponses, 5 réponses, 6 réplique) ; +0x148 terminée (`_hasEnded`, bool) ;
+  +0x149 crie (bool) ; +0x150 `me` ; +0x158 `hand` de l'interlocuteur ; +0x258 réponses
   (`vector<std::string>`) ; +0x278 réplique de l'interlocuteur (`std::string`).
-- Événement 1 = `EV_PLAYER_TALK_TO_ME`.
+- Événements (`EventTriggerEnum`) : 1 = `EV_PLAYER_TALK_TO_ME`, 3 = `EV_I_SEE_NEUTRAL_SQUAD` (le
+  contrôle des gardes, « halte »), 8 voleur pris, 44 prime repérée, 45 prisonnier évadé repéré...
+- **`endDialogue(bool)`** `0x674830` [D] (KenshiLib 1.0.65 `0x6740B0` + `0x780`, le même décalage que
+  `setInDialog` et `replyClicked` ; prologue `40 53 56 41 54 48 83 EC 30 48 8B F1`). Hors du thread
+  principal (test `0x25C6D0`) : range seulement `DT_END_DIALOG` (1) dans +0x80, traité plus tard par
+  `Dialogue::update`. Sur le thread principal : met +0x148 à 1, remet les états de la conversation,
+  puis appelle `setInDialog(false)` (`0x674B46`) : le crochet du mod voit donc la fermeture.
+- **`setInDialog(bool)`** `0x6746A0` [D] : hors du thread principal, range `DT_OPENWINDOW` (2) ou
+  `DT_CLOSEWINDOW` (3) ; `Dialogue::update` le rappelle ensuite sur le thread principal (appels
+  `0x685106` / `0x685112`), donc par le crochet. Sur le thread principal : ouvrir saute à `0x727820`
+  (ouverture de la fenêtre de conversation), fermer appelle `0x721F20`. Seul `setInDialog` mène à
+  `0x727820` (références relevées).
+- **La conversation met le jeu en pause** [D] : `0x727820` appelle `GameWorld::userPause(true)`
+  (`0x727875`, `dl = 1`) avant d'ouvrir la fenêtre, et `0x721F20` `userPause(false)` en la fermant.
+  En solo, parler à quelqu'un fige donc le monde. En coop, la fenêtre d'une conversation d'un client
+  n'est jamais ouverte chez l'hôte (pas de pause) ; celle de l'hôte lui-même l'est, et le mod lève la
+  pause aussitôt quand d'autres joueurs sont là (voir FONCTIONNALITES « Dialogues »).
 
 ### Inventaires
 - `Inventory` : +0x10 tous les objets (`lektor<Item*>`) ; +0x28 sections (table nom →
@@ -840,6 +859,9 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
 **Conversations**
 - Le jeu prépare les conversations aussi sur des threads de travail. La première réplique peut
   arriver avant l'ouverture de la fenêtre.
+- Ouvrir la fenêtre de conversation met le jeu en pause (`userPause(true)` dans `0x727820`).
+- `startConversation` / `startPlayerConversation` sont appelés sur le `Dialogue` de l'un ou l'autre
+  des deux personnages : le mod regarde les deux côtés (propriétaire du dialogue et cible).
 
 **Sauvegarde**
 - `SaveManager` efface sa demande avant que tous les fichiers soient écrits : il recopie son
