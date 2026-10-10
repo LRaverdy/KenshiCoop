@@ -12,6 +12,8 @@ import subprocess
 import sys
 import time
 
+sys.stdout.reconfigure(errors="replace")   # game names can hold characters the console's code page lacks
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT = ["suite", "trade", "doors", "factions", "diplomacy", "prison", "ranged", "build", "placevalid", "stuck", "farnpc", "beds", "tpdown", "research"]
 
