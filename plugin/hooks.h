@@ -37,6 +37,16 @@ bool InHostCall();   // a HostCallScope is alive on this thread (lot A: doors, o
 // caught (logged when scopes were left open; returns how many).
 kc::ScopeCounts MarkCallScopes();
 int RepairCallScopes(const kc::ScopeCounts& mark, const char* where);
+// The same around a block: declared before the block's HostCallScope, it repairs on the way out
+// whatever an exception caught by a __try wrapper inside the block left open.
+struct CallScopeGuard {
+    explicit CallScopeGuard(const char* where) : mark(MarkCallScopes()), where(where) {}
+    ~CallScopeGuard() { RepairCallScopes(mark, where); }
+    CallScopeGuard(const CallScopeGuard&) = delete;
+    CallScopeGuard& operator=(const CallScopeGuard&) = delete;
+    kc::ScopeCounts mark;
+    const char* where;
+};
 // Inside it, the animation hooks let a client play one of the host's animations (every other
 // animation call on the host's characters is refused on clients, ours included).
 std::string AnimHookStats();   // tests

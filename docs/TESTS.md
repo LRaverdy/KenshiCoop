@@ -9,7 +9,7 @@ Deux niveaux de tests :
 
 ```powershell
 .\build.ps1                            # compile aussi kc_tests
-.\build\bin\Release\kc_tests.exe       # dernière ligne : "26728 checks, 0 failed" (10 octobre 2026)
+.\build\bin\Release\kc_tests.exe       # dernière ligne : "26907 checks, 0 failed" (10 octobre 2026)
 .\build.ps1 -Asan                      # variante AddressSanitizer, dans build-asan\
 ```
 
@@ -34,11 +34,15 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `TestCrashRejoin` | client figé 7 s (gardé), puis relancé avec le même compte avant la coupure : remplacé, même nom, même perso, pas de doublon, fenêtre de commerce fermée, perso arrêté |
 | `TestAdmin` | administration de l'hôte : syntaxe des commandes `admin`, calcul de l'XP du jeu (`increaseStat`, 20 au plus par appel, niveaux visés au plus juste), mode dieu retenu par joueur (même compte Steam = même joueur, « tout le monde » puis un seul retiré), message envoyé à un seul joueur et jamais par un client |
 | `TestTaskTargets` | sécurité des acteurs : chaque numéro de tâche confronté à chaque sorte de cible (rien, soi, PNJ debout / à terre / mort, autre membre, objet, contenant, chantier à nous ou non, bâtiment fini, lit, cage, machine, porte, handle périmé), par les 4 façons de donner un ordre ; numéros inconnus refusés ; barre d'escouade et panneau Tâches ; table des règles des messages ; aller-retour de `Result` |
-| `TestCallScopeRepair` | plantage `0x883B78` : `RepairScopeCounts` (portées laissées ouvertes, fermées deux fois) ; une exception non C++ rattrapée par `__except` laisse en `/EHsc` la portée ouverte comptée, la réparation la remet ; tâche 27 sur un coéquipier et BUILD sur un PNJ, un coéquipier, rien ou un bâtiment fini refusés par les 4 voies, BUILD sur un chantier à nous accepté |
+| `TestCallScopeRepair` | plantage `0x883B78` : `RepairScopeCounts` (portées laissées ouvertes, fermées deux fois) ; une exception non C++ rattrapée par `__except` laisse en `/EHsc` la portée ouverte comptée, la réparation la remet ; tâche 27 sur un coéquipier et BUILD sur un PNJ, un coéquipier, rien ou un bâtiment fini refusés par les 4 voies, BUILD sur un chantier à nous accepté ; `TaskTargetWrongKind` (copie des jobs de l'hôte) : tâche connue avec une cible du mauvais type refusée, tâches inconnues non jugées |
+| `TestDialogue` | conversations : 1 hôte + 2 clients ; la fenêtre d'un garde s'ouvre chez le bon client seulement, acteur = son perso, bulle chez tout le monde ; réponses forgées (autre joueur, perso de l'hôte, d'un autre, aucun) refusées ; la vraie réponse arrive une fois ; réponse à une réplique dépassée ou non proposée ignorée ; « parler » à un PNJ occupé refusé (`Busy`, « occupé ») pour l'autre joueur, accepté pour celui qui lui parle ; PNJ que le jeu fait parler à l'hôte : occupé ; « occupé » du jeu chez le bon joueur et chez l'hôte ; recrue donnée au joueur qui lui parlait malgré une autre réponse en même temps ; « partir » termine la conversation chez l'hôte ; départ d'un joueur : sa conversation terminée |
 | `TestActorSafety` | sécurité des acteurs : 1 hôte + 2 clients ; ordres forgés (aller, arrêter, ramasser, lit, parler, mode, escouade) au nom du perso de l'hôte, d'un autre joueur, d'un PNJ, d'aucun, d'un inconnu : rien n'est exécuté, refus journalisé, `Result` rejeté (par `seq`) et message français ; idem pour regarder dans un contenant, apparence, dépôt d'objet, réponse à la conversation d'un autre ; l'ordre de son propre perso est exécuté (`Done`) ; le client refuse d'envoyer pour un perso qui n'est pas le sien ; un ordre envoyé quand même (`SendRawCommandForTest`) est refusé ; ordres de son perso visant une mauvaise cible (construire, machine, lit, porte, cage, ramasser, coffre sur un PNJ ; handle périmé ; sans cible ; parler à un membre de l'escouade) refusés, la bonne cible acceptée (premiers soins sur le perso de l'hôte compris) |
 | `TestMap` | marqueurs de carte : 1 hôte + 2 clients reçoivent les persos (propriétaires, perso de chaque joueur, positions même très loin) et les escouades hostiles de l'hôte ; un ping de client chez l'hôte et l'autre client, refusé s'il suit le précédent de moins de 0,5 s, 5 au plus par joueur, effacé après 10 s |
 | `TestManyPlayers` | 1 hôte + 4 clients arrivant ensemble, 120 personnages |
 | `TestJoinQueue` | file d'attente des arrivées : 3 arrivées quasi simultanées (une pendant la sauvegarde, une pendant le chargement du premier), un joueur à la fois jusqu'à la fermeture de son éditeur, positions / joueur attendu / étape côté clients, liste côté hôte, personne rejeté pendant l'attente, chaque sauvegarde contient les persos des précédents ; le joueur dans l'éditeur plante (tour suivant), un joueur quitte la file (renumérotée) ; deux éditeurs ouverts ensemble : pause jusqu'à la fermeture du dernier |
+| `TestWorkshop` | atelier : recherche (connues, file, avancement) et machine de l'hôte identiques chez le client sans rien ouvrir (opérateurs, ordres de fabrication, inventaire de la machine, totaux d'énergie) ; machine loin des joueurs non envoyée ; un mineur qui part, vu partout ; technologie demandée sans artefact refusée ; la même demandée deux fois d'un coup : une fois en file, payée une fois ; annulée puis redemandée sans repayer ; changement local du client défait ; plan porté par le perso du client appris chez l'hôte et consommé partout ; plan au nom du perso de l'hôte : jamais envoyé par le client, refusé par le contrôle central s'il est forgé ; ordre de fabrication du client exécuté et vu partout ; deux « répéter » d'un coup : le dernier l'emporte partout ; ordre déjà retiré refusé ; machine coupée par le client, coupée partout, panneau d'énergie suivi ; demande d'un perso trop loin refusée ; passage de niveau de l'hôte annoncé au client (« Science 5 -> 6 ») |
+| `TestSquadWire` | fenêtre Escouade : aller-retour de `SquadState`, `SquadRequest`, `JobState` ; demandes mal formées refusées (pas d'acteur, renommer sans escouade, nom vide, rang négatif) ; noms nettoyés (caractères de contrôle, 64 octets, lettre UTF-8 coupée) ; tâches 105 / 148 sans cible ; ce qu'est un réglage d'IA |
+| `TestSquadWindow` | fenêtre Escouade, 1 hôte + 2 clients : mêmes escouades partout ; recrue « à personne » (pas l'avatar de l'hôte) ; renommer son escouade (fait), celle d'un autre (remis) ; nouvelle escouade du client créée chez l'hôte, son perso déposé dedans puis chef de la première ; escouade vide retirée partout ; déplacer le perso de l'hôte refusé (côté client et côté hôte) ; ordre des escouades ; renommages simultanés de l'hôte et du client (le dernier arrivé gagne, même nom partout) ; déplacements simultanés du même perso ; noms des persos (le sien passe, celui de l'hôte est remis) ; passif d'une recrue réglé par les deux clients (le dernier gagne), refusé sur l'avatar de l'hôte, ordre de déplacement sur la recrue refusé ; listes de tâches avec cibles ajoutées et réordonnées chez les deux clients |
 | `TestMessageRules` | autorité : chaque valeur de `Msg` (les 256 octets passés à `MsgName`) a exactement une règle dans `kMessageRules`, et `PeekType` n'accepte que ces messages ; numéros de la fusion du protocole 33 (`JoinQueue` 72, `BagBind` 80, `MapMarkers` 82, `MapPing` 83, `Diplomacy` 85, `Result` 90) ; un client qui envoie `Diplomacy`, `MapMarkers`, `JoinQueue`, `BagBind` ou `Result` est refusé ; 5 pings d'affilée : 1 passe, 4 ignorés (`minInterval` 0,5 s), puis un autre passe |
 
 ## 2. Tests en jeu (`tools/coop_test.py`)
@@ -105,12 +109,14 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `kosquad` | des membres de l'escouade K.-O. chez l'hôte tombent et restent au sol chez le client, puis se relèvent ensemble |
 | `far` | le personnage du client à environ 5 km de l'escouade de l'hôte : l'hôte simule-t-il bien sa zone, et le client voit-il la même chose ? |
 | `squads` | nouvelles escouades et déplacements entre escouades, depuis l'hôte et depuis le client |
+| `squadui` | fenêtre Escouade et réglages d'IA : le client renomme son escouade, renomme celle de l'hôte (refusé), crée une escouade, y met son perso, le fait chef, tente de déplacer le perso de l'hôte (refusé), glisse son escouade en tête ; renommages et déplacements **simultanés** de l'hôte et du client (même résultat partout) ; nom de son perso (passe), de celui de l'hôte (refusé) ; fiche identique ; passif (valeur, pas bascule), style, tenir, allure ; réglage d'une recrue à personne et réglages simultanés hôte + client ; tâches ajoutées des deux côtés identiques. Vérifications « escouade : … » et « ia : … » |
 | `stuck` | la copie d'un PNJ poussée dans un mur ou sous le sol chez le client revient où l'hôte l'a |
 | `farnpc` | écart des PNJ qui marchent loin de l'escouade du client |
 | `beds` (`kctest_town`) | le perso du client dort dans le lit libre le plus proche, puis mine |
 | `tpdown` | TP admin du perso du client mis K.-O. |
 | `admin` | administration de l'hôte (commandes `admin …`) : refusée chez le client (commande et console) ; mode dieu sur le perso du client, combat contre un PNJ créé : ni sang ni membre perdus chez l'hôte, même état chez le client ; le mode dieu tient après un resync (reconnexion), puis retiré ; 100 points d'XP en attaque = le calcul du jeu (5 × 20), même valeur chez le client ; +3 niveaux dans chaque compétence, mêmes valeurs ; TP joueur → hôte, hôte → joueur, joueur → point de la carte : arrivée et même position chez le client ; soigner réveille un K.-O. ; argent +5000 partout ; dieu pour tout le monde puis retiré. Pas encore lancée en jeu |
 | `talk` | un PNJ parle au personnage du client : la conversation tourne chez l'hôte, la fenêtre s'ouvre chez le client |
+| `dialogue` (`kctest_town`) | bac à sable : l'hôte crée un PNJ à côté du perso du client. Le perso du client lui parle (sinon le PNJ engage) : fenêtre chez le client, acteur = son perso, l'hôte suit la conversation, pas de pause chez l'hôte, aucun perso de l'hôte entraîné ; une réponse arrive à l'hôte ; le perso de l'hôte qui parle au même PNJ reçoit « occupé » et la conversation du client continue ; « partir » la ferme ; le PNJ engage lui-même (événement 3, contrôle de garde, sinon 1) ; une TP puis un combat la ferment ; conversation et réponse à la vitesse 3. Vérifications « dialogue : … ». Pas encore lancée en jeu |
 | `factions` | lot B : mêmes relations au départ ; relation changée par l'hôte identique chez le client ; prime donnée puis levée par l'hôte visible chez le client ; une relation changée par le jeu du client revient à celle de l'hôte |
 | `diplomacy` (`kctest_town`) | diplomatie : mêmes guerres entre factions, chefs et villes au départ (empreintes `diplo`) ; guerre déclarée par l'hôte entre deux factions identique chez le client ; paix faite par le jeu du client remise à la guerre de l'hôte ; un chef tué par les joueurs chez l'hôte l'est aussi chez le client ; une ville prise par une autre faction chez l'hôte l'est aussi chez le client ; tout est remis comme avant ; mêmes empreintes à la fin. Vérifications « diplomatie : … » |
 | `ranged` (`--shooter <clé>`) | (lot C) 3 tirs d'un arbalétrier de l'hôte sur l'escouade sont refaits chez le client, sur la même trajectoire ; même point visé ; une tourelle proche tournée chez l'hôte tourne pareil chez le client ; santé et inventaires identiques ensuite |
@@ -132,7 +138,9 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `prison` (lot D) | l'hôte met le personnage du client dans la cage la plus proche, l'enchaîne, le réduit en esclavage puis le libère : même état chez le client, gardé dans la cage, tout effacé à la fin. Il faut une cage à moins de 300 m de l'escouade (`--save` d'une sauvegarde près d'une prison ou d'un camp d'esclavagistes) |
 | `actorsafety` (`kctest_town`) | **sécurité des acteurs** : l'hôte sélectionne ses propres persos (comme un joueur) ; le client donne avec son perso chaque sorte d'ordre (lit, parler, piller, ramasser, commerce, tâche, construire, porte, premiers soins sur un perso de l'hôte, suivre, porter un perso de l'hôte K.-O., attaquer) : après chacun, la sélection de l'hôte est inchangée et ses persos n'ont rien reçu (pas de nouvelle tâche, pas de déplacement, pas de lit, pas de conversation ; `actorstats` leaks=0). Puis ordres forgés (`forgeorder`) au nom d'un perso de l'hôte : refusés ; et ordres de son perso visant une cible du mauvais type (dont le chemin du plantage de `stress4` : `npcreq <perso> 2 a`, construire sur un PNJ) : refusés, l'hôte et le client vivants. Contrôles « securite controle : ... ». Pas encore lancée en jeu |
 | `crashrejoin` (`--only abcdefg`) | client **tué** (`taskkill /F`) puis relancé avec le même faux id Steam et revenu : (a) au repos, (b) en combat à la vitesse 3, (c) en portant un corps, (d) fenêtre de commerce ouverte, (e) en fouillant un corps, (f) dans l'éditeur de personnage, (g) relancé avant que l'hôte ait vu la coupure. À chaque fois : l'hôte vit, voit la coupure (< 20 s) et nettoie (journal « disconnected (… » / « cleaned up: »), le joueur retrouve les mêmes persos (clés, inventaires ; sauf combat), pas de doublon, comparaison hôte / client propre, l'hôte n'est pas resté en pause |
+| `map` (`--clients 2`) | **carte, minicarte, repères, barre, pings** : chaque client reçoit le flux de l'hôte (âge < 2 s, mêmes persos, mêmes propriétaires et positions à 30 unités près, mêmes escouades hostiles ; un PNJ copié qui se bat contre l'escouade sert d'ennemi) ; chaque joueur a un perso « à lui » ; chaque machine dessine tous les persos, une couleur par joueur (`mapscene carte`) ; projection du jeu (`worldToMapCoords`) = la nôtre à 1,5 px près ; minicarte centrée sur son perso ; repères au-dessus des têtes ; cadres de la barre seulement aux couleurs des joueurs ; vue 3D non couverte et repères dessinés (`mapconv`) ; cadres dessinés = portraits du jeu relus et convertis, à 2 px près ; **écran de carte ouvert par le bouton MAP du jeu** (`mapui open`), détecté, marqueurs dessinés, image à sa place ; **fenêtre du client 1 redimensionnée deux fois** en cours de test (cadres et image de la carte toujours à leur place), puis remise en grille ; installation par `setup_multi` (chaque client ferme son éditeur à son tour de la file d'arrivée) ; ping du client 1 visible chez l'hôte et chez le client 2 à son nom, second ping trop rapide refusé, 5 au plus, effacé après 10 s. Contrôles « carte : … », « minicarte : … », « tetes : … », « barre : … », « ping : … ». Pas encore lancée en jeu |
 | `map` (`--clients 2`) | **carte, minicarte, repères, barre, pings** : chaque client reçoit le flux de l'hôte (âge < 2 s, mêmes persos, mêmes propriétaires et positions à 30 unités près, mêmes escouades hostiles ; un PNJ copié qui se bat contre l'escouade sert d'ennemi) ; chaque joueur a un perso « à lui » ; chaque machine dessine tous les persos, une couleur par joueur (`mapscene carte`) ; projection du jeu (`worldToMapCoords`) = la nôtre à 1,5 px près ; minicarte centrée sur son perso ; repères au-dessus des têtes ; cadres de la barre seulement aux couleurs des joueurs ; ping du client 1 visible chez l'hôte et chez le client 2 à son nom, second ping trop rapide refusé, 5 au plus, effacé après 10 s. Contrôles « carte : … », « minicarte : … », « tetes : … », « barre : … », « ping : … ». Pas encore lancée en jeu |
+| `research` | **atelier** (bac à sable posé par l'hôte : banc de recherche, établi, générateur, batterie, lampe, livres / artefacts et matériaux mis dans les bancs par `machinegive`) : même recherche des deux côtés ; le client met en file une technologie qu'il peut rechercher (`researchpick`, `researchreq`), l'hôte l'exécute, même file partout ; demandée de nouveau par le client et par l'hôte : une seule fois en file, rien consommé deux fois, inventaire du banc identique ; annulée par le client, vu partout ; avancée chez l'hôte (`researchprogress`) : terminée et connue partout, même arbre, menu de construction débloqué pareil ; le client pose et bâtit un bâtiment débloqué ; il commande une fabrication à l'établi (exécutée par l'hôte, même file partout), hôte et client changent « répéter » en même temps (même résultat partout), inventaire de l'établi identique, son perso travaille l'établi, il retire l'ordre ; compétences de son perso identiques ; mine : son perso et deux de l'hôte minent le même filon, même nombre de mineurs (3) et même minerai partout, un mineur retiré vu partout ; énergie : générateur, batterie et lampe identiques (sortie, charge, consommation) et totaux de la base, générateur coupé par le client coupé partout, le reste suit. Contrôles « recherche : … », « fabrication : … », « mine : … », « energie : … ». Pas encore lancée en jeu |
 | `cmd <pid> <commande…>` | envoie une commande de debug à une instance |
 
 ### La suite (`suite`) : 32 points
@@ -296,6 +304,17 @@ l'escouade triée par handle.
 |---|---|
 | `squads` | escouades vues par cette machine (`nom: membre,membre \| …`) |
 | `squadmove <nom> <autreNom\|new>` | glisser ce portrait dans l'escouade d'un autre membre, ou une nouvelle |
+| `squadsfull` | toutes les escouades dans l'ordre de la fenêtre, vides comprises (`\| nom: a,b \| …`) |
+| `squadrename <rang> <nom>` | la case de nom de l'escouade à ce rang, comme une frappe |
+| `squadnew <nom>` | le bouton « nouvelle escouade », puis son nom |
+| `squadorder <de> <vers>` | glisser une escouade (ordre des escouades) |
+| `squadlead <nom>` | déposer ce portrait sur le premier de son escouade (il devient chef) |
+| `charrename <nom> <nouveau>` | renommer ce perso (fenêtre du personnage) |
+| `aiorder <nom> <ordre>` | un bouton de la barre d'escouade pour ce perso seul |
+| `aimodes <nom>` | ordres permanents (bits), style, allure |
+| `aishared <nom>` | 1 si ce perso est « à personne » chez cette machine |
+| `jobsof <nom>` / `jobfor <nom> <tâche> <sujet>` | sa liste de tâches ; lui donner une tâche permanente sur un autre perso |
+| `charinfo <nom>` | ce que montrent ses fenêtres : compétences, faim, sang, membre le plus touché |
 
 **Dialogues**
 
@@ -303,7 +322,10 @@ l'escouade triée par handle.
 |---|---|
 | `say <index> <texte…>` / `says` | faire dire une bulle ; bulles rejouées chez le client et la dernière |
 | `convo <index> <k>` | (hôte) le k-ième PNJ le plus proche engage la conversation avec ce membre |
-| `dialog` / `answer <n>` | (client) fenêtre de conversation affichée ; choisir une réponse |
+| `dialog` / `answer <n\|leave>` | (client) fenêtre de conversation affichée (`actor=`, `turn=`) ; choisir une réponse, ou partir |
+| `dialogs` | (hôte) conversations affichées chez les clients (`n=`, `open=`), refus « occupé » du jeu (`busy=`) et des ordres (`orderbusy=`), fermetures forcées (`swept=`), pauses levées (`unpaused=`) |
+| `npcevent <index> <événement> [k\|npc]` | (hôte) le k-ième PNJ le plus proche (ou le dernier créé) envoie cet événement de dialogue à ce membre (1 parler, 3 contrôle de garde) |
+| `talkto <sélection> <k\|npc>` | ce membre seul reçoit l'ordre de parler au k-ième PNJ le plus proche (ou au dernier créé, hôte) |
 
 **Objets, fouille, contenants**
 
@@ -341,11 +363,13 @@ l'escouade triée par handle.
 | Commande | Rôle |
 |---|---|
 | `mapfeed` | le flux de carte de cette machine (hôte : construit, client : reçu) : âge, joueurs, persos (`nom:owner=:av=:x=:z=`), escouades hostiles (`threat:kind=:n=:x=:z=`) |
-| `mapscene carte` | ce que la carte dessine : ouverte, bornes, chaque perso avec propriétaire, couleur (`col=or`…), position, et à l'écran si la carte est ouverte (`sx=`, `sy=`, `vis=`) ; escouades hostiles |
+| `mapscene carte` | ce que la carte dessine : ouverte (sinon `why=` : la raison), bornes, chaque perso avec propriétaire, couleur (`col=or`…), position, et à l'écran si la carte est ouverte (`sx=`, `sy=`, `vis=`) ; escouades hostiles |
 | `mapscene minicarte` | centre, zoom, rotation, coin, persos et ennemis dans le cercle |
-| `mapscene tetes` | repères au-dessus des têtes : perso, propriétaire, couleur, à l'écran ou non, point projeté |
-| `mapscene barre` | cadres de la barre d'escouade (propriétaire, couleur, rectangle) et cellules de portrait suivies |
+| `mapscene tetes` | repères au-dessus des têtes : origine de rendu (`origin=`), perso, propriétaire, couleur, à l'écran ou non, point projeté (même hors écran) |
+| `mapscene barre` | cadres de la barre d'escouade (`frame:owner=:col=:x=:y=:w=`) et cellules de portrait suivies |
 | `mapscene pings` | pings dessinés ici (id, joueur, type, position, âge) |
+| `mapconv` | conversions de l'overlay : tampon (`bb=`), client de la fenêtre, DPI, vue MyGUI (`gui=`), facteurs `fx`/`fy`, vue couverte, repères et minicarte dessinés, carte détectée / dessinée et nombre de marqueurs ; cadres relus maintenant (`frame:owner=:raw=:conv=`) et dessinés à la dernière image (`drawn:owner=:x=:y=:w=:h=`) ; image de la carte (`map:raw=:conv=:drawn=` ou `map:why=`) |
+| `mapui open\|close\|maptab\|state` | l'écran de carte du jeu par son bouton MAP (`ShortcutMapButton`, clic injecté dans MyGUI) ; `maptab` choisit l'onglet carte ; `state` : `open=`, `window=`, `why=` |
 | `mapproj <x> <z>` | `MapScreen::worldToMapCoords` du jeu comparé à notre projection (`game=` / `ours=`, taille de l'image) |
 | `ping <x> <z> [type]` | ce joueur pinge ce point (0 aller ici, 1 danger, 2 butin, 3 à l'aide) ; `err` si trop tôt |
 | `pings` | pings vivants dans la session (`id=:owner=:kind=:x=:z=:age=`) |
@@ -415,6 +439,23 @@ l'escouade triée par handle.
 | `state <fichier> [rayon]` | écrit tout ce que voit cette instance (session, heure, météo, effets, chaque personnage avec position, animations, inventaire, santé). C'est la base des comparaisons |
 | `anims <fichier>` | animations jouées par chaque membre de l'escouade |
 | `animstats` | (client) corrections de l'horloge d'animation depuis le dernier appel |
+
+**Atelier** (`plugin/workshop.cpp`)
+
+| Commande | Rôle |
+|---|---|
+| `research` | la recherche telle que cette instance l'a : `desk=` niveau du banc, `finished=` nombre, `fh=` empreinte des technologies connues, `queue=sid:avancement|…` |
+| `researchknown <sid>` | `ok 1` si la technologie est connue ici |
+| `researchenabled [type]` | ce qui est débloqué (`enabledObjects` ; type 0 : bâtiments du menu de construction) : nombre, `eh=` empreinte, puis les sids |
+| `researchpick [n]` | jusqu'à n technologies dont les prérequis sont remplis ici (coût non vérifié), ni connues ni en file |
+| `researchreq <queue\|cancel> <sid>` | le bouton ajouter / retirer de la fenêtre Recherche (client : devient une demande à l'hôte) |
+| `researchprogress <quantité>` | (hôte) le travail des chercheurs, accéléré : termine la technologie en tête |
+| `blueprintreq <index> <nom>` | « apprendre » un plan que porte ce membre (client : demande à l'hôte) |
+| `craftlist [n]` | ce que la faction sait fabriquer (`craftableThings`), par sid |
+| `machine <nom>` | la machine la plus proche du membre 0 : `ops=` opérateurs/max, `names=`, `flags=` (1 marche, 2 batterie, 4 établi, 8 répéter, 16 générateur, 32 batterie), `power=`, `stored=`, `prog=`, `prod=`, `crafts=objet:avancement,…`, `town=` totaux d'énergie de sa ville |
+| `machineinv <nom>` | son inventaire : piles, quantité totale, empreinte `ih=` |
+| `machinereq <nom> <addcraft base [matériau]\|removecraft i\|repeat 0/1\|power 0/1\|battery 0/1>` | hôte : exécuté ; client : les interrupteurs passent par les boutons du panneau (crochetés), les ordres de fabrication par la file des demandes comme les boutons de la fenêtre |
+| `machinegive <nom> <objet> <n>` | (hôte, bac à sable) n objets neufs dans l'inventaire de cette machine |
 
 ## 4. Après les tests : remettre la configuration du joueur
 

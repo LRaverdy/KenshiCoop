@@ -110,6 +110,7 @@ std::string RunGod(const adm::Command& c, kc::Session& s, KenshiWorld& w, const 
         for (uint8_t id : ids) g_gods.Set(KeyOf(s, id), c.on, CurrentKeys(s));
     int n = 0;
     {
+        CallScopeGuard scopeRepair("admin");
         HostCallScope scope;
         for (const auto& m : Squad(s, w)) {
             if (!c.who.all && !Wanted(ids, m.owner)) continue;
@@ -127,6 +128,7 @@ std::string RunGod(const adm::Command& c, kc::Session& s, KenshiWorld& w, const 
 
 std::string RunHeal(const adm::Command& c, kc::Session& s, KenshiWorld& w, const std::vector<uint8_t>& ids) {
     int n = 0, woke = 0;
+    CallScopeGuard scopeRepair("admin");
     HostCallScope scope;
     for (const auto& m : Squad(s, w)) {
         if (!Wanted(ids, m.owner) || kenshi::IsDead(m.c)) continue;
@@ -158,6 +160,7 @@ std::string RunXp(const adm::Command& c, kc::Session& s, KenshiWorld& w, const s
     int chars = 0, written = 0;
     double gained = 0;
     std::string detail;
+    CallScopeGuard scopeRepair("admin");
     HostCallScope scope;
     for (const auto& m : Squad(s, w)) {
         if (!Wanted(ids, m.owner)) continue;

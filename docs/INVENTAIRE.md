@@ -28,6 +28,7 @@ protocole 33, environ 25 500 lignes). L'état de chaque fonctionnalité au sens 
 | Objets au sol | hooks PickupItem, GiveItem, DropItemHuman ; Ground | vérifié en jeu |
 | Inventaires, fouille | Inventory/InvOp, `world.cpp` | vérifié en jeu, bug d'ordre des échanges |
 | Contenants, vol | ContainerOpen/Opened/Close, `kenshi.cpp` (ImStealin, notifyTheftFrom) | vérifié en jeu, vol 🟡 |
+| Atelier : recherche, établis, machines et mines, énergie | `common/src/session_workshop.cpp` (Research/ResearchRequest, Machines/MachineRequest, entités `machine`), `plugin/workshop.cpp` (hooks startResearch, stopResearch, payCosts, progressResearch, learnResearch, _addCraft, _removeCraft, CraftingQueue, updatePowerGrid, togglePowerButton, toggleBattButton) | testé unitairement, jamais testé en partie |
 | Panneau d'inventaire d'un bâtiment (mine) | hook ShowInventoryBuilding (`hooks.cpp`) | harnais `mine` seulement |
 | Commerce | hook ShowTradeWindow, TradeOpen, `kenshi.cpp`:2060-2066 | vérifié en jeu (9/10) |
 | Heure, vitesse, pause | TimeState | vérifié en jeu |
@@ -105,7 +106,7 @@ chez l'hôte, il observe et diffuse.
   contenu réel à l'hôte).
 - **Prisons** : SetPrisonMode, SetChainedMode, SetSlaveState.
 - **Dialogues** : Say, SetInDialog, SetResponses, SetReplyText, SendEvent, SendEventOverride,
-  StartConversation, StartPlayerConversation, DoActions.
+  StartConversation, StartPlayerConversation, DoActions ; EndDialogue (appelée seulement).
 - **IA, factions** : SensoryDialogAssessment, SensoryAssessCrimes, BlackboardUpdate,
   BlackboardPeriodic, FactionWarPeriodic, UniqueSquadPeriodic, AffectRelationsAmount,
   AffectRelationsEvent, SetRelation, SetCrime, AssignBounty.
@@ -124,7 +125,7 @@ chez l'hôte, il observe et diffuse.
 
 ## 4. Adresses du jeu
 
-### Table `kFunctions` (`plugin/kenshi.cpp`, enum dans `kenshi.h`) : 139 entrées vérifiées par octets de prologue
+### Table `kFunctions` (`plugin/kenshi.cpp`, enum dans `kenshi.h`) : 167 entrées vérifiées par octets de prologue
 
 « hook » = accrochée ; sinon appelée seulement.
 
@@ -168,6 +169,7 @@ chez l'hôte, il observe et diffuse.
 | 135–136 | ClearUsageNodes, CalculateSaleValue | 0x54C4D0, 0x7AD300 | |
 | 137 | HealCompletely | 0x6464C0 | traduite de KenshiLib, vérifiée en partie |
 | 138 | ShowInventoryBuilding | 0x6E6640 | hook |
+| 162–166 | SquadSwapCharacters, ChangePlatoonIndex, DestroyPlatoon, SquadSetName, CharGetPermajobData | 0x792E60, 0x7F3440, 0x6BA9D0, 0x4BE480, 0x5C8F10 | fenêtre Escouade (`squads.cpp`) ; SquadSwapCharacters : hook |
 | fin | TerrainHeight, TerrainWithWaterHeight, IsIndoors, GetNearestTown, WithinBordersRange, GetNearestWithinItsRadius | 0x9B3710, 0x9B3720, 0x9B2BA0, 0x927F10, 0x926D50, 0x928890 | validité d'une pose (`buildings.cpp`) |
 
 ### Adresses écrites en dur hors de la table (non vérifiées au démarrage)
@@ -183,7 +185,6 @@ chez l'hôte, il observe et diffuse.
 | 0x6508D0–0x651FF1 | bornes de addWound | `kenshi.h`:573 |
 | 0x16DFB00 | callback d'aimantation de bâtiment | `buildings.cpp`:33 |
 | 0x2134100 | `TownList*` (villes) ; slots vt 0x40, 0x58, 0x268, 0x2A0 de `TownBase` | `buildings.cpp` (`TownTooClose`, sous `__try`) |
-| 0x4BE480 | ActivePlatoon::setName | `kenshi.cpp`:756 |
 | 0x21337B0 (+0x1C0), 0x16EFE88 | GUI / éditeur, vtable lektor<Character*> | `kenshi.cpp`:837-839, `debug.cpp`:575 |
 | 0x6E2DF0, 0x6E5740, 0x70CEF0 | drapeau de la fenêtre de commerce, fermeture, callback | `kenshi.cpp`:2060-2066 (sous `__try`) |
 | 0x2011F78 | liste des techniques de combat | `kenshi.cpp`:2646 |
@@ -229,7 +230,7 @@ hk_medKnockout) ; `ReadOperatorCount` +0x3E0 ; CharBody +0x648 / Tasker +0x68 / 
   invmove, loot, lootorder, containerreq, contake, contcount, minereq.
 - **Commerce** : merchants, shopcounters, tradegui, tradelist, tradeopen, tradebuy, tradesell,
   tradestate, closewindows.
-- **Dialogues** : say, says, dialog, convo, answer, talkreq.
+- **Dialogues** : say, says, dialog, convo, answer (dont `answer leave`), talkreq, talkto, npcevent, dialogs.
 - **Ordres** : orderreq, taskreq, bedreq, carryreq, carrying.
 - **Éditeur** : editchar, editdone.
 - **Monde** : hours, pause, paused, speed, weathers, setweather, rollweather, fxhurry.

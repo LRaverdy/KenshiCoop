@@ -157,6 +157,12 @@ public:
     virtual void TakeDialogEvents(std::vector<WorldDialog>& out) { out.clear(); }
     virtual void ApplySay(const Handle& speaker, const std::string& text, bool shout) { (void)speaker; (void)text; (void)shout; }
     virtual void DialogAnswer(uint32_t dialogId, int index) { (void)dialogId; (void)index; }   // host
+    // Host: end that conversation in the game (its player walked away or left the game). Its window
+    // closes through the usual Close event (or a Close is reported if the game sends none).
+    virtual void EndDialog(uint32_t dialogId) { (void)dialogId; }
+    // Host: the character `npc` is in a conversation now, with `other` (any conversation: the host's
+    // own, NPCs among themselves); false when it is free.
+    virtual bool TalkingWith(const Handle& npc, Handle& other) { (void)npc; (void)other; return false; }
     // Squads of the player faction. Host: each squad's name and members (in squad order).
     // Client: split the local characters the same way.
     struct WorldSquad {
@@ -236,6 +242,48 @@ public:
     // Client: remove from ours the jobs the host's no longer has.
     virtual bool ReadJobs(const Handle& h, std::vector<int32_t>& jobs) { (void)h; jobs.clear(); return false; }
     virtual void ApplyJobs(const Handle& h, const std::vector<int32_t>& jobs) { (void)h; (void)jobs; }
+    // ---- squad window and AI settings (session_squads.cpp)
+    // A squad of the player faction as this machine has it. id: the host's Platoon handle (client: the
+    // host squad it is matched to, invalid when none yet); key: this machine's own identity of it;
+    // members: host handles, in squad order (index 0 leads the squad).
+    struct SquadView {
+        Handle id;
+        uint64_t key = 0;
+        std::string name;
+        std::vector<Handle> members;
+        bool awaitingHost = false;   // client: a portrait was dropped on this new squad, the host makes it
+    };
+    // Host: every squad of the player faction, in the faction's order (empty ones too).
+    virtual void ReadSquadViews(std::vector<SquadView>& out) { out.clear(); }
+    // Host: run a request the session authorized. Move: into `squad` (invalid: a new squad named
+    // `name`) at `index`, or swapped with the member at `index` (swap). Order: index in ReadSquadViews'
+    // list. Remove: an empty squad. created: the new squad's id. False: the game did not do it.
+    virtual bool SquadMove(const Handle& who, const Handle& squad, int index, bool swap, const std::string& name, Handle& created) {
+        (void)who; (void)squad; (void)index; (void)swap; (void)name; (void)created; return false;
+    }
+    virtual bool SquadCreate(const std::string& name, Handle& created) { (void)name; (void)created; return false; }
+    virtual bool SquadRename(const Handle& squad, const std::string& name) { (void)squad; (void)name; return false; }
+    virtual bool SquadOrder(const Handle& squad, int index) { (void)squad; (void)index; return false; }
+    virtual bool SquadRemove(const Handle& squad) { (void)squad; return false; }
+    virtual bool RenameCharacter(const Handle& h, const std::string& name) { (void)h; (void)name; return false; }
+    // Client: our squads (matched to the host's ones), make them the host's (order, names, members,
+    // squads created and removed), remove one of ours the host refused to create, impose a name.
+    virtual void ReadLocalSquads(std::vector<SquadView>& out) { out.clear(); }
+    virtual void ApplySquadViews(const std::vector<SquadView>& host) { (void)host; }
+    virtual void RemoveLocalSquad(uint64_t key) { (void)key; }
+    virtual void ApplyCharacterName(const Handle& h, const std::string& name) { (void)h; (void)name; }
+    virtual bool ReadCharacterName(const Handle& h, std::string& out) { (void)h; out.clear(); return false; }
+    // Client: squad changes made in our squad window (portraits dropped): the requests to send.
+    struct LocalSquadRequest { Handle actor; SquadOp op = SquadOp::Move; Handle squad; int index = 0; std::string name; };
+    virtual void TakeLocalSquadRequests(std::vector<LocalSquadRequest>& out) { out.clear(); }
+    // Characters nobody owns (recruits never given to a player): their AI settings are anyone's.
+    virtual void SetShared(const std::vector<Handle>& handles) { (void)handles; }
+    // Host: a settings order (squad bar toggle, Tâches panel) on a character nobody owns.
+    virtual bool OrderShared(const Handle& h, const Command& c) { return Order(h, c); }
+    // Job lists with each job's target. Host: read (subjects as host handles). Client: make ours the
+    // same (remove, add, reorder).
+    virtual bool ReadJobList(const Handle& h, std::vector<JobEntry>& jobs) { (void)h; jobs.clear(); return false; }
+    virtual void ApplyJobList(const Handle& h, const std::vector<JobEntry>& jobs) { (void)h; (void)jobs; }
     // ---- lot A: doors and locks. Host: the doors and locked furniture within `radius` of the points,
     // as they are; is this container locked (it cannot be looked into); run a door button a client
     // clicked. Client: impose one door's state (found by kind and place; false: not here); the door
@@ -303,6 +351,35 @@ public:
     virtual void TakeLocalBuildActions(std::vector<BuildAction>& out) { out.clear(); }
     // ok: done; refused: why not (French, for the player)
     virtual bool ExecuteBuildAction(const BuildAction& a, std::string& refused) { (void)a; refused.clear(); return false; }
+
+    // ---- workshop (plugin/workshop.cpp): research, crafting benches, machines and power.
+    // Research. Host: the player faction's research as its game has it; run a client's request on
+    // its game (actor: the asking player's character, already admitted; false: refused or failed,
+    // why in French). Client: impose the host's research (finished techs, queue, progress); its own
+    // game never researches, pays or completes anything by itself. Returns what had to change.
+    virtual bool ReadResearch(ResearchState& out) { out = ResearchState{}; return false; }
+    virtual bool ExecuteResearchRequest(const ResearchRequest& r, const Handle& actor, std::string& refusedFr) {
+        (void)r; (void)actor; refusedFr.clear(); return false;
+    }
+    virtual size_t ApplyResearch(const ResearchState& s) { (void)s; return 0; }
+    // Machines. Host: the player's machines within `radius` of the points (operators as game handles,
+    // netId 0) and the power panels of their towns; run a client's machine request. Client: impose a
+    // machine's state (`operators`: host handles of the replicated characters working it) and a town's
+    // power totals (its own game then stops computing that town's power).
+    struct WorldMachine { MachineState state; Handle handle; std::vector<Handle> operators; };
+    virtual void ReadMachines(const std::vector<Vec3>& centers, float radius, std::vector<WorldMachine>& out, std::vector<TownPower>& towns) {
+        (void)centers; (void)radius; out.clear(); towns.clear();
+    }
+    virtual bool ExecuteMachineRequest(const MachineRequest& r, const Handle& actor, std::string& refusedFr) {
+        (void)r; (void)actor; refusedFr.clear(); return false;
+    }
+    virtual bool ApplyMachine(const MachineState& s, const std::vector<Handle>& operators) { (void)s; (void)operators; return false; }
+    virtual bool ApplyTownPower(const TownPower& t) { (void)t; return false; }
+    // Client: what the local player asked in the research, crafting and building windows (never done
+    // locally). actor: our character concerned (host handle; invalid: the session picks the player's own).
+    struct LocalResearchAsk { ResearchRequest req; Handle actor; };
+    struct LocalMachineAsk { MachineRequest req; Handle actor; };
+    virtual void TakeWorkshopAsks(std::vector<LocalResearchAsk>& research, std::vector<LocalMachineAsk>& machines) { research.clear(); machines.clear(); }
 
     // Inventories. Host: read; execute a client's item movement (false = refused/impossible).
     virtual bool ReadInventory(const Handle& h, std::vector<ItemState>& out) = 0;
@@ -435,6 +512,8 @@ public:
         std::string name, text;
         std::vector<std::string> replies;
         bool waiting = false;   // an answer was sent, the next line has not come yet
+        uint32_t actor = 0;     // our character in it (the actor named by our answers)
+        uint32_t turn = 0;      // the line shown (our answer names it)
     };
     const DialogView& dialog() const { return dialog_; }
     // Client: lines of our log for the host's log (sent a few times a second); frames counted for
@@ -448,6 +527,9 @@ public:
     size_t RequestResync(uint8_t playerId);
     bool TakeResyncRequest() { return std::exchange(resyncRequested_, false); }
     void AnswerDialog(int index);
+    void LeaveDialog();   // client: our character walks away from the conversation (the host ends it)
+    size_t openDialogs() const { return hostDialogs_.size(); }   // host: conversations shown on a client's screen
+    uint32_t dialogBusyRefusals() const { return dialogBusy_; }   // host: talk orders refused, the NPC being busy
     // Client: the trade window the host opened for us (tests, overlay).
     struct TradeView {
         bool pending = false, open = false;
@@ -468,6 +550,14 @@ public:
     DiplomacyView diplomacyView() const;
     // the host's diplomacy as this side knows it (host: its last read; client: what it received)
     const DiplomacyState& hostDiplomacy() const { return hostDiplo_; }
+    // ---- workshop (tests, overlay): counters; the research as this side knows it (host: last sent;
+    // client: received); a machine as the host sent it (key "sid@x,y,z", null: unknown here)
+    struct WorkshopView { size_t researchSent = 0, researchReceived = 0, researchApplied = 0, machinesSent = 0, machinesReceived = 0, machinesApplied = 0, requestsDone = 0, requestsRefused = 0, asked = 0; };
+    WorkshopView workshopView() const { return workshop_; }
+    const ResearchState& knownResearch() const { return isHost() ? researchSent_ : hostResearch_; }
+    size_t machinesKnown() const { return isHost() ? machinesSent_.size() : clientMachines_.size(); }
+    const MachineState* knownMachine(const std::string& key) const;
+    static std::string MachineKey(const std::string& sid, const Vec3& pos);
     const FactionsMsg& hostFactions() const { return hostFactions_; }      // client: the host's relations (host: last sent)
     const BountiesMsg& hostBounties() const { return hostBounties_; }      // client: the host's bounties (host: last sent)
     // ---- lot A: doors (tests): doors sent (host) / known and applied here (client)
@@ -561,6 +651,7 @@ private:
         bool keep = false;                   // scratch flag for interest updates
         bool container = false;              // a container a player has open (no character)
         bool bag = false;                    // a worn backpack (also `container`): its wearer is bagOwner
+        bool machine = false;                // a player machine's inventory (also `container`): synced to every player while tracked
         uint32_t bagOwner = 0;
         std::string bagSid;
         std::set<uint8_t> openBy;            // host: players who have it open
@@ -614,6 +705,9 @@ private:
     void SendSquads(double now);
     void SendEditedAppearances();
     void SendBind(const Entity& e, PeerId to, const Handle& previous = Handle{});
+    // Host: an NPC already followed joined the player faction (recruited in a conversation): it is a
+    // squad character now, the host's until it is given to a player (a newcomer).
+    void JoinSquad(Entity& e, std::vector<Handle>& newcomers, const Handle* previous = nullptr);
     void SendInventories(double now, bool force, PeerId onlyTo);
     void ClientInventoryDiff(double now);
     void SendLocalDrops();
@@ -682,7 +776,27 @@ private:
     SquadsMsg lastSquads_;                 // host: last sent / client: last received
     bool haveSquads_ = false;
     double squadsAt_ = -1e9, nextSquads_ = 0;
-    std::unordered_map<uint32_t, uint8_t> dialogOwner_;   // host: conversation -> the player it was sent to
+    // Host: each conversation shown on a client's screen: whose it is, the player's character in it
+    // (the only actor its answers may name), the NPC, and the line shown (turn, answers offered).
+    struct HostDialog {
+        uint8_t owner = 0;
+        uint32_t pc = 0;
+        Handle npc;
+        uint64_t npcIdentity = 0;
+        std::string npcName;
+        uint32_t turn = 0;
+        std::string text;
+        std::vector<std::string> replies;
+    };
+    std::unordered_map<uint32_t, HostDialog> hostDialogs_;
+    std::vector<uint32_t> pendingDialogEnds_;   // host: conversations to end in the game (live tick)
+    // host: who each player answered lately (a recruit or an animal bought in that conversation is theirs)
+    struct RecentPartner { uint8_t player = 0; uint64_t identity = 0; double at = 0; };
+    std::vector<RecentPartner> recentPartners_;
+    uint32_t dialogBusy_ = 0;
+    // Host: `npc` is in someone else's conversation (a client's shown here, or any in the game) than
+    // the actor's: who it talks with.
+    bool TalkTargetBusy(uint32_t actorNetId, const Handle& actor, const Handle& npc, std::string& with);
     std::vector<IWorld::WorldDialog> scratchDialogs_;
     std::vector<DialogReply> pendingAnswers_;   // host
     struct PendingContainer { uint8_t player; uint32_t looter; uint32_t netId; double until; };
@@ -837,6 +951,43 @@ private:
     void ClientDoorsPacket(Reader& r);
     void ResetDoors();
     // ---- end lot A
+    // ---- workshop (session_workshop.cpp): research, crafting benches, machines and power.
+    // Host: the research as last sent, the requests to run; the machines tracked (key: kind and place)
+    // and what was last sent of each; town power totals. Client: the host's research and machines,
+    // imposed (dirty: just received), with our requests numbered.
+    ResearchState researchSent_;
+    bool haveResearchSent_ = false;
+    std::set<PeerId> researchServed_, machinesServed_;
+    double nextResearch_ = 0, researchFullAt_ = 0;
+    std::vector<std::pair<uint8_t, ResearchRequest>> pendingResearchReqs_;
+    std::vector<std::pair<uint8_t, MachineRequest>> pendingMachineReqs_;
+    std::unordered_map<std::string, MachineState> machinesSent_;
+    std::unordered_map<std::string, uint32_t> machineNetIds_;   // host: kind and place -> its inventory entity
+    std::vector<TownPower> townsSent_;
+    double nextMachines_ = 0, machinesFullAt_ = 0;
+    std::vector<IWorld::WorldMachine> scratchMachines_;
+    std::vector<TownPower> scratchTowns_;
+    ResearchState hostResearch_;                 // client
+    bool haveResearch_ = false, researchDirty_ = false;
+    double researchReapplyAt_ = 0;
+    struct ClientMachine { MachineState state; bool dirty = true; bool found = false; };
+    std::unordered_map<std::string, ClientMachine> clientMachines_;
+    std::unordered_map<std::string, TownPower> clientTowns_;
+    double machinesReapplyAt_ = 0;
+    uint32_t workshopSeq_ = 0;
+    std::vector<IWorld::LocalResearchAsk> scratchResearchAsks_;
+    std::vector<IWorld::LocalMachineAsk> scratchMachineAsks_;
+    WorkshopView workshop_;
+    void HostResearch(double now);
+    void HostMachines(double now);
+    void HostWorkshopRequests();
+    void HostResearchPacket(uint8_t from, Reader& r);
+    void HostMachinePacket(uint8_t from, Reader& r);
+    void ClientWorkshop(double now);
+    void ClientResearchPacket(Reader& r);
+    void ClientMachinesPacket(Reader& r);
+    uint32_t OwnActorNear(const Vec3* pos);   // client: our character for a request (nearest to pos, else our first)
+    void ResetWorkshop();
     // ---- fix G5: job lists (session_jobs.cpp). Host: what each squad member's list was when last
     // sent. Client: the host's lists, imposed (dirty: just received).
     std::unordered_map<uint32_t, std::vector<int32_t>> jobsSent_;
@@ -847,6 +998,53 @@ private:
     void ClientJobs(double now);
     void ClientJobsPacket(Reader& r);
     void ResetJobs();
+    std::unordered_map<uint32_t, std::vector<JobEntry>> jobListSent_;   // host: JobState, per character
+    std::unordered_map<uint32_t, std::vector<JobEntry>> hostJobLists_;  // client: the host's, with targets
+    std::unordered_set<uint32_t> jobListDirty_;
+    bool haveJobState_ = false;                                         // client: the host sends JobState (JobList ignored)
+    void ClientJobStatePacket(Reader& r);
+    // ---- squad window and AI settings (session_squads.cpp)
+public:
+    // Host: may that player set the AI settings (squad bar toggles, fight style, Tâches panel) of that
+    // character? Its own, or one nobody owns (shared; the last request wins).
+    bool MaySetSettings(uint8_t player, uint32_t netId) const;
+    bool IsShared(uint32_t netId) const { return shared_.count(netId) != 0; }
+    static bool IsSettingsCommand(const Command& c);
+    const SquadStateMsg& squadState() const { return squadState_; }   // host: last sent; client: the host's
+    size_t pendingSquadRequests() const { return squadPending_.size(); }   // client
+    // Client: ask the host for a squad change (tests, debug commands). False: not sent (not ours).
+    bool RequestSquadChange(const SquadRequest& r);
+private:
+    void ResetSquads();
+    void SendSquadState(double now);
+    void HostSquadRequest(uint8_t from, const SquadRequest& r);
+    void ClientSquads(double now);
+    void ClientSquadStatePacket(Reader& r);
+    void OnSquadResult(const Result& m);
+    bool SquadEditable(uint8_t player, const SquadEntry& s) const;
+    void ComputeShared();
+    SquadStateMsg squadState_;
+    bool haveSquadState_ = false;
+    bool squadStateDirty_ = false;                 // client: just received
+    double nextSquadState_ = 0, squadStateFullAt_ = 0, nextClientSquads_ = 0;
+    std::unordered_set<uint32_t> shared_;          // characters nobody owns (host: computed; client: received)
+    std::vector<std::pair<uint8_t, SquadRequest>> pendingSquadReqs_;   // host: run on the next live tick
+    uint32_t squadSeq_ = 0;
+    struct SquadPending {                          // client: a request the host has not answered yet
+        SquadRequest req;
+        uint64_t localKey = 0;                     // Create: our squad it is for
+        double until = 0;
+    };
+    std::map<uint32_t, SquadPending> squadPending_;   // seq ->
+    struct NameEdit { std::string name; double since = 0; };
+    std::map<std::pair<int, std::string>, NameEdit> nameEdits_;   // client: names being typed here (kind 0 squad id, 1 netId)
+    std::map<uint64_t, double> createSeen_;        // client: our unmatched empty squads, first seen
+    std::set<uint64_t> createAsked_;
+    std::map<uint64_t, Handle> lastLocalIds_;      // client: our squads matched last pass (key -> host id)
+    std::map<std::string, std::string> baseSquadNames_;   // client: our squads' names as we last left them (host id key)
+    std::vector<Handle> baseOrder_;                // client: ... and their order
+    std::map<uint32_t, std::string> baseCharNames_;   // client: squad characters' names as we last left them
+    std::vector<IWorld::LocalSquadRequest> scratchSquadReqs_;
     // ---- lot D: prisons (session_prisons.cpp)
     std::unordered_map<uint32_t, CaptiveState> captiveSent_;   // host: last state sent per character
     double nextCaptives_ = 0, captivesFullAt_ = 0;
@@ -893,7 +1091,6 @@ private:
     size_t logDropped_ = 0;
     double nextLogSend_ = 0, nextReport_ = 0, reportStart_ = 0;
     uint32_t frames_ = 0;
-    std::unordered_map<uint32_t, std::vector<std::string>> dialogReplies_;   // host: last answers offered per conversation
     std::vector<Handle> scratchEdited_;
     bool haveMoney_ = false;               // client
     int32_t hostMoney_ = 0;

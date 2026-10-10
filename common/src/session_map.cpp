@@ -12,6 +12,7 @@
 // included. A ping lives 10 s. It is only a marker: nothing changes in the game world.
 #include <algorithm>
 #include <cctype>
+#include <set>
 
 #include "kc/session.h"
 
@@ -59,12 +60,17 @@ void Session::HostMapMarkers(double now) {
         for (const auto& p : m.players) if (p.id == id) return p.name;
         return {};
     };
-    // every squad character, in squad order
+    // every squad character, in squad order, once. PlayerCharacters appends: the list still held the
+    // characters near the players (the squad among them) from the tick's interest pass, and each
+    // squad character went out twice (14 for 7 in the game).
+    scratchHandles_.clear();
     world_.PlayerCharacters(scratchHandles_);
     std::map<uint8_t, size_t> avatars;   // player -> its characters marked as its own
+    std::set<uint32_t> seen;
     scratchCenters_.clear();
     for (const Handle& h : scratchHandles_) {
         auto b = byHandle_.find(h);
+        if (b != byHandle_.end() && !seen.insert(b->second).second) continue;
         if (b == byHandle_.end()) continue;
         const Entity& e = entities_[b->second];
         if (!e.squad || m.chars.size() >= kMaxMapChars) continue;

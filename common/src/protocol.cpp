@@ -417,6 +417,8 @@ void Encode(Writer& w, const DialogMsg& m) {
         const size_t n = std::min(e.replies.size(), kMaxDialogReplies);
         w.varint(n);
         for (size_t i = 0; i < n; ++i) w.str(e.replies[i].size() > kMaxDialogText ? e.replies[i].substr(0, kMaxDialogText) : e.replies[i]);
+        w.varint(e.pcNetId);
+        w.varint(e.turn);
     }
 }
 bool Decode(Reader& r, DialogMsg& m) {
@@ -424,7 +426,7 @@ bool Decode(Reader& r, DialogMsg& m) {
     m.events.resize(n);
     for (auto& e : m.events) {
         const uint8_t k = r.u8();
-        if (k < uint8_t(DialogKind::Say) || k > uint8_t(DialogKind::Close)) return false;
+        if (k < uint8_t(DialogKind::Say) || k > uint8_t(DialogKind::Busy)) return false;
         e.kind = DialogKind(k);
         e.dialogId = GetU32Var(r);
         e.netId = GetU32Var(r);
@@ -433,6 +435,8 @@ bool Decode(Reader& r, DialogMsg& m) {
         const uint32_t nr = r.count(kMaxDialogReplies, 1);
         e.replies.resize(nr);
         for (auto& s : e.replies) s = r.str(kMaxDialogText);
+        e.pcNetId = GetU32Var(r);
+        e.turn = GetU32Var(r);
         if (!r.ok()) return false;
     }
     return Done(r);
@@ -440,12 +444,16 @@ bool Decode(Reader& r, DialogMsg& m) {
 void Encode(Writer& w, const DialogReply& m) {
     w.u8(uint8_t(Msg::DialogReply));
     w.varint(m.dialogId);
+    w.varint(m.actor);
+    w.varint(m.turn);
     w.i32(m.index);
 }
-bool Decode(Reader& r, DialogReply& m) {
+bool Decode(Reader& r, DialogReply& m) {   // every answer names its actor
     m.dialogId = GetU32Var(r);
+    m.actor = GetU32Var(r);
+    m.turn = GetU32Var(r);
     m.index = r.i32();
-    return Done(r) && m.index >= 0 && m.index < int32_t(kMaxDialogReplies);
+    return Done(r) && m.actor != 0 && m.index >= kDialogLeave && m.index < int32_t(kMaxDialogReplies);
 }
 
 void Encode(Writer& w, const SquadsMsg& m) {
@@ -544,6 +552,7 @@ const char* TaskLabel(int task) {
     case 55: return "recruit";
     case 57: return "repair robot";
     case 58: return "medic (job)";
+    case 105: case 142: case 148: return "rescue (job)";
     case 60: case 61: return "first aid (robot)";
     case 68: case 225: return "carry someone";
     case 69: return "put down";
@@ -603,7 +612,7 @@ const char* StandingOrderLabel(int order) {
     case 12: return "hold position";
     case 13: return "passive";
     case 14: return "taunt";
-    case 15: return "chase";
+    case 15: return "jobs (permanence)";
     case 16: return "group speed";
     case 17: return "ranged";
     default: return "?";
@@ -657,6 +666,8 @@ bool TaskTargetAllowed(TaskVia via, int task, uint32_t t, std::string* why) {
         return living ? true : fail("a living character");
     case 58:   // medic (job)
         return none || living ? true : fail("no subject or a living character");
+    case 105: case 142: case 148:   // find and rescue (the orders panel's RESCUE button: 148)
+        return none || living ? true : fail("no subject or a living character");
     case 26:   // loot: a body, a container, or a merchant standing there (the game's trade)
         return other || cont ? true : fail("a character or a container");
     case 284:   // loot a container
@@ -690,6 +701,24 @@ bool TaskTargetAllowed(TaskVia via, int task, uint32_t t, std::string* why) {
     }
 }
 
+bool TaskTargetWrongKind(TaskVia via, int task, uint32_t t, std::string* why) {
+    std::string w;
+    if (TaskTargetAllowed(via, task, t, &w)) return false;
+    // known: some kind of subject is accepted for it (every case of the table accepts one)
+    static const uint32_t F = kTgtNamed | kTgtFound;
+    static const uint32_t kinds[] = {
+        0, F | kTgtCharacter | kTgtSelf | kTgtConscious | kTgtSquad, F | kTgtCharacter | kTgtConscious,
+        F | kTgtCharacter | kTgtDown, F | kTgtCharacter | kTgtDead | kTgtDown, F | kTgtItem, F | kTgtContainer,
+        F | kTgtBuilding, F | kTgtBuilding | kTgtUnfinished | kTgtOurs, F | kTgtBuilding | kTgtOurs, F | kTgtBuilding | kTgtBed,
+        F | kTgtBuilding | kTgtCage, F | kTgtBuilding | kTgtMachine, F | kTgtBuilding | kTgtDoor,
+    };
+    bool known = false;
+    for (uint32_t k : kinds) known = known || TaskTargetAllowed(via, task, k, nullptr);
+    if (!known) return false;
+    if (why) *why = w;
+    return true;
+}
+
 const char* ToString(ResultReason r) {
     switch (r) {
     case ResultReason::None: return "none";
@@ -699,6 +728,7 @@ const char* ToString(ResultReason r) {
     case ResultReason::NotAllowed: return "not allowed";
     case ResultReason::SelectionBusy: return "selection busy";
     case ResultReason::Failed: return "failed";
+    case ResultReason::Busy: return "busy";
     }
     return "?";
 }
@@ -717,7 +747,7 @@ bool Decode(Reader& r, Result& m) {
     m.netId = GetU32Var(r);
     const uint8_t st = r.u8(), why = r.u8();
     m.text = r.str(400);
-    if (st < 1 || st > 3 || why > uint8_t(ResultReason::Failed)) return false;
+    if (st < 1 || st > 3 || why > uint8_t(ResultReason::Busy)) return false;
     m.state = ResultState(st);
     m.reason = ResultReason(why);
     return Done(r);
@@ -743,6 +773,8 @@ const MessageRule kMessageRules[] = {
     {Msg::Chat, AuthRole::Connected, AuthSubject::None, "chat"},
     {Msg::Ping, AuthRole::Connected, AuthSubject::None, "ping"},
     {Msg::MapPing, AuthRole::InGame, AuthSubject::None, "map ping", 0.5},   // = Session::kPingInterval
+    {Msg::ResearchRequest, AuthRole::InGame, AuthSubject::OwnCharacter, "research request"},
+    {Msg::MachineRequest, AuthRole::InGame, AuthSubject::OwnCharacter, "machine request"},
     // host -> client only
     {Msg::Welcome, AuthRole::HostOnly, AuthSubject::None, "welcome"},
     {Msg::Reject, AuthRole::HostOnly, AuthSubject::None, "reject"},
@@ -785,7 +817,12 @@ const MessageRule kMessageRules[] = {
     {Msg::BagBind, AuthRole::HostOnly, AuthSubject::None, "bag bind"},
     {Msg::MapMarkers, AuthRole::HostOnly, AuthSubject::None, "map markers"},
     {Msg::Diplomacy, AuthRole::HostOnly, AuthSubject::None, "diplomacy"},
+    {Msg::Research, AuthRole::HostOnly, AuthSubject::None, "research"},
+    {Msg::Machines, AuthRole::HostOnly, AuthSubject::None, "machines"},
     {Msg::Result, AuthRole::HostOnly, AuthSubject::None, "result"},
+    {Msg::SquadState, AuthRole::HostOnly, AuthSubject::None, "squad state"},
+    {Msg::SquadRequest, AuthRole::InGame, AuthSubject::OwnCharacter, "squad request"},
+    {Msg::JobState, AuthRole::HostOnly, AuthSubject::None, "job state"},
 };
 } // namespace
 const char* MsgName(Msg type) {
@@ -852,7 +889,14 @@ const char* MsgName(Msg type) {
     case Msg::MapMarkers: return "MapMarkers";
     case Msg::MapPing: return "MapPing";
     case Msg::Diplomacy: return "Diplomacy";
+    case Msg::Research: return "Research";
+    case Msg::ResearchRequest: return "ResearchRequest";
+    case Msg::Machines: return "Machines";
+    case Msg::MachineRequest: return "MachineRequest";
     case Msg::Result: return "Result";
+    case Msg::SquadState: return "SquadState";
+    case Msg::SquadRequest: return "SquadRequest";
+    case Msg::JobState: return "JobState";
     }
 #pragma warning(pop)
     return nullptr;

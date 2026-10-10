@@ -126,6 +126,11 @@ std::string LocalTaskRefused(kc::Session& s, KenshiWorld& w, kenshi::Character* 
 std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstream& in, const std::string& cmd) {
     std::string err;
     if (cmd == "echo") return "ok";
+    {   // workshop: research, crafting benches, machines, power (plugin/workshop.cpp)
+        bool handled = false;
+        std::string r = WorkshopCommand(s, w, in, cmd, handled);
+        if (handled) return r;
+    }
     // ---- map markers, minimap, heads, squad bar, pings (exp_map)
     if (cmd == "mapscene") {   // mapscene <carte|minicarte|tetes|barre|pings>: what this machine draws
         std::string what;
@@ -146,6 +151,12 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         o << " ;";
         for (const auto& t : m.threats) o << " threat:kind=" << int(t.kind) << ":n=" << int(t.count) << ":x=" << t.pos.x << ":z=" << t.pos.z;
         return o.str();
+    }
+    if (cmd == "mapconv") return DescribeMapConversion();   // mapconv: MyGUI view -> back buffer -> display, frames read now and drawn
+    if (cmd == "mapui") {   // mapui open|close|maptab|state: the game's map screen, through its MAP button
+        std::string what;
+        in >> what;
+        return MapUi(what.empty() ? "state" : what);
     }
     if (cmd == "mapproj") {   // mapproj <x> <z>: the game's MapScreen::worldToMapCoords against ours
         float x = 0, z = 0;
@@ -892,6 +903,145 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         for (auto& [k, n] : kinds) o << " " << k << "x" << n;
         return o.str();
     }
+    // ---- squad window and AI settings (experiment squadui). Characters by name, '_' for spaces.
+    auto squadChar = [&](std::string n) -> kenshi::Character* {
+        std::replace(n.begin(), n.end(), '_', ' ');
+        std::vector<kenshi::Character*> all;
+        kenshi::PlayerCharacters(all);
+        for (kenshi::Character* c : all) { std::string cn; if (kenshi::CharacterName(c, cn) && cn == n) return c; }
+        return nullptr;
+    };
+    if (cmd == "squadsfull") {   // squadsfull: every squad in the squad window's order, empty ones too: "| name: a,b | ..."
+        std::vector<void*> sq;
+        kenshi::PlayerSquads(sq);
+        std::ostringstream o;
+        o << "ok";
+        for (void* q : sq) {
+            std::string n;
+            kenshi::SquadName(q, n);
+            o << " | " << n << ":";
+            std::vector<kenshi::Character*> m;
+            kenshi::SquadMembers(q, m);
+            for (size_t i = 0; i < m.size(); ++i) { std::string cn; kenshi::CharacterName(m[i], cn); o << (i ? "," : " ") << cn; }
+        }
+        return o.str();
+    }
+    if (cmd == "squadrename") {   // squadrename <position> <name>: the squad window's name box, as typed ('_' for spaces)
+        size_t pos = 0;
+        std::string name;
+        in >> pos >> name;
+        std::replace(name.begin(), name.end(), '_', ' ');
+        std::vector<void*> sq;
+        kenshi::PlayerSquads(sq);
+        if (pos >= sq.size() || name.empty()) return "err no such squad";
+        kenshi::SetSquadName(sq[pos], name);
+        return "ok";
+    }
+    if (cmd == "squadnew") {   // squadnew <name>: the squad window's "new squad" button, then its name box
+        std::string name;
+        in >> name;
+        std::replace(name.begin(), name.end(), '_', ' ');
+        void* q = nullptr;
+        kenshi::KeepSelection([&] { q = kenshi::NewSquad(); });
+        if (!q) return "err";
+        if (!name.empty()) kenshi::SetSquadName(q, name);
+        return "ok";
+    }
+    if (cmd == "squadorder") {   // squadorder <from> <to>: a squad dragged in the squad window (Faction::changePlatoonIndex)
+        size_t from = 0, to = 0;
+        in >> from >> to;
+        std::vector<void*> sq;
+        kenshi::PlayerSquads(sq);
+        if (from >= sq.size() || to >= sq.size()) return "err no such squad";
+        return kenshi::SetSquadOrder(sq[from], kenshi::SquadFactionIndex(sq[to])) ? "ok" : "err";
+    }
+    if (cmd == "squadlead") {   // squadlead <name>: that portrait dropped on its squad's first one (swapCharacters: it leads)
+        std::string who;
+        in >> who;
+        kenshi::Character* c = squadChar(who);
+        if (!c) return "err no " + who;
+        std::vector<kenshi::Character*> m;
+        kenshi::SquadMembers(kenshi::SquadOf(c), m);
+        if (m.empty() || m[0] == c) return "ok already";
+        using FnSwap = void (*)(void*, int, int);
+        reinterpret_cast<FnSwap>(kenshi::FnAddr(kenshi::FnSquadSwapCharacters))(kenshi::SquadOf(c), kenshi::SquadMemberIndex(c), kenshi::SquadMemberIndex(m[0]));
+        return "ok";
+    }
+    if (cmd == "charrename") {   // charrename <name> <new name>: the character window's rename
+        std::string who, name;
+        in >> who >> name;
+        std::replace(name.begin(), name.end(), '_', ' ');
+        kenshi::Character* c = squadChar(who);
+        if (!c) return "err no " + who;
+        return kenshi::SetCharacterName(c, name) ? "ok" : "err";
+    }
+    if (cmd == "aiorder") {   // aiorder <name> <standingOrder>: the squad bar's toggle for that character alone, as the UI does
+        std::string who;
+        int order = 0;
+        in >> who >> order;
+        kenshi::Character* c = squadChar(who);
+        if (!c) return "err no " + who;
+        kenshi::WithSelection(c, [&] { reinterpret_cast<void (*)(void*, int)>(kenshi::FnAddr(kenshi::FnSetOrderSelected))(kenshi::Player(), order); });
+        return "ok";
+    }
+    if (cmd == "aimodes") {   // aimodes <name>: standing orders (bits, see "modes"), fight style, speed order
+        std::string who;
+        in >> who;
+        kenshi::Character* c = squadChar(who);
+        if (!c) return "err no " + who;
+        uint8_t style = 0, gait = 0;
+        float pace = 0;
+        const uint16_t m = kenshi::ReadModes(c, style);
+        kenshi::ReadPace(c, gait, pace);
+        return "ok " + std::to_string(m) + " " + std::to_string(style) + " " + std::to_string(gait);
+    }
+    if (cmd == "aishared") {   // aishared <name>: 1 when nobody owns it (its AI settings are anyone's) in this machine's view
+        std::string who;
+        in >> who;
+        kenshi::Character* c = squadChar(who);
+        kc::Handle h;
+        if (!c || !kenshi::GetHandle(c, h)) return "err no " + who;
+        return std::string("ok ") + (KenshiWorld::View()->shared.count(h) ? "1" : "0");
+    }
+    if (cmd == "jobsof") {   // jobsof <name>: its job list (Tâches panel) by kind, in order
+        std::string who;
+        in >> who;
+        kenshi::Character* c = squadChar(who);
+        if (!c) return "err no " + who;
+        std::string o = "ok " + std::to_string(kenshi::PermajobCount(c));
+        for (int i = 0, n = kenshi::PermajobCount(c); i < n; ++i) o += " " + std::to_string(kenshi::PermajobType(c, i));
+        return o;
+    }
+    if (cmd == "jobfor") {   // jobfor <name> <task> <subjectName>: a permanent job, as the UI gives it (addJobSelectedCharacters)
+        std::string who, subj;
+        int task = 0;
+        in >> who >> task >> subj;
+        kenshi::Character* c = squadChar(who);
+        kenshi::Character* s2 = squadChar(subj);
+        kc::Vec3 p;
+        if (!c || !s2 || !kenshi::GetPosition(s2, p)) return "err";
+        const float loc[3] = {p.x, p.y, p.z};
+        using FnAddJob = void (*)(void*, int, void*, bool, bool, const float*);
+        kenshi::WithSelection(c, [&] { reinterpret_cast<FnAddJob>(kenshi::FnAddr(kenshi::FnAddJobSelected))(kenshi::Player(), task, s2, true, true, loc); });
+        return "ok";
+    }
+    if (cmd == "charinfo") {   // charinfo <name>: what its character windows show: skills, hunger, blood, lowest limb
+        std::string who;
+        in >> who;
+        kenshi::Character* c = squadChar(who);
+        std::vector<float> st;
+        if (!c || !kenshi::ReadStats(c, st)) return "err no " + who;
+        std::ostringstream o;
+        o << "ok ";
+        for (size_t i = 0; i < st.size(); ++i) o << (i ? "," : "") << int(st[i] * 10);
+        kc::EntityVitals v;
+        if (kenshi::ReadVitals(c, v)) {
+            float low = 1e9f;
+            for (const auto& p : v.parts) low = std::min(low, p.flesh);
+            o << " hunger=" << int(v.hunger) << " blood=" << int(v.blood) << " limb=" << int(low);
+        }
+        return o.str();
+    }
     if (cmd == "squads") {   // squads: the player's squads as this machine has them: "name: member,member | ..."
         std::vector<kc::IWorld::WorldSquad> ws;
         w.ReadSquads(ws);
@@ -1538,15 +1688,88 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
     if (cmd == "dialog") {   // dialog: the conversation window this client shows (client)
         const auto& d = s.dialog();
         std::ostringstream o;
-        o << "ok open=" << d.open << " id=" << d.id << " waiting=" << d.waiting << " name=" << d.name << " | " << d.text << " |";
+        o << "ok open=" << d.open << " id=" << d.id << " waiting=" << d.waiting << " actor=" << d.actor << " turn=" << d.turn << " name=" << d.name << " | "
+          << d.text << " |";
         for (const auto& r : d.replies) o << " [" << r << "]";
         return o.str();
     }
-    if (cmd == "answer") {   // answer <index>: pick that answer in the conversation window (client)
-        int i = 0;
-        in >> i;
-        s.AnswerDialog(i);
+    if (cmd == "answer") {   // answer <index|leave>: pick that answer in the conversation window, or walk away (client)
+        std::string a;
+        in >> a;
+        if (a == "leave") { s.LeaveDialog(); return "ok"; }
+        s.AnswerDialog(a.empty() ? 0 : std::atoi(a.c_str()));
         return "ok";
+    }
+    if (cmd == "dialogs") {   // dialogs: (host) conversations shown on clients' screens, refusals "occupé", conversations swept, pauses undone
+        std::ostringstream o;
+        const auto list = w.RemoteDialogList();
+        o << "ok n=" << list.size() << " open=" << s.openDialogs() << " busy=" << w.dialogsBusyRefused << " orderbusy=" << s.dialogBusyRefusals()
+          << " swept=" << w.dialogsSwept << " unpaused=" << w.hostDialogUnpaused << " |";
+        for (const auto& d : list) o << " " << d.id << ":" << d.pc << ">" << d.other;
+        return o.str();
+    }
+    if (cmd == "npcevent") {   // npcevent <squadIndex> <event> [k|npc]: (host) the k-th nearest NPC (or the last spawned) sends that dialogue event to that squad member (1 talk, 3 guard check)
+        size_t sel = 0;
+        int ev = 1;
+        std::string which;
+        in >> sel >> ev >> which;
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kenshi::Character* npc = nullptr;
+        if (which == "npc") npc = w.Find(lastSpawned_);
+        else {
+            const size_t k = which.empty() ? 0 : std::strtoul(which.c_str(), nullptr, 10);
+            kc::Vec3 mp, p;
+            if (!kenshi::GetPosition(me, mp)) return "err";
+            std::vector<kenshi::Character*> all;
+            kenshi::ActiveCharacters(all);
+            std::vector<std::pair<float, kenshi::Character*>> nearby;
+            for (kenshi::Character* c : all) {
+                kc::Handle h;
+                if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsDown(c) || !kenshi::GetPosition(c, p)) continue;
+                nearby.emplace_back((p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z), c);
+            }
+            std::sort(nearby.begin(), nearby.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            if (k < nearby.size()) npc = nearby[k].second;
+        }
+        if (!npc) return "err no such NPC";
+        std::string name;
+        kenshi::CharacterName(npc, name);
+        HostCallScope scope;
+        return (kenshi::CallDialogueEvent(npc, me, ev) ? "ok " : "err ") + name;
+    }
+    if (cmd == "talkto") {   // talkto <selectIndex> <k|npc>: select that squad member alone, order it to talk to the k-th nearest NPC (npc: the last spawned, host)
+        size_t sel = 0;
+        std::string which;
+        in >> sel >> which;
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kenshi::Character* npc = nullptr;
+        if (which == "npc") npc = w.Find(lastSpawned_);
+        else {
+            const size_t k = which.empty() ? 0 : std::strtoul(which.c_str(), nullptr, 10);
+            kc::Vec3 mp, p;
+            if (!kenshi::GetPosition(me, mp)) return "err";
+            std::vector<kenshi::Character*> all;
+            kenshi::ActiveCharacters(all);
+            std::vector<std::pair<float, kenshi::Character*>> nearby;
+            for (kenshi::Character* c : all) {
+                kc::Handle h;
+                if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsDown(c) || !kenshi::GetPosition(c, p)) continue;
+                nearby.emplace_back((p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z), c);
+            }
+            std::sort(nearby.begin(), nearby.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            if (k < nearby.size()) npc = nearby[k].second;
+        }
+        if (!npc) return "err no such NPC";
+        if (auto r = LocalTaskRefused(s, w, me, kc::TaskVia::TaskNearest, kc::kTaskTalk, npc); !r.empty()) return r;
+        std::string name;
+        kenshi::CharacterName(npc, name);
+        bool ok = false;
+        kenshi::WithSelection(me, [&] { ok = kenshi::CallAddTaskNearest(kc::kTaskTalk, npc); });
+        return (ok ? "ok " : "err ") + name;
     }
     if (cmd == "fxhurry") return "ok " + std::to_string(w.HurryEffects());   // fxhurry: every effect group places one now
     if (cmd == "setweather") {   // setweather <regionSid> <seasonSid> <weatherSid>

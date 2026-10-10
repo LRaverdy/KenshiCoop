@@ -94,7 +94,9 @@ Ordre dans `Tick()` (`main.cpp`) :
   (`kc/call_scopes.h`) remettent le compte au début de chaque tick de la boucle principale, à la
   fin de chaque tick (`TickSEH`), après l'exception d'un ordre (`CallTaskSeh`, `AddJobSeh`) et
   après l'usine de personnages (`Spawn`), avec une ligne au journal (`... call scope(s) left open
-  by a caught exception`) ; les destructeurs ne descendent jamais sous zéro.
+  by a caught exception`) ; les destructeurs ne descendent jamais sous zéro. `CallScopeGuard`, déclaré
+  avant la `HostCallScope` d'un bloc, fait la même réparation à la sortie du bloc (atelier, escouades,
+  administration, répliques, fin des conversations, copie des jobs).
 - **`AnimReplayScope`** : même principe pour rejouer une animation de l'hôte.
 - **`HookView`** : publiée à chaque image par `EndFrame`, et lisible depuis n'importe quel thread
   du jeu (l'IA tourne sur d'autres threads). Elle contient :
@@ -272,7 +274,7 @@ Ordre dans `Tick()` (`main.cpp`) :
   - qu'un ordre concerne un personnage du joueur ;
   - qu'un déplacement d'objet part de ses personnages, d'un PNJ à terre ou d'un contenant qu'il a
     ouvert, et va vers ses personnages ou ce contenant ;
-  - qu'une réponse vise une conversation de ce joueur ;
+  - qu'une réponse nomme le perso de ce joueur qui est dans cette conversation ;
   - qu'une apparence est celle de son personnage.
 - **Contrôle central** (`common/src/session_authority.cpp`) : **chaque** message a sa règle dans la
   table `kMessageRules` (`protocol.cpp` : rôle requis, sujet à contrôler, intervalle minimal). Rôles :
@@ -284,7 +286,7 @@ Ordre dans `Tick()` (`main.cpp`) :
   C4062 en erreur : un nouveau message ne compile pas sans son nom, et `TestMessageRules` vérifie
   qu'il a sa règle. `Session::Authorize`
   l'applique **avant** le gestionnaire (`HostPacket`) ; le client filtre ce qu'il envoie avec la même
-  table (`ClientMaySend`). Sujet `OwnCharacter` (Command, ContainerOpen, Appearance, dépôt d'objet) :
+  table (`ClientMaySend`). Sujet `OwnCharacter` (Command, ContainerOpen, Appearance, ResearchRequest, MachineRequest, dépôt d'objet) :
   l'acteur nommé doit être un membre d'escouade attribué à ce joueur (`CheckActor` ; pour un dépôt
   depuis un sac à dos porté, son porteur : `DropActor` ; pour un dépôt depuis un coffre ouvert, un
   corps ou le sac d'un PNJ, le perso du joueur nommé dans `InvOp::toNetId`, qui doit se tenir à moins de
@@ -300,10 +302,10 @@ Ordre dans `Tick()` (`main.cpp`) :
 
 ## Messages (`common/include/kc/protocol.h`)
 
-Version du protocole : **33** (sacs à dos portés : `BagBind` ; sécurité des acteurs : `Result` ; file d'attente des arrivées : `JoinQueue` ; diplomatie : `Diplomacy` ; carte : `MapMarkers`, `MapPing`) au moment de la rédaction. Elle augmente à chaque changement de
+Version du protocole : **34** (atelier : `Research`, `ResearchRequest`, `Machines`, `MachineRequest` ; fenêtre Escouade : `SquadState`, `SquadRequest`, `JobState` ; 33 : sacs à dos portés : `BagBind` ; sécurité des acteurs : `Result` ; file d'attente des arrivées : `JoinQueue` ; diplomatie : `Diplomacy` ; carte : `MapMarkers`, `MapPing`) au moment de la rédaction. Elle augmente à chaque changement de
 format, et une version différente est refusée à la connexion.
 
-Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51, 56 à 67, 69, 73 à 79, 81, 84,
+Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51, 63 à 67, 69, 73 à 79, 81, 84,
 86 à 89, 91 et plus) sont refusés par `PeekType`, qui n'accepte que les messages de l'énumération `Msg`
 (`MsgName`). Chaque message a sa règle d'autorité (`kMessageRules`, voir « Contrôle central ») ; sens
 « H→C » : règle `HostOnly`, refusé par l'hôte s'il vient d'un client.
@@ -335,8 +337,8 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | 24 | AnimFrame | H→C (non fiable) | tout ce que joue chaque personnage proche (nom, temps, poids, vitesse, horloge) |
 | 25 | Ground | H→C | objet posé au sol ou ramassé |
 | 26 | Progress | H→C | compétences, ordres permanents, style de combat, argent de la faction |
-| 27 | Dialog | H→C | bulles (à tous) ; ouverture, texte et fermeture d'une conversation (au joueur concerné) |
-| 28 | DialogReply | C→H | réponse choisie |
+| 27 | Dialog | H→C | bulles (à tous) ; ouverture, texte (numéroté) et fermeture d'une conversation, « occupé » (au joueur concerné, avec son perso) |
+| 28 | DialogReply | C→H | réponse choisie ou « partir », avec l'acteur et la réplique répondue |
 | 29 | Squads | H→C | escouades : nom et membres dans l'ordre |
 | 30 | Appearance | ⇄ | apparence complète et nom d'un personnage (éditeur) |
 | 31 | EditCharacter | H→C | ouvre l'éditeur sur ton nouveau personnage |
@@ -359,6 +361,13 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | 53 | BuildState | H→C | lot E : avancement des chantiers suivis (terminé, en pause, en démontage), avec type et endroit |
 | 54 | BuildRemove | H→C | lot E : un bâtiment suivi a été détruit pour de bon chez l'hôte |
 | 55 | BuildAction | ⇄ | lot E : acheter / démonter (client : demande ; hôte : rejeu d'un achat chez tous) |
+| 56 | Research | H→C | atelier (protocole 34) : la recherche de la faction du joueur : technologies connues (plans lus compris), file dans l'ordre et avancement, niveau du banc |
+| 57 | ResearchRequest | C→H | atelier : mettre en file / retirer une technologie, apprendre un plan (acteur : le perso du joueur ; règle `OwnCharacter`) |
+| 58 | Machines | H→C | atelier : machines des joueurs près d'eux (et celles qu'un perso de joueur travaille) : opérateurs, marche / batterie, énergie, charge, barre de progression, production, ordres de fabrication et « répéter », netId de leur inventaire ; totaux d'énergie de leur ville |
+| 59 | MachineRequest | C→H | atelier : ajouter / retirer un ordre de fabrication, répéter, marche, batterie (acteur nommé ; règle `OwnCharacter`) |
+| 60 | SquadState | H→C | fenêtre Escouade : chaque escouade (handle de son `Platoon` chez l'hôte, nom, membres dans l'ordre : le premier est le chef) dans l'ordre de la faction, vides comprises ; nom et drapeau « à personne » (`kMemberShared`) de chaque perso de l'escouade ; à chaque changement et toutes les 10 s |
+| 61 | SquadRequest | C→H | une action de la fenêtre Escouade : déplacer son perso (dans une escouade, ou une nouvelle ; à un rang), créer, renommer, réordonner, retirer une escouade, renommer son perso ; nomme toujours un perso du joueur (`OwnCharacter`) |
+| 62 | JobState | H→C | listes de tâches des persos des joueurs avec la cible de chaque tâche (handle d'un perso, type et endroit d'un meuble, lieu) ; le client fait la même liste (retire, ajoute, réordonne) |
 | 68 | JobList | H→C | fix G5 : la liste de tâches (panneau Tâches) des persos des joueurs, telle que l'hôte l'a |
 | 70 | Stall | H→C | fix G6 : ton jeu va se figer (TP lointaine, zone à charger), la connexion attend jusqu'à 2 min |
 | 71 | Floors | H→C | fix G6 : groupe d'étage (`CharMovement::floorGroup`) des persos, à chaque changement et toutes les 5 s |
@@ -453,7 +462,38 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 - Le client prend pour chaque escouade de l'hôte l'escouade locale qui a déjà le plus de ses
   membres, ou en crée une (4 au plus par passe). Il y range les membres dans l'ordre, la renomme,
   puis montre une de ses escouades si la barre d'escouade est vide.
-- Le portrait déposé par un client devient `Command SquadMove`.
+- Le portrait déposé par un client devient `Command SquadMove` (anciens clients).
+
+### Fenêtre Escouade et réglages d'IA (`session_squads.cpp`, `plugin/squads.cpp`)
+- **Hôte** : `SendSquadState` lit les escouades de la faction (`Faction::activePlatoons`, ordre de la
+  fenêtre, escouade des morts exclue), leurs membres, le nom de chaque perso, et calcule les persos
+  « à personne » (`ComputeShared` : membres encore à l'hôte par défaut, jamais donnés à personne,
+  sauf l'avatar de l'hôte, celui qui porte son nom ou à défaut le premier). Envoyé quand il change,
+  et toutes les 10 s.
+- **Demandes** : `SquadRequest` passe par `Authorize` (acteur = un perso du joueur), puis attend le
+  tick suivant ; `HostSquadRequest` les exécute une par une dans l'ordre d'arrivée (la dernière
+  gagne), répond par `Result` et renvoie l'état tout de suite. Règles : déplacer seulement son perso
+  (sur un perso du même joueur dans la même escouade : échange, sinon insertion) ; renommer,
+  réordonner, retirer une escouade qui contient un de ses persos, ou vide (retirer : vide et pas la
+  dernière) ; renommer son perso.
+- **Client** (`ClientSquads`, deux fois par seconde) : les portraits déposés ou échangés deviennent
+  des demandes (hooks `addCharacterAt`, `swapCharacters`) ; le reste est vu en comparant nos
+  escouades à ce qu'on en avait fait au passage précédent (noms, ordre, escouades nouvelles ou
+  retirées, noms des persos) : un nom frappé est envoyé quand il ne change plus depuis 1 s, une
+  escouade vide nouvelle après 1,5 s, et reste affiché jusqu'à la réponse (au plus 5 s) ; puis l'état
+  de l'hôte (avec nos demandes en cours) est imposé : `ApplySquadViews` associe chaque escouade de
+  l'hôte à une des nôtres (même association qu'avant, même handle, celle qui a le plus de ses
+  membres, une vide à nous, sinon une nouvelle), y range les membres, la renomme, remet l'ordre et
+  retire les nôtres que l'hôte n'a plus (vides).
+- **Réglages d'IA** : bascules, style, allure et tâches permanentes passent par `Command` (`Task`,
+  `SetOrder` / panneau Tâches / `AddJob` permanent : `Session::IsSettingsCommand`). Un perso « à
+  personne » accepte ces commandes de tout joueur en jeu (`MaySetSettings`, contrôlé dans
+  `Authorize` et `ApplyCommand`, exécuté par `OrderShared`). `SetOrder` porte la valeur voulue
+  (`shift` = absolu, `add` = valeur).
+- **Tâches** (`JobState`) : l'hôte lit chaque tâche et sa cible (`Character::getPermajobData` :
+  `Tasker` +0x10 sujet, +0x58 lieu) ; le client retire ce qu'il a en trop, ajoute ce qui manque
+  (`Character::addJob`, sujet retrouvé par handle ou par type et endroit) et remet l'ordre
+  (`movePermajob`). Une tâche donnée ici il y a moins de 5 s est gardée en attendant l'hôte.
 
 ### Ordres (`RouteOrder`, `Session::ApplyCommand`, `KenshiWorld::Order`, `RunPlayerTask`)
 1. Le client note par quelle fonction de l'interface l'ordre est passé (`TaskVia`), le numéro de
@@ -470,13 +510,25 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 4. Chaque ordre est journalisé : `[nom] order "..." (n) on X -> ok/FAILED`, et le client reçoit un
    `Result` (fait, ou rejeté avec la raison).
 
-### Dialogues (`SendDialogs`, `KenshiWorld::Note*`)
+### Dialogues (`SendDialogs`, `KenshiWorld::Note*`, `SweepDialogs`, `ConversationAllowed`)
 - Les bulles de l'hôte partent à tout le monde.
 - Pour la conversation d'un personnage d'un autre joueur, les hooks de la fenêtre de dialogue de
   l'hôte produisent `Open`, `Text` (texte et réponses) et `Close`, envoyés **à ce joueur
-  seulement**. La fenêtre de l'hôte reste fermée.
-- Le client affiche une fenêtre de l'overlay ; la réponse revient en `DialogReply`, que l'hôte
-  rejoue avec `Dialogue::replyClicked`.
+  seulement**, avec le perso du joueur (`pcNetId`) ; chaque `Text` porte un numéro (`turn`). La
+  fenêtre de l'hôte reste fermée (donc pas de pause).
+- La session de l'hôte garde chaque conversation affichée chez un client (`hostDialogs_` : joueur,
+  perso, PNJ et son identité, réplique, réponses).
+- Le client affiche une fenêtre de l'overlay ; la réponse revient en `DialogReply` (conversation,
+  **acteur**, réplique, réponse ou `kDialogLeave`). Contrôle central : acteur à ce joueur, et c'est le
+  perso de cette conversation. Puis : réplique dépassée ignorée ; réponse rejouée avec
+  `Dialogue::replyClicked` ; « partir » : `Dialogue::endDialogue`.
+- Une conversation par PNJ : `TalkTargetBusy` refuse l'ordre « parler » (Result `Busy`) ; le crochet
+  de `startConversation` / `startPlayerConversation` refuse chez l'hôte qu'un PNJ en conversation
+  avec un client en commence une autre (événement `Busy` vers le joueur qui demandait).
+- Départ d'un joueur : ses conversations sont terminées dans le jeu (live tick). `SweepDialogs`
+  (0,5 s, thread du jeu) ferme celles qui sont finies sans fermeture (combat, TP, K.-O.).
+- Recrue : un PNJ suivi qui entre dans la faction du joueur devient perso d'escouade (`JoinSquad`) ;
+  il va au joueur qui lui parlait (`recentPartners_`, par identité).
 
 ### Inventaires (`SendInventories`, `ClientInventoryDiff`, `HostInvOp`)
 1. L'hôte envoie l'inventaire complet de chaque entité dont l'empreinte a changé ; celui d'un
@@ -562,7 +614,12 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
    l'image, partie visible, bornes du monde), la caméra (proj × vue d'Ogre), les cadres de portrait
    des persos des joueurs (cellules suivies par les hooks `PortraitMainCellView::update` / destructeur),
    les pings et les réglages ; elle passe à l'overlay.
-3. L'overlay (`MapOverlayDraw`, fil de rendu) dessine carte, minicarte, têtes, cadres et pings ;
+   Les rectangles de l'interface (image de la carte et sa partie visible, cadres, « couvert ») sont
+   lus par `ReadGui` en pixels de la vue MyGUI (`guiW` × `guiH`, `RenderManager::getViewSize`).
+3. L'overlay (`MapOverlayDraw`) relit ces rectangles dans sa propre image quand il tourne sur le fil
+   du jeu (`MapRefreshGui` : pas de retard derrière une fenêtre qu'on déplace), puis les convertit en
+   pixels du tampon d'affichage de cette image (`SceneToDisplay`, `io.DisplaySize`) ; il garde ce qu'il
+   a dessiné pour les tests (`MapOverlayLastDrawn`, commande `mapconv`). Il dessine carte, minicarte, têtes, cadres et pings ;
    la procédure de fenêtre (`MapOverlayMessage`) prend la molette et les boutons de la minicarte
    et les clics de ping ; le filtre DirectInput cache ces clics au jeu.
 4. Ping : `Session::PlaceMapPing` (hôte : ajouté et diffusé ; client : `MapPing` à l'hôte, qui
@@ -598,6 +655,34 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 4. Les points visés sont réimposés à chaque image, et les tourelles tournées avec `aimAt`.
 5. Le hook de `shoot` refuse chez les clients tout tir qui ne vient pas de KenshiCoop. Les
    dégâts des projectiles du client sont refusés comme tous les autres (`applyDamage`).
+### Atelier : recherche, établis, machines, énergie (`session_workshop.cpp`, `plugin/workshop.cpp`)
+1. Chaque seconde, l'hôte lit la recherche de la faction (`IWorld::ReadResearch` : technologies
+   connues, plans lus compris, file et avancement, niveau du banc) et envoie `Research` si elle a
+   changé, à tous ; en entier toutes les 15 s et à un joueur qui arrive.
+2. Chaque seconde, il lit les machines à moins de 1500 unités des persos de l'escouade
+   (`ReadMachines`) : celles des joueurs, et toute autre qu'un perso de joueur travaille (mine,
+   filon). Opérateurs (en netIds), marche, batterie, énergie, charge, barre de progression, quantité
+   produite, ordres de fabrication et « répéter » ; les totaux d'énergie de leur ville. `Machines`
+   part pour ce qui change, tout toutes les 5 s. L'inventaire d'une machine suivie devient une entité
+   (`Entity::machine`) envoyée à **tous** les joueurs, ouverte ou non ; elle est oubliée quand la
+   machine n'est plus suivie (sauf si un joueur l'a ouverte).
+3. Le client impose tout (`ApplyResearch`, `ApplyMachine`, `ApplyTownPower`), à l'arrivée puis
+   toutes les 3 s (recherche) / 2 s (machines). Son jeu ne recherche, ne paie, ne lit de plan, ne
+   prend ni ne retire d'ordre de fabrication et ne calcule plus l'énergie d'une ville dont il a reçu
+   les totaux (crochets de `plugin/workshop.cpp`, refusés hors `HostCallScope`).
+4. Les boutons de la fenêtre Recherche (ajouter, retirer), « apprendre » d'un plan, les boutons de la
+   fenêtre Fabrication (ajouter, retirer, répéter) et les interrupteurs du panneau d'un bâtiment
+   (marche, batterie) deviennent `ResearchRequest` / `MachineRequest`, avec l'acteur : le porteur du
+   plan, sinon le perso du joueur le plus proche de la machine. `Authorize` les admet (règle
+   `OwnCharacter`), l'hôte les exécute **l'une après l'autre** (`HostWorkshopRequests`) avec les
+   vérifications de son jeu (niveau du banc, artefacts payés une fois, technologie pas déjà en file
+   ni connue, plan dans l'inventaire de l'acteur, machine des joueurs, acteur à moins de 2500 unités)
+   et répond par `Result` (fait, ou refusé avec la raison en français). Deux joueurs sur le même
+   établi : le dernier ordre l'emporte, partout.
+5. Apprendre en travaillant : les gains sont calculés une fois chez l'hôte (`increaseStat` est refusé
+   chez le client) et arrivent par `Progress` ; le client annonce les passages de niveau de ses persos
+   (« * Nom : Science 5 -> 6 »).
+
 ### Bâtiments (lot E : `session_buildings.cpp`, `plugin/buildings.cpp`)
 1. Mode construction : `<PreviewGroup>::createBuildings` (`0x4D72A0`) appelle
    `RootObjectFactory::createBuilding` (`0x57CC70`) pour chaque bâtiment posé. Les hooks captent
@@ -709,6 +794,8 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | `plugin/overlay.cpp`, `overlay.h` | overlay ImGui : panneau d'état, fenêtre Multijoueur, console, conversation |
 | `common/include/kc/colors.h` | la couleur de chaque joueur (`kc::PlayerColor`) |
 | `common/src/protocol_map.cpp`, `src/session_map.cpp` | messages et session de la carte : flux de carte, pings |
+| `common/src/protocol_workshop.cpp`, `src/session_workshop.cpp` | atelier : messages et session de la recherche, des établis, des machines et de l'énergie ; noms français des compétences |
+| `plugin/workshop.cpp` | atelier : lecture et imposition de la recherche, des machines et de l'énergie ; crochets ; commandes de test |
 | `plugin/map.cpp`, `map.h`, `map_view.h` | carte : escouades hostiles (hôte), scène de chaque image, projections, hooks des portraits |
 | `plugin/overlay_map.cpp`, `overlay_map.h` | dessin de la carte, de la minicarte, des repères, des cadres et des pings ; souris |
 | `plugin/host_console.cpp`, `host_console.h` | console Windows hors du jeu |

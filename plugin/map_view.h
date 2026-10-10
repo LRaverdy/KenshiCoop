@@ -43,6 +43,14 @@ struct MapScene {
     bool covered = false;       // the management screen or the character editor is up: no 3D markers, no minimap
     uint8_t me = 0;             // the local player
     std::vector<std::pair<uint8_t, std::string>> players;   // legend: id, name
+    // Coordinates read from the game's GUI (the map image, its visible part, the portraits) are in
+    // MyGUI's view pixels, guiW x guiH. The overlay draws in its display pixels (the back buffer):
+    // SceneToDisplay converts them, every frame, with the sizes of that frame. They differ while the
+    // window is being resized, or when the game renders at another size than its GUI's view.
+    float guiW = 0, guiH = 0;   // 0: unknown (taken as the display's size)
+    bool inDisplay = false;     // the GUI coordinates below are already display pixels
+    double builtAt = 0;         // NowSeconds() of the read
+    std::string mapWhy;         // why the map screen's markers are not drawn (empty: the map shows)
     // the game's map screen, when it shows: the map image's rectangle (it pans and zooms with it),
     // the visible part of it, and the world rectangle the image covers
     bool mapOpen = false;
@@ -52,7 +60,9 @@ struct MapScene {
     float minX = 0, minZ = 0, sizeX = 0, sizeZ = 0;
     // the 3D camera: Ogre projection * view (row-major), and where it looks (x, z)
     bool camOk = false;
-    float viewProj[16] = {};
+    float viewProj[16] = {};   // world -> clip: Ogre's projection * view, Kenshi's moving render origin folded in
+    bool originOk = false;
+    kc::Vec3 origin;           // that origin (SceneManager::getRelativeOrigin), for the tests
     float camFwdX = 0, camFwdZ = -1;
     // the minimap's centre: the selected character, else the player's own
     bool centreOk = false;
@@ -60,14 +70,64 @@ struct MapScene {
     std::vector<SceneChar> chars;
     std::vector<SceneThreat> threats;
     std::vector<ScenePing> pings;
-    std::vector<SceneRect> portraits;   // squad bar frames of the players' own characters
+    std::vector<SceneRect> portraits;   // squad bar frames of the players' own characters (visible part, not covered)
+    // what the GUI rectangles were read from, so the overlay can read them again in its own frame
+    // (plugin/map.cpp, MapRefreshGui): squad bar cells with their owner, and the map's widgets
+    std::vector<std::pair<void*, uint8_t>> portraitCells;
     // settings
     bool showMap = true, showHeads = true, showPortraits = true, showMinimap = true, minimapRotate = false, showPings = true;
     int minimapCorner = 1;              // 0 top left, 1 top right, 2 bottom left, 3 bottom right
     float minimapZoom = 1500.0f;        // world units from the centre to the rim
 };
 
+// What the overlay drew in its last frame (display pixels), for the tests (mapconv).
+struct MapDrawn {
+    double at = -1e9;           // NowSeconds()
+    float w = 0, h = 0;         // display size of that frame
+    bool refreshed = false;     // GUI rectangles read again in that frame (same thread as the game's GUI)
+    int heads = 0;              // markers above heads
+    bool minimap = false;
+    bool mapOpen = false;
+    int mapMarkers = 0;         // characters, hostile squads and pings drawn on the map screen
+    float imgX = 0, imgY = 0, imgW = 0, imgH = 0;
+    std::vector<SceneRect> frames;
+};
+
 // ---- projections (pure: the overlay and the tests use the same ones)
+
+// MyGUI view pixels -> display pixels (the back buffer ImGui draws into: io.DisplaySize).
+// MyGUI renders its view stretched over the whole render target, so the factor is per axis.
+// An unknown or absurd view size gives 1:1 (MyGUI's view is normally the back buffer).
+struct GuiToDisplay {
+    float fx = 1, fy = 1;
+    bool known = false;         // both sizes were sane
+};
+inline GuiToDisplay MakeGuiToDisplay(float guiW, float guiH, float dispW, float dispH) {
+    GuiToDisplay g;
+    const auto sane = [](float v) { return std::isfinite(v) && v >= 16.0f && v <= 65536.0f; };
+    if (sane(guiW) && sane(guiH) && sane(dispW) && sane(dispH)) {
+        g.fx = dispW / guiW;
+        g.fy = dispH / guiH;
+        g.known = true;
+    }
+    return g;
+}
+inline SceneRect GuiRectToDisplay(const SceneRect& r, const GuiToDisplay& g) {
+    SceneRect o = r;
+    o.x = r.x * g.fx; o.y = r.y * g.fy;
+    o.w = r.w * g.fx; o.h = r.h * g.fy;
+    return o;
+}
+// Converts the scene's GUI rectangles to display pixels of this frame (once).
+inline void SceneToDisplay(MapScene& s, float dispW, float dispH) {
+    if (s.inDisplay) return;
+    const GuiToDisplay g = MakeGuiToDisplay(s.guiW, s.guiH, dispW, dispH);
+    s.imgX *= g.fx; s.imgW *= g.fx; s.imgY *= g.fy; s.imgH *= g.fy;
+    s.clipX0 *= g.fx; s.clipX1 *= g.fx; s.clipY0 *= g.fy; s.clipY1 *= g.fy;
+    for (auto& r : s.portraits) r = GuiRectToDisplay(r, g);
+    s.guiW = dispW; s.guiH = dispH;
+    s.inDisplay = true;
+}
 
 // The map screen: MapScreen::worldToMapCoords puts (x, z) at (x - minX) / sizeX * image width,
 // (z - minZ) / sizeZ * image height inside the map image; the image sits at imgX, imgY.

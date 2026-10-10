@@ -190,6 +190,37 @@ const FunctionSig kFunctions[FnCount] = {
     {"CharacterAnimal::dropItem", 0x5CA4A0, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48}},
     // ---- crash report (main loop's catch(...) funclets 0x1373AB0 / 0x1373A20 call it)
     {"writeCrashDump", 0x744D20, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x8D, 0xAC, 0x24}},
+    // ---- conversations (KenshiLib 1.0.65 0x6740B0 + 0x780, like setInDialog / replyClicked; body read: DT_END_DIALOG off the
+    //      main thread, else _hasEnded = 1 and setInDialog(false) at 0x674B46)
+    {"Dialogue::endDialogue", 0x674830, {0x40, 0x53, 0x56, 0x41, 0x54, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B, 0xF1}},
+    // ---- workshop (located by their strings: "Research complete: {1}", "Used artifacts for '{1}' research.",
+    //      "Failed to learn from blueprint...", "_removeCraft"; and by their callers, see docs/MOTEUR.md)
+    {"Research::startResearch", 0x8348A0, {0x4C, 0x8B, 0xDC, 0x56, 0x57, 0x41, 0x54, 0x48, 0x81, 0xEC, 0x90, 0x00}},
+    {"Research::stopResearch", 0x830DE0, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
+    {"Research::completeResearch", 0x834550, {0x48, 0x8B, 0xC4, 0x55, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48}},
+    {"Research::payCosts", 0x8343C0, {0x40, 0x55, 0x56, 0x57, 0x48, 0x81, 0xEC, 0x80, 0x02, 0x00, 0x00, 0x48}},
+    {"Research::progressResearch", 0x836B70, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x70, 0x48, 0x8B, 0xD9, 0x8B, 0x89, 0x74}},
+    {"Research::isInQueue", 0x82EAA0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
+    {"Item::learnResearch", 0x2B65D0, {0x40, 0x55, 0x48, 0x8D, 0x6C, 0x24, 0xA9, 0x48, 0x81, 0xEC, 0x00, 0x01}},
+    {"CraftingBuilding::_addCraft", 0x2B5CA0, {0x48, 0x8B, 0xC4, 0x53, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41}},
+    {"CraftingBuilding::_removeCraft", 0x2B6A20, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00}},
+    {"CraftingQueue::addCraftButton", 0x2B9770, {0x4C, 0x8B, 0xDC, 0x55, 0x56, 0x57, 0x48, 0x81, 0xEC, 0xB0, 0x00, 0x00}},
+    {"CraftingQueue::removeCraftButton", 0x2B9940, {0x4C, 0x8B, 0xDC, 0x57, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00, 0x48}},
+    {"CraftingQueue::craftRemoved", 0x2B9A50, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x83, 0x79}},
+    {"CraftingQueue::repeatButton", 0x2B5000, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x83, 0x79, 0x68, 0x00, 0x48, 0x8D}},
+    {"UseableStuff::stopOperating", 0x2ACA90, {0x48, 0x81, 0xC1, 0xD0, 0x03, 0x00, 0x00, 0xE9, 0x73, 0xBA, 0xD8, 0xFF}},
+    {"std::set<hand>::insert", 0xF7D90, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x48, 0x89}},
+    {"Town::updatePowerGrid", 0x92CD60, {0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x18, 0x55, 0x56, 0x57, 0x41, 0x55}},
+    {"UseableStuff::togglePowerButton", 0x297A60, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x80, 0xB9, 0xB5, 0x03, 0x00, 0x00}},
+    {"UseableStuff::toggleBattButton", 0x297AE0, {0x48, 0x83, 0xEC, 0x48, 0x80, 0xB9, 0xB4, 0x03, 0x00, 0x00, 0x00, 0x0F}},
+    {"ManagementScreen::refreshResearchList", 0x49A4C0, {0x48, 0x8B, 0xC4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
+    {"Research::checkRequirements", 0x832FA0, {0x40, 0x55, 0x56, 0x57, 0x48, 0x8D, 0x6C, 0x24, 0xB9, 0x48, 0x81, 0xEC}},
+    // ---- squad window
+    {"ActivePlatoon::swapCharacters", 0x792E60, {0x41, 0x3B, 0xD0, 0x0F, 0x84, 0x18, 0x01, 0x00, 0x00, 0x44, 0x89, 0x44}},
+    {"Faction::changePlatoonIndex", 0x7F3440, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x4C, 0x8B}},
+    {"Faction::destroyPlatoon", 0x6BA9D0, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x48, 0x89}},
+    {"ActivePlatoon::setName", 0x4BE480, {0x48, 0x8B, 0x49, 0x78, 0x49, 0x83, 0xC9, 0xFF, 0x45, 0x33, 0xC0, 0x48}},
+    {"Character::getPermajobData", 0x5C8F10, {0x48, 0x8B, 0x81, 0x50, 0x06, 0x00, 0x00, 0x48, 0x8B, 0x48, 0x20, 0xE9}},
 };
 
 namespace {
@@ -794,6 +825,31 @@ bool CallStartPlayerConversation(Character* npc, Character* pc) {
 }
 
 namespace {
+bool SendEventOverrideSeh(void* d, void* pc, int ev, bool& result) {
+    __try {
+        result = reinterpret_cast<bool (*)(void*, void*, int, bool)>(FnAddr(FnDialogueSendEventOverride))(d, pc, ev, true);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+bool EndDialogueSeh(void* d) {
+    __try {
+        reinterpret_cast<void (*)(void*, bool)>(FnAddr(FnDialogueEndDialogue))(d, true);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool CallDialogueEvent(Character* npc, Character* pc, int ev) {
+    void* d = CharacterDialogue(npc);
+    bool result = false;
+    return d && IsCharacter(pc) && ev > 0 && SendEventOverrideSeh(d, pc, ev, result) && result;
+}
+
+namespace {
 bool PickupItemSeh(void* pi, void* item) {
     __try { reinterpret_cast<void (*)(void*, void*)>(FnAddr(FnPickupItem))(pi, item); return true; }
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -817,7 +873,6 @@ bool FocusCamera(Character* c) {
 namespace {
 constexpr uintptr_t CH_platoon = 0x658, CH_squadMemberId = 0x418;   // ActivePlatoon*, int
 constexpr uintptr_t AP_platoon = 0x78;                               // ActivePlatoon -> Platoon (named RootObject)
-constexpr uintptr_t kFnSquadSetName = 0x4BE480;                       // ActivePlatoon::setName(const std::string&)
 using FnAddAt = void (*)(void*, void*, int);
 using FnNewSquad = void* (*)(void*);
 using FnSetName = void (*)(void*, const void*);
@@ -852,7 +907,7 @@ void SetSquadName(void* squad, const std::string& name) {
     if (!squad || (SquadName(squad, cur) && cur == name)) return;
     alignas(8) uint8_t gs[0x28];
     GameStringView(name, gs);
-    SetNameSeh(reinterpret_cast<void*>(Addr(kFnSquadSetName)), squad, gs);
+    SetNameSeh(FnAddr(FnSquadSetName), squad, gs);
 }
 
 void SquadMembers(void* squad, std::vector<Character*>& out) {
@@ -1367,7 +1422,7 @@ int SelectionRestoreFailures() { return g_selectionRestoreFailures; }
 
 namespace {
 constexpr uintptr_t CH_dialogue = 0x280;    // Dialogue*
-constexpr uintptr_t DL_shouting = 0x149, DL_me = 0x150, DL_target = 0x158;   // bool, Character*, hand
+constexpr uintptr_t DL_hasEnded = 0x148, DL_shouting = 0x149, DL_me = 0x150, DL_target = 0x158;   // bool, bool, Character*, hand
 constexpr uintptr_t DL_responses = 0x258, DL_npcReply = 0x278;               // vector<std::string>, std::string
 constexpr size_t kGameStringSize = 0x28;
 } // namespace
@@ -1399,6 +1454,15 @@ bool DialogueShouting(const void* dialogue) {
 
 void SetDialogueShouting(void* dialogue, bool shout) {
     if (dialogue) Wr(dialogue, DL_shouting, shout);
+}
+
+bool DialogueEnded(const void* dialogue) {
+    bool v = false;
+    return dialogue && Rd(dialogue, DL_hasEnded, v) && v;
+}
+
+bool CallEndDialogue(void* dialogue) {
+    return DialogueOwner(dialogue) && EndDialogueSeh(dialogue);
 }
 
 bool ReadDialogueWindowText(const void* dialogue, std::string& text, std::vector<std::string>& replies) {
@@ -3845,6 +3909,21 @@ void ItemTemplates(const std::string& part, std::vector<std::pair<std::string, s
     }
 }
 
+void GameDataOfType(int type, std::vector<void*>& out, size_t max) {
+    out.clear();
+    if (!g_gameDataBuilt) BuildGameDataIndex();
+    std::vector<std::pair<std::string, void*>> all;
+    for (const auto& [sid, gd] : g_gameDataBySid) {
+        int t = -1;
+        if (Rd(gd, off::GD_type, t) && t == type) all.emplace_back(sid, gd);
+    }
+    std::sort(all.begin(), all.end());   // the same order on every machine
+    for (auto& [sid, gd] : all) {
+        if (out.size() >= max) break;
+        out.push_back(gd);
+    }
+}
+
 void BuildingTemplates(const std::string& part, std::vector<std::pair<std::string, std::string>>& out, size_t max) {
     out.clear();
     if (!g_gameDataBuilt) BuildGameDataIndex();
@@ -4064,6 +4143,120 @@ bool MovePermajob(Character* c, int from, int to) {
 
 bool RemoveJobKind(Character* c, int task) {
     return HasOrdersReceiver(c) && task >= 0 && CallInt(FnAddr(FnCharRemoveJob), c, task);
+}
+
+// ---- squad window: the player faction's squads, their order, the squad window's own actions
+namespace {
+constexpr uintptr_t FA_platoonCount = 0x210, FA_platoonData = 0x218;   // Faction::activePlatoons (lektor<Platoon*>)
+constexpr uintptr_t PL_activePlatoon = 0x1D8, AP_me = 0x78, AP_count = 0x58;   // Platoon -> ActivePlatoon -> Platoon; members
+constexpr uintptr_t PI_deadSquad = 0x2C8;                               // PlayerInterface::deadPlayerSquad (hand)
+using FnPtrInt = void (*)(void*, void*, int);
+using FnPtrPtr = void (*)(void*, void*);
+using FnPtrOfInt = const void* (*)(const void*, int);
+using FnAddJobC = void (*)(void*, int, void*, bool, bool, const float*);
+bool PtrIntSeh(void* fn, void* a, void* b, int i) {
+    __try { reinterpret_cast<FnPtrInt>(fn)(a, b, i); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool PtrPtrSeh(void* fn, void* a, void* b) {
+    __try { reinterpret_cast<FnPtrPtr>(fn)(a, b); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool PtrOfIntSeh(void* fn, const void* self, int i, const void*& out) {
+    __try { out = reinterpret_cast<FnPtrOfInt>(fn)(self, i); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool AddJobSeh(void* fn, void* c, int task, void* subject, const float* loc) {
+    __try { reinterpret_cast<FnAddJobC>(fn)(c, task, subject, true, true, loc); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* PlayerFaction() {
+    PlayerInterface* pi = Player();
+    void* f = nullptr;
+    return pi && Rd(pi, PI_faction, f) ? f : nullptr;
+}
+void* PlatoonOf(void* squad) {
+    void* p = nullptr;
+    return squad && Rd(squad, AP_me, p) ? p : nullptr;
+}
+} // namespace
+
+void PlayerSquads(std::vector<void*>& out) {
+    out.clear();
+    void* f = PlayerFaction();
+    uint32_t n = 0;
+    void** data = nullptr;
+    if (!f || !Rd(f, FA_platoonCount, n) || !Rd(f, FA_platoonData, data) || !data || n > 4096) return;
+    kc::Handle dead;
+    PlayerInterface* pi = Player();
+    const bool haveDead = pi && ReadHandle(reinterpret_cast<const uint8_t*>(pi) + PI_deadSquad, dead) && dead.valid();
+    for (uint32_t i = 0; i < n; ++i) {
+        void* platoon = nullptr;
+        void* active = nullptr;
+        if (!Rd(data, i * sizeof(void*), platoon) || !platoon || !Rd(platoon, PL_activePlatoon, active) || !active) continue;
+        kc::Handle h;
+        if (haveDead && ObjectHandle(platoon, h) && h == dead) continue;
+        out.push_back(active);
+    }
+}
+
+bool SquadHandle(void* squad, kc::Handle& out) { return ObjectHandle(PlatoonOf(squad), out); }
+
+bool SwapInSquad(void* squad, int a, int b) {
+    const int n = SquadSize(squad);
+    return a != b && a >= 0 && b >= 0 && a < n && b < n && TwoIntsSeh(FnAddr(FnSquadSwapCharacters), squad, a, b);
+}
+
+int SquadFactionIndex(void* squad) {
+    void* f = PlayerFaction();
+    void* platoon = PlatoonOf(squad);
+    uint32_t n = 0;
+    void** data = nullptr;
+    if (!f || !platoon || !Rd(f, FA_platoonCount, n) || !Rd(f, FA_platoonData, data) || !data || n > 4096) return -1;
+    for (uint32_t i = 0; i < n; ++i) {
+        void* p = nullptr;
+        if (Rd(data, i * sizeof(void*), p) && p == platoon) return int(i);
+    }
+    return -1;
+}
+
+bool SetSquadOrder(void* squad, int factionIndex) {
+    void* f = PlayerFaction();
+    void* platoon = PlatoonOf(squad);
+    return f && platoon && factionIndex >= 0 && PtrIntSeh(FnAddr(FnChangePlatoonIndex), f, platoon, factionIndex);
+}
+
+bool DestroySquad(void* squad) {
+    void* f = PlayerFaction();
+    void* platoon = PlatoonOf(squad);
+    return f && platoon && SquadSize(squad) == 0 && PtrPtrSeh(FnAddr(FnDestroyPlatoon), f, platoon);
+}
+
+int SquadSize(void* squad) {
+    int n = 0;
+    return squad && Rd(squad, AP_count, n) && n >= 0 && n < 4096 ? n : 0;
+}
+
+bool SetCharacterName(Character* c, const std::string& name) {
+    std::string cur;
+    if (!IsCharacter(c) || name.empty()) return false;
+    if (CharacterName(c, cur) && cur == name) return true;
+    void* fn = VSlot(c, slot::RO_setName);
+    alignas(8) uint8_t gs[0x28];
+    GameStringView(name, gs);
+    return fn && CallStrBool(fn, c, gs, false);
+}
+
+bool PermajobTarget(Character* c, int slot, kc::Handle& subject, kc::Vec3& location) {
+    subject = kc::Handle{};
+    location = {};
+    if (slot < 0 || slot >= PermajobCount(c)) return false;
+    const void* t = nullptr;
+    if (!PtrOfIntSeh(FnAddr(FnCharGetPermajobData), c, slot, t) || !t) return false;
+    ReadHandle(static_cast<const uint8_t*>(t) + 0x10, subject);   // Tasker::subject
+    return RdVec(t, 0x58, location);                                // Tasker::location
+}
+
+bool AddPermajob(Character* c, int task, void* subject, const kc::Vec3& location) {
+    if (!HasOrdersReceiver(c) || task < 0) return false;
+    const float loc[3] = {location.x, location.y, location.z};
+    return AddJobSeh(FnAddr(FnCharAddJob), c, task, subject, loc);
 }
 
 } // namespace kenshi
