@@ -705,6 +705,7 @@ private:
         uint64_t npcIdentity = 0;
         std::string npcName;
         uint32_t turn = 0;
+        std::string text;
         std::vector<std::string> replies;
     };
     std::unordered_map<uint32_t, HostDialog> hostDialogs_;

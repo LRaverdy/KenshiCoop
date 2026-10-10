@@ -1633,7 +1633,11 @@ KenshiWorld::RemoteDialog& KenshiWorld::Remember(void* dialogue, kenshi::Charact
     }
     RemoteDialog& r = it->second;
     if (pc) { r.pc = pc; kenshi::GetHandle(pc, r.pcH); }
-    if (other) { r.other = other; kenshi::GetHandle(other, r.otherH); }
+    if (other) {
+        if (other != r.other) r.placed = false;   // someone else takes over (a leader): measured anew
+        r.other = other;
+        kenshi::GetHandle(other, r.otherH);
+    }
     return r;
 }
 
@@ -1743,8 +1747,11 @@ std::vector<KenshiWorld::RemoteDialogInfo> KenshiWorld::RemoteDialogList() {
 }
 
 // A conversation is over for good when its dialogue is gone or ended, a side is dead, knocked out or
-// down, the player's character is no longer another player's, or the two stand far apart (a
-// teleport): the game may not close the window itself then. Ended in the game, and closed.
+// down, the player's character is no longer another player's, or one of them jumped away (a
+// teleport: more than 20 m between two sweeps 0.5 s apart; nobody runs that fast) or they ended up
+// 100 m further apart than when it started: the game may not close the window itself then. Ended in
+// the game, and closed. (An absolute distance is wrong: a conversation may start from 40 m and more,
+// as the in-game test showed: every conversation the Chef Voleur started was closed at once.)
 void KenshiWorld::SweepDialogs() {
     const double now = NowSeconds();
     if (now < nextDialogSweep_) return;
@@ -1754,7 +1761,7 @@ void KenshiWorld::SweepDialogs() {
     auto v = View();
     {
         std::lock_guard<std::mutex> lk(dialogMutex_);
-        for (const auto& [dl, r] : remoteDialogs_) {
+        for (auto& [dl, r] : remoteDialogs_) {
             kenshi::Character* pc = r.pcH.valid() ? kenshi::Resolve(r.pcH) : nullptr;
             kenshi::Character* other = r.otherH.valid() ? kenshi::Resolve(r.otherH) : nullptr;
             const bool alive = kenshi::DialogueOwner(dl) != nullptr;
@@ -1767,7 +1774,18 @@ void KenshiWorld::SweepDialogs() {
                      kenshi::IsUnconscious(other))
                 why = "a character in it is down";
             else if (!v->squadForeign.count(pc)) why = "the character is no longer another player's";
-            else if (kenshi::GetPosition(pc, a) && kenshi::GetPosition(other, b) && Dist(a, b) > 400.0f) why = "they are far apart (teleport)";
+            else if (kenshi::GetPosition(pc, a) && kenshi::GetPosition(other, b)) {
+                if (!r.placed) {
+                    r.placed = true;
+                    r.startDist = Dist(a, b);
+                } else if (Dist(a, r.pcAt) > 200.0f || Dist(b, r.otherAt) > 200.0f) {
+                    why = "a character in it jumped away (teleport)";
+                } else if (Dist(a, b) > r.startDist + 1000.0f) {
+                    why = "they are far apart";
+                }
+                r.pcAt = a;
+                r.otherAt = b;
+            }
             if (why) gone.push_back({dl, r.id, r.pcH, r.otherH, alive && !kenshi::DialogueEnded(dl), why});
         }
     }

@@ -987,6 +987,10 @@ void Session::SendDialogs() {
             log_("[" + who + "] conversation with " + e.text);
         }
         if (d.kind == DialogKind::Text) {
+            // the game fills the window twice per line (the reply, then the answers): the same line
+            // again is not a new one (its turn would make the player's answer look stale)
+            if (info.turn && e.text == info.text && e.replies == info.replies) continue;
+            info.text = e.text;
             e.turn = ++info.turn;
             std::string r;
             for (size_t i = 0; i < e.replies.size(); ++i) r += (i ? " | " : "") + std::to_string(i + 1) + ". " + e.replies[i];
