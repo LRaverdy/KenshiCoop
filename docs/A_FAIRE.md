@@ -65,6 +65,12 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   « objet glissé au sol disparu » et « ramassage perdu ». À corriger : (1) tout geste qui ne peut
   pas partir chez l'hôte doit être refusé localement (rien ne bouge chez le client) ; (2) faire
   connaître ces inventaires à l'hôte (sacs, conteneurs de mods, persos de l'escouade du joueur).
+  **Pareil pour rob** (23:14-23:15, 9 fois) : « drop to the ground not sent: the host does not
+  know that inventory (580-gamedata.base) » : 580 = matériaux de construction, posés depuis
+  l'inventaire de **son propre perso**. Donc en vraie partie (Steam, rejoint après un plantage),
+  le client ne retrouve pas l'inventaire de son propre perso côté hôte pour un dépôt au sol, alors
+  que le test `grounddrop` (39/39, en local) passe : chercher pourquoi (identifiant du perso après
+  une reconnexion, perso créé par l'éditeur, handle différent par Steam).
 - **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
