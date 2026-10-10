@@ -34,6 +34,11 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   un vrai bâtiment fini pour le jeu (état, propriétaire ou faction), donc l'ordre « démanteler »
   n'est pas proposé ou est refusé (vérifier aussi la validation de la tâche démanteler dans
   `TaskTargetAllowed`).
+  **Cause trouvée** dans le journal de l'hôte : « refused: client task 16 (via 1) not run: task 16
+  (?) needs a task a client may send (unknown task id) » (7 fois). La tâche 16 (démanteler) n'est
+  pas dans la liste des tâches qu'un client peut envoyer (`kc::TaskTargetAllowed`, protocol.cpp) :
+  l'ajouter, cible = bâtiment du joueur (fini ou en chantier). Revoir toute la liste pour
+  d'autres tâches légitimes manquantes (réparer, etc.).
 - **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
