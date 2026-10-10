@@ -1585,6 +1585,21 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         HostCallScope scope;
         return kenshi::MoveInventoryItem(a, b, op, &e) ? "ok " + op.item.templateSid : "err " + e;
     }
+    if (cmd == "invsecs") {   // invsecs <who>: that character's items as "index:section" (spawned|squadN|key)
+        std::string who;
+        in >> who;
+        auto squad = SortedSquad(w);
+        kc::Handle h;
+        if (who == "spawned") h = lastSpawned_;
+        else if (who.rfind("squad", 0) == 0) { size_t i = std::stoul(who.substr(5)); if (i < squad.size()) h = squad[i]; }
+        else sscanf(who.c_str(), "%u:%u:%u:%u:%u", &h.type, &h.container, &h.containerSerial, &h.index, &h.serial);
+        kenshi::Character* c = w.Find(h);
+        std::vector<kc::ItemState> items;
+        if (!c || !kenshi::ReadInventory(c, items)) return "err bad character";
+        std::string r = "ok " + std::to_string(items.size());
+        for (size_t i = 0; i < items.size(); ++i) r += " " + std::to_string(i) + ":" + items[i].section;
+        return r;
+    }
     if (cmd == "invswap") {   // invswap <from> <to> <section>: what dropping <from>'s item there on <to>'s (occupied) slot does
         std::string fromS, toS, sec;
         in >> fromS >> toS >> sec;
@@ -1600,6 +1615,18 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         kenshi::Character* b = w.Find(pick(toS));
         std::vector<kc::ItemState> ia, ib;
         if (!a || !b || !kenshi::ReadInventory(a, ia) || !kenshi::ReadInventory(b, ib)) return "err bad characters";
+        // "any": the first worn section (not the bag) occupied on both sides
+        if (sec == "any") {
+            sec.clear();
+            for (const auto& x : ia)
+                if (x.section != "main" && std::any_of(ib.begin(), ib.end(), [&](const kc::ItemState& y) { return y.section == x.section; })) { sec = x.section; break; }
+            if (sec.empty()) {
+                std::string sa, sb;
+                for (const auto& x : ia) sa += " " + x.section;
+                for (const auto& x : ib) sb += " " + x.section;
+                return "err no common occupied section; from:" + sa + " | to:" + sb;
+            }
+        }
         auto inSec = [&](const std::vector<kc::ItemState>& v) { return std::find_if(v.begin(), v.end(), [&](const kc::ItemState& i) { return i.section == sec; }); };
         auto xa = inSec(ia);
         auto xb = inSec(ib);

@@ -1215,16 +1215,37 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
             if (d < best) { best = d; item = it; itemHandle = ih; }
         }
         if (!item) {
-            Log("client pick up: no %s within 40 units of the spot (%zu loose items around)", TemplateName(cmd.itemSid).c_str(), around.size());
+            // say why: nothing loose there at all, or that kind only farther away (positions drift)
+            std::vector<void*> wide;
+            kenshi::LooseItemsNear(cmd.pos, 400.0f, wide);
+            float nearest = 1e30f;
+            size_t sameKind = 0;
+            for (void* it : wide) {
+                kc::Handle ih;
+                kc::ItemState st;
+                kc::Vec3 p;
+                if (!kenshi::DescribeGroundItem(it, ih, st, p) || st.templateSid != cmd.itemSid) continue;
+                ++sameKind;
+                nearest = std::min(nearest, Dist(p, cmd.pos));
+            }
+            Log("client pick up FAILED: no %s (%s) within 40 units of (%.0f,%.0f,%.0f): %zu loose items within 60, %zu of that kind within 400 (nearest %.0f)",
+                TemplateName(cmd.itemSid).c_str(), cmd.itemSid.c_str(), cmd.pos.x, cmd.pos.y, cmd.pos.z, around.size(), sameKind,
+                sameKind ? nearest : -1.0f);
             return false;
         }
+        kc::Vec3 cp;
+        const float startDist = kenshi::GetPosition(c, cp) ? Dist(cp, cmd.pos) : -1.0f;
         // the game's own order, as when the host clicks: it walks there and takes it, stealing it
-        // (with the guards' reaction) when it is someone's. Our own walk-and-take stays as fallback.
+        // (with the guards' reaction) when it is someone's. Watched: if the character does not move
+        // off within a few seconds, our own walk-and-take takes over.
+        const double now = NowSeconds();
         if (kenshi::OrderPickupItem(c, item)) {
-            Log("client pick up: the game's pick up order given (%.0f units from the client's spot)", best);
+            Log("client pick up: the game's pick up order given (item %.0f units from the client's spot, character %.0f units away)", best, startDist);
+            pickups_[h] = {itemHandle, now + 30.0, true, now + 4.0, startDist};
             return true;
         }
-        pickups_[h] = {itemHandle, NowSeconds() + 30.0};
+        Log("client pick up: the game's pick up order could not be given (no player interface, or the item is not loose); walking the character there");
+        pickups_[h] = {itemHandle, now + 30.0};
         return CallPlayerMoveOrder(c, cmd.pos);
     }
     case kc::CommandKind::SquadMove: {
@@ -1412,15 +1433,33 @@ void KenshiWorld::UpdatePendingPickups() {
         kc::Vec3 cp, ip;
         kc::Handle ih;
         kc::ItemState st;
-        if (!c || !item || !kenshi::ItemLoose(item) || now > it->second.until || !kenshi::DescribeGroundItem(item, ih, st, ip)) {
+        PendingPickup& p = it->second;
+        if (!c || !item || !kenshi::ItemLoose(item) || now > p.until || !kenshi::DescribeGroundItem(item, ih, st, ip)) {
+            if (!c) Log("client pick up: the character is gone, pick up abandoned");
+            else if (!item || !kenshi::ItemLoose(item)) Log("client pick up: the item left the ground (taken)");
+            else if (now > p.until) {
+                const float d = kenshi::GetPosition(c, cp) ? Dist(cp, ip) : -1.0f;
+                Log("client pick up FAILED: still %.0f units from the item after 30 s (game order=%d), given up", d, int(p.gameOrder));
+            }
             it = pickups_.erase(it);
             continue;
         }
-        if (kenshi::GetPosition(c, cp) && Dist(cp, ip) < kReach) {
+        const bool hasPos = kenshi::GetPosition(c, cp);
+        if (hasPos && Dist(cp, ip) < kReach) {
             HostCallScope scope;
-            kenshi::CallGiveItem(c, item);
+            const bool ok = kenshi::CallGiveItem(c, item);
+            Log("client pick up: character next to the item, %s", ok ? "taken" : "giveItem FAILED (inventory full?)");
             it = pickups_.erase(it);
             continue;
+        }
+        if (p.gameOrder && p.checkAt > 0 && now > p.checkAt) {
+            p.checkAt = 0;
+            const float d = hasPos ? Dist(cp, ip) : -1.0f;
+            if (d >= 0 && d > p.startDist - 3.0f) {   // the game's order did not get it moving
+                Log("client pick up: the game's order did not move the character (%.0f -> %.0f units), walking it there", p.startDist, d);
+                HostCallScope scope;
+                if (!CallPlayerMoveOrder(c, ip)) Log("client pick up FAILED: move order refused too");
+            }
         }
         ++it;
     }

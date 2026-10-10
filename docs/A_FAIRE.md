@@ -100,6 +100,8 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   pendant que son ragdoll démarrait, d'où la projection. Correctif : le ragdoll est retiré juste avant le
   ramassage, le succès est vérifié (sinon nouvel essai chaque seconde) ; à la pose, le corps passe en
   ragdoll tout de suite et on ne le touche plus pendant 2 s.
+  Essai du 10/10 : « corps None » chez le client venait du test (`where npc` utilise le dernier PNJ créé, qui n'existe que chez l'hôte) ; il lit maintenant la position par la clé du PNJ.
+- **Test `lootswap`** (10/10) : aucun emplacement commun occupé (le PNJ copié et le perso du client ne portaient rien au même endroit). Le test habille maintenant l'un ou l'autre avec les vêtements des autres membres de l'escouade de l'hôte, puis échange le premier emplacement commun (`invswap ... any`, nouvelle commande `invsecs`). Il vérifiait aussi les refus sur des caractères et non des lignes du journal : corrigé.
 - **Un PNJ invisible en combat chez 2 clients sur 3** (10/10 vers 00:38). Les rapports des clients le
   confirment : chez nass4, 1 PNJ de l'hôte « pas encore là » ; chez Geoffrey, 31 en permanence ; rob, 0.
   Ces PNJ n'existent pas dans le jeu du client, et sa recréation (modèle + faction) échoue. Voir pourquoi
@@ -151,3 +153,10 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   L'hôte cherche maintenant tout objet hors inventaire, à 40 unités, et lance l'ordre « ramasser » du
   jeu (le perso y va, le vol est traité comme pour l'hôte). Le ramassage est aussi signalé aux
   clients pour ces objets-là.
+  **Essai en jeu du 10/10 (`groundpick`) : 0/3 objets pris.** Le test ne voyait pas les refus (il lisait
+  les 300 derniers *caractères* du journal, pas les lignes) : corrigé, il recopie les lignes « pick up »
+  de l'hôte. L'hôte écrit maintenant la raison de chaque échec (objet introuvable : objets autour, même
+  type plus loin et à quelle distance ; ordre du jeu impossible ; perso resté sur place ; `giveItem`
+  refusé ; abandon après 30 s). Si l'ordre « ramasser » du jeu ne fait pas bouger le perso en 4 s,
+  l'hôte l'y envoie lui-même et le lui fait prendre à 15 unités. À relancer : `coop_test.py groundpick`.
+  **Essai en jeu du 10/10 (`groundpick`) : 0/3 objets pris.** Le test ne voyait pas les refus (il lisait les 300 derniers *caractères* du journal, pas les lignes) : corrigé, il recopie maintenant les lignes « pick up » de l'hôte. L'hôte écrit désormais la raison de chaque échec (objet introuvable : combien d'objets autour, du même type plus loin et à quelle distance ; ordre du jeu impossible ; perso resté sur place ; `giveItem` refusé ; abandon après 30 s). Si l'ordre « ramasser » du jeu ne fait pas bouger le perso en 4 s, l'hôte l'y envoie lui-même et le lui fait prendre à 15 unités. À relancer : `coop_test.py groundpick`.
