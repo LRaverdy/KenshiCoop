@@ -146,7 +146,8 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
   seulement (fenêtre du mod, bouton « Partir »), qui choisit ses réponses ; le jeu ne se met pas en
   pause pour une conversation. Un PNJ ne parle qu'à un joueur à la fois (« occupé »).
 - **Heure, vitesse et pause** : celles de l'hôte, imposées en permanence. Les clients ne peuvent
-  pas les changer.
+  pas les changer ; un client figé un moment (une zone qui charge) est remis à l'heure de l'hôte
+  d'un coup.
 - **Météo** (pluie, tempêtes, éclairs, nuages de gaz…) : celle de l'hôte, région par région.
 - **Inventaires et équipement** de tous les personnages proches.
 - **Fouille** : clic droit « Fouiller » sur un personnage K.-O. ou mort, ou sur un **coffre, une

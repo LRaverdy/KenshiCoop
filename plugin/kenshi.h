@@ -264,6 +264,8 @@ enum Fn : int {
     FnDestroyPlatoon,           // void Faction::destroyPlatoon(Platoon*)   (the squad window's cross on an empty squad)
     FnSquadSetName,             // void ActivePlatoon::setName(const std::string&)   (writes Platoon::name)
     FnCharGetPermajobData,      // const Tasker* Character::getPermajobData(int slot) const   (a job's subject hand +0x10, location +0x58)
+    // ---- game clock (ClockSync snaps)
+    FnClockSetHourOfDay,        // void GameClock::setHourOfDay(float hours 0..24)   (our name: the object at rva::GameClockOwner; a new game calls it with 0 then sets day 1)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -287,6 +289,10 @@ inline constexpr uintptr_t GD_type = 0x50;             // GameData: itemType
 inline constexpr uintptr_t GD_stringID = 0x58;         // GameData: std::string
 inline constexpr uintptr_t FAC_data = 0x240;           // Faction: GameData*
 inline constexpr uintptr_t Clock_hours = 0xA0;         // double, in the object at rva::GameClockOwner
+// What +0xA0 is recomputed from every frame (0x66FF60): day * 24 + the sky clock's hour of day.
+inline constexpr uintptr_t Clock_day = 0x08;           // int32: whole days (a new game starts on day 1)
+inline constexpr uintptr_t Clock_sky = 0x20;           // pointer: the sky clock
+inline constexpr uintptr_t Sky_hourOfDay = 0x1C;       // float 0..24 in the sky clock
 
 // PlayerInterface
 inline constexpr uintptr_t PI_selectedCharacters = 0x208;  // boost::unordered_set<hand>
@@ -599,6 +605,8 @@ void SetUnconscious(Character* c, bool on);   // the medical state only (no fall
 bool IsRagdoll(Character* c);   // the body is physically on the ground (or carried)
 
 bool GetGameHours(double& out);
+// Set the game clock (total hours) the game's own way: day, then setHourOfDay. Game thread only.
+bool SetGameHours(double hours);
 // Save management (deferred operations, executed by the game a frame later).
 bool SaveManagerBusy();                                     // a save/load is pending or running
 bool ShowLoadWindow();                                      // opens the game's "Load" window

@@ -184,7 +184,10 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
 - Un personnage dans un lit ou une cage (le sommeil est un K.-O.) reçoit seulement l'état
   inconscient chez le client, jamais la chute qui le sortirait de là ; idem s'il est porté.
 - **Le joueur** voit chaque blessure de membre, saignement, faim, K.-O. et mort comme chez l'hôte.
-  Un personnage tombe là où celui de l'hôte est tombé.
+  Un personnage tombe là où celui de l'hôte est tombé. Un corps couché trop loin de celui de
+  l'hôte est relevé et recouché (3 fois au plus) : il est remis debout d'autant en deçà du corps de
+  l'hôte que sa chute précédente l'avait porté loin de ses pieds (sinon il retombait chaque fois au
+  même écart, 7 à 12 unités pour un humain, ~75 pour une grosse bête). Non revérifié en jeu.
 - **Fonctionnement** :
   - les valeurs de santé partent 5 fois par seconde ;
   - le client les réimpose toutes les 0,25 s, parce que sa simulation locale (saignement,
@@ -483,6 +486,10 @@ la fenêtre du client.
   - Une pile lâchée sur une pile du même objet s'y ajoute chez l'hôte aussi (au lieu d'être posée
     ailleurs, ce qui faisait « sauter » l'inventaire du client).
   - Expérience `lootswap`, tests `TestInventorySwaps`.
+  - Chez le client, l'inventaire d'une copie est refait à l'identique de celui de l'hôte, même
+    dans une section d'équipement que son jeu tient désactivée (bottes, chemise d'une doublure de
+    PNJ, qui finissaient dans le sac : stress à 4 joueurs du 10/10). Un objet qui reste ailleurs
+    est nommé au journal (`inventory of … not as on the host`). Non revérifié en jeu.
 - **Limite** : un objet tenu à la souris pendant un glisser-déposer laisse 10 s avant le retour à
   l'état de l'hôte.
 
@@ -515,8 +522,11 @@ la fenêtre du client.
   exactement où l'hôte s'est arrêté, puis se met en pause : le jeu n'enregistre aucune position
   pendant la pause.
 - Vérifié par la suite (« pause en pleine course », 0,000 à 0,024 d'écart).
-- L'heure du client est recalée sur celle de l'hôte : écart de plus de 0,003 h, il tourne 2 à 5 %
-  plus vite ou plus lentement jusqu'à la rattraper (`ClockSync`). Non vérifié en jeu.
+- L'heure du client est recalée sur celle de l'hôte (`ClockSync`) : écart de plus de 0,002 h, il
+  tourne 3 à 10 % plus vite ou plus lentement jusqu'à la rattraper ; plus de 0,008 h (un client
+  figé par une zone qui charge), ou plus de 0,002 h pendant une pause de l'hôte, l'heure est
+  recalée d'un coup. Le stress à 4 joueurs du 10/10 finissait à 0,16 h d'écart avec l'ancien
+  rattrapage seul ; le recalage n'est pas encore vérifié en jeu.
 
 ### Météo et effets météo ✅
 - **Le joueur** a la même météo par région, ainsi que les mêmes éclairs, rayons, tempêtes et

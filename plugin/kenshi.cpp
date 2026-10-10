@@ -222,6 +222,8 @@ const FunctionSig kFunctions[FnCount] = {
     {"Faction::destroyPlatoon", 0x6BA9D0, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x48, 0x89}},
     {"ActivePlatoon::setName", 0x4BE480, {0x48, 0x8B, 0x49, 0x78, 0x49, 0x83, 0xC9, 0xFF, 0x45, 0x33, 0xC0, 0x48}},
     {"Character::getPermajobData", 0x5C8F10, {0x48, 0x8B, 0x81, 0x50, 0x06, 0x00, 0x00, 0x48, 0x8B, 0x48, 0x20, 0xE9}},
+    // ---- game clock
+    {"GameClock::setHourOfDay", 0x66CF30, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x0F, 0x2E, 0x0D, 0x8F, 0xB4, 0x01}},
 };
 
 namespace {
@@ -1580,6 +1582,24 @@ bool GetGameHours(double& out) {
     return Rd(clock, off::Clock_hours, out) && std::isfinite(out) && out >= 0;
 }
 
+// The hours (+0xA0) are recomputed every frame from the day (+0x08) and the sky clock's hour of day,
+// so those two are what is set: the day as a new game sets it, the hour through the game's setter
+// (it updates the sky and the hour/minute fields, then the hours themselves).
+bool SetGameHours(double hours) {
+    void* clock = nullptr;
+    void* sky = nullptr;
+    if (!std::isfinite(hours) || hours < 0 || hours > 24.0 * 1e6) return false;
+    if (!Rd(reinterpret_cast<void*>(Addr(rva::GameClockOwner)), 0, clock) || !clock || !Rd(clock, off::Clock_sky, sky) || !sky) return false;
+    int32_t day = int32_t(std::floor(hours / 24.0));
+    float hourOfDay = float(hours - 24.0 * day);
+    if (hourOfDay >= 24.0f) { ++day; hourOfDay = 0.0f; }   // rounding to float
+    if (hourOfDay < 0.0f) hourOfDay = 0.0f;
+    if (!Wr(clock, off::Clock_day, day)) return false;
+    if (!CallMedFloat(FnAddr(FnClockSetHourOfDay), clock, hourOfDay)) return false;
+    double now = 0;
+    return GetGameHours(now) && std::fabs(now - hours) < 0.01;
+}
+
 
 namespace {
 void* SaveManagerInstance() { return CallNoArgPtr(FnAddr(FnSaveManagerGet)); }
@@ -2204,26 +2224,40 @@ bool CallSectionValidPos(void* sec, void* item, int& x, int& y) {
 
 // gameAddFallback: when the section has no free cell, let the game's Inventory::addItem find a place.
 // Never for an item that must survive a failure: addItem may destroy what it cannot store.
-bool PlaceItem(void* inv, void* item, const std::string& section, int x, int y, int qty, bool gameAddFallback = true) {
+// hostLayout: the item is where the host's game has it (a client rebuilding an inventory): a section
+// our game holds disabled takes it all the same. canItemGoHere refuses anything in a disabled
+// section (InventorySection +0xD0, its first test), so worn boots and shirts of NPC stand-ins went
+// into the bag on clients (stress4: "aucun inventaire different", 1:44:... with 2306 boots at
+// main 2,0 and 2214 shirt at main 0,2 where the host has them worn). A player's own move (the host
+// replaying it) still obeys the section: hostLayout false.
+bool PlaceItem(void* inv, void* item, const std::string& section, int x, int y, int qty, bool gameAddFallback = true,
+               bool hostLayout = false) {
     if (void* sec = FindSection(inv, section)) {
         int w = 0, h = 0, iw = 1, ih = 1;
         uint8_t enabled = 1;
         Rd(sec, SEC_width, w); Rd(sec, SEC_height, h); Rd(item, IT_width, iw); Rd(item, IT_height, ih); Rd(sec, SEC_enabled, enabled);
+        const uint8_t one = 1;
+        const bool unlock = !enabled && hostLayout;   // enabled for the checks too, put back right after
+        auto canGo = [&](int px, int py) {
+            if (unlock) Wr(sec, SEC_enabled, one);
+            const bool ok = CallSectionCanGo(sec, item, px, py);
+            if (unlock) Wr(sec, SEC_enabled, enabled);
+            return ok;
+        };
         auto tryAt = [&](int px, int py) {
             if (px < 0 || py < 0 || px + iw > w || py + ih > h) return false;
-            const uint8_t one = 1;
             if (!enabled) Wr(sec, SEC_enabled, one);
             CallSecAddAt(VSlot(sec, SECV_addAt), sec, item, px, py);
             if (!enabled) Wr(sec, SEC_enabled, enabled);
             uint8_t inside = 0;
             return Rd(item, IT_inInventory, inside) && inside != 0;
         };
-        if (CallSectionCanGo(sec, item, x, y) && tryAt(x, y)) return true;
+        if (canGo(x, y) && tryAt(x, y)) return true;
         // somewhere free in that section (the game's own "add" would equip a weapon or armour back
         // into a free slot: dragging a worn item into the bag would then snap it back on)
         for (int py = 0; py + ih <= h && py < 64; ++py)
             for (int px = 0; px + iw <= w && px < 64; ++px)
-                if (CallSectionCanGo(sec, item, px, py) && tryAt(px, py)) return true;
+                if (canGo(px, py) && tryAt(px, py)) return true;
     }
     return gameAddFallback && CallAddItem(VSlot(inv, INVV_addItem), inv, item, qty);
 }
@@ -2305,7 +2339,7 @@ bool RebuildInventory(void* c, const std::vector<kc::ItemState>& items, std::str
         std::string why;
         void* item = CreateItemFromState(s, &why);
         if (!item) { ok = false; if (err) *err = why; continue; }
-        if (!PlaceItem(inv, item, s.section, s.x, s.y, s.quantity)) { ok = false; if (err) *err = "cannot place " + s.templateSid; }
+        if (!PlaceItem(inv, item, s.section, s.x, s.y, s.quantity, true, true)) { ok = false; if (err) *err = "cannot place " + s.templateSid; }
     }
     return ok;
 }

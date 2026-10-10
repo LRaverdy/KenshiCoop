@@ -4,6 +4,23 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
 
 ## 10 octobre 2026
 
+- **Persos des joueurs en double chez les clients déjà là** (stress à 4 joueurs du 10/10, trouvé en
+  relisant les relevés, pas corrigé). Chez le client 1, 4 copies en trop de Joueur3 et Joueur4 dans
+  son escouade dès le 1er relevé, 12 à la fin ; chez le client 2, 2 puis 4 copies de Joueur4 ; le
+  client 3 (arrivé le dernier) n'en a aucune. Elles apparaissent à chaque « new world (generation
+  N): every per-world state reset » de ces clients (fenêtres redimensionnées, zone qui charge) : le
+  jeu ne tournait pas pendant quelques images et l'ensemble des persos de l'escouade a changé (les
+  copies des autres joueurs en font partie), donc `KenshiWorld::BeginFrame` compte un nouveau monde,
+  vide `alias_`, les copies déjà là ne sont plus reconnues (« 2 host squad members are missing in
+  the local world ») et le client en recrée. Piste : ne compter que les persos du joueur lui-même
+  (pas les copies) pour reconnaître un nouveau monde, ou un vrai compteur de chargements. Nouvelle
+  vérification dans `stress4` : « aucun perso de joueur en trop chez un client ».
+- **Hauteur des persos dans les régions lointaines** (stress à 4 joueurs du 10/10) : à l'arrêt, des
+  persos de joueurs (0,1 à 4,5 unités) et des bêtes (7 à 14) n'ont pas la même hauteur chez l'hôte
+  et chez le client, avec 0,000 au sol ; la copie du client tient exactement la position de l'hôte.
+  Hypothèse : l'hôte n'a pas de caméra dans ces régions et n'y a pas le même sol. Le test tolère
+  15 en hauteur ; à confirmer (hauteur du terrain sous le perso chez l'un et l'autre).
+
 - **Un join qui garde l'hôte en pause** (fix G6) : vérifié. Un joueur qui rejoint est retiré après
   `loadTimeout` (300 s). Si son jeu plante pendant le chargement, ENet le coupe en 15 s et l'hôte
   repart. Le journal dit maintenant « X left while joining (connection lost: their game quit or

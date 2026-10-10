@@ -202,6 +202,7 @@ Les signatures sont celles du commentaire du code.
 | escouade | `FnDestroyPlatoon` | `Faction::destroyPlatoon(Platoon*)` | `0x6BA9D0` | — | [D, partiel] retire l'escouade de la faction ; `SquadManagementScreen::removeSquad` (`0x491D20`) ne l'appelle que pour une escouade vide et pas la dernière (sinon une boîte de message) |
 | escouade | `FnSquadSetName` | `ActivePlatoon::setName(const std::string&)` | `0x4BE480` | — | [D] affecte `Platoon` (+0x78) +0x18 ; sans appelant direct dans 1.0.68 : la case de nom de la fenêtre (`onNameChanged` `0x48DF00`) écrit le même champ à chaque frappe |
 | tâches | `FnCharGetPermajobData` | `Character::getPermajobData(int slot) const` | `0x5C8F10` | — | [D] `Character::ai` (+0x650) → `orders` (+0x20) → `OrdersReceiver::getPermajobData` : le `Tasker*` de la tâche (sujet `hand` +0x10, lieu +0x58) |
+| heure | `FnClockSetHourOfDay` | `GameClock::setHourOfDay(float)` (notre nom) | `0x66CF30` | — | [D] l'objet de `0x21303D0` : écrit l'heure du jour (0..24) dans l'horloge du ciel (+0x20 → +0x1C), appelle sa vt 0x8 (mise à jour, 0 s), recalcule les heures (+0xA0 = jour × 24 + heure du jour) et heure / minute (+0x0 / +0x4). Une nouvelle partie l'appelle avec 0 puis écrit le jour 1 (+0x8, `0x36CFB4`) ; le mod fait de même pour recaler l'horloge d'un client (`kenshi::SetGameHours`) |
 
 | validité | `FnTerrainHeight` | `UtilityT::getTerrainHeight(float x, float z)` | `0x9B3710` | — | le sol sous l'eau éventuelle ; -99 où aucun terrain n'est connu (saut vers `getTerrainHeightFast(x, z, nullptr)` `0x9B32F0`) |
 | validité | `FnTerrainWithWaterHeight` | `UtilityT::getTerrainWithWaterHeight(float x, float z)` | `0x9B3720` | — | max(sol, 100) : la hauteur que `createBuildings` retire à la position (appel vérifié à `0x4D7512`) |
@@ -494,6 +495,11 @@ Emplacements de vtable :
 - `InventorySection` : +0x30 largeur, +0x34 hauteur, +0x40 objets (`vector` de
   `{Item*, u16 x, y, w, h}`, 0x10 octets chacun), +0xD0 activée. vt 0x10 `addItem`, vt 0x18
   `_addItem(item, x, y)`.
+  - `canItemGoHere` (`0x74BE40`) répond non tout de suite pour une section désactivée (+0xD0 = 0,
+    son premier test), puis vérifie le type d'objet et la taille. Chez un client, des sections
+    d'équipement de doublures sont désactivées (bottes, chemise) alors que le perso de l'hôte les
+    porte : le mod active la section le temps de vérifier et de poser (`PlaceItem`, mode
+    `hostLayout`).
 - `Item` : +0xC0 fabricant, +0xC8 matériau, +0xD8 dans un inventaire, +0xDC position, +0xE8
   section, +0x118 charges, +0x11C qualité, +0x129 équipé, +0x12C quantité, +0x130 / +0x134
   largeur / hauteur, +0x188 groupe d'objets.
@@ -909,10 +915,16 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
   entre les dernières poses.
 - Une téléportation ne déplace pas un ragdoll actif.
 - Reconstruire un ragdoll le lance en l'air.
+- Un corps qui s'effondre ne reste pas où étaient ses pieds : sa position (le bassin) finit à une
+  distance à peu près fixe, d'un essai à l'autre, de l'endroit où il était debout (7 à 12 unités
+  pour un humain, 47 à 79 pour une chauve-souris terrestre ou une araignée ; stress4).
 
 **Heure**
-- L'heure du jeu (`0x21303D0`, +0xA0) est recalculée à chaque image depuis un compteur interne.
-  L'écrire n'a aucun effet durable.
+- L'heure du jeu (`0x21303D0`, +0xA0) est recalculée à chaque image (`0x66FF60`) : jour (+0x8,
+  entier) × 24 + heure du jour de l'horloge du ciel (+0x20 → +0x1C, float). Écrire +0xA0 n'a
+  aucun effet durable ; écrire le jour puis appeler `0x66CF30` (heure du jour) en a un (c'est ce
+  que fait une nouvelle partie). Au chargement (`0x66DB50`), jour, heure et minute viennent de la
+  sauvegarde.
 
 **Santé**
 - `MedicalSystem` écrit lui-même ses drapeaux « mort » et « inconscient » avant d'appeler
