@@ -138,8 +138,7 @@ struct FakeWorld : IWorld {
     }
     void PlayerCharacters(std::vector<Handle>& out) override { for (auto& [s, c] : chars) if (c.squad) out.push_back(Hc(s)); }
     void NearbyCharacters(const std::vector<Vec3>& centers, float radius, std::vector<Handle>& out) override {
-        for (auto& [s, c] : chars) {
-            if (c.squad) continue;
+        for (auto& [s, c] : chars) {   // the squad too, as the game's active characters (KenshiWorld)
             if (radius <= 0) { out.push_back(Hc(s)); continue; }   // 0 = every active character
             for (auto& ctr : centers) if (Dist(c.pos, ctr) <= radius) { out.push_back(Hc(s)); break; }
         }
@@ -2612,6 +2611,11 @@ static void TestMap() {
     });
     const MapMarkersMsg& m = s2.mapMarkers();
     CHECK(m.chars.size() == 3 && m.players.size() == 3);
+    {   // each squad character once (the nearby-characters list also holds the squad: it must not leak in)
+        std::set<uint32_t> ids;
+        for (const auto& c : host.mapMarkers().chars) CHECK(ids.insert(c.netId).second);
+        CHECK(host.mapMarkers().chars.size() == 3);
+    }
     CHECK(s2.mapMarkersAge() < 2.0);
     CHECK(m == host.mapMarkers() || m.chars.size() == host.mapMarkers().chars.size());
     if (m.chars.size() == 3) {

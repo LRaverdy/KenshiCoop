@@ -124,6 +124,8 @@ struct Exports {
     MousePosFn mousePos = nullptr;
     TabIndexFn tabSelect = nullptr;
     MatrixFn viewMatrix = nullptr, projMatrix = nullptr;
+    WidgetPtrFn camSceneMgr = nullptr;                       // Ogre::Camera::getSceneManager
+    float* (*relativeOrigin)(const void* sm, float* out) = nullptr;   // Ogre::SceneManager::getRelativeOrigin (Kenshi's)
 };
 Exports g_ex;
 void ResolveExports() {
@@ -150,11 +152,15 @@ void ResolveExports() {
     if (HMODULE ogre = GetModuleHandleW(L"OgreMain_x64.dll")) {
         g_ex.viewMatrix = reinterpret_cast<MatrixFn>(GetProcAddress(ogre, "?getViewMatrix@Camera@Ogre@@UEBAAEBVMatrix4@2@XZ"));
         g_ex.projMatrix = reinterpret_cast<MatrixFn>(GetProcAddress(ogre, "?getProjectionMatrix@Frustum@Ogre@@UEBAAEBVMatrix4@2@XZ"));
+        g_ex.camSceneMgr = reinterpret_cast<WidgetPtrFn>(GetProcAddress(ogre, "?getSceneManager@Camera@Ogre@@QEBAPEAVSceneManager@2@XZ"));
+        g_ex.relativeOrigin = reinterpret_cast<float* (*)(const void*, float*)>(
+            GetProcAddress(ogre, "?getRelativeOrigin@SceneManager@Ogre@@QEBA?AVVector3@2@XZ"));
     }
-    Log("map: exports MyGUI visible=%d/%d coord=%d parent=%d name=%d view=%d layers=%d gui=%d input=%d, Ogre view=%d proj=%d",
+    Log("map: exports MyGUI visible=%d/%d coord=%d parent=%d name=%d view=%d layers=%d gui=%d input=%d, Ogre view=%d proj=%d origin=%d",
         g_ex.visible != nullptr, g_ex.inheritedVisible != nullptr, g_ex.absCoord != nullptr, g_ex.parent != nullptr, g_ex.name != nullptr,
         g_ex.renderMgr != nullptr, g_ex.layerMgr != nullptr && g_ex.widgetFromPoint != nullptr, g_ex.gui != nullptr,
-        g_ex.input != nullptr && g_ex.mousePress != nullptr, g_ex.viewMatrix != nullptr, g_ex.projMatrix != nullptr);
+        g_ex.input != nullptr && g_ex.mousePress != nullptr, g_ex.viewMatrix != nullptr, g_ex.projMatrix != nullptr,
+        g_ex.camSceneMgr != nullptr && g_ex.relativeOrigin != nullptr);
 }
 
 bool CallBoolSEH(WidgetBoolFn f, const void* w, bool& out) {
@@ -237,10 +243,16 @@ bool AbsCoord(const void* w, Coord& c) {
 bool WidgetOnScreen(const void* w, Coord& c) { return WidgetShown(w) && AbsCoord(w, c) && c.width > 0 && c.height > 0; }
 // The part of a shown widget its parents let through (scrolled lists, scroll views and windows crop
 // their children): its rectangle cut by every parent's.
-bool VisiblePart(const void* w, Coord& vis) {
+// Also cut by MyGUI's view (viewW x viewH, when known): Kenshi's bars keep their layout when the
+// window shrinks, and a widget can lie partly or wholly below the screen.
+bool VisiblePart(const void* w, Coord& vis, float viewW = 0, float viewH = 0) {
     Coord c{};
     if (!WidgetOnScreen(w, c)) return false;
     int x0 = c.left, y0 = c.top, x1 = c.left + c.width, y1 = c.top + c.height;
+    if (viewW > 0 && viewH > 0) {
+        x0 = std::max(x0, 0); y0 = std::max(y0, 0);
+        x1 = std::min(x1, int(viewW)); y1 = std::min(y1, int(viewH));
+    }
     const void* p = WidgetParent(w);
     for (int depth = 0; p && depth < 48; ++depth, p = WidgetParent(p)) {
         Coord pc{};
@@ -280,8 +292,8 @@ bool GuiViewSize(float& w, float& h) {
     return true;
 }
 // A widget under `root` whose name ends with "_<suffix>" (or is `suffix`), depth first.
-void* FindWidget(const void* root, const char* suffix, int depth = 0) {
-    if (!root || depth > 24) return nullptr;
+void* FindWidget(const void* root, const char* suffix, int depth = 0, int maxDepth = 24) {
+    if (!root || depth > maxDepth) return nullptr;
     if (NameEndsWith(WidgetName(root), suffix)) return const_cast<void*>(root);
     for (uintptr_t vec : {kWidgetChildren, kWidgetSkinChildren}) {
         void** b = nullptr;
@@ -290,7 +302,7 @@ void* FindWidget(const void* root, const char* suffix, int depth = 0) {
         for (void** it = b; it < e; ++it) {
             void* c = nullptr;
             if (!Rd(it, 0, c) || !c) continue;
-            if (void* f = FindWidget(c, suffix, depth + 1)) return f;
+            if (void* f = FindWidget(c, suffix, depth + 1, maxDepth)) return f;
         }
     }
     return nullptr;
@@ -308,6 +320,19 @@ void* FindWidgetAnywhere(const char* suffix) {
             if (void* f = FindWidget(c, suffix)) return f;
     }
     return nullptr;
+}
+bool RelativeOriginSEH(const void* cam, float out[3]) {
+    if (!g_ex.camSceneMgr || !g_ex.relativeOrigin) return false;
+    __try {
+        const void* sm = g_ex.camSceneMgr(cam);
+        if (!sm) return false;
+        float tmp[4] = {};
+        g_ex.relativeOrigin(sm, tmp);
+        out[0] = tmp[0]; out[1] = tmp[1]; out[2] = tmp[2];
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 bool MatricesSEH(const void* cam, float view[16], float proj[16]) {
     __try {
@@ -428,7 +453,7 @@ void ReadGui(MapScene& s, GuiStats* st) {
     else {
         Coord ic{}, vis{};
         if (!WidgetOnScreen(mw.image, ic)) s.mapWhy = "map image hidden";
-        else if (!VisiblePart(mw.image, vis)) s.mapWhy = "map image cropped out";
+        else if (!VisiblePart(mw.image, vis, s.guiW, s.guiH)) s.mapWhy = "map image cropped out";
         else {
             s.mapOpen = true;
             s.mapWhy.clear();
@@ -450,7 +475,7 @@ void ReadGui(MapScene& s, GuiStats* st) {
         if (st) ++st->cells;
         Coord vis{};
         if (!WidgetShown(main)) { if (st) ++st->hidden; continue; }
-        if (!VisiblePart(main, vis)) { if (st) ++st->clipped; continue; }
+        if (!VisiblePart(main, vis, s.guiW, s.guiH)) { if (st) ++st->clipped; continue; }
         if (CoveredAt(main, vis.left + vis.width / 2, vis.top + vis.height / 2)) { if (st) ++st->covered; continue; }
         s.portraits.push_back({float(vis.left), float(vis.top), float(vis.width), float(vis.height), owner});
     }
@@ -625,14 +650,31 @@ void UpdateMapScene(kc::Session& session, KenshiWorld& world, const Config& cfg,
         Rd(cc, kCamOgre, cam) && cam) {
         float v[16], p[16];
         if (MatricesSEH(cam, v, p)) {
+            // Kenshi's Ogre renders around a moving origin (SceneManager::getRelativeOrigin, a
+            // Kenshi addition: CameraClass::getCameraPos adds it to the camera node's position).
+            // The view matrix is in that render space: render = world - origin. Folded in here
+            // (in double), so the projections take world positions.
+            double o[3] = {0, 0, 0};
+            float of[3] = {};
+            if (RelativeOriginSEH(cam, of) && std::isfinite(of[0]) && std::isfinite(of[1]) && std::isfinite(of[2])) {
+                o[0] = of[0]; o[1] = of[1]; o[2] = of[2];
+                s.originOk = true;
+                s.origin = {of[0], of[1], of[2]};
+            }
             bool finite = true;
-            for (int i = 0; i < 4; ++i)
+            for (int i = 0; i < 4; ++i) {
+                double row[4];
                 for (int j = 0; j < 4; ++j) {
-                    float acc = 0;
-                    for (int k = 0; k < 4; ++k) acc += p[i * 4 + k] * v[k * 4 + j];
-                    s.viewProj[i * 4 + j] = acc;
-                    finite = finite && std::isfinite(acc);
+                    double acc = 0;
+                    for (int k = 0; k < 4; ++k) acc += double(p[i * 4 + k]) * double(v[k * 4 + j]);
+                    row[j] = acc;
                 }
+                row[3] -= row[0] * o[0] + row[1] * o[1] + row[2] * o[2];
+                for (int j = 0; j < 4; ++j) {
+                    s.viewProj[i * 4 + j] = float(row[j]);
+                    finite = finite && std::isfinite(s.viewProj[i * 4 + j]);
+                }
+            }
             s.camOk = finite;
             s.camFwdX = -v[8];
             s.camFwdZ = -v[10];
@@ -781,13 +823,15 @@ std::string DescribeMapScene(const std::string& what) {
         for (const auto& t : s.threats)
             if (s.centreOk && Dist2D(t.pos, s.centre) <= s.minimapZoom) o << " threat:kind=" << t.kind;
     } else if (what == "tetes") {
-        o << " enabled=" << s.showHeads << " cam=" << s.camOk << " covered=" << s.covered << " screen=" << w << "x" << h << " ;";
+        o << " enabled=" << s.showHeads << " cam=" << s.camOk << " covered=" << s.covered << " screen=" << w << "x" << h << " origin=" << s.originOk << ":"
+          << s.origin.x << "," << s.origin.y << "," << s.origin.z << " ;";
         for (const auto& c : s.chars) {
             if (!c.head) continue;
             float sx = 0, sy = 0;
-            const bool on = WorldToScreen(s, {c.pos.x, c.pos.y + 22.0f, c.pos.z}, w, h, sx, sy) && sx >= 0 && sy >= 0 && sx <= w && sy <= h;
+            const bool proj = WorldToScreen(s, {c.pos.x, c.pos.y + 22.0f, c.pos.z}, w, h, sx, sy);
+            const bool on = proj && sx >= 0 && sy >= 0 && sx <= w && sy <= h;
             o << ' ' << clean(c.name) << ":owner=" << int(c.owner) << ":col=" << colour(c.owner) << ":onscreen=" << on;
-            if (on) o << ":sx=" << sx << ":sy=" << sy;
+            if (proj) o << ":sx=" << sx << ":sy=" << sy;   // off screen too: where it projects
         }
     } else if (what == "barre") {
         o << " enabled=" << s.showPortraits << " frames=" << s.portraits.size();
@@ -796,7 +840,7 @@ std::string DescribeMapScene(const std::string& what) {
             o << " cells=" << g_cells.size();
         }
         o << " ;";
-        for (const auto& r : s.portraits) o << " owner=" << int(r.owner) << ":col=" << colour(r.owner) << ":x=" << r.x << ":y=" << r.y << ":w=" << r.w;
+        for (const auto& r : s.portraits) o << " frame:owner=" << int(r.owner) << ":col=" << colour(r.owner) << ":x=" << r.x << ":y=" << r.y << ":w=" << r.w;
     } else if (what == "pings") {
         o << " enabled=" << s.showPings << " n=" << s.pings.size() << " ;";
         for (const auto& p : s.pings)
@@ -899,16 +943,32 @@ std::string MapUi(const std::string& what) {
         return TabSelectSEH(tabs, 0) ? "ok tab selected" : "err tab selection failed";
     }
     if ((what == "open" && s.mapOpen) || (what == "close" && !up)) return "ok already " + state;
-    static void* button = nullptr;
-    if (!button || !NameEndsWith(WidgetName(button), "ShortcutMapButton")) button = FindWidgetAnywhere("ShortcutMapButton");
-    Coord c{};
     void* input = nullptr;
-    if (!button) return "err ShortcutMapButton not found";
-    if (!VisiblePart(button, c)) return "err the map button is not on screen";
     if (!g_ex.input || !Rd(g_ex.input, 0, input) || !input || !g_ex.mouseMove || !g_ex.mousePress || !g_ex.mouseRelease) return "err no MyGUI input";
+    // close: the window's own close button (Kenshi_WindowCX skin: header -> "Button", Event=close);
+    // the MAP button is often under the window by then (a click there lands on the window)
+    void* target = nullptr;
+    if (what == "close") {
+        void** b = nullptr;
+        void** e = nullptr;
+        if (Rd(window, kWidgetSkinChildren, b) && Rd(window, kWidgetSkinChildren + 8, e) && b && e >= b && e - b < 64)
+            for (void** it = b; it < e && !target; ++it) {
+                void* c = nullptr;
+                if (Rd(it, 0, c) && c) target = FindWidget(c, "Button", 0, 1);   // the header's children only
+            }
+        if (!target) return "err close button not found (" + state + ")";
+    } else {
+        static void* button = nullptr;
+        if (!button || !NameEndsWith(WidgetName(button), "ShortcutMapButton")) button = FindWidgetAnywhere("ShortcutMapButton");
+        if (!button) return "err ShortcutMapButton not found";
+        target = button;
+    }
+    Coord c{};
+    if (!VisiblePart(target, c, s.guiW, s.guiH)) return "err the button is not on screen (" + WidgetName(target) + ")";
     const int x = c.left + c.width / 2, y = c.top + c.height / 2;
+    if (CoveredAt(target, x, y)) return "err the button is under another window (" + WidgetName(target) + ")";
     if (!InjectClickSEH(input, x, y)) return "err click failed";
-    Log("map: test clicked the game's map button '%s' at (%d,%d) to %s the map", WidgetName(button).c_str(), x, y, what.c_str());
+    Log("map: test clicked '%s' at (%d,%d) to %s the map", WidgetName(target).c_str(), x, y, what.c_str());
     return "ok clicked " + std::to_string(x) + "," + std::to_string(y);
 }
 

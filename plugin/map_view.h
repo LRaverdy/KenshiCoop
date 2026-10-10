@@ -60,7 +60,9 @@ struct MapScene {
     float minX = 0, minZ = 0, sizeX = 0, sizeZ = 0;
     // the 3D camera: Ogre projection * view (row-major), and where it looks (x, z)
     bool camOk = false;
-    float viewProj[16] = {};
+    float viewProj[16] = {};   // world -> clip: Ogre's projection * view, Kenshi's moving render origin folded in
+    bool originOk = false;
+    kc::Vec3 origin;           // that origin (SceneManager::getRelativeOrigin), for the tests
     float camFwdX = 0, camFwdZ = -1;
     // the minimap's centre: the selected character, else the player's own
     bool centreOk = false;
