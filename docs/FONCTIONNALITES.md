@@ -279,6 +279,31 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   - 🟡 miner ou utiliser une machine (bug signalé par les amis, corrigé depuis par la recherche
     « type + endroit ») ;
   - 🟡 les autres ordres.
+- **Sécurité des acteurs** 🟡 (tests unitaires ; expérience `actorsafety` pas encore lancée en jeu) :
+  un client ne fait **jamais** agir un personnage qui n'est pas le sien.
+  - Bug signalé en partie réelle : le joueur 2 voulait dormir ou parler à un PNJ, et c'est le perso
+    de l'hôte qui y allait. Cause (désassemblage 1.0.68) : `PlayerInterface::unselectAll` ne vide pas
+    la sélection, il resélectionne le perso « principal » ; et `objectSelected(perso, false)` refuse
+    de retirer le dernier sélectionné. L'hôte, qui sélectionnait « seulement » le perso du client,
+    gardait donc son propre perso principal sélectionné : l'ordre partait aux deux (addOrder,
+    newPlayerTask, addJob, ramasser) ou au plus proche des deux (lit, conversation). Seule une
+    sélection vide chez l'hôte (juste après le chargement, comme dans les tests) était sûre.
+  - Maintenant : la sélection est faite **exactement** des acteurs (le principal gardé par le jeu en
+    est retiré), vérifiée, sinon l'ordre est refusé sans rien exécuter ; puis la sélection, l'escouade
+    affichée, le panneau de détails et le perso principal de l'hôte sont remis, dans le même appel.
+  - Chaque demande d'un client nomme son acteur ; l'hôte vérifie, à un seul endroit, qu'il est à **ce**
+    joueur (ni l'hôte, ni un autre joueur, ni un PNJ, ni inconnu) avant tout traitement. Refus :
+    journal anglais (`refused: actor N not owned by player P`, `auth: [nom] ... refused: ...`),
+    compteur par joueur et par règle, réponse `Result` avec un texte en français affiché au joueur.
+  - Le client ne demande rien pour un perso qui n'est pas le sien : refusé chez lui avec « Action
+    refusée : ce personnage n'est pas le tien. ». Agir **sur** le perso d'un autre (premiers soins,
+    suivre, porter un corps) reste possible : l'acteur est le sien.
+  - **Cible vérifiée** : chaque numéro de tâche qu'un client peut envoyer est confronté à ce qu'est sa
+    cible (construire : un chantier de la faction du joueur ; parler : un PNJ debout ; lit : un lit ;
+    machine : une machine ; attaquer : un autre perso ; porter : un corps ; portes, cages...). Numéro
+    inconnu, cible introuvable, périmée ou du mauvais type : refusé avant les fonctions d'ordre du jeu.
+    Corrige le plantage de l'hôte du test `stress4` (ordre « construire » visant un PNJ, plantage dans
+    `Character::addJob`). Changement d'escouade : seulement vers l'escouade d'un joueur.
 - **Sélection mixte chez l'hôte** (fix G5) : si la sélection de l'hôte contient le perso d'un autre
   joueur, ce perso en est retiré et l'ordre (déplacement, arrêt, mode passif...) part aux persos de
   l'hôte ; avant, l'ordre entier était refusé. Expérience `passive`.

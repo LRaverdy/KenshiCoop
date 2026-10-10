@@ -94,8 +94,14 @@ public:
     virtual void Apply(const Handle& h, const EntityState& target, const EntityState& latest) = 0;
     virtual void ApplyVitals(const Handle& h, const EntityVitals& v) = 0;
 
-    // Host side: execute an order for a character (issued by a client).
+    // Host side: execute an order for a character (issued by a client), on exactly that character:
+    // never on the host's selection, a fallback or the nearest one (false: refused or failed).
     virtual bool Order(const Handle& h, const Command& c) = 0;
+    // Host side: why the last Order was refused (French, for the player, and the reason); empty when
+    // it was not refused.
+    virtual std::string TakeOrderRefusal(ResultReason& reason) { reason = ResultReason::None; return {}; }
+    // Client side: the host rejected an order of ours for character `h` (undo what we predicted).
+    virtual void OrderRejected(const Handle& h, const Command& c) { (void)h; (void)c; }
     // Host side: a character whose player just left or lost their connection stops what it was
     // doing (walk, task, pending pick up) and stays where it is.
     virtual void HaltCharacter(const Handle& h) { (void)h; }
@@ -454,6 +460,24 @@ public:
     // client: those the host told us about), and how many are found here.
     size_t buildingCount() const { return buildings_.size(); }
     size_t buildingsResolved() const;
+    // ---- actor safety and authority (session_authority.cpp). The one rule for every client request the
+    // host runs (orders, containers, looks, item drops): the character that acts (the actor, named in
+    // the request) must be a squad member assigned to that very player. Never the host's, another
+    // player's, an NPC, an unknown one; and nothing is ever run on another character instead. Every
+    // client->host message goes through Authorize (its MessageRule) before its handler; the client
+    // filters what it sends with the same rules.
+    enum class ActorVerdict : uint8_t { Ok, Missing, Unknown, NotSquad, NotOwned };
+    ActorVerdict CheckActor(uint8_t player, uint32_t actorNetId) const;
+    static const char* VerdictText(ActorVerdict v);
+    uint32_t actorRefusals() const { return actorRefusals_; }   // host: requests refused (all rules)
+    double recentRefusals(uint8_t player) const;                // host: refusals of that player, decaying (half-life 60 s)
+    // client: the host's answers received (newest last, at most 64), and how many rejected
+    const std::deque<Result>& results() const { return results_; }
+    uint32_t rejectedCount() const { return rejected_; }
+    // tests: a message as if player `playerId` had sent it (forged requests); false: no such player
+    bool InjectForTest(uint8_t playerId, const Writer& w);
+    // tests (client): send this order as is, without our own checks (a forged request)
+    bool SendRawCommandForTest(Command c);
 
 private:
     struct Sample { double t; EntityState s; };
@@ -560,6 +584,22 @@ private:
     RemotePlayer* playerByPeer(PeerId p);
     Entity* entityByHandle(const Handle& h);
     void ApplyCommand(uint8_t from, const Command& c);
+    // host: the message's rule (role, subject) before its handler; a refusal is logged, counted and answered
+    bool Authorize(RemotePlayer& pl, Msg type, Reader r);
+    // host: CheckActor at the time the request runs; refused: logged, counted, answered (Result)
+    bool AdmitActor(uint8_t player, uint32_t actorNetId, const std::string& request, Msg type = Msg::Command, uint32_t seq = 0);
+    void Refuse(uint8_t player, Msg type, uint32_t seq, uint32_t netId, ResultReason reason, const std::string& rule, const std::string& detail,
+                const std::string& french);
+    void SendResult(uint8_t player, const Result& m);
+    bool ClientMaySend(Msg type, uint32_t netId, const char* what);   // client: the same rule, before sending
+    void OnResult(const Result& m);                                     // client
+    uint32_t actorRefusals_ = 0;
+    struct Decaying { double value = 0, at = 0; };
+    std::map<std::pair<uint8_t, std::string>, Decaying> refusals_;   // host: per player and rule
+    std::deque<Result> results_;                                      // client
+    uint32_t rejected_ = 0;
+    double nextResultNote_ = 0;
+    std::map<uint32_t, std::pair<Handle, Command>> sentOrders_;      // client: seq -> order, until answered (64 kept)
     EntityState Interpolate(const Entity& e, double renderTime) const;
 
     IWorld& world_;
@@ -670,6 +710,7 @@ private:
     void ClientBags(double now);
     double nextClientBags_ = 0;
     const Entity* Wearer(const Entity& e) const;   // a bag's wearer, else the entity itself (null: unknown wearer)
+    uint32_t DropActor(uint32_t netId) const;      // who drops an item from that inventory: a worn bag's wearer, else netId itself
     std::map<uint8_t, double> lastDialogAnswer_;   // host: when each player last answered a conversation
     bool squadKnown_ = false;                      // host: the squad was listed once (later arrivals are newcomers)
     void EndTrade(uint8_t player, const std::string& reason);   // host: close it (reason shown to the player)

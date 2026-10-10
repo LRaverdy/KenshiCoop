@@ -2362,6 +2362,133 @@ def own_index(pid):
     return len(keys) - 1
 
 
+# ---- actor safety: a client never makes a character it does not own act
+def exp_actorsafety(host, cli):
+    """The host selects its own characters, as a player would. The client then gives every kind of order
+    with its own character (bed, talk, loot, pick up, trade, carry, job, build, door, first aid on a host
+    character, follow, attack): on the host the actor is the client's character, the host's characters
+    get nothing (no new task, no move, no bed, no conversation) and the host's selection is unchanged.
+    Then forged requests naming a host character as the actor, and orders aimed at the wrong kind of
+    target (the BUILD on an NPC that crashed the host in stress4): refused, the host stays alive."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    mine_h = cmd(host, "ownidx 1")[1].split()[1:]
+    hidx = [int(x) for x in mine_h if int(x) != own][:3]
+    check("securite controle : l'hote a ses propres persos", len(hidx) > 0, mine_h)
+    if not hidx:
+        summary()
+        return
+    log("host selects its own characters", cmd(host, "selectset " + " ".join(str(i) for i in hidx)))
+    sel0 = cmd(host, "selected")[1]
+    check("securite controle : la selection de l'hote est exactement ses persos",
+          sel0 == "ok " + " ".join(str(i) for i in sorted(hidx)), sel0)
+
+    def state(i):
+        t = cmd(host, f"charstate {i}")[1]
+        d = dict(kv.split("=") for kv in t.split()[1:]) if t.startswith("ok") else {}
+        if "pos" in d:
+            x, z = d["pos"].split(",")
+            d["pos"] = (float(x), float(z))
+        return d
+
+    excluded = set()   # a host character the client legitimately acts on (carried): not compared for moves
+
+    def host_untouched(label, before, actor_word):
+        time.sleep(4)
+        sel = cmd(host, "selected")[1]
+        check(f"securite controle : {label} : selection de l'hote inchangee", sel == sel0, f"{sel0} -> {sel}")
+        for i in hidx:
+            if i in excluded:
+                continue
+            a, b = before[i], state(i)
+            if not a or not b:
+                check(f"securite controle : {label} : perso {i} de l'hote lisible", False, f"{a} / {b}")
+                continue
+            moved = ((a["pos"][0] - b["pos"][0]) ** 2 + (a["pos"][1] - b["pos"][1]) ** 2) ** 0.5
+            check(f"securite controle : {label} : le perso {i} de l'hote n'a rien recu",
+                  int(b["tasks"]) <= int(a["tasks"]) and int(b["jobs"]) <= int(a["jobs"]) and b["in"] == a["in"] and b["dialog"] == a["dialog"]
+                  and moved < 5.0, f"{a} -> {b} (deplace de {moved:.1f})")
+        st = cmd(host, "actorstats")[1]
+        check(f"securite controle : {label} : aucune fuite vers un perso de l'hote", "leaks=0" in st, st)
+        hl = host_log()
+        if actor_word:
+            check(f"securite controle : {label} : l'hote execute l'ordre du client", actor_word in hl[-20000:], actor_word)
+
+    actions = [
+        ("lit", f"bedreq {own}", "client task 258"),
+        ("parler", f"talkreq {own}", "client task 12"),
+        ("piller", f"npcreq {own} 26 a", "client task 26"),
+        ("commerce", f"tradeopen {own} any", None),
+        ("tache", f"jobreq {own} 31 {hidx[0]}", "client task 31"),
+        ("construire", f"buildreq {own} 2", "client task 2"),
+        ("porte", f"doororder {own} 72 door", "client task 72"),
+        ("premiers soins sur un perso de l'hote", f"taskreq {own} 25 {hidx[0]}", "client task 25"),
+        ("suivre", f"taskreq {own} 44 {hidx[0]}", "client task 44"),
+    ]
+    g = cmd(cli, f"groundnear 400 ground {own}")[1].split()[2:]
+    if g:
+        _, isid, at = g[0].split("|")
+        actions.insert(3, ("ramasser", f"pickupreq {own} {isid} {at}", "pick up"))
+    for label, line, word in actions:
+        before = {i: state(i) for i in hidx}
+        r = cmd(cli, line)
+        log(f"client: {label}:", line, "->", r)
+        if not r[0]:
+            log(f"   ({label} not available here: {r[1]})")
+            continue
+        host_untouched(label, before, word)
+    # carrying: a host character knocked out, carried by the client's character
+    if len(hidx) > 1:
+        target = hidx[-1]
+        cmd(host, f"kosquad {target}")
+        time.sleep(2)
+        excluded.add(target)
+        before = {i: state(i) for i in hidx}
+        log("client: carry a knocked out host character", cmd(cli, f"carryreq {own} {target}"))
+        host_untouched("porter", before, "client task 225")
+    # attack: last (a fight may draw everyone in)
+    before = {i: state(i) for i in hidx}
+    log("host spawns an NPC", cmd(host, f"spawnnpc 40 40 {own}"))
+    time.sleep(2)
+    log("client: attack", cmd(cli, f"npcreq {own} 4 a"))
+    host_untouched("attaquer", before, "client task 4")
+
+    # forged requests: a host character as the actor
+    st0 = cmd(host, "actorstats")[1]
+    before = {i: state(i) for i in hidx}
+    for via, task, subj in ((3, 258, "none"), (3, 12, "npc"), (0, 0, "none"), (1, 4, "npc"), (4, 31, f"squad{own}"), (2, 2, "building")):
+        log("client forges an order for host character", hidx[0], via, task, subj, cmd(cli, f"forgeorder {hidx[0]} {via} {task} {subj}"))
+    time.sleep(1)
+    st1 = cmd(host, "actorstats")[1]
+    n0 = int(st0.split("refused=")[1].split()[0]) if "refused=" in st0 else 0
+    n1 = int(st1.split("refused=")[1].split()[0]) if "refused=" in st1 else 0
+    check("securite controle : ordres forges au nom d'un perso de l'hote refuses", n1 - n0 >= 6, f"{st0} -> {st1}")
+    check("securite controle : refus journalises en anglais", "not owned by player" in host_log(), "refused: actor ... not owned by player N")
+    host_untouched("ordres forges", before, None)
+    res = cmd(cli, "results")[1]
+    check("securite controle : le client recoit les refus", res.startswith("ok") and int(res.split()[1]) > 0, res)
+
+    # wrong targets with the client's own character (the stress4 crash: BUILD via 3 on an NPC)
+    t0 = cmd(host, "actorstats")[1]
+    wrong = [(3, 2, "npc"), (4, 2, "npc"), (2, 2, "item"), (3, 98, "npc"), (3, 258, "item"), (3, 12, "item"), (3, 12, f"squad{hidx[0]}"),
+             (3, 87, "npc"), (1, 72, "npc"), (3, 107, "npc"), (3, 3, "npc"), (3, 284, "npc"), (4, 2, "none"), (3, 5, "self")]
+    for via, task, subj in wrong:
+        log("client forges a wrong target", via, task, subj, cmd(cli, f"forgeorder {own} {via} {task} {subj}"))
+        time.sleep(0.2)
+    log("client: the stress4 path (npcreq task 2 on an NPC)", cmd(cli, f"npcreq {own} 2 a"))
+    time.sleep(2)
+    t1 = cmd(host, "actorstats")[1]
+    tr0 = int(t0.split("target=")[1].split()[0]) if "target=" in t0 else 0
+    tr1 = int(t1.split("target=")[1].split()[0]) if "target=" in t1 else 0
+    check("securite controle : cibles du mauvais type refusees", tr1 - tr0 >= 10, f"{t0} -> {t1}")
+    check("securite controle : l'hote est toujours vivant", alive(host) and cmd(host, "state")[0], t1)
+    check("securite controle : le client est toujours vivant", alive(cli) and cmd(cli, "state")[0])
+    check("securite controle : selection de l'hote inchangee a la fin", cmd(host, "selected")[1] == sel0, cmd(host, "selected")[1])
+    summary()
+
+
 def exp_stuck(host, cli):
     """An NPC's copy shut in a wall / under the floor on the client only: the client must notice it
     makes no progress and put it back where the host has it (within ~2 s)."""
@@ -4347,6 +4474,9 @@ def main():
     fa_ = sub.add_parser("factions", help="lot B: relations, bounties and crimes the host's everywhere")
     fa_.add_argument("--save", default="kctest_base")
     fa_.add_argument("--keep", action="store_true")
+    asf = sub.add_parser("actorsafety", help="a client's orders only ever move its own characters; forged and wrong-target orders refused")
+    asf.add_argument("--save", default="kctest_town")
+    asf.add_argument("--keep", action="store_true")
     tk = sub.add_parser("talk")
     tk.add_argument("--save", default="kctest_base")
     tk.add_argument("--keep", action="store_true")
@@ -4472,6 +4602,8 @@ def main():
             exp_facing(host, cli)
         elif a.what == "talk":
             exp_talk(host, cli)
+        elif a.what == "actorsafety":
+            exp_actorsafety(host, cli)
         elif a.what == "stuck":
             exp_stuck(host, cli)
         elif a.what == "farnpc":

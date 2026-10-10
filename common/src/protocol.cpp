@@ -595,6 +595,147 @@ const char* StandingOrderLabel(int order) {
     }
 }
 
+bool TaskTargetAllowed(TaskVia via, int task, uint32_t t, std::string* why) {
+    auto fail = [&](const char* need) {
+        if (why) *why = "task " + std::to_string(task) + " (" + TaskLabel(task) + ") needs " + need;
+        return false;
+    };
+    // the Tâches panel and the squad bar act on the actor itself, with no subject
+    if (via == TaskVia::RemovePermajob || via == TaskVia::MovePermajob || via == TaskVia::RemoveJob)
+        return task >= 0 && task < 512 ? true : fail("a job kind (0-511)");
+    if (via == TaskVia::SetOrder) return task >= 0 && task <= 17 ? true : fail("a squad bar toggle (0-17)");
+    if (via != TaskVia::AddOrder && via != TaskVia::NewTask && via != TaskVia::TaskNearest && via != TaskVia::AddJob)
+        return fail("a known way of giving orders");
+    const bool named = (t & kTgtNamed) != 0;
+    if (named && !(t & kTgtFound)) return fail("its subject to be found here (unknown, stale or of another kind)");
+    const bool none = !named;
+    const bool self = (t & kTgtSelf) != 0;
+    const bool ch = (t & kTgtCharacter) != 0;
+    const bool dead = ch && (t & kTgtDead);
+    const bool other = ch && !self;                                   // another character
+    const bool living = ch && !dead;                                   // standing or knocked out
+    const bool standing = living && (t & kTgtConscious) && !(t & kTgtDown);
+    const bool lying = ch && (t & (kTgtDown | kTgtDead));             // knocked out or dead
+    const bool bld = !ch && (t & kTgtBuilding);
+    const bool cont = !ch && (t & kTgtContainer);
+    const bool item = !ch && (t & kTgtItem);
+    switch (task) {
+    case 2:   // build: a construction site of the player faction
+        return bld && (t & kTgtUnfinished) && (t & kTgtOurs) ? true : fail("an unfinished building of the player faction");
+    case 95: case 96:   // repair, dismantle
+        return bld && (t & kTgtOurs) ? true : fail("a building of the player faction");
+    case 3: case 259:   // pick up, eat
+        return item || (task == 259 && (none || self)) ? true : fail("an item");
+    case 4: case 5: case 235: case 262: case 263:   // attack, shoot
+        return other && !dead ? true : fail("another living character");
+    case 228: case 229:   // stealth knock out / kill
+        return other && standing ? true : fail("another character standing");
+    case 246:   // kidnap
+        return other && lying && !dead ? true : fail("another character knocked out");
+    case 6: case 7: case 27: case 28: case 30: case 54: case 69: case 116: case 257:   // the actor alone
+        return none || self ? true : fail("no subject");
+    case 29:   // go to
+        return none || self || bld || ch ? true : fail("a place, a building or a character");
+    case 12: case 126:   // talk
+        return other && standing && !(t & kTgtSquad) ? true : fail("a living NPC");
+    case 25: case 57: case 60: case 61: case 249: case 250: case 269:   // first aid, repair a robot, splint, heal legs
+        return living ? true : fail("a living character");
+    case 58:   // medic (job)
+        return none || living ? true : fail("no subject or a living character");
+    case 26:   // loot: a body, a container, or a merchant standing there (the game's trade)
+        return other || cont ? true : fail("a character or a container");
+    case 284:   // loot a container
+        return cont ? true : fail("a container");
+    case 31: case 44:   // follow (job), follow
+        return other && !dead ? true : fail("another living character");
+    case 68: case 225:   // carry someone
+        return other && lying ? true : fail("another character lying on the ground");
+    case 70: case 98: case 258:   // put down in a bed, sleep
+        return (t & kTgtBed) && !ch ? true : fail("a bed");
+    case 99:   // put someone in a bed
+        return ((t & kTgtBed) && !ch) || (other && lying) ? true : fail("a bed or a body");
+    case 72: case 73: case 76: case 77: case 78: case 81: case 226: case 285: case 286: case 290:   // doors and locks
+        return (t & kTgtDoor) && !ch ? true : fail("a door or a lock");
+    case 87: case 146: case 149: case 152: case 234:   // operate a machine, man a turret
+        return (t & kTgtMachine) && !ch ? true : fail("a machine");
+    case 97: case 231: case 255:   // train, eat crops, sit on the throne
+        return bld ? true : fail("a building");
+    case 107:   // get in a cage
+        return (t & kTgtCage) && !ch ? true : fail("a cage");
+    case 108:   // put in a cage
+        return ((t & kTgtCage) && !ch) || (other && lying) ? true : fail("a cage or a body");
+    case 110:   // free a prisoner
+        return ((t & kTgtCage) && !ch) || other ? true : fail("a cage or a prisoner");
+    case 244:   // grab food
+        return cont || item || bld ? true : fail("food (an item or a container)");
+    case 55: case 118: case 119: case 124:
+        return fail("a window the host would open (not available to client players)");
+    default:
+        return fail("a task a client may send (unknown task id)");
+    }
+}
+
+const char* ToString(ResultReason r) {
+    switch (r) {
+    case ResultReason::None: return "none";
+    case ResultReason::NotYourCharacter: return "not your character";
+    case ResultReason::NoActor: return "no actor";
+    case ResultReason::WrongTarget: return "wrong target";
+    case ResultReason::NotAllowed: return "not allowed";
+    case ResultReason::SelectionBusy: return "selection busy";
+    case ResultReason::Failed: return "failed";
+    }
+    return "?";
+}
+void Encode(Writer& w, const Result& m) {
+    w.u8(uint8_t(Msg::Result));
+    w.u8(uint8_t(m.request));
+    w.varint(m.seq);
+    w.varint(m.netId);
+    w.u8(uint8_t(m.state));
+    w.u8(uint8_t(m.reason));
+    w.str(m.text.size() > 400 ? m.text.substr(0, 400) : m.text);
+}
+bool Decode(Reader& r, Result& m) {
+    m.request = Msg(r.u8());
+    m.seq = GetU32Var(r);
+    m.netId = GetU32Var(r);
+    const uint8_t st = r.u8(), why = r.u8();
+    m.text = r.str(400);
+    if (st < 1 || st > 3 || why > uint8_t(ResultReason::Failed)) return false;
+    m.state = ResultState(st);
+    m.reason = ResultReason(why);
+    return Done(r);
+}
+
+namespace {
+const MessageRule kMessageRules[] = {
+    {Msg::Ready, AuthRole::Joining, AuthSubject::None, "ready"},
+    {Msg::Command, AuthRole::InGame, AuthSubject::OwnCharacter, "order"},
+    {Msg::ContainerOpen, AuthRole::InGame, AuthSubject::OwnCharacter, "look into a container"},
+    {Msg::ContainerClose, AuthRole::Connected, AuthSubject::None, "close a container"},
+    {Msg::Appearance, AuthRole::InGame, AuthSubject::OwnCharacter, "new looks"},
+    {Msg::DialogReply, AuthRole::InGame, AuthSubject::OwnConversation, "answer in a conversation"},
+    {Msg::InvOp, AuthRole::InGame, AuthSubject::Inventory, "move an item"},
+    {Msg::BuildPlace, AuthRole::InGame, AuthSubject::None, "place a building"},
+    {Msg::BuildAction, AuthRole::InGame, AuthSubject::None, "buy or dismantle a building"},
+    {Msg::DoorRequest, AuthRole::InGame, AuthSubject::None, "door button"},
+    {Msg::EditState, AuthRole::Connected, AuthSubject::None, "character editor open/closed"},
+    {Msg::ClientLog, AuthRole::Connected, AuthSubject::None, "log lines"},
+    {Msg::ClientReport, AuthRole::Connected, AuthSubject::None, "sync report"},
+    {Msg::Chat, AuthRole::Connected, AuthSubject::None, "chat"},
+    {Msg::Ping, AuthRole::Connected, AuthSubject::None, "ping"},
+};
+} // namespace
+const MessageRule* MessageRuleFor(Msg type) {
+    for (const auto& r : kMessageRules) if (r.type == type) return &r;
+    return nullptr;
+}
+const MessageRule* MessageRules(size_t& count) {
+    count = sizeof(kMessageRules) / sizeof(kMessageRules[0]);
+    return kMessageRules;
+}
+
 void EncodeResync(Writer& w) { w.u8(uint8_t(Msg::Resync)); }
 
 // ---- lot A: doors
@@ -765,7 +906,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || (t > uint8_t(Msg::BuildAction) && t != uint8_t(Msg::JobList) && t != uint8_t(Msg::Stall) && t != uint8_t(Msg::Floors) && t != uint8_t(Msg::BagBind))) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || (t > uint8_t(Msg::BuildAction) && t != uint8_t(Msg::JobList) && t != uint8_t(Msg::Stall) && t != uint8_t(Msg::Floors) && t != uint8_t(Msg::BagBind) && t != uint8_t(Msg::Result))) return std::nullopt;
     return Msg(t);
 }
 

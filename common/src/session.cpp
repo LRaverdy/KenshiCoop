@@ -256,7 +256,7 @@ void Session::HostTick(double now, bool live) {
     // A player's new looks: applied here, then shown to everyone else.
     for (auto& [from, m] : pendingLooks_) {
         auto it = entities_.find(m.netId);
-        if (it == entities_.end() || !it->second.squad || it->second.owner != from) { log_("ignored looks for a character the player does not own"); continue; }
+        if (!AdmitActor(from, m.netId, "new looks", Msg::Appearance)) continue;
         world_.ApplyAppearance(it->second.handle, m);
         Writer w;
         Encode(w, m);
@@ -953,7 +953,7 @@ void Session::HostContainers(double now) {
     for (auto& [from, ask] : containerAsks_) {
         auto pl = players_.find(from);
         auto looter = entities_.find(ask.looterNetId);
-        if (pl == players_.end() || looter == entities_.end() || !looter->second.squad || looter->second.owner != from) continue;
+        if (pl == players_.end() || !AdmitActor(from, ask.looterNetId, "look into a container", Msg::ContainerOpen)) continue;
         Handle h;
         if (!world_.FindContainer(ask.sid, ask.pos, h)) {
             log_("[" + pl->second.name + "] container " + world_.TemplateName(ask.sid) + " not found here");
@@ -1057,6 +1057,11 @@ const Session::Entity* Session::Wearer(const Entity& e) const {
     if (!e.bag) return &e;
     auto it = entities_.find(e.bagOwner);
     return it == entities_.end() ? nullptr : &it->second;
+}
+
+uint32_t Session::DropActor(uint32_t netId) const {
+    auto it = entities_.find(netId);
+    return it != entities_.end() && it->second.bag ? it->second.bagOwner : netId;
 }
 
 uint32_t Session::EnsureBag(uint32_t wearer, const Handle& bag, const std::string& sid) {
@@ -1312,7 +1317,7 @@ void Session::ClientContainers(double now) {
     world_.TakeContainerRequests(scratchContainerReqs_);
     for (const auto& r : scratchContainerReqs_) {
         Entity* e = entityByHandle(r.looter);
-        if (!e || !e->squad || e->owner != localId_) continue;
+        if (!e || !ClientMaySend(Msg::ContainerOpen, e->netId, "look into a container")) continue;
         ContainerOpen m;
         m.looterNetId = e->netId;
         m.sid = r.sid;
@@ -1633,6 +1638,8 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         return;
     }
     if (!pl) return;  // everything else requires a completed handshake
+    // one authority check for every message, before its handler (its MessageRule: role, subject)
+    if (!Authorize(*pl, type, r)) return;
 
     switch (type) {
     case Msg::Ready: {
@@ -1859,8 +1866,7 @@ void Session::HostInvOp(uint8_t from, const InvOp& op, const InvOp* swapWith) {
     };
     const bool srcOk = mayTouch(src->second);
     if (op.kind == InvOpKind::Drop) {
-        const Entity* w = Wearer(src->second);
-        if (w && w->squad && w->owner == from) world_.ExecuteInvOp(src->second.handle, src->second.handle, op);
+        if (AdmitActor(from, DropActor(op.fromNetId), "drop an item", Msg::InvOp)) world_.ExecuteInvOp(src->second.handle, src->second.handle, op);
         src->second.invHash = 0;
         return;
     }
@@ -2170,6 +2176,7 @@ void Session::SendLocalDrops() {
     for (const auto& [h, item] : drops) {
         for (auto& [id, e] : entities_) {
             if (e.handle != h) continue;
+            if (!ClientMaySend(Msg::InvOp, id, "item drop")) break;   // only our own characters drop things
             InvOp op;
             op.kind = InvOpKind::Drop;
             op.fromNetId = id;
@@ -2184,12 +2191,8 @@ void Session::SendLocalDrops() {
 
 void Session::ApplyCommand(uint8_t from, const Command& c) {
     const std::string who = players_.count(from) ? players_[from].name : "player " + std::to_string(from);
+    if (!AdmitActor(from, c.netId, "order", Msg::Command, c.seq)) return;
     auto it = entities_.find(c.netId);
-    if (it == entities_.end()) { log_("[" + who + "] order for an unknown character (ignored)"); return; }
-    if (!it->second.squad || it->second.owner != from) {
-        log_("[" + who + "] order refused: not their character");
-        return;
-    }
     std::string what;
     switch (c.kind) {
     case CommandKind::MoveTo: what = "move"; break;
@@ -2205,6 +2208,22 @@ void Session::ApplyCommand(uint8_t from, const Command& c) {
     }
     const bool ok = world_.Order(it->second.handle, c);
     if (c.kind != CommandKind::MoveTo || !ok) log_("[" + who + "] " + what + (ok ? " -> ok" : " -> FAILED"));
+    Result res;
+    res.request = Msg::Command;
+    res.seq = c.seq;
+    res.netId = c.netId;
+    if (ok) {
+        res.state = ResultState::Done;
+    } else {
+        res.state = ResultState::Rejected;
+        res.text = world_.TakeOrderRefusal(res.reason);
+        if (res.text.empty()) res.reason = ResultReason::Failed;
+        if (res.reason != ResultReason::Failed) {   // refused for safety: counted like the other refusals
+            Refuse(from, Msg::Command, c.seq, c.netId, res.reason, "order target", what + ": " + ToString(res.reason), res.text);
+            return;
+        }
+    }
+    SendResult(from, res);
 }
 
 // ============================== client ==============================
@@ -2350,14 +2369,17 @@ void Session::ClientTick(double now, bool live) {
     world_.TakeLocalOrders(scratchOrders_);
     for (auto& [h, cmd] : scratchOrders_) {
         Entity* e = entityByHandle(h);
-        if (!e || !e->squad || e->owner != localId_) {
-            // not one of ours (the host's character, or one the host does not know): never sent
-            log_(std::string("local order dropped: ") + (!e ? "unknown character" : !e->squad ? "not a squad member" : "that character belongs to another player"));
+        // not one of ours (the host's character, another player's, one the host does not know): never
+        // sent, with a French notice (the host would refuse it anyway: Session::Authorize)
+        if (!e || !ClientMaySend(Msg::Command, e->netId, "order")) {
+            if (!e) log_("refused locally: order for a character the host does not know");
             continue;
         }
         Command c = cmd;
         c.seq = ++cmdSeq_;
         c.netId = e->netId;
+        sentOrders_[c.seq] = {h, c};   // until the host answers (Result)
+        while (sentOrders_.size() > 64) sentOrders_.erase(sentOrders_.begin());
         Writer w;
         Encode(w, c);
         SendReliable(net_.serverPeer(), w);
@@ -2938,6 +2960,11 @@ void Session::ClientPacket(Msg type, Reader& r) {
     case Msg::Doors: ClientDoorsPacket(r); break;   // lot A
     case Msg::JobList: ClientJobsPacket(r); break;   // fix G5
     case Msg::Shots: case Msg::Ranged: ClientRangedPacket(type, r); break;   // lot C
+    case Msg::Result: {   // the host's answer to one of our requests
+        Result m;
+        if (Decode(r, m)) OnResult(m);
+        break;
+    }
     case Msg::Pong: break;
     default: break;
     }

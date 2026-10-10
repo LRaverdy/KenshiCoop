@@ -1274,7 +1274,12 @@ bool CallTaskSeh(void* pi, const kc::Command& cmd, void* subject, void* building
 
 // Host: a client's order, given to that character alone; the host player's selection, squad bar and
 // details panel are left exactly as they were.
-bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, void* building) {
+namespace {
+std::atomic<int> g_actorLeaks{0};
+}
+int ActorLeaks() { return g_actorLeaks.load(); }
+
+bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, void* building, std::string* refused) {
     void* pi = kenshi::Player();
     if (!pi || !kenshi::IsCharacter(c)) return false;
     if (cmd.via == kc::TaskVia::RemovePermajob || cmd.via == kc::TaskVia::MovePermajob || cmd.via == kc::TaskVia::RemoveJob) {
@@ -1304,11 +1309,33 @@ bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, 
     kc::Handle target = cmd.subject;
     if (subject) kenshi::ObjectHandle(subject, target);   // found by kind and place: its handle here
     kenshi::MakeHand(target, hand);
+    // a witness: the host player's own selected characters get nothing from it (checked after)
+    struct Watch { kenshi::Character* c; size_t tasks; int jobs; };
+    std::vector<Watch> watch;
+    {
+        std::vector<kc::Handle> sel;
+        kenshi::SelectedHandles(sel);
+        for (const auto& h : sel)
+            if (kenshi::Character* o = kenshi::Resolve(h); o && o != c) watch.push_back({o, kenshi::LocalTaskCount(o), kenshi::PermajobCount(o)});
+    }
     bool ok = false;
-    kenshi::WithSelection(c, [&] {
+    std::string why;
+    const bool exact = kenshi::WithSelection(std::vector<kenshi::Character*>{c}, [&] {
         HostCallScope scope;
         ok = CallTaskSeh(pi, cmd, subject, building, loc, hand);
-    });
+    }, &why);
+    if (!exact) {
+        Log("refused: client task %d (via %d) not run: the selection could not be made exactly its actor (%s); nothing else got it", cmd.task,
+            int(cmd.via), why.c_str());
+        if (refused) *refused = "Action refusée : ton personnage n'a pas pu recevoir cet ordre seul chez l'hôte (rien n'a été fait).";
+        return false;
+    }
+    if (!why.empty()) Log("client task %d: %s", cmd.task, why.c_str());
+    for (const auto& w : watch)
+        if (kenshi::LocalTaskCount(w.c) > w.tasks || kenshi::PermajobCount(w.c) > w.jobs) {
+            g_actorLeaks.fetch_add(1);
+            Log("SAFETY: a character of the host's selection got a task from a client's order (task %d, via %d)", cmd.task, int(cmd.via));
+        }
     return ok;
 }
 
