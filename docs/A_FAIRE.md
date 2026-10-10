@@ -29,6 +29,11 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   bâtiment normal en a. Probable : le bâtiment est créé ou fini par la synchro sans passer par ce
   qui crée sa physique (finishConstruction / l'état « fini » du jeu), à vérifier aussi pour les
   bâtiments posés par l'hôte.
+- **Bâtiment construit par le joueur 3 : impossible à démanteler** (à préciser : chez lui, chez
+  l'hôte, ou chez tous). Sans doute le même fond que la collision : le bâtiment fini n'est pas
+  un vrai bâtiment fini pour le jeu (état, propriétaire ou faction), donc l'ordre « démanteler »
+  n'est pas proposé ou est refusé (vérifier aussi la validation de la tâche démanteler dans
+  `TaskTargetAllowed`).
 - **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
