@@ -350,8 +350,8 @@ l'escouade triée par handle.
 | `mapfeed` | le flux de carte de cette machine (hôte : construit, client : reçu) : âge, joueurs, persos (`nom:owner=:av=:x=:z=`), escouades hostiles (`threat:kind=:n=:x=:z=`) |
 | `mapscene carte` | ce que la carte dessine : ouverte (sinon `why=` : la raison), bornes, chaque perso avec propriétaire, couleur (`col=or`…), position, et à l'écran si la carte est ouverte (`sx=`, `sy=`, `vis=`) ; escouades hostiles |
 | `mapscene minicarte` | centre, zoom, rotation, coin, persos et ennemis dans le cercle |
-| `mapscene tetes` | repères au-dessus des têtes : perso, propriétaire, couleur, à l'écran ou non, point projeté |
-| `mapscene barre` | cadres de la barre d'escouade (propriétaire, couleur, rectangle) et cellules de portrait suivies |
+| `mapscene tetes` | repères au-dessus des têtes : origine de rendu (`origin=`), perso, propriétaire, couleur, à l'écran ou non, point projeté (même hors écran) |
+| `mapscene barre` | cadres de la barre d'escouade (`frame:owner=:col=:x=:y=:w=`) et cellules de portrait suivies |
 | `mapscene pings` | pings dessinés ici (id, joueur, type, position, âge) |
 | `mapconv` | conversions de l'overlay : tampon (`bb=`), client de la fenêtre, DPI, vue MyGUI (`gui=`), facteurs `fx`/`fy`, vue couverte, repères et minicarte dessinés, carte détectée / dessinée et nombre de marqueurs ; cadres relus maintenant (`frame:owner=:raw=:conv=`) et dessinés à la dernière image (`drawn:owner=:x=:y=:w=:h=`) ; image de la carte (`map:raw=:conv=:drawn=` ou `map:why=`) |
 | `mapui open\|close\|maptab\|state` | l'écran de carte du jeu par son bouton MAP (`ShortcutMapButton`, clic injecté dans MyGUI) ; `maptab` choisit l'onglet carte ; `state` : `open=`, `window=`, `why=` |

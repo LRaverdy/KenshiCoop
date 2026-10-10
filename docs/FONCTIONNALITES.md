@@ -923,7 +923,7 @@ la fenêtre du client.
   de la vue MyGUI et DPI quand elles changent ; au plus une ligne par seconde ou deux.
 - **Limites / à vérifier en jeu** : tout (aucun essai en jeu encore) ; un raid lointain encore
   « abstrait » (escouade pas chargée chez l'hôte) n'est pas montré ; le sol d'un ping 3D est pris
-  plat à la hauteur du perso centré ; la vue de la caméra est supposée (docs/MOTEUR.md § 11) ; une fenêtre du jeu posée
+  plat à la hauteur du perso centré ; la projection 3D (origine de rendu mobile de Kenshi, docs/MOTEUR.md § 11) n'est pas encore vérifiée en jeu ; une fenêtre du jeu posée
   sur l'écran de carte n'en cache pas les marqueurs ; un Alt+clic gauche ne va plus au jeu tant que les pings sont
   actifs ; hors session (partie solo) la minicarte montre l'escouade locale, sans ennemis ni pings.
 

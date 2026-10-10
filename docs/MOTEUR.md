@@ -1454,6 +1454,13 @@ vérifié dans le constructeur `0x9D4770`, 4e argument). `CampaignData`+0x12 `_i
 `Platoon*`. Limite : seules les escouades chargées (personnages actifs chez l'hôte) sont vues ; un
 raid encore « abstrait » loin de tout joueur n'a pas de position.
 
+**Origine de rendu mobile** : le Ogre de Kenshi a `SceneManager::getRelativeOrigin()`
+(export de `OgreMain_x64.dll`, `Vector3` rendu par pointeur caché) ; `CameraClass::getCameraPos`
+(`0x1008F0`) rend `camera(+0x68)->getSceneManager()->getRelativeOrigin()` + position dérivée du nœud
+(+0x70). La scène est donc dessinée en coordonnées monde − origine, et `getViewMatrix` est dans cet
+espace : pour projeter une position du monde, retrancher l'origine d'abord (le mod l'intègre à
+proj × vue). Sans cela tous les points sont hors écran.
+
 **Caméra 3D** : `PlayerInterface`+0x30 `CameraClass*` (`getCamera` `0x3E7060`), `CameraClass`+0x20
 `initialised` (`isInitialised` `0xA1B030`), +0x68 `Ogre::Camera*` (`getCameraPos` `0x1008F0`).
 Matrices par les exports d'`OgreMain_x64.dll` : `Camera::getViewMatrix` (virtuelle, version sans
