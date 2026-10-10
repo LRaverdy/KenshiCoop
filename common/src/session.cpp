@@ -1146,6 +1146,7 @@ void Session::ClientContainers(double now) {
             if (world_.OpenTradeWindow(looter->second.handle, trader->second.handle)) {
                 windowOpenedAt_ = now;
                 trade_.open = true;
+                trade_.checkAt = now + 0.5;
                 CaptureLocalSpend();
                 unsentSpend_ = 0;
                 size_t stacks = 0;
@@ -1156,6 +1157,26 @@ void Session::ClientContainers(double now) {
                 log_("trade window could not open here");
                 EndClientTrade();
             }
+        }
+    }
+    // The game builds the merchant's side once, when the window opens, from the shop counters it
+    // finds then; now and then it found none and the window stayed empty while the counters held
+    // the host's stock (nothing could be bought, a sale went nowhere). Opened again, a few times.
+    if (trade_.open && !trade_.refresh && trade_.checkAt > 0 && now >= trade_.checkAt && !world_.TradeWindowBusy()) {
+        size_t stacks = 0;
+        for (uint32_t id : trade_.counters)
+            if (auto it = entities_.find(id); it != entities_.end()) stacks += it->second.inv.size();
+        const int shown = world_.TradeWindowStock();
+        if (shown < 0) {
+            trade_.checkAt = now + 0.5;   // the window is not there yet
+        } else if (shown == 0 && stacks > 0 && trade_.reopens < 3) {
+            ++trade_.reopens;
+            trade_.checkAt = 0;
+            trade_.refresh = true;   // closed and opened again below
+            log_("trade window shows none of the shop's " + std::to_string(stacks) + " stacks: opened again (" + std::to_string(trade_.reopens) + ")");
+        } else {
+            if (shown == 0 && stacks > 0) log_("trade window still shows none of the shop's stock after 3 tries");
+            trade_.checkAt = 0;
         }
     }
     // the stock changed under our window (not while an item is on the mouse): the window closes, the
