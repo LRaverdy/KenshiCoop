@@ -2436,41 +2436,88 @@ void Session::ClientInventoryDiff(double now) {
     }
 }
 
+Session::DropPlan Session::PlanClientDrop(uint32_t netId, Entity& e, InvOp& op) {
+    op = InvOp{};
+    op.kind = InvOpKind::Drop;
+    op.fromNetId = netId;
+    // a chest we have open, a body, an NPC's backpack: our character nearest to it drops the item
+    // (named, the host checks it is ours and standing by it); our characters and their bags: themselves
+    Vec3 at;
+    if (!SelfDrop(netId) && DropSourcePos(e, at)) {
+        float best = kDropReach;
+        for (const auto& [oid, o] : entities_) {
+            if (!o.squad || o.container || o.owner != localId_) continue;
+            const float d = world_.DistanceTo(o.handle, at);
+            if (d <= best) { best = d; op.toNetId = oid; }
+        }
+    }
+    const uint32_t actor = DropRequestActor(op);
+    if (!actor) return DropPlan::NoActor;   // nobody of ours by that chest or body: the host would refuse it
+    return CheckActor(localId_, actor) == ActorVerdict::Ok ? DropPlan::Ok : DropPlan::NotOurs;
+}
+
+// Client: the inventories a drop can be asked from, for the inventory windows' drop hook (which
+// refuses the others at once: nothing moves here for a drop the host would never get). Our squad's
+// characters and the backpacks they wear, a container we have open, a body or an NPC's backpack with
+// one of ours by it.
+void Session::PublishDropSources(double now) {
+    if (now < nextDropSources_) return;
+    nextDropSources_ = now + 0.2;
+    std::vector<Handle> sources;
+    for (auto& [id, e] : entities_) {
+        if (!e.handle.valid()) continue;
+        bool candidate = false;
+        if (e.bag || e.container) candidate = e.present;
+        else if (e.squad) candidate = e.owner == localId_;
+        else candidate = (!e.buf.empty() && (e.buf.back().s.flags & (kFlagDown | kFlagDead))) ||
+                         (e.haveVitals && (e.vitals.flags & (kVitUnconscious | kVitDead)));   // a body one may strip
+        if (!candidate) continue;
+        InvOp op;
+        if (PlanClientDrop(id, e, op) == DropPlan::Ok) sources.push_back(e.handle);
+    }
+    world_.SetDropSources(sources);
+}
+
+void Session::RefusedDrop(Entity* e, const std::string& logged, const std::string& shown) {
+    log_(logged);
+    // our game may already have let the item go: the host's state comes back at once (not after the
+    // 10 s an item held by the mouse is given)
+    if (e && e->haveInv) { e->invDirty = true; e->invRetry = 0; e->invUnmatchedSince = 0; }
+    const double now = clock_();
+    if (now < nextDropNote_ && shown == lastDropNote_) return;   // the same one again and again: said once
+    nextDropNote_ = now + 2.0;
+    lastDropNote_ = shown;
+    AddChat("* " + shown, "drop refused here: " + shown);
+}
+
 void Session::SendLocalDrops() {
     std::vector<std::pair<Handle, ItemState>> drops;
     world_.TakeLocalDrops(drops);
     for (const auto& [h, item] : drops) {
-        bool sent = false;
-        for (auto& [id, e] : entities_) {
-            if (e.handle != h) continue;
-            InvOp op;
-            op.kind = InvOpKind::Drop;
-            op.fromNetId = id;
-            op.item = item;
-            // a chest we have open, a body, an NPC's backpack: our character nearest to it drops the item
-            // (named, the host checks it is ours and standing by it); our characters and their bags: themselves
-            Vec3 at;
-            if (!SelfDrop(id) && DropSourcePos(e, at)) {
-                float best = kDropReach;
-                for (const auto& [oid, o] : entities_) {
-                    if (!o.squad || o.container || o.owner != localId_) continue;
-                    const float d = world_.DistanceTo(o.handle, at);
-                    if (d <= best) { best = d; op.toNetId = oid; }
-                }
-            }
-            if (!DropRequestActor(op)) {   // nobody of ours by that chest or body: the host would refuse it
-                log_("drop to the ground not sent: no character of ours by it (" + item.templateSid + ")");
-                sent = true;
-                break;
-            }
-            if (!ClientMaySend(Msg::InvOp, DropRequestActor(op), "item drop")) { sent = true; break; }   // only our own characters drop things
-            Writer w;
-            Encode(w, op);
-            SendReliable(net_.serverPeer(), w);
-            sent = true;
-            break;
+        Entity* src = nullptr;
+        uint32_t srcId = 0;
+        for (auto& [id, e] : entities_)
+            if (e.handle == h) { src = &e; srcId = id; break; }
+        if (!src) {
+            RefusedDrop(nullptr, "drop to the ground not sent: the host does not know that inventory (" + item.templateSid + ")",
+                        "Objet non posé : l'hôte ne connaît pas cet inventaire.");
+            continue;
         }
-        if (!sent) log_("drop to the ground not sent: the host does not know that inventory (" + item.templateSid + ")");
+        InvOp op;
+        const DropPlan plan = PlanClientDrop(srcId, *src, op);
+        if (plan == DropPlan::NoActor) {
+            RefusedDrop(src, "drop to the ground not sent: no character of ours by it (" + item.templateSid + ")",
+                        "Objet non posé : aucun de tes persos n'est à côté.");
+            continue;
+        }
+        if (!ClientMaySend(Msg::InvOp, DropRequestActor(op), "item drop")) {   // only our own characters drop things (said by ClientMaySend)
+            if (src->haveInv) { src->invDirty = true; src->invRetry = 0; src->invUnmatchedSince = 0; }
+            continue;
+        }
+        op.item = item;
+        Writer w;
+        Encode(w, op);
+        SendReliable(net_.serverPeer(), w);
     }
 }
 
@@ -2731,6 +2778,7 @@ void Session::ClientTick(double now, bool live) {
     ClientBags(now);
     ClientInventoryDiff(now);
     SendLocalDrops();
+    PublishDropSources(now);
     for (auto& [id, e] : entities_) {
         if (!e.present || !e.invDirty || now < e.invRetry) continue;
         // Trading: the host's stock differs from what our window shows (another player bought or

@@ -293,6 +293,11 @@ void KenshiWorld::EndFrame() {
             v->shared.insert(a != alias_.end() ? a->second : h);
         }
     }
+    if (active_ && client_)
+        for (const kc::Handle& h : dropSources_) {   // the session names characters by the host's handle
+            auto a = alias_.find(h);
+            v->dropSources.insert(a != alias_.end() ? a->second : h);
+        }
     clientActive_.store(active_ && client_, std::memory_order_relaxed);
     view_.store(std::shared_ptr<const HookView>(std::move(v)), std::memory_order_release);
 }
@@ -1973,6 +1978,18 @@ void KenshiWorld::EndDialog(uint32_t dialogId) {
     dialogEvents_.push_back(std::move(d));
 }
 
+// Host: where an item a client asked to pick up went, once it left the ground (said in the log):
+// the character that was sent should hold it.
+std::string KenshiWorld::PickedItemWhere(kenshi::Character* c, const kc::Handle& itemHandle) {
+    void* item = kenshi::ResolveItem(itemHandle);
+    if (!item) return "joined a stack of the same kind in an inventory, or destroyed";
+    if (c && kenshi::InventoryHolds(c, item)) return "in the inventory of the character that was sent";
+    for (const auto& [h, o] : squad_)
+        if (o != c && kenshi::InventoryHolds(o, item)) return "in ANOTHER squad member's inventory (" + CharacterNameOf(h) + ")";
+    if (kenshi::ItemLoose(item)) return "loose again";
+    return "in an inventory outside the squad (taken by someone else?)";
+}
+
 void KenshiWorld::UpdatePendingPickups() {
     constexpr float kReach = 15.0f;
     const double now = NowSeconds();
@@ -2003,7 +2020,7 @@ void KenshiWorld::UpdatePendingPickups() {
         const bool described = loose && kenshi::DescribeGroundItem(item, ih, st, ip);
         if (!loose || !described || now > p.until) {
             if (!c) Log("client pick up: the character is gone, pick up abandoned");
-            else if (!loose) Log("client pick up: the item left the ground (taken)");
+            else if (!loose) Log("client pick up: the item left the ground (taken): %s", PickedItemWhere(c, p.item).c_str());
             else if (!described) Log("client pick up: the item can no longer be read, pick up abandoned");
             else {
                 const float d = kenshi::GetPosition(c, cp) ? Dist(cp, ip) : -1.0f;
@@ -2016,7 +2033,8 @@ void KenshiWorld::UpdatePendingPickups() {
         if (hasPos && Dist(cp, ip) < kReach) {
             HostCallScope scope;
             const bool ok = kenshi::CallGiveItem(c, item);
-            Log("client pick up: character next to the item, %s", ok ? "taken" : "giveItem FAILED (inventory full?)");
+            Log("client pick up: character next to the item, %s%s", ok ? "taken: " : "giveItem FAILED (inventory full?)",
+                ok ? PickedItemWhere(c, p.item).c_str() : "");
             it = pickups_.erase(it);
             continue;
         }

@@ -196,8 +196,15 @@ public:
     virtual bool OpenContainerWindow(const Handle& looter, const Handle& container) { (void)looter; (void)container; return false; }
     virtual bool ContainerWindowOpen() { return false; }
     virtual void CloseContainerWindows() {}
-    // Client: items the local player dropped from a character (asked of the host, not done locally).
+    // Client: items the local player dropped from a character (asked of the host, not done locally),
+    // each named by the handle the session knows its inventory by: the host's handle for a
+    // character (a stand-in or a character that changed squad has another one here), ours for a
+    // container or a worn backpack.
     virtual void TakeLocalDrops(std::vector<std::pair<Handle, ItemState>>& out) { out.clear(); }
+    // Client: the inventories a drop to the ground can be asked of the host from right now (same
+    // handles as TakeLocalDrops). The inventory windows' drop hook refuses any other at once, so that
+    // nothing moves here for a drop the host would never get.
+    virtual void SetDropSources(const std::vector<Handle>& handles) { (void)handles; }
     // Trade with merchants. Host: trade windows the game asked to open for another player's character
     // (who trades, with whom); a merchant's shop counters (the containers its trade window sells
     // from); a character's cats (ours: the player faction's; a merchant: its own); move the price of
@@ -713,6 +720,14 @@ private:
     void SendInventories(double now, bool force, PeerId onlyTo);
     void ClientInventoryDiff(double now);
     void SendLocalDrops();
+    // Client: can a drop from that inventory go to the host now? Fills the request (the character that
+    // drops it). Silent: the callers say why.
+    enum class DropPlan : uint8_t { Ok, NoActor, NotOurs };
+    DropPlan PlanClientDrop(uint32_t netId, Entity& e, InvOp& op);
+    void PublishDropSources(double now);
+    void RefusedDrop(Entity* e, const std::string& logged, const std::string& shown);   // back to the host's state, said once
+    double nextDropSources_ = 0, nextDropNote_ = 0;
+    std::string lastDropNote_;
     void HostInvOp(uint8_t from, const InvOp& op, const InvOp* swapWith = nullptr);
     void HostInvOps();
     void HostTradeOp(uint8_t from, const InvOp& op);

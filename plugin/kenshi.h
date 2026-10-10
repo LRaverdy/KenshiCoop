@@ -742,6 +742,10 @@ void GroundItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out)
 // Any item lying in the world, out of every inventory, even one the game keeps in an item group or
 // as a non-physical prop (shop goods, town clutter): what a player can still pick up or steal.
 bool ItemLoose(void* item);
+// Loose and really out there: active in the world (+0x190) or kept in an item group (shop goods, town
+// clutter). An item the game just made (a merchant's restock, a new NPC's gear) is loose too until its
+// first inventory takes it, but neither: its giveItem is no pickup.
+bool ItemPlacedInWorld(void* item);
 void LooseItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out);
 // An item object (Item and its 13 subclasses: weapons, armour, money, backpacks, limbs...) put in
 // the world by Item::activate and lying there: out of every inventory, active (+0x190), not in an item
@@ -756,6 +760,11 @@ void* InventoryOfHolder(void* holder);         // a character's or a building's 
 // Inventory::dropItem on the window's inventory (vt 0x38).
 bool InventoryDrop(void* inventory, void* item);
 bool InventoryRemove(void* inventory, void* item);   // Inventory::removeItemDontDestroy(item, all, true): what dropItem does after the drop
+// Client: a drop refused here: the item stays in that inventory. Still listed: nothing to do; taken out
+// already (held by the mouse): put back where it was (its section and cell), else anywhere in the bag
+// ("main"). Never the game's addItem, which destroys what it cannot store. False: not put back.
+bool KeepInInventory(void* inventory, void* item);
+bool InventoryHolds(void* holder, void* item);       // that item object is in the holder's inventory (worn or not)
 // Host: an item of a building's inventory (a chest) dropped by a character standing by it: out of
 // the chest, then that character's dropItem (what the game's Building::dropItem does with its user).
 bool DropFromHolder(void* holder, void* item, Character* dropper);

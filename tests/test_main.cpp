@@ -323,6 +323,9 @@ struct FakeWorld : IWorld {
     }
     std::vector<std::pair<Handle, ItemState>> localDrops;   // client: items the player dropped to the ground
     void TakeLocalDrops(std::vector<std::pair<Handle, ItemState>>& out) override { out.swap(localDrops); localDrops.clear(); }
+    std::vector<Handle> dropSources;   // client: where the session says a drop can be asked from
+    void SetDropSources(const std::vector<Handle>& handles) override { dropSources = handles; }
+    bool DropSource(const Handle& h) const { return std::find(dropSources.begin(), dropSources.end(), h) != dropSources.end(); }
     int drops = 0;
     Handle lastDropper;
     bool ExecuteInvOp(const Handle& from, const Handle& to, const InvOp& op) override {
@@ -2329,6 +2332,90 @@ static void TestGroundDrops() {
     hw.chars[2].dest = hw.chars[2].pos;
     forge(net[FakeWorld::H(2)]);
     CHECK(hw.drops == 3 && hw.boxes[700].items.size() == 1);
+}
+
+// v0.3.0 session (4 players over Steam): items dragged to the ground by clients vanished. The drop
+// named the inventory by our own handle, which the host's handle of a stand-in or of a character
+// that changed squad is not ("the host does not know that inventory"), and the item had already
+// left our inventory. Now: the session tells the world which inventories a drop may be asked from
+// (characters by the host's handle), the hook refuses the others at once, and a drop refused late
+// brings the host's state back at once, with a French note.
+static void TestClientDropGate() {
+    std::printf("session: client drops: where they may be asked from; refused ones change nothing here, said in French\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    auto item = [](const char* sid, int q, const char* sec, int x, int y) {
+        ItemState i; i.templateSid = sid; i.quantity = q; i.section = sec; i.x = int16_t(x); i.y = int16_t(y); return i;
+    };
+    hw.chars[1].items = {item("bread", 2, "main", 0, 0)};
+    hw.chars[2].items = {item("building-materials", 2, "main", 0, 0), item("sword", 1, "main", 2, 0)};
+    hw.boxes[700] = {"chest", {210, 0, 5}, {item("ore", 5, "main", 0, 0)}};
+    hw.chars[3].squad = false;   // an NPC
+    AtMenu(cw);
+    cw.boxes = hw.boxes;
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    host.Assign(FakeWorld::H(2), 2);
+    Run({{&host, &hw}, {&cli, &cw}}, 1.5, [&] { return cw.DropSource(FakeWorld::H(2)); });
+    // our own character (by the host's handle): yes; the host's character, a chest not open: no
+    CHECK(cw.DropSource(FakeWorld::H(2)));
+    CHECK(!cw.DropSource(FakeWorld::H(1)) && !cw.DropSource(FakeWorld::H(3)) && !cw.DropSource(FakeWorld::B(700)));
+    // the chest once open, with our character by it; no longer once our character walked away
+    cw.containerReqs.push_back({FakeWorld::H(2), "chest", {210, 0, 5}});
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cw.DropSource(FakeWorld::B(700)); });
+    CHECK(cw.DropSource(FakeWorld::B(700)));
+    hw.chars[2].pos = hw.chars[2].dest = {5000, 0, 5000};
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return !cw.DropSource(FakeWorld::B(700)); });
+    CHECK(!cw.DropSource(FakeWorld::B(700)) && cw.DropSource(FakeWorld::H(2)));
+    // a knocked-out NPC far from all of ours: not a source; a drop from it let through just before
+    // (the item already left our copy) is refused here (nobody of ours by it) and the host's state
+    // comes back at once, not after the 10 s given to an item held by the mouse
+    hw.chars[3].items = {item("knife", 1, "main", 0, 0)};
+    hw.chars[3].vit.flags = kVitUnconscious;
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return cw.chars[3].items.size() == 1; });
+    CHECK(cw.chars[3].items.size() == 1 && !cw.DropSource(FakeWorld::H(3)));
+    cw.chars[3].items.clear();
+    cw.localDrops.push_back({FakeWorld::H(3), item("knife", 1, "main", 0, 0)});
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return cw.chars[3].items.size() == 1; });
+    CHECK(cw.chars[3].items.size() == 1 && hw.chars[3].items.size() == 1 && hw.drops == 0);
+    hw.chars[2].pos = hw.chars[2].dest = {200, 0, 0};
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return cw.DropSource(FakeWorld::H(3)); });
+    CHECK(cw.DropSource(FakeWorld::H(3)));   // the body, with one of ours by it now
+    // the backpack our character wears: named itself (our handle of it), dropped by the host from it
+    hw.chars[2].bagSid = "small-pack"; hw.chars[2].bagSerial = 7002;
+    cw.chars[2].bagSid = "small-pack"; cw.chars[2].bagSerial = 9002;
+    hw.chars[2].bag = {item("ration", 3, "main", 0, 0)};
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return cw.chars[2].bag == hw.chars[2].bag && cw.DropSource(FakeWorld::Pk(9002)); });
+    CHECK(cw.DropSource(FakeWorld::Pk(9002)) && !cw.DropSource(FakeWorld::Pk(7002)));
+    const int drops0 = hw.drops;
+    cw.chars[2].bag.clear();   // the hook let it go (prediction)
+    cw.localDrops.push_back({FakeWorld::Pk(9002), item("ration", 3, "main", 0, 0)});
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return hw.chars[2].bag.empty(); });
+    CHECK(hw.chars[2].bag.empty() && hw.drops == drops0 + 1 && hw.lastDropper == FakeWorld::Pk(7002));
+    // A drop named by a handle the host does not know (what a stand-in's own handle was before the
+    // fix): no request, a French note, and nothing of ours lost
+    const size_t chat0 = cli.chatLog().size();
+    cw.localDrops.push_back({FakeWorld::H(4242), item("building-materials", 2, "main", 0, 0)});
+    Run({{&host, &hw}, {&cli, &cw}}, 1.0);
+    CHECK(hw.drops == drops0 + 1 && hw.chars[2].items.size() == 2);
+    bool noted = false;
+    for (size_t i = chat0; i < cli.chatLog().size(); ++i) noted = noted || cli.chatLog()[i].find("Objet non posé") != std::string::npos;
+    CHECK(noted);
+    // A drop the hook let through but refused late (the host's character): the host's state comes
+    // back at once, not 10 s later (the item had left our inventory: prediction undone)
+    cw.chars[1].items.clear();
+    cw.localDrops.push_back({FakeWorld::H(1), item("bread", 2, "main", 0, 0)});
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return cw.chars[1].items.size() == 1; });
+    CHECK(cw.chars[1].items.size() == 1 && hw.chars[1].items.size() == 1 && hw.drops == drops0 + 1);
+    // the same from our own character's inventory, with nobody's handle mixed up: done by the host
+    cw.chars[2].items.erase(cw.chars[2].items.begin());
+    cw.localDrops.push_back({FakeWorld::H(2), item("building-materials", 2, "main", 0, 0)});
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return hw.chars[2].items.size() == 1; });
+    CHECK(hw.chars[2].items.size() == 1 && hw.drops == drops0 + 2 && cw.chars[2].items == hw.chars[2].items);
 }
 
 // ---- fix G2: swaps, merges and refusals in looting
@@ -4453,6 +4540,7 @@ int main() {
     TestInventories();
     TestInventorySwaps();
     TestGroundDrops();
+    TestClientDropGate();
     TestTrade();
     TestTravellingTrade();
     TestCrashRejoin();

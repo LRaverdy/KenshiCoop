@@ -16,13 +16,29 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   recruté est bien arrivé dans l'escouade (chez l'hôte) mais le client ne le voit pas.
 - **Fenêtre de sortie des mines invisible chez les clients** (l'inventaire de production). Vérifier
   tous les types de mines et d'ateliers / bâtiments de production.
-- **Objet glissé au sol par le client 2 disparu** : il n'est pas apparu au sol, il a disparu (pas
-  à chaque fois). Perte d'objet : prioritaire.
+- ~~**Objet glissé au sol par le client 2 disparu**~~ : il n'est pas apparu au sol, il a disparu (pas
+  à chaque fois). Perte d'objet : prioritaire. — **corrigé** (à vérifier en jeu), voir l'entrée
+  « armes jetées » plus bas : même cause (handle local d'une doublure envoyé à la place de celui
+  de l'hôte, objet déjà retiré de l'inventaire du client).
 - **Joueur 3 dans une ville voisine : parler aux PNJ ne fait rien** (aucune fenêtre de dialogue).
-- **Ramassage par le client 2 : objets perdus** (prioritaire, lié au point « objet glissé au sol
+- ~~**Ramassage par le client 2 : objets perdus**~~ (prioritaire, lié au point « objet glissé au sol
   disparu ») : un objet ramassé disparaît du sol mais n'arrive pas dans son inventaire ; une autre
   fois il est bien arrivé puis a disparu de l'inventaire au bout d'un moment (inventaire réécrit
-  par celui de l'hôte, où l'objet n'est jamais arrivé ?).
+  par celui de l'hôte, où l'objet n'est jamais arrivé ?). — **corrigé en partie** (à vérifier en
+  jeu). Ce que dit le journal : les ramassages des clients réussissent chez l'hôte (« pick up Rhum de
+  Cactus -> ok », « the item left the ground (taken) ») ; nass4 a ensuite voulu reposer le fer qu'il
+  venait de ramasser (22:24:28 puis 22:24:43 « drop … not sent ») : l'objet a quitté son inventaire
+  chez lui sans partir chez l'hôte, d'où « arrivé puis disparu ». Corrigé avec les dépôts (entrée
+  suivante). En plus : (1) la reconstruction d'un inventaire du client laissait le jeu **détruire** un
+  objet qu'elle ne pouvait pas poser à la place de l'hôte (« cannot place 42243-rebirth.mod » puis
+  « here missing », 58 fois) : il va maintenant dans le sac ; (2) le jeu du client ne ramasse plus
+  jamais un objet du monde lui-même (avant : seulement refusé pour un perso suivi dans la dernière
+  seconde), sinon l'objet serait dans un inventaire que l'hôte n'a pas et la synchro l'effacerait ;
+  (3) l'hôte journalise où arrive un objet ramassé pour un client (« in the inventory of the
+  character that was sent »). Les 8624 « host picked up item …: we do not have it » étaient des
+  objets neufs (équipement d'une escouade qui apparaît, stock d'un marchand) que l'hôte annonçait
+  comme ramassés : il ne les annonce plus (`kenshi::ItemPlacedInWorld`). Non trouvé : un ramassage
+  dont l'objet n'arrive jamais ; si ça se reproduit, la nouvelle ligne de l'hôte dira où il est allé.
 - **Construction par le client 3** : la construction s'est bien passée, mais (1) la jauge des
   matériaux de construction du chantier ne montrait pas les matériaux apportés (chez le client) ;
   (2) une fois fini, le bâtiment n'a pas de collision chez le client (on le traverse), alors qu'un
@@ -55,7 +71,7 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   trop espacées, orientation / animation de marche pas mise à jour (marche jouée à l'envers quand
   le PNJ est déplacé vers l'arrière de sa direction). Mesurer : fréquence des positions reçues
   par PNJ chez ce client, écart d'orientation.
-- **Client 2 (nass4) : armes jetées / échangées sur un perso de son escouade** : changé chez lui,
+- ~~**Client 2 (nass4) : armes jetées / échangées sur un perso de son escouade**~~ : changé chez lui,
   pas chez les autres ni chez l'hôte. Journal de l'hôte, plusieurs fois entre 23:08 et 23:11 :
   « [nass4] drop to the ground not sent: the host does not know that inventory
   (52295-rebirth.mod) » (et 1020-gamedata.base). Le client fait le geste dans son jeu, ne
@@ -71,6 +87,20 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   le client ne retrouve pas l'inventaire de son propre perso côté hôte pour un dépôt au sol, alors
   que le test `grounddrop` (39/39, en local) passe : chercher pourquoi (identifiant du perso après
   une reconnexion, perso créé par l'éditeur, handle différent par Steam).
+  **Corrigé** (à vérifier en jeu). *Cause* : `KenshiWorld::TakeLocalDrops` nommait l'inventaire par
+  le handle **local** du perso, la session le cherchait parmi les handles **de l'hôte**. Ils
+  diffèrent pour toute doublure (journal : « stand-in 1:582:… for the host's 1:47:… ») et tout perso
+  qui a changé d'escouade (les persos donnés à un joueur, un joueur revenu après un plantage) ;
+  en local, même sauvegarde, mêmes handles : `grounddrop` passait. Les ordres passaient déjà par
+  `HostHandleOf` (rob parlait aux PNJ avec ce même perso pendant que ses dépôts échouaient). Ni sac à
+  dos ni conteneur de mod : 52295 et 1020 sont des armes portées. Le crochet avait déjà retiré
+  l'objet chez le client. *Correction* : handle de l'hôte pour un perso ; la session publie les
+  inventaires d'où un dépôt peut partir (`SetDropSources`) et la fenêtre d'inventaire refuse
+  aussitôt les autres (l'objet reste ou revient à sa place, toast « Objet non posé ») ; le jeu du
+  client ne pose plus jamais rien lui-même ; un sac à dos est nommé lui-même (avant : par son
+  porteur, l'hôte cherchait l'objet dans le mauvais inventaire) ; un refus tardif remet l'état de
+  l'hôte tout de suite. Test `TestClientDropGate`. Reste à vérifier en jeu que l'objet tenu à la
+  souris revient bien à sa place (`kenshi::KeepInInventory`).
 - **Parler aux PNJ : lent, et parfois impossible** (rob, Ruche, 23:14). (1) Lent : l'ordre
   « parler » part chez l'hôte, le perso marche jusqu'au PNJ, puis la conversation s'ouvre ; aucun
   retour visible pendant ce temps. (2) Impossible : « [rob] order "talk" (12) -> refused: Marchand

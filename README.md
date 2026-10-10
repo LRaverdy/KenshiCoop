@@ -155,7 +155,9 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
   déplacé est rejoué par l'hôte.
 - **Vol** : prendre dans un contenant qui n'est pas à toi est un vol, décidé par le jeu de l'hôte.
   Si on te voit, la fenêtre se ferme et l'objet reste.
-- **Objets au sol** : posés et ramassés, au même endroit pour tout le monde.
+- **Objets au sol** : posés et ramassés, au même endroit pour tout le monde. Un objet que l'hôte ne
+  peut pas poser pour toi reste dans ton inventaire (message « Objet non posé »), il ne disparaît
+  plus.
 - **Cadavres** : restent synchronisés et se fouillent, près des joueurs.
 - **Carte et repères** : sur la carte du jeu (onglet CARTE de la fenêtre de gestion, bouton MAP), tous les persos de tous les joueurs à la couleur
   de leur joueur et les escouades hostiles qui nous visent en rouge ; une minicarte ronde ; un
