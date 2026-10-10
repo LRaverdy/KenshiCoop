@@ -389,6 +389,12 @@ public:
     // client (diagnostics): newest state received from the host and the state being rendered now
     bool TargetOf(const Handle& h, EntityState& latest, EntityState& rendered) const;
     size_t joiningPlayers() const;                            // host: players still loading the world
+    // Host: the join queue, the player whose turn it is first (phase: what they are doing;
+    // waiting: still in the queue).
+    struct QueueEntry { uint8_t id = 0; std::string name; bool waiting = true; JoinPhase phase = JoinPhase::Saving; };
+    std::vector<QueueEntry> joinQueue() const;
+    // Client: our place in the host's join queue (nullptr: not waiting in it).
+    const JoinQueueMsg* queueStatus() const { return queued_ ? &queue_ : nullptr; }
     // Client: the conversation window of one of our characters (open = false: none).
     struct DialogView {
         bool open = false;
@@ -499,6 +505,11 @@ private:
         std::unordered_map<uint32_t, Sent> sent;
         bool worldSent = false;              // the world save was streamed to this player
         double joinedAt = 0;
+        double worldSentAt = 0;              // when it was streamed (the loading deadline runs from there)
+        double turnStartedAt = -1;           // their turn in the join queue began (-1: still queued)
+        double inGameAt = 0;                 // FinishJoin
+        bool editorExpected = false;         // asked to make their character (EditCharacter sent)
+        bool editorSeen = false;             // ... and their editor opened
         uint64_t readyHash = 0;              // pending Ready to verify on the next live tick
         bool readyPending = false;
         bool kicked = false;
@@ -773,6 +784,18 @@ private:
     std::vector<WorldFile> exportFiles_;
     bool exportReady_ = false;
     uint64_t exportHash_ = 0;
+
+    // host join queue: one player at a time joins (save, download, load, character editor)
+    std::deque<uint8_t> joinQueue_;   // waiting their turn, first come first served
+    uint8_t joinTurn_ = 0;            // the player whose turn it is (0: none)
+    std::string queueSig_;            // what the queued players were last told
+    double queueSentAt_ = -1e9;
+    void AdvanceJoinQueue(double now);
+    void SendJoinQueue(double now);
+    JoinPhase TurnPhase() const;
+    // client: our place in the host's join queue
+    JoinQueueMsg queue_;
+    bool queued_ = false;
 
     // client world download
     WorldBegin dlInfo_;

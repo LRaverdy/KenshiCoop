@@ -270,7 +270,7 @@ Ordre dans `Tick()` (`main.cpp`) :
 
 ## Messages (`common/include/kc/protocol.h`)
 
-Version du protocole : **27** au moment de la rédaction. Elle augmente à chaque changement de
+Version du protocole : **33** au moment de la rédaction. Elle augmente à chaque changement de
 format, et une version différente est refusée à la connexion.
 
 | # | Message | Sens | Rôle |
@@ -325,6 +325,7 @@ format, et une version différente est refusée à la connexion.
 | 55 | BuildAction | ⇄ | lot E : acheter / démonter (client : demande ; hôte : rejeu d'un achat chez tous) |
 | 70 | Stall | H→C | fix G6 : ton jeu va se figer (TP lointaine, zone à charger), la connexion attend jusqu'à 2 min |
 | 71 | Floors | H→C | fix G6 : groupe d'étage (`CharMovement::floorGroup`) des persos, à chaque changement et toutes les 5 s |
+| 72 | JoinQueue | H→C | file d'attente des arrivées : ta place (1 = ton tour), le total, qui arrive et son étape (sauvegarde, chargement, éditeur) ; à chaque changement et toutes les 2 s |
 
 ## Les flux, système par système
 
@@ -333,6 +334,9 @@ format, et une version différente est refusée à la connexion.
    - Un nom déjà pris devient « Nom 2 ».
    - Une connexion du même compte Steam remplace l'ancienne.
    - L'hôte répond `Welcome` et annonce `PlayerJoined` aux autres.
+   - Le joueur entre dans la **file d'attente des arrivées** (`joinQueue_`, premier arrivé, premier
+     servi). Les étapes 2 à 6 et l'éditeur se font **pour un seul joueur à la fois**
+     (`joinTurn_`, voir « File d'attente » ci-dessous).
 2. L'hôte **gèle son monde** (`HoldForJoin` : vraie pause, réimposée si quelqu'un appuie sur
    lecture). Avec `own_character=1`, il retrouve ou crée le personnage du joueur
    (`EnsurePlayerCharacter`) **avant** de sauvegarder.
@@ -349,6 +353,31 @@ format, et une version différente est refusée à la connexion.
    - la météo complète, puis les effets une seconde plus tard ;
    - les escouades ;
    - `EditCharacter` si le personnage vient d'être créé.
+
+#### File d'attente des arrivées (`AdvanceJoinQueue`, `SendJoinQueue`)
+- **Pourquoi** : l'empreinte vérifiée à l'étape 6 est l'ensemble des handles de l'escouade. Le
+  personnage d'un nouveau venu la change. Avant la file, plusieurs arrivées partageaient une
+  sauvegarde : quand un joueur arrivait après l'envoi de la sauvegarde aux premiers, l'hôte créait
+  son personnage et sauvegardait de nouveau pour lui seul ; les premiers chargeaient un monde qui
+  ne correspondait plus à celui de l'hôte et restaient bloqués jusqu'au délai de 300 s (essai
+  `join4` du 10/10 : Joueur2 et Joueur3 « joining took too long », seul Joueur4 entré).
+- **Un tour** commence quand le joueur précédent a fini. Le délai de 300 s court à partir du
+  début du tour (puis de l'envoi du monde), jamais pendant l'attente. Le tour se termine quand le
+  joueur est dans le monde **et** a fermé l'éditeur (`EditState`), ou sans éditeur s'il avait déjà
+  son personnage ; aussi s'il part, plante ou est exclu, après 10 min d'éditeur, ou si l'éditeur
+  ne s'est pas ouvert 30 s après son arrivée. Le tour suivant commence aussitôt, avec une
+  **sauvegarde neuve** qui contient tous les joueurs arrivés avant.
+- **Ceux qui attendent** reçoivent `JoinQueue` (position, total, joueur en cours, étape) à chaque
+  changement et toutes les 2 s. Le client reste en « Downloading » : chaque `JoinQueue` repousse
+  son propre délai, la connexion ENet reste vivante. Panneau et fenêtre Multijoueur : « File
+  d'attente : position 2/3 — en attente de Joueur2 (création du personnage)… ». Un joueur qui
+  part de la file est retiré tout de suite (`ForgetPlayer`) et les positions sont renumérotées.
+- **L'hôte** liste la file dans son panneau, sa fenêtre Multijoueur et la commande `status` de la
+  console (« File d'attente des arrivées : 1. Joueur2 — création du personnage, 2. Joueur3 —
+  attend son tour »). Journal : « join queue: … ».
+- Le monde reste gelé du premier tour au dernier. Sur un même PC, les clients partagent le
+  dossier `KenshiCoopJoin` : la file évite aussi qu'un téléchargement écrase celui d'un autre
+  pendant son chargement.
 
 ### Positions (`SendSnapshots`, `KenshiWorld::Apply`)
 - Le client garde 1 s d'instantanés par entité et rend l'état à `heure de l'hôte − 50 ms`. Il
@@ -533,7 +562,10 @@ format, et une version différente est refusée à la connexion.
 
 ### Éditeur de personnage
 1. `EditCharacter` : le client ouvre l'éditeur sur son personnage.
-2. `EditState` : l'hôte met la partie en pause tant qu'un joueur édite (10 min au plus).
+2. `EditState` : l'hôte met la partie en pause tant qu'au moins un joueur édite (10 min au plus
+   chacun) ; plusieurs éditeurs ouverts en même temps (un nouveau venu et un joueur qui rouvre le
+   sien) : la pause dure jusqu'à la fermeture du dernier (« nobody is in the character editor any
+   more: the game resumes »). Le client envoie `EditState` à l'image même où l'éditeur s'ouvre.
 3. Validation (hook `closeCharacterEditor`) : le client envoie `Appearance` (toutes les valeurs de
    la GameData d'apparence et le nom).
 4. L'hôte l'applique (le jeu reconstruit le corps) et la renvoie aux autres. Les éditions de

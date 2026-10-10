@@ -185,7 +185,8 @@ void DrawMultiplayer(const OverlayModel& m, float w, float h) {
         return;
     }
     ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s", m.stateText.c_str());
-    if (m.download >= 0) ImGui::ProgressBar(m.download, ImVec2(-1.0f, 0.0f));
+    for (const auto& q : m.queueLines) ImGui::TextUnformatted(q.c_str());
+    if (m.download >= 0 && m.queueLines.empty()) ImGui::ProgressBar(m.download, ImVec2(-1.0f, 0.0f));
     if (!m.errorText.empty()) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", m.errorText.c_str());
     if (m.leftHostWorld) {
         ImGui::Separator();

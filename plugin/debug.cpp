@@ -113,7 +113,19 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         std::ostringstream o;
         o << "ok state=" << StateStr(s.state()) << " live=" << live << " ready=" << w.Ready() << " id=" << int(s.localId())
           << " entities=" << s.entityCount() << " npcs=" << s.npcCount() << " missingNpcs=" << s.missingNpcs()
-          << " joining=" << s.joiningPlayers() << " busy=" << kenshi::SaveManagerBusy() << " error=\"" << s.lastError() << "\"";
+          << " joining=" << s.joiningPlayers();
+        // join queue (names without spaces): client "queue=2/3 queueWait=<name> queuePhase=saving|loading|editor",
+        // host "queue=<name>:<phase>,<name>:wait,..."
+        auto word = [](std::string t) { for (char& c : t) if (c == ' ' || c == '"') c = '_'; return t.empty() ? std::string("-") : t; };
+        auto phase = [](kc::JoinPhase p) { return p == kc::JoinPhase::Saving ? "saving" : p == kc::JoinPhase::Loading ? "loading" : "editor"; };
+        if (const kc::JoinQueueMsg* q = s.queueStatus())
+            o << " queue=" << int(q->position) << '/' << int(q->total) << " queueWait=" << word(q->current) << " queuePhase=" << phase(q->phase);
+        else if (s.isHost()) {
+            std::string list;
+            for (const auto& e : s.joinQueue()) list += (list.empty() ? "" : ",") + word(e.name) + ':' + (e.waiting ? "wait" : phase(e.phase));
+            o << " queue=" << (list.empty() ? "-" : list);
+        } else o << " queue=-";
+        o << " busy=" << kenshi::SaveManagerBusy() << " error=\"" << s.lastError() << "\"";
         return o.str();
     }
     if (cmd == "load") {

@@ -114,6 +114,21 @@ void Encode(Writer& w, const PlayerLeft& m) { w.u8(uint8_t(Msg::PlayerLeft)); w.
 bool Decode(Reader& r, PlayerLeft& m) { m.id = r.u8(); return Done(r); }
 void Encode(Writer& w, const StallMsg& m) { w.u8(uint8_t(Msg::Stall)); w.u16(m.seconds); }
 bool Decode(Reader& r, StallMsg& m) { m.seconds = r.u16(); return Done(r); }
+void Encode(Writer& w, const JoinQueueMsg& m) {
+    w.u8(uint8_t(Msg::JoinQueue));
+    w.u8(m.position);
+    w.u8(m.total);
+    w.u8(uint8_t(m.phase));
+    w.str(m.current);
+}
+bool Decode(Reader& r, JoinQueueMsg& m) {
+    m.position = r.u8();
+    m.total = r.u8();
+    const uint8_t ph = r.u8();
+    m.phase = JoinPhase(ph);
+    m.current = r.str(kMaxNameLen);
+    return Done(r) && ph <= uint8_t(JoinPhase::Editor) && m.position >= 1 && m.position <= m.total && m.total <= kMaxPlayers;
+}
 void Encode(Writer& w, const FloorsMsg& m) {
     w.u8(uint8_t(Msg::Floors));
     w.varint(m.entries.size());
@@ -751,7 +766,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || (t > uint8_t(Msg::BuildAction) && t != uint8_t(Msg::JobList) && t != uint8_t(Msg::Stall) && t != uint8_t(Msg::Floors))) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || (t > uint8_t(Msg::BuildAction) && t != uint8_t(Msg::JobList) && t != uint8_t(Msg::Stall) && t != uint8_t(Msg::Floors) && t != uint8_t(Msg::JoinQueue))) return std::nullopt;
     return Msg(t);
 }
 

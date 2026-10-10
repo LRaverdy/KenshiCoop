@@ -165,6 +165,30 @@ void HandleHotkeys() {
 }
 
 // ---- the Multijoueur window and the console (French: what the players read)
+const char* FrenchPhase(kc::JoinPhase p) {
+    switch (p) {
+    case kc::JoinPhase::Saving: return "préparation du monde";
+    case kc::JoinPhase::Loading: return "chargement du monde";
+    case kc::JoinPhase::Editor: return "création du personnage";
+    }
+    return "";
+}
+
+// The join queue in French: a waiting client's place, or (host) everyone in it.
+std::vector<std::string> QueueLines() {
+    std::vector<std::string> out;
+    if (const kc::JoinQueueMsg* q = g_session->queueStatus()) {
+        out.push_back("File d'attente : position " + std::to_string(q->position) + "/" + std::to_string(q->total) + " — en attente de " + q->current +
+                      " (" + FrenchPhase(q->phase) + ")…");
+    } else if (g_session->isHost()) {
+        const auto list = g_session->joinQueue();
+        if (!list.empty()) out.push_back("File d'attente des arrivées :");
+        for (size_t i = 0; i < list.size(); ++i)
+            out.push_back("  " + std::to_string(i + 1) + ". " + list[i].name + " — " + (list[i].waiting ? std::string("attend son tour") : FrenchPhase(list[i].phase)));
+    }
+    return out;
+}
+
 const char* FrenchState(kc::SessionState s) {
     switch (s) {
     case kc::SessionState::Idle: return "Hors ligne";
@@ -284,6 +308,7 @@ void ConsoleCommand(const std::string& line) {
         if (client && g_session->missingNpcs()) out(std::to_string(g_session->missingNpcs()) + " PNJ de l'hôte pas encore présents ici");
         if (client && g_session->missingSquad()) out(std::to_string(g_session->missingSquad()) + " membres de l'escouade introuvables ici");
         if (host && g_session->joiningPlayers()) out(std::to_string(g_session->joiningPlayers()) + " joueur(s) en train de rejoindre");
+        for (const auto& q : QueueLines()) out(q);
         if (!g_session->lastError().empty() && !host && !client) out("dernière erreur : " + FrenchError(g_session->lastError()));
         return;
     }
@@ -460,7 +485,10 @@ void PublishOverlay() {
     m.visible = g_overlayVisible;
     m.title = std::string("KenshiCoop ") + kVersion + "  -  " + FrenchState(g_session->state());
     const auto st = g_session->state();
-    if (st == kc::SessionState::Downloading) {
+    m.queueLines = QueueLines();
+    if (st == kc::SessionState::Downloading && g_session->queueStatus()) {
+        m.lines.insert(m.lines.end(), m.queueLines.begin(), m.queueLines.end());
+    } else if (st == kc::SessionState::Downloading) {
         m.lines.push_back("Réception du monde de l'hôte : " + std::to_string(int(g_session->downloadProgress() * 100)) + " %");
     } else if (st == kc::SessionState::Loading || st == kc::SessionState::Connecting || st == kc::SessionState::Handshake) {
         m.lines.push_back("Patiente...");
@@ -486,6 +514,7 @@ void PublishOverlay() {
             m.lines.push_back("ATTENTION : " + std::to_string(g_session->missingSquad()) + " membres de l'escouade manquent ici (charge la sauvegarde de l'hôte)");
         if (g_session->isHost() && g_session->joiningPlayers())
             m.lines.push_back(std::to_string(g_session->joiningPlayers()) + " joueur(s) en train d'arriver : partie en pause");
+        if (g_session->isHost()) m.lines.insert(m.lines.end(), m.queueLines.begin(), m.queueLines.end());
         if (g_session->isHost()) m.lines.push_back("Ctrl+Shift+G  confier la sélection au joueur suivant");
         m.lines.push_back("Ctrl+Shift+L  quitter la session");
     }
