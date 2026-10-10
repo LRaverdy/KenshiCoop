@@ -39,6 +39,15 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   pas dans la liste des tâches qu'un client peut envoyer (`kc::TaskTargetAllowed`, protocol.cpp) :
   l'ajouter, cible = bâtiment du joueur (fini ou en chantier). Revoir toute la liste pour
   d'autres tâches légitimes manquantes (réparer, etc.).
+- **Commerce du joueur 3 (rob) : fenêtre qui clignote et vide** (23:07). Journal de l'hôte :
+  « trade window open: 31 shop counters holding 136 stacks », puis « trade window shows none of
+  the shop's 136 stacks: opened again (1..3) » et « still shows none … after 3 tries ». Le
+  clignotement vient du contournement (réouverture 3 fois) ; le vrai bug est la fenêtre du jeu
+  construite sans les comptoirs (marchand en ville avec 31 comptoirs). C'est le défaut
+  intermittent « tradelist merchant → 0 » déjà vu en test, jamais compris : à trouver
+  (comptoirs du client pas encore reliés au bâtiment quand la fenêtre se construit ? bâtiment
+  du marchand différent chez le client ?). Supprimer la réouverture qui clignote une fois la
+  cause corrigée.
 - **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
