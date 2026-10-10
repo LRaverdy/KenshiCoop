@@ -447,7 +447,7 @@ void DrawDiplomacy(const OverlayModel& m, float w, float h) {
 // "Affichage": what the map layer shows. Each change is kept in KenshiCoop.ini ([ui]).
 void DrawDisplaySettings(const OverlayModel& m) {
     ImGui::Separator();
-    if (!ImGui::CollapsingHeader("Affichage (carte, minicarte, repères)")) return;
+    if (!ImGui::CollapsingHeader("Affichage (carte, minicarte, repères)", ImGuiTreeNodeFlags_DefaultOpen)) return;
     auto option = [](const char* key, float v) {
         OverlayAction a;
         a.kind = OverlayAction::Kind::SetOption;
@@ -460,9 +460,9 @@ void DrawDisplaySettings(const OverlayModel& m) {
         if (ImGui::Checkbox(label, &v)) option(key, v ? 1.0f : 0.0f);
         if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
     };
-    box("Joueurs et ennemis sur la carte (M)", "map_markers", m.optMap, "Tous les persos des joueurs, à leur couleur, et en rouge les escouades hostiles qui nous visent.");
-    box("Repère au-dessus des joueurs", "head_markers", m.optHeads, "Un petit curseur à la couleur du joueur, avec son nom.");
-    box("Couleur des joueurs dans la barre d'escouade", "portrait_colours", m.optPortraits, "Le cadre du portrait des persos des joueurs ; les recrues gardent le cadre normal.");
+    box("Joueurs et ennemis sur la carte (bouton CARTE)", "map_markers", m.optMap, "Tous les persos des joueurs, à leur couleur, et en rouge les escouades hostiles qui nous visent.");
+    box("Curseur de couleur au-dessus des joueurs", "head_markers", m.optHeads, "Un petit curseur à la couleur du joueur, avec son nom.");
+    box("Contour de couleur des cartes des joueurs (barre d'escouade)", "portrait_colours", m.optPortraits, "Le cadre du portrait des persos des joueurs ; les recrues gardent le cadre normal.");
     box("Minicarte (Ctrl+Shift+N)", "minimap", m.optMinimap, nullptr);
     box("Minicarte tournante (suit la caméra)", "minimap_rotate", m.optMinimapRotate, "Sinon le nord reste en haut.");
     static const char* corners[] = {"en haut à gauche", "en haut à droite", "en bas à gauche", "en bas à droite"};
