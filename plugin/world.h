@@ -121,6 +121,10 @@ public:
     // ---- lot E: buildings (plugin/buildings.cpp)
     void TakeLocalPlacements(std::vector<LocalPlacement>& out) override;
     bool ExecutePlacement(const kc::BuildPlace& p, kc::Handle& created, kc::Vec3& worldPos) override;
+    bool CheckPlacement(const kc::BuildPlace& p, std::string& why, std::string& whyFr) override;
+    // tests: the ground there (UtilityT::getTerrainHeight, -99 when unknown) and build mode's
+    // reference height (getTerrainWithWaterHeight); false when no game is loaded
+    static bool GroundAt(float x, float z, float& ground, float& withWater);
     bool FindBuilding(const std::string& sid, const kc::Vec3& pos, kc::Handle& out) override;
     bool BuildingIdentity(const kc::Handle& h, std::string& sid, kc::Vec3& pos) override;
     bool ReadBuildState(const kc::Handle& h, float& progress, uint8_t& flags) override;

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <map>
 #include <sstream>
@@ -1419,28 +1420,42 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         return out;
     }
-    if (cmd == "buildplace" || cmd == "furnplace") {
-        // buildplace <sid> <dx> <dz> [yawDeg] [squadIndex]: a placement as build mode makes it, next to squad member 0 (or that one)
-        //   (client: asked of the host; host: built and announced)
+    if (cmd == "buildplace" || cmd == "furnplace" || cmd == "buildplaceat" || cmd == "buildcheck" || cmd == "buildcheckat") {
+        // buildplace <sid> <dx> <dz> [yawDeg] [squadIndex] [force]: a placement as build mode makes it, next to squad member 0 (or that one)
+        //   (client: asked of the host; host: built and announced). Checked first as build mode
+        //   checks a spot (CheckPlacement): "err invalid spot: <why>" and nothing is placed. "force"
+        //   (client only) skips that local check, so that the host's own check is what refuses it.
+        // buildplaceat <sid> <x> <z> [yawDeg] [force]: the same at a world position
+        // buildcheck <sid> <dx> <dz> [yawDeg] [squadIndex] / buildcheckat <sid> <x> <z> [yawDeg]:
+        //   only the check ("ok valid" or "err invalid spot: <why>")
         // furnplace <sid> <building name part> <dx> <dz>: a piece of furniture inside the nearest such
         //   building of ours (position relative to that building)
-        std::string sid, part;
+        const bool at = cmd == "buildplaceat" || cmd == "buildcheckat";
+        const bool onlyCheck = cmd == "buildcheck" || cmd == "buildcheckat";
+        std::string sid, part, tok;
         float dx = 0, dz = 0, yaw = 0;
         size_t near0 = 0;
-        if (cmd == "buildplace") { in >> sid >> dx >> dz >> yaw; if (!(in >> near0)) near0 = 0; }
-        else in >> sid >> part >> dx >> dz;
+        bool force = false;
+        if (cmd == "furnplace") in >> sid >> part >> dx >> dz;
+        else {
+            in >> sid >> dx >> dz >> yaw;
+            while (in >> tok) {
+                if (tok == "force") force = true;
+                else if (!at) near0 = std::strtoul(tok.c_str(), nullptr, 10);
+            }
+        }
         std::replace(part.begin(), part.end(), '_', ' ');
-        auto squad = SortedSquad(w);
         kc::Vec3 me;
-        if (near0 >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[near0]), me)) return "err no squad";
+        if (!at) {
+            auto squad = SortedSquad(w);
+            if (near0 >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[near0]), me)) return "err no squad";
+        }
         if (!kenshi::GameDataBySid(sid)) return "err unknown template " + sid;
         kc::BuildPlace p;
         p.sid = sid;
         const float a = yaw * 3.14159265f / 180.0f;
         p.rot = {std::cos(a / 2), 0, std::sin(a / 2), 0};
-        if (cmd == "buildplace") {
-            p.pos = {me.x + dx, 0.0f, me.z + dz};   // height: above the terrain, as build mode gives it
-        } else {
+        if (cmd == "furnplace") {
             void* parent = w.NearestBuilding(me, part, 2000.0f, 2);
             std::string psid;
             kc::Vec3 ppos;
@@ -1450,8 +1465,34 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             p.parentPos = ppos;
             p.indoorsSid = psid;
             p.indoorsPos = ppos;
+        } else {
+            // height: above the terrain (with water), as build mode gives it to the factory
+            p.pos = at ? kc::Vec3{dx, 0.0f, dz} : kc::Vec3{me.x + dx, 0.0f, me.z + dz};
+            std::string why, whyFr;
+            const bool valid = w.CheckPlacement(p, why, whyFr);
+            char where[64];
+            snprintf(where, sizeof(where), " at %.1f,%.1f", double(p.pos.x), double(p.pos.z));
+            if (onlyCheck) return valid ? std::string("ok valid") + where : "err invalid spot: " + why + where;
+            if (!valid && !(force && !s.isHost())) return "err invalid spot: " + why + where;
+            if (!valid) Log("debug placement of %s: invalid here (%s), sent anyway (force)", sid.c_str(), why.c_str());
         }
         return w.DebugPlace(p) ? "ok " + sid + (s.isHost() ? " built" : " asked") : "err placement failed";
+    }
+    if (cmd == "groundat") {   // groundat <x> <z>: the ground there (-99: unknown here), build mode's reference height, land / water / unknown
+        float x = 0, z = 0, g = 0, ww = 0;
+        in >> x >> z;
+        if (!KenshiWorld::GroundAt(x, z, g, ww)) return "err no game";
+        char b[96];
+        snprintf(b, sizeof(b), "ok %.1f %.1f %s", double(g), double(ww), g == -99.0f ? "unknown" : (g < 98.0f ? "water" : "land"));
+        return b;
+    }
+    if (cmd == "chatlast") {   // chatlast [n]: the last chat lines here, notices from the host included (" | " between lines)
+        size_t n = 5;
+        in >> n;
+        const auto& lines = s.chatLog();
+        std::string out = "ok";
+        for (size_t i = lines.size() > n ? lines.size() - n : 0; i < lines.size(); ++i) out += (out.size() > 2 ? " | " : " ") + lines[i];
+        return out;
     }
     if (cmd == "buildlist") {   // buildlist [name part] [radius] [squadIndex]: buildings around squad member 0 or that one ("sid@x,y,z:progress/flags" each)
         std::string part = "any";

@@ -166,6 +166,7 @@ chez l'hôte, il observe et diffuse.
 | 135–136 | ClearUsageNodes, CalculateSaleValue | 0x54C4D0, 0x7AD300 | |
 | 137 | HealCompletely | 0x6464C0 | traduite de KenshiLib, vérifiée en partie |
 | 138 | ShowInventoryBuilding | 0x6E6640 | hook |
+| fin | TerrainHeight, TerrainWithWaterHeight, IsIndoors, GetNearestTown, WithinBordersRange, GetNearestWithinItsRadius | 0x9B3710, 0x9B3720, 0x9B2BA0, 0x927F10, 0x926D50, 0x928890 | validité d'une pose (`buildings.cpp`) |
 
 ### Adresses écrites en dur hors de la table (non vérifiées au démarrage)
 
@@ -179,6 +180,7 @@ chez l'hôte, il observe et diffuse.
 | 0x16F9EB8 … 0x168C128, 0x16D3F78, 0x16D5258, 0x16D5138 | vtables (Character, AI, effets, tourelles) | `kenshi.h`:34-47, 634-636 |
 | 0x6508D0–0x651FF1 | bornes de addWound | `kenshi.h`:573 |
 | 0x16DFB00 | callback d'aimantation de bâtiment | `buildings.cpp`:33 |
+| 0x2134100 | `TownList*` (villes) ; slots vt 0x40, 0x58, 0x268, 0x2A0 de `TownBase` | `buildings.cpp` (`TownTooClose`, sous `__try`) |
 | 0x4BE480 | ActivePlatoon::setName | `kenshi.cpp`:756 |
 | 0x21337B0 (+0x1C0), 0x16EFE88 | GUI / éditeur, vtable lektor<Character*> | `kenshi.cpp`:837-839, `debug.cpp`:575 |
 | 0x6E2DF0, 0x6E5740, 0x70CEF0 | drapeau de la fenêtre de commerce, fermeture, callback | `kenshi.cpp`:2060-2066 (sous `__try`) |

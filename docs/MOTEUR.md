@@ -186,6 +186,17 @@ Les signatures sont celles du commentaire du code.
 | fix G5 | `FnCharGetPermajob` | `Character::getPermajob(int) const` | `0x5C8EF0` | — | type de la tâche d'un emplacement |
 | fix G5 | `FnCharPermajobCount` | `Character::getPermajobCount() const` | `0x5C8F30` | — | nombre de tâches |
 
+| validité | `FnTerrainHeight` | `UtilityT::getTerrainHeight(float x, float z)` | `0x9B3710` | — | le sol sous l'eau éventuelle ; -99 où aucun terrain n'est connu (saut vers `getTerrainHeightFast(x, z, nullptr)` `0x9B32F0`) |
+| validité | `FnTerrainWithWaterHeight` | `UtilityT::getTerrainWithWaterHeight(float x, float z)` | `0x9B3720` | — | max(sol, 100) : la hauteur que `createBuildings` retire à la position (appel vérifié à `0x4D7512`) |
+| validité | `FnIsIndoors` | `UtilityT::isIndoors(const Vector3&)` | `0x9B2BA0` | — | le bâtiment dont l'intérieur contient ce point (rayons vers le haut et le bas, groupe 0x2000) ; appelée par `isIndoorsOK` et le clic du mode construction |
+| validité | `FnGetNearestTown` | `TownList::getNearestTown(pos, owner, except, mine, TownType)` | `0x927F10` | — | appelée par `placementVerification` (`0x4DBAF6`, type 10) |
+| validité | `FnWithinBordersRange` | `TownBase::withinBordersRange(pos, mult) const` | `0x926D50` | — | (rayon vt 0x2A0 × mult)² > distance² au sol ; faux pour le type 8 |
+| validité | `FnGetNearestWithinItsRadius` | `TownList::getNearestWithinItsRadius(pos, skipPlayerTowns) const` | `0x928890` | — | appelée par `placementVerification` (`0x4DBBBE`, avec `true`) |
+
+Les six adresses : traduites de KenshiLib 1.0.65 (décalage +0x780 / +0x17B0 dans ces zones) puis
+confirmées dans le 1.0.68 comme cibles des appels lus dans `placementVerification`, `createBuildings`
+et le clic du mode construction ; prologues relevés dans `kenshi_x64.exe` et vérifiés au démarrage.
+
 Les cinq passent par `Character::ai` (+0x650) puis `AI::orders` (+0x20, `OrdersReceiver`, tâches
 à +0x90 nombre et +0x98 tableau de `Tasker*`). `Character::clearPermajobs` (`0x5C8FE0`) n'a aucun
 appelant : le panneau n'a pas de « tout effacer » propre.
@@ -1148,3 +1159,41 @@ Changer l'orientation du nœud juste après `shoot` change donc toute la traject
   achète si la réponse vaut 2 (prix `calculateSaleValue` `0x7AD300`, pris aux cats de la faction du
   joueur) ; `isForSale` vt 0x2C0. Démontage : `confirmDismantle(int)` `0x54FEA0` (2 = oui).
 - `getFaction` est le slot 0x58 de tout `RootObjectBase` ; un bâtiment a un handle de type 0.
+
+### Validité d'une pose (mode construction) [D]
+Lu dans le 1.0.68 (désassemblage), pour que l'hôte refuse ce que le mode construction refuserait.
+- **Qui décide** : le clic gauche du mode construction (`0x4E27E0`, appelé chaque image avec
+  l'aperçu courant) appelle `buildingPlacementUpdate` (vt 0x50, `0x4D5420`), qui remet `slopeOK`
+  (+0x8C) et `floorOk` (+0x8A) à 1, met `slopeOK` à 0 si la normale du sol touché par la souris a
+  y < 0,2 (sur un objet : angle > 5), puis `placementVerification` (vt 0xC8, `0x4DD240`, un saut
+  vers `placementVerification_recurse` `0x4DBA40`). Le clic vérifie ensuite, dans cet ordre, et
+  affiche le message du jeu au premier échec : ville (+0x90 non nul) « Can't build too close to
+  another town. » ; `checkProspectingIsNotZero` (vt 0x10 : culture, mine) ; `indoorsOK` (+0x8B)
+  « Must be placed outside or on a roof. » / « Must be placed inside a building. » / « Cannot
+  build inside incomplete buildings. » ; `snappingOk` (vt 0x28) ; `isCollisionOK` (vt 0x60, +0x88)
+  « Too close to another building. » ; `charactersOK` (+0x89) ; `isBlockingBuildingsNodes` (vt
+  0x80) ; `isOnValidGround` (vt 0x90, +0x8F) « The building has one or more parts on invalid
+  ground. » ; `isFloorOk` (vt 0x68) ; `isGoodAboveAndBelow` (vt 0x88) et `slopeOK` « Ground needs
+  to be more level. ». Tout passe : `placeFinalPreviewBuilding` (vt 0xC0), et seuls ces aperçus
+  arrivent à `createBuildings`. **Un client n'envoie donc que des poses que son jeu a acceptées.**
+- **Eau et acide** : la surface est à 100 partout (`getTerrainWithWaterHeight` = max(sol, 100) ;
+  `UtilityT::getPositionInWater(x, z)` `0x9B3770` = sol ≤ 100). Une empreinte de type LAND
+  (`BuildingPlacementGroundType` 1, le défaut ; entier « ground type » de la GameData de la pièce,
+  constructeur `Footprint` `0x4D9530`) est invalide sous 98 (`Footprint::isGroundValid` `0x4D13D0`,
+  constante `0x16DFAF0`). Quand la souris touche l'eau (groupe 2), la hauteur prise est celle du
+  sol dessous (`getTerrainHeightFromRenderer` `0x9B1F80`), d'où le refus.
+- **Ville** (`placementVerification`, `0x4DBAEF`–`0x4DBD86`) : `getNearestTown(pos, 0, 0, 0, 10)` ;
+  « près » si `withinBordersRange(pos, 2,5)` (1,0 pour les types 4 et 9) ou à moins de 2000 du
+  centre (+0x48 / +0x50) ; une ville dont le rayon (vt 0x2A0 × 0,9, ou × 0,6) contient la pose
+  (`getNearestWithinItsRadius(pos, true)`, `isTown` vt 0x268) la remplace ; ignorée si sa faction
+  (vt 0x58) est celle du joueur (`Faction+0x250` `isPlayer`) ; sauf pour un bâtiment « creates
+  player town », il faut en plus `withinBordersRange(pos, 1,0)`. `TownList*` à `*(0x2134100)`.
+- **Position** : `createBuildings` donne à la fabrique x, z du monde et y moins
+  `getTerrainWithWaterHeight(x, z)` (`0x4D7512`).
+- **Ce que l'hôte refait** (`KenshiWorld::CheckPlacement`, `plugin/buildings.cpp`) sans aperçu,
+  pour un bâtiment (pas un meuble) : ville (même calcul), intérieur (`isIndoors` au point de la
+  pose, sauf posé dans un bâtiment), un autre bâtiment dont l'origine est à moins de 10 (1 m ; le
+  vrai test de collision des empreintes demande l'aperçu), sol LAND sous 98 au point de la pose,
+  pente (normale du terrain à ±2 sous 0,2). Pas refait : collision des empreintes, personnages
+  dans le passage, nœuds d'usage, étage, prospection, aimantation. Terrain inconnu chez l'hôte
+  (-99) : refusé (« réessaie »).

@@ -51,6 +51,12 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
   `C:\Program Files (x86)\Steam\steamapps\common\Kenshi`.
 
 ### Fonctionnement
+- **Poses et téléportations** : les expériences qui posent un bâtiment (`build`, `construct`,
+  `farlong`, `soak`, `placevalid`) passent par `place_valid` : l'endroit voulu, puis des cercles
+  autour (25 à 260 unités), jusqu'à ce que la vérification du jeu (`buildplace`) l'accepte. Les
+  téléportations lointaines (`far`, `fartp`, `farlong`, `soak`) passent par `teleport_dry` : la
+  première destination de la liste qui est de la terre ferme (`groundat` chez l'hôte, avant la TP
+  si le terrain y est connu, sinon après), jamais un lac d'eau ou d'acide.
 1. Le script lance les instances et ferme le petit lanceur de Kenshi s'il apparaît.
 2. Il charge la sauvegarde chez l'hôte, héberge, puis fait rejoindre chaque client.
 3. Il place les fenêtres côte à côte : hôte à gauche, client à droite ; en grille de 2×2 pour 4
@@ -94,6 +100,7 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `talk` | un PNJ parle au personnage du client : la conversation tourne chez l'hôte, la fenêtre s'ouvre chez le client |
 | `factions` | lot B : mêmes relations au départ ; relation changée par l'hôte identique chez le client ; prime donnée puis levée par l'hôte visible chez le client ; une relation changée par le jeu du client revient à celle de l'hôte |
 | `ranged` (`--shooter <clé>`) | (lot C) 3 tirs d'un arbalétrier de l'hôte sur l'escouade sont refaits chez le client, sur la même trajectoire ; même point visé ; une tourelle proche tournée chez l'hôte tourne pareil chez le client ; santé et inventaires identiques ensuite |
+| `placevalid` | les poses sont vérifiées comme le mode construction vérifie un endroit : le perso du client va sur la terre ferme près du lac d'acide (54612, 40576) ; ce point est de l'eau/acide chez les deux ; refusé par la vérification du client (`buildcheckat`, `buildplaceat`) et de l'hôte ; envoyé quand même (`force`), l'hôte le refuse, le journalise avec la raison, le client reçoit « dans l'eau ou l'acide », rien n'est bâti (aucune annonce, rien dans le lac chez les deux) ; une pose sur un endroit sec à côté est acceptée et bâtie au même endroit chez les deux |
 | `build` (lot E) | une pose du client bâtie par l'hôte puis par tous au même endroit, celle de l'hôte aussi ; avancement et fin du chantier ; démontage demandé par le client ; achat d'un bâtiment à vendre (avec `--save kctest_town`) |
 | `construct` (`--material`, `--task`) | vraie construction : argent et matériaux donnés aux deux joueurs ; le client pose un chantier et ordonne à son perso de le bâtir (clic droit : `newPlayerTaskSelectedCharacters`), puis l'hôte, puis les deux en même temps ; avancement des deux côtés, matériaux qui baissent pareil, chantier terminé identique. Le numéro de tâche « construire » n'est pas connu : sans `--task`, le test essaie 1 à 99 jusqu'à ce que l'avancement bouge chez l'hôte |
 | `buyhouse` (`kctest_town`) | achat d'un bâtiment à vendre par le client (`buildbuy` = le bouton de confirmation de la fenêtre d'achat) puis par l'hôte : même prix débité partout, bâtiment à nous partout, porte et conteneur utilisables ; refus sans argent ; achat simultané du même bâtiment : un seul paiement. ÉCHEC explicite s'il n'y a aucun bâtiment à vendre à 3 km |
@@ -321,7 +328,11 @@ l'escouade triée par handle.
 | Commande | Rôle |
 |---|---|
 | `buildtypes <nom>` | modèles de bâtiments dont le nom contient ce texte (`sid=nom`) |
-| `buildplace <sid> <dx> <dz> [lacet°] [membre]` | une pose comme le mode construction, à côté du membre 0 ou de ce membre (client : demandée à l'hôte ; hôte : bâtie et annoncée) |
+| `buildplace <sid> <dx> <dz> [lacet°] [membre] [force]` | une pose comme le mode construction, à côté du membre 0 ou de ce membre (client : demandée à l'hôte ; hôte : bâtie et annoncée). Vérifiée d'abord comme le mode construction vérifie un endroit : `err invalid spot: <raison> at x,z` et rien n'est posé. `force` (client seulement) saute cette vérification locale pour tester celle de l'hôte |
+| `buildplaceat <sid> <x> <z> [lacet°] [force]` | la même chose à une position du monde |
+| `buildcheck <sid> <dx> <dz> [lacet°] [membre]` / `buildcheckat <sid> <x> <z> [lacet°]` | seulement la vérification : `ok valid at x,z` ou `err invalid spot: <raison> at x,z` |
+| `groundat <x> <z>` | le sol à cet endroit ici (sous l'eau, -99 = inconnu), la hauteur de référence du mode construction (surface de l'eau 100) et `land` / `water` / `unknown` |
+| `chatlast [n]` | les n dernières lignes du chat ici, avis de l'hôte compris (` \| ` entre les lignes) |
 | `furnplace <sid> <nom du bâtiment> <dx> <dz>` | un meuble dans le bâtiment à nous le plus proche de ce nom (position relative au bâtiment) |
 | `buildlist [nom] [rayon] [membre]` | bâtiments autour du membre 0 (ou de ce membre) : `sid@x,y,z:avancement/drapeaux` (1 terminé, 2 en pause, 4 démontage) |
 | `buildcount` | bâtiments suivis par la session, et combien sont trouvés ici |

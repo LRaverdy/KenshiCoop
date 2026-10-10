@@ -458,6 +458,15 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   valeurs et chaque machine appelle la même fonction avec les mêmes valeurs, puis ce que le mode
   construction fait à un bâtiment neuf. Les bâtiments ont un autre handle sur chaque machine : ils
   sont nommés par type et endroit, plus un netId donné par l'hôte.
+- **Emplacement valide** : le mode construction refuse lui-même un endroit invalide (aperçu
+  rouge : eau ou acide, pente, ville, dans ou sur un autre bâtiment…) ; un client n'envoie donc que
+  des poses que son jeu a acceptées. L'hôte refait en plus les vérifications du jeu sur chaque pose
+  demandée par un client (ville, intérieur d'un bâtiment, autre bâtiment au même endroit, sol dans
+  l'eau ou l'acide, pente : docs/MOTEUR.md section 10) : une pose refusée n'est bâtie nulle part,
+  le journal de l'hôte dit pourquoi (« refused: invalid spot (in water or acid …) ») et le joueur
+  reçoit « Impossible de construire X ici : dans l'eau ou l'acide. ». La commande de test
+  `buildplace` passe par la même vérification. Pas refaits par l'hôte (il faudrait l'aperçu du
+  jeu) : collision exacte des empreintes, personnages dans le passage, nœuds d'usage, étage.
 - **Arrivée en cours de partie** : les bâtiments posés avant sont dans la sauvegarde envoyée ;
   l'hôte envoie aussitôt l'état de tous ceux qu'il suit.
 - **Limites, à vérifier en jeu** :

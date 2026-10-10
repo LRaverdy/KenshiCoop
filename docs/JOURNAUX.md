@@ -139,6 +139,7 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 | `[X] goes to look into Y` → `[X] opens Y` → `[X] closes the container` | contenant |
 | `[X] steals Y (unseen)` / `[X] caught stealing Y` | vol réussi / vol repéré (la fenêtre se ferme) |
 | `client item move done: …` / `client item move refused: …` | déplacement d'objet demandé par un client |
+| `[X] placement of Y at x,y,z refused: invalid spot (in water or acid (ground …, surface …))` | pose d'un client que le mode construction aurait refusée (aussi : `too close to a town`, `inside another building`, `on top of another building`, `too steep`, `the ground there is not loaded on the host`) : rien n'est bâti, le joueur reçoit la raison |
 | `refused an inventory move from player N` | demande refusée (pas son personnage, PNJ conscient…) : l'état réel est renvoyé |
 
 ### Lignes venues des clients (préfixe `[nom]`)

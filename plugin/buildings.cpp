@@ -11,7 +11,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <vector>
 
 #include "hooks.h"
 #include "util.h"
@@ -119,6 +121,90 @@ bool ForSale(void* b) {
 
 bool KindAndPlace(void* b, std::string& sid, kc::Vec3& pos) {
     return b && kenshi::ObjectTemplate(b, sid) && kenshi::ObjectPosition(b, pos);
+}
+
+// ---- placement validity: the values build mode uses (docs/MOTEUR.md section 10, "Validité d'une pose")
+constexpr float kNoTerrain = -99.0f;          // UtilityT::getTerrainHeightFast where no terrain is known (0x168BDA0)
+constexpr float kGroundValidMin = 98.0f;      // PreviewBuilding::Footprint::isGroundValid: a LAND footprint lower than this is in the water (0x16DFAF0)
+constexpr float kMinNormalY = 0.2f;           // PreviewBuilding::buildingPlacementUpdate: terrain normal.y below this = slopeOK false (0x16885D8)
+constexpr int kGroundLand = 1;                // BuildingPlacementGroundType: 0 any, 1 land (the default), 2 water
+constexpr float kTooClose = 10.0f;            // mod: another building's origin this close (1 m) overlaps for sure
+constexpr uintptr_t kTownList = 0x2134100;    // TownList* (what PreviewBuilding::placementVerification reads)
+constexpr uintptr_t TB_x = 0x48, TB_z = 0x50, TB_type = 0xD8;   // TownBase: position x / z, TownType
+constexpr uintptr_t TBV_getPosition = 0x40, TBV_getFaction = 0x58, TBV_isTown = 0x268, TBV_getRadius = 0x2A0;
+constexpr uintptr_t FA_isPlayer = 0x250;      // Faction: PlayerInterface* (the player's own faction)
+constexpr int kTownTypeAny = 10;              // what placementVerification asks getNearestTown for
+
+using FnHeightSig = float (*)(float, float);
+using FnPointSig = void* (*)(const float*);
+using FnNearestTownSig = void* (*)(void* list, const float* pos, void* owner, void* except, void* mine, int type);
+using FnBordersSig = bool (*)(void* town, const float* pos, float mult);
+using FnWithinRadiusSig = void* (*)(void* list, const float* pos, bool skipPlayerTowns);
+using FnPosOutSig = const float* (*)(void* self, float* out);
+using FnFloatSig = float (*)(void* self);
+
+bool HeightSeh(kenshi::Fn f, float x, float z, float& out) {
+    __try { out = reinterpret_cast<FnHeightSig>(kenshi::FnAddr(f))(x, z); return std::isfinite(out); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool IndoorsSeh(const float* p, void*& out) {
+    __try { out = reinterpret_cast<FnPointSig>(kenshi::FnAddr(kenshi::FnIsIndoors))(p); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* NearestTownSeh(void* list, const float* p) {
+    __try { return reinterpret_cast<FnNearestTownSig>(kenshi::FnAddr(kenshi::FnGetNearestTown))(list, p, nullptr, nullptr, nullptr, kTownTypeAny); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+bool BordersSeh(void* town, const float* p, float mult) {
+    __try { return reinterpret_cast<FnBordersSig>(kenshi::FnAddr(kenshi::FnWithinBordersRange))(town, p, mult); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* WithinRadiusSeh(void* list, const float* p) {
+    __try { return reinterpret_cast<FnWithinRadiusSig>(kenshi::FnAddr(kenshi::FnGetNearestWithinItsRadius))(list, p, true); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+bool PosOutSeh(void* fn, void* self, float* out) {
+    __try {
+        const float* r = reinterpret_cast<FnPosOutSig>(fn)(self, out);
+        if (r && r != out) std::memcpy(out, r, 12);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool FloatSeh(void* fn, void* self, float& out) {
+    __try { out = reinterpret_cast<FnFloatSig>(fn)(self); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+// PreviewBuilding::placementVerification's town (0x4DBA40 to 0x4DBD86, PreviewBuilding+0x90): the
+// town a building at p would be "too close to". Build mode's click (0x4E27E0) refuses the spot when
+// there is one: "Can't build too close to another town." Player towns never count.
+void* TownTooClose(const float p[3], bool createsPlayerTown) {
+    void* list = nullptr;
+    if (!Rd(reinterpret_cast<void*>(kenshi::Addr(kTownList)), 0, list) || !list) return nullptr;
+    void* town = NearestTownSeh(list, p);
+    if (!town) return nullptr;
+    int type = 0;
+    Rd(town, TB_type, type);
+    const float mult = (type == 4 || type == 9) ? 1.0f : 2.5f;
+    bool inRange = BordersSeh(town, p, mult);
+    float tx = 0, tz = 0;
+    if (Rd(town, TB_x, tx) && Rd(town, TB_z, tz) && std::sqrt((tx - p[0]) * (tx - p[0]) + (tz - p[2]) * (tz - p[2])) < 2000.0f) inRange = true;
+    // a closer town whose own radius holds the spot replaces it
+    if (void* other = WithinRadiusSeh(list, p)) {
+        void* isTownFn = Slot(other, TBV_isTown);
+        void* otherTown = isTownFn ? PtrSeh(isTownFn, other) : nullptr;
+        float op[3] = {0, 0, 0}, radius = 0;
+        void* posFn = Slot(other, TBV_getPosition);
+        void* radFn = Slot(other, TBV_getRadius);
+        if (otherTown && posFn && radFn && PosOutSeh(posFn, other, op) && FloatSeh(radFn, other, radius)) {
+            const float r = static_cast<float>(radius * (mult == 1.0f ? 0.6 : 0.9));
+            const float d2 = (p[0] - op[0]) * (p[0] - op[0]) + (p[2] - op[2]) * (p[2] - op[2]);
+            if (r * r > d2) town = otherTown;
+        }
+    }
+    if (!inRange || !town) return nullptr;
+    void* facFn = Slot(town, TBV_getFaction);
+    void* fac = facFn ? PtrSeh(facFn, town) : nullptr;
+    void* isPlayer = nullptr;
+    if (fac && Rd(fac, FA_isPlayer, isPlayer) && isPlayer) return nullptr;   // our own town
+    if (!createsPlayerTown && !BordersSeh(town, p, 1.0f)) return nullptr;
+    return town;
 }
 } // namespace
 
@@ -283,6 +369,110 @@ bool KenshiWorld::ExecutePlacement(const kc::BuildPlace& p, kc::Handle& created,
         return false;
     }
     Log("built %s at %.1f,%.1f,%.1f (placement %u)", p.sid.c_str(), worldPos.x, worldPos.y, worldPos.z, unsigned(p.netId));
+    return true;
+}
+
+// ---------------------------------------------------------------- placement validity
+
+bool KenshiWorld::GroundAt(float x, float z, float& ground, float& withWater) {
+    if (!kenshi::World()) return false;
+    return HeightSeh(kenshi::FnTerrainHeight, x, z, ground) && HeightSeh(kenshi::FnTerrainWithWaterHeight, x, z, withWater);
+}
+
+// Build mode accepts a spot in its click handler (0x4E27E0) from what PreviewBuilding::
+// placementVerification (vt 0xC8, 0x4DD240) and buildingPlacementUpdate (vt 0x50) computed on the
+// preview under the cursor. A placement that comes from elsewhere (a client's request, a debug
+// command) has no preview: the same rules are applied here with the functions those checks call,
+// in the click handler's order, on the building's own spot (the game checks each footprint).
+// Furniture is left to the client's build mode (its layout and nodes need the preview).
+bool KenshiWorld::CheckPlacement(const kc::BuildPlace& p, std::string& why, std::string& whyFr) {
+    why.clear();
+    whyFr.clear();
+    void* data = kenshi::GameDataBySid(p.sid);
+    if (!data) {
+        why = "unknown template";
+        whyFr = "modèle de bâtiment inconnu.";
+        return false;
+    }
+    if (!p.parentSid.empty()) return true;   // furniture
+    float ground = 0, withWater = 0;
+    if (!GroundAt(p.pos.x, p.pos.z, ground, withWater)) {
+        why = "no game loaded";
+        whyFr = "partie pas chargée.";
+        return false;
+    }
+    if (ground == kNoTerrain) {
+        why = "the ground there is not loaded on the host";
+        whyFr = "le terrain n'est pas chargé chez l'hôte (réessaie dans un moment).";
+        return false;
+    }
+    // the factory's height is relative to getTerrainWithWaterHeight (createBuildings, 0x4D72A0)
+    const float at[3] = {p.pos.x, withWater + p.pos.y, p.pos.z};
+    void* indoors = p.indoorsSid.empty() ? nullptr : BuildingAt(p.indoorsSid, p.indoorsPos);
+    void* snapped = p.snapSid.empty() ? nullptr : BuildingAt(p.snapSid, p.snapPos);
+    // 1. town ("Can't build too close to another town.")
+    bool createsTown = false;
+    kenshi::GameDataBoolField(data, "creates player town", createsTown);
+    if (void* town = TownTooClose(at, createsTown)) {
+        std::string tsid;
+        why = "too close to a town";
+        if (kenshi::ObjectTemplate(town, tsid)) why += " (" + tsid + ")";
+        whyFr = "trop près d'une ville.";
+        return false;
+    }
+    // 2. inside a building ("Must be placed outside or on a roof.": isIndoorsOK, through isIndoors)
+    if (!indoors) {
+        void* in = nullptr;
+        if (IndoorsSeh(at, in) && in) {
+            why = "inside another building";
+            whyFr = "il doit être posé dehors ou sur un toit.";
+            return false;
+        }
+    }
+    // 3. on top of another building ("Too close to another building.": the footprints' collision
+    //    test needs the preview; here only a building whose origin is within 1 m)
+    if (!snapped) {
+        std::vector<void*> around;
+        kenshi::ObjectsNear(kc::Vec3{at[0], at[1], at[2]}, 40.0f, around);
+        for (void* o : around) {
+            std::string sid;
+            kc::Vec3 op;
+            if (o == indoors || !IsBuilding(o) || !KindAndPlace(o, sid, op)) continue;
+            const float dx = op.x - at[0], dz = op.z - at[2];
+            if (std::sqrt(dx * dx + dz * dz) < kTooClose && std::fabs(op.y - at[1]) < 30.0f) {
+                why = "on top of another building (" + sid + ")";
+                whyFr = "trop près d'un autre bâtiment.";
+                return false;
+            }
+        }
+    }
+    if (indoors) return true;   // on a floor or a roof: the ground below does not matter
+    // 4. ground ("The building has one or more parts on invalid ground."): Footprint::isGroundValid
+    int groundType = kGroundLand;
+    kenshi::GameDataIntField(data, "ground type", groundType);
+    if (groundType == kGroundLand && ground < kGroundValidMin) {
+        char b[96];
+        snprintf(b, sizeof(b), "in water or acid (ground %.1f, surface %.1f)", double(ground), double(withWater));
+        why = b;
+        whyFr = "dans l'eau ou l'acide.";
+        return false;
+    }
+    // 5. slope ("Ground needs to be more level."): the terrain's normal under the spot
+    constexpr float s = 2.0f;
+    float hx0 = 0, hx1 = 0, hz0 = 0, hz1 = 0;
+    if (!snapped && HeightSeh(kenshi::FnTerrainHeight, p.pos.x - s, p.pos.z, hx0) && HeightSeh(kenshi::FnTerrainHeight, p.pos.x + s, p.pos.z, hx1) &&
+        HeightSeh(kenshi::FnTerrainHeight, p.pos.x, p.pos.z - s, hz0) && HeightSeh(kenshi::FnTerrainHeight, p.pos.x, p.pos.z + s, hz1) &&
+        hx0 != kNoTerrain && hx1 != kNoTerrain && hz0 != kNoTerrain && hz1 != kNoTerrain) {
+        const float gx = (hx1 - hx0) / (2 * s), gz = (hz1 - hz0) / (2 * s);
+        const float ny = 1.0f / std::sqrt(1.0f + gx * gx + gz * gz);
+        if (ny < kMinNormalY) {
+            char b[64];
+            snprintf(b, sizeof(b), "too steep (normal.y %.2f)", double(ny));
+            why = b;
+            whyFr = "le sol doit être plus plat.";
+            return false;
+        }
+    }
     return true;
 }
 

@@ -138,6 +138,16 @@ void Session::HostBuildings(double now) {
     for (auto& [pid, p] : pendingPlaces_) {
         Handle created;
         Vec3 wpos;
+        // the checks build mode makes before it accepts a spot: a placement it would have refused
+        // (debug placements, a modified client) is not built anywhere
+        std::string why, whyFr;
+        if (!world_.CheckPlacement(p, why, whyFr)) {
+            char at[96];
+            snprintf(at, sizeof(at), " at %.1f,%.1f,%.1f", double(p.pos.x), double(p.pos.y), double(p.pos.z));
+            log_("[" + nameOf(pid) + "] placement of " + world_.TemplateName(p.sid) + at + " refused: invalid spot (" + why + ")");
+            tell(pid, "Impossible de construire " + world_.TemplateName(p.sid) + " ici : " + whyFr);
+            continue;
+        }
         if (!world_.ExecutePlacement(p, created, wpos) || !created.valid()) {
             log_("[" + nameOf(pid) + "] placement of " + world_.TemplateName(p.sid) + " could not be built on the host");
             tell(pid, "Impossible de construire " + world_.TemplateName(p.sid) + " ici (refusé par la partie de l'hôte).");

@@ -136,7 +136,9 @@ Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui
   - combat à distance (projectiles, tourelles) ;
   - relations de factions et primes.
 - Côté client, ne pas poser de bâtiment pour l'instant : il n'existerait probablement que chez
-  toi.
+  toi. (Une pose qu'un client fait quand même est vérifiée par l'hôte comme le mode construction
+  vérifie un endroit : dans l'eau ou l'acide, trop près d'une ville… elle est refusée et le
+  joueur reçoit la raison.)
 - Les corps au sol peuvent reposer à quelques dizaines de centimètres (rarement plus d'un mètre)
   de leur position chez l'hôte : la chute du ragdoll est simulée par chaque PC.
 - Autour des joueurs, les positions sont exactes. Les PNJ éloignés qui marchent peuvent être
