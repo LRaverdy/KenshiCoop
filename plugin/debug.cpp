@@ -133,6 +133,12 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         for (const auto& t : m.threats) o << " threat:kind=" << int(t.kind) << ":n=" << int(t.count) << ":x=" << t.pos.x << ":z=" << t.pos.z;
         return o.str();
     }
+    if (cmd == "mapconv") return DescribeMapConversion();   // mapconv: MyGUI view -> back buffer -> display, frames read now and drawn
+    if (cmd == "mapui") {   // mapui open|close|maptab|state: the game's map screen, through its MAP button
+        std::string what;
+        in >> what;
+        return MapUi(what.empty() ? "state" : what);
+    }
     if (cmd == "mapproj") {   // mapproj <x> <z>: the game's MapScreen::worldToMapCoords against ours
         float x = 0, z = 0;
         if (!(in >> x >> z)) return "err usage: mapproj <x> <z>";

@@ -90,6 +90,7 @@ bool OverlayTyping();                       // a text field of ours has the keyb
 struct MapScene;
 void OverlayPublishScene(MapScene scene);
 void OverlayScreenSize(float& w, float& h);  // the back buffer, as last drawn
+void OverlayWindowInfo(int& clientW, int& clientH, int& dpi);   // the game window's client area and DPI, as last drawn
 void OverlayPushAction(OverlayAction a);     // from the overlay's own layers
 void OverlayShutdown();
 

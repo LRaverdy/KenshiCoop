@@ -1350,12 +1350,40 @@ l'`ICroppedRectangle` placé à +0x8). Le z croissant descend sur la carte : le 
 décroissant) est en haut. Le mod refait ce calcul à partir du rectangle absolu de l'image ; la
 commande `mapproj` compare au résultat de la fonction du jeu.
 
-**MyGUI** (exports de `MyGUIEngine_x64.dll`, appelés par `GetProcAddress`) :
-`Widget::getInheritedVisible` (le widget et tous ses parents visibles : faux quand l'onglet carte
-n'est pas choisi ou l'écran fermé), `ICroppedRectangle::getAbsoluteCoord` (this = widget + 0x8,
-`TCoord<int>` rendu par pointeur caché). Les coordonnées MyGUI sont prises comme des pixels du
-tampon d'affichage [U : vrai pour la fenêtre de jeu, non vérifié avec une mise à l'échelle de
-l'interface].
+**Ouvrir la carte** : onglet `MapTab` (« CARTE ») de la fenêtre de gestion
+(`Kenshi_OverviewWindow.layout` : `Root` (Window) → `TabsMain` → `MapTab` → `MapScrollView` →
+`Client` → canevas → `MapImage`), ouverte par le bouton `ShortcutMapButton` (« MAP »,
+`Kenshi_MainPanel.layout`, colonne de raccourcis près de la barre d'escouade) ou par la touche
+`toggle_map` de `controls.cfg` (réglage du joueur : le mod n'en suppose aucune ; dans la partie de
+l'utilisateur, M est la caméra libre). Les widgets sont nommés `<préfixe>_MapImage`…, le préfixe
+étant l'adresse de la `ManagementScreen` en hexadécimal sur 16 chiffres (lu en mémoire d'un jeu
+lancé : `00000000D970B870_MapImage`). `MapScreen` : +0x10 `MapTab`, +0x18 `MapScrollView`, +0x20
+`MapImage`, +0x28 `CameraMarker` (vérifié par les noms).
+
+**MyGUI** (exports de `MyGUIEngine_x64.dll`, compilé avec MSVC 2010, appelés par `GetProcAddress`) :
+- `Widget::getInheritedVisible` = `mInheritsVisible` (+0x41A) : **seulement les parents** (mis à jour
+  par `_updateVisible` : parent nul, ou parent visible et lui-même « inherited visible ») ; la
+  visibilité propre est `mVisible` (+0x46C, `Widget::getVisible`). Une fenêtre racine cachée par
+  `setVisible(false)` répond donc toujours vrai à `getInheritedVisible` : « affiché » =
+  `getVisible() && getInheritedVisible()`. (Le mod ne testait que le second : l'écran de gestion
+  comptait comme toujours ouvert, d'où ni repères 3D ni minicarte, et les cases cachées de la barre
+  d'escouade recevaient un cadre.)
+- `Widget::getParent` (+0x450), `getName` (`std::string` MSVC 2010 à +0x428 : tampon de 16 octets ou
+  pointeur, taille +0x10, capacité +0x18), enfants `mWidgetChild` (+0x3D8 début, +0x3E0 fin) et
+  `mWidgetChildSkin` (+0x3F8 / +0x400), racines de `Gui` (+0x28 / +0x30, `Gui::getEnumerator`).
+- `ICroppedRectangle::getAbsoluteCoord` (this = widget + 0x8, `TCoord<int>` rendu par pointeur caché ;
+  lit +0x28/+0x2C la position absolue, +0x20/+0x24 la taille, relatifs à l'`ICroppedRectangle`).
+- `RenderManager` : instance `Singleton<RenderManager>::msInstance` (export de donnée) ; slot 6 de
+  sa vtable (+0x30) = `const IntSize& getViewSize() const` (vérifié : ses appelants lisent [rax] et
+  [rax+4] ; le slot 7 rend `getVertexFormat` par pointeur caché) ; dans Kenshi
+  (`OgreRenderManager`, dans l'exe) la taille est à +0x2C. Lu dans un jeu lancé : vue 844×774 =
+  tampon = client de la fenêtre après le redimensionnement du banc (le jeu redimensionne son tampon
+  et la vue MyGUI). Le mod convertit quand même vue MyGUI → tampon à chaque image.
+- `LayerManager::getWidgetFromPoint(x, y)` (instance `msInstance`) : le widget du dessus à un point,
+  couche du dessus d'abord, seulement ceux qui prennent la souris : sert à savoir si un portrait est
+  sous une fenêtre du jeu.
+- `InputManager::injectMouseMove/Press/Release` (bouton gauche = 0), `getMousePosition` : la commande
+  de test `mapui` clique ainsi le bouton MAP. `TabControl::setIndexSelected` : `mapui maptab`.
 
 **Couleurs des points du jeu** (`MapScreen::getMarkerColor` `0x48F320`, statique) :
 `MarkerColourAlly` `0x212F538`, `Neutral` `0x212F548` (aussi pour un objet nul), `Enemy`

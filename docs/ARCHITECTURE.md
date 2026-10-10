@@ -555,7 +555,12 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
    l'image, partie visible, bornes du monde), la caméra (proj × vue d'Ogre), les cadres de portrait
    des persos des joueurs (cellules suivies par les hooks `PortraitMainCellView::update` / destructeur),
    les pings et les réglages ; elle passe à l'overlay.
-3. L'overlay (`MapOverlayDraw`, fil de rendu) dessine carte, minicarte, têtes, cadres et pings ;
+   Les rectangles de l'interface (image de la carte et sa partie visible, cadres, « couvert ») sont
+   lus par `ReadGui` en pixels de la vue MyGUI (`guiW` × `guiH`, `RenderManager::getViewSize`).
+3. L'overlay (`MapOverlayDraw`) relit ces rectangles dans sa propre image quand il tourne sur le fil
+   du jeu (`MapRefreshGui` : pas de retard derrière une fenêtre qu'on déplace), puis les convertit en
+   pixels du tampon d'affichage de cette image (`SceneToDisplay`, `io.DisplaySize`) ; il garde ce qu'il
+   a dessiné pour les tests (`MapOverlayLastDrawn`, commande `mapconv`). Il dessine carte, minicarte, têtes, cadres et pings ;
    la procédure de fenêtre (`MapOverlayMessage`) prend la molette et les boutons de la minicarte
    et les clics de ping ; le filtre DirectInput cache ces clics au jeu.
 4. Ping : `Session::PlaceMapPing` (hôte : ajouté et diffusé ; client : `MapPing` à l'hôte, qui

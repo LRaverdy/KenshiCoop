@@ -114,6 +114,30 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return CallWindowProcW(g_oldWndProc, hwnd, msg, wp, lp);
 }
 
+// The window's client area and DPI (the mouse arrives in client pixels; we draw in back buffer pixels).
+int WindowDpi(HWND hwnd) {
+    using Fn = UINT(WINAPI*)(HWND);
+    static Fn fn = reinterpret_cast<Fn>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow"));
+    return fn && hwnd ? int(fn(hwnd)) : 96;
+}
+std::atomic<int> g_clientW{0}, g_clientH{0}, g_dpi{96};
+// Logs the sizes the overlay converts between, when they change (at most every second).
+void NoteDisplaySizes(float bw, float bh) {
+    RECT rc{};
+    if (!g_hwnd || !GetClientRect(g_hwnd, &rc)) return;
+    const int cw = rc.right, ch = rc.bottom, dpi = WindowDpi(g_hwnd);
+    g_clientW = cw; g_clientH = ch; g_dpi = dpi;
+    static std::string last;
+    static double at = -1e9;
+    char k[96];
+    snprintf(k, sizeof(k), "%.0fx%.0f %dx%d %d", double(bw), double(bh), cw, ch, dpi);
+    if (last == k || NowSeconds() - at < 1.0) return;
+    last = k;
+    at = NowSeconds();
+    Log("overlay: back buffer %.0fx%.0f (ImGui display), window client %dx%d, dpi %d, mouse scale %.3f,%.3f", double(bw), double(bh), cw, ch, dpi,
+        cw > 0 ? double(bw) / cw : 1.0, ch > 0 ? double(bh) / ch : 1.0);
+}
+
 bool EnsureInit(IDXGISwapChain* swap) {
     if (g_ready) return swap == g_swap;
     if (g_failed) return false;
@@ -645,6 +669,7 @@ void Render(IDXGISwapChain* swap) {
     io.DisplaySize = ImVec2(float(desc.BufferDesc.Width), float(desc.BufferDesc.Height));
     g_screenW = io.DisplaySize.x;
     g_screenH = io.DisplaySize.y;
+    NoteDisplaySizes(io.DisplaySize.x, io.DisplaySize.y);
     ImGui::NewFrame();
     MapOverlayDraw(scene, io.DisplaySize.x, io.DisplaySize.y, g_device);
     DrawStatus(m, io.DisplaySize.x, io.DisplaySize.y);
@@ -909,6 +934,12 @@ void OverlayPublishScene(MapScene scene) {
 void OverlayScreenSize(float& w, float& h) {
     w = g_screenW.load();
     h = g_screenH.load();
+}
+
+void OverlayWindowInfo(int& clientW, int& clientH, int& dpi) {
+    clientW = g_clientW.load();
+    clientH = g_clientH.load();
+    dpi = g_dpi.load();
 }
 
 void OverlayPushAction(OverlayAction a) { PushAction(std::move(a)); }

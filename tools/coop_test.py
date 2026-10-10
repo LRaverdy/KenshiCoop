@@ -1091,10 +1091,7 @@ def exp_map(host, clis):
     hostile squads); what each machine draws is read back (mapscene); the game's map projection must
     match ours; a client's ping must show on the host and on the other client, rate-limited."""
     import re as _re
-    time.sleep(6)
-    for c in clis:
-        cmd(c, "editdone")
-    time.sleep(4)
+    time.sleep(6)   # editors already closed by setup_multi, each at its join turn
 
     def kv(text):
         return dict(p.split("=", 1) for p in text.split(";")[0].split() if "=" in p)
@@ -1179,6 +1176,85 @@ def exp_map(host, clis):
         log(f"{label} squad bar frames:", t[:300])
         frames = items(t, 1)
         check(f"barre : {label} cadres aux couleurs des joueurs seulement", all(f.get("owner") in owners for f in frames), t[:200])
+    # what the overlay converts: MyGUI view -> back buffer (ImGui display), frames as drawn
+    def conv(pid):
+        ok, t = cmd(pid, "mapconv")
+        parts = t.split(";")
+        head = kv(parts[0]) if parts else {}
+        frames, drawn = [], []
+        for tok in (parts[1].split() if len(parts) > 1 else []):
+            m = _re.search(r"owner=(\d+):raw=([-\d.,]+):conv=([-\d.,]+)", tok)
+            if m:
+                frames.append((m.group(1), [float(v) for v in m.group(3).split(",")]))
+        for tok in (parts[2].split() if len(parts) > 2 else []):
+            d = dict(x.split("=", 1) for x in tok.split(":")[1:] if "=" in x)
+            if "x" in d:
+                drawn.append((d["owner"], [float(d["x"]), float(d["y"]), float(d["w"]), float(d["h"])]))
+        return ok, head, frames, drawn, parts[3] if len(parts) > 3 else "", t
+
+    def check_frames(pid, label):
+        """Every frame the overlay drew matches a portrait widget read now (converted to the display),
+        and lies on the display."""
+        time.sleep(0.5)
+        ok, k, frames, drawn, mp, t = conv(pid)
+        log(f"{label} mapconv:", t[:500])
+        bw, bh = [float(v) for v in k.get("bb", "0x0").split("x")]
+        bad = []
+        for owner, r in drawn:
+            near = [f for o, f in frames if o == owner and max(abs(a - b) for a, b in zip(f, r)) <= 2.0]
+            if not near or r[0] < -1 or r[1] < -1 or r[0] + r[2] > bw + 1 or r[1] + r[3] > bh + 1:
+                bad.append((owner, r))
+        check(f"barre : {label} cadres dessines = portraits du jeu convertis (meme taille de fenetre)",
+              ok and len(drawn) == len(frames) and not bad and float(k.get("drawnAge", 99)) < 1.0,
+              f"{len(drawn)} dessines / {len(frames)} portraits, hors place {bad[:3]} | {t[:300]}")
+        return k
+
+    for pid, label in [(host, "hote")] + [(c, f"client {i + 1}") for i, c in enumerate(clis)]:
+        k = check_frames(pid, label)
+        check(f"tetes : {label} vue 3D non couverte (ecran de gestion ferme), reperes dessines",
+              k.get("covered") == "0" and int(k.get("heads", 0)) >= 1, k)
+    # the game's map screen, opened by its own MAP button (clicked through MyGUI's input), on client 1
+    c1 = clis[0]
+    log("map: open the map screen on client 1:", cmd(c1, "mapui open"))
+    time.sleep(1.5)
+    st = cmd(c1, "mapui state")[1]
+    if "window=1" in st and "open=0" in st:
+        log("map: window up on another tab:", st, cmd(c1, "mapui maptab"))
+        time.sleep(1.0)
+    st = cmd(c1, "mapui state")[1]
+    t = cmd(c1, "mapscene carte")[1]
+    check("carte : ecran de carte ouvert par son bouton, detecte", "open=1" in st and kv(t).get("open") == "1", f"{st} | {t[:200]}")
+    ok, k, frames, drawn, mp, t = conv(c1)
+    log("client 1 mapconv (map open):", t[:500])
+    m = _re.search(r"conv=([-\d.,]+):drawn=([-\d.,]+)", mp)
+    same = bool(m) and max(abs(float(a) - float(b)) for a, b in zip(m.group(1).split(","), m.group(2).split(","))) <= 2.0
+    check("carte : marqueurs dessines sur l'ecran de carte, image a sa place", k.get("mapDrawn") == "1" and int(k.get("markers", 0)) >= 1 and same, t[:400])
+    # the window resized mid-test: the frames follow (back buffer, MyGUI view and client may differ)
+    wins = [hw for hw, w, h in windows_of(c1) if w >= 640]
+    if wins:
+        r = wt.RECT()
+        user32.GetWindowRect(wins[0], ctypes.byref(r))
+        W, H = r.right - r.left, r.bottom - r.top
+        log("map: resize client 1's window", f"{W}x{H} ->", f"{int(W * 0.8)}x{int(H * 0.7)}")
+        user32.SetWindowPos(wins[0], 0, 0, 0, int(W * 0.8), int(H * 0.7), 0x0002 | 0x0004)   # SWP_NOMOVE | SWP_NOZORDER
+        time.sleep(3)
+        ok, k, frames, drawn, mp, t = conv(c1)
+        log("client 1 mapconv after the resize (map open):", t[:500])
+        m = _re.search(r"conv=([-\d.,]+):drawn=([-\d.,]+)", mp)
+        same = bool(m) and max(abs(float(a) - float(b)) for a, b in zip(m.group(1).split(","), m.group(2).split(","))) <= 2.0
+        check("carte : apres redimensionnement, image de la carte a sa place", k.get("mapDrawn") == "1" and same, t[:400])
+        log("map: close the map screen on client 1:", cmd(c1, "mapui close"))
+        time.sleep(1.5)
+        check("carte : ecran de carte referme", "window=0" in cmd(c1, "mapui state")[1], cmd(c1, "mapui state")[1])
+        check_frames(c1, "client 1 (fenetre redimensionnee)")
+        user32.SetWindowPos(wins[0], 0, 0, 0, int(W * 0.6), int(H * 0.9), 0x0002 | 0x0004)
+        time.sleep(3)
+        check_frames(c1, "client 1 (redimensionnee encore)")
+        arrange_grid([host] + clis)   # back to the grid the user watches
+        time.sleep(2)
+    else:
+        log("map: client 1's window not found, no resize")
+        cmd(c1, "mapui close")
     # pings: client 1 pings, the host and client 2 see it in its name
     px, pz = (float(hchars[0]["x"]) + 50, float(hchars[0]["z"]) + 50) if hchars else (0.0, 0.0)
     r1 = cmd(clis[0], f"ping {px} {pz} 1")
@@ -4987,7 +5063,9 @@ def main():
                 kill_launched()
         return
     if a.what == "map":
-        host, clis = setup_many(a.save, max(2, a.clients))
+        # setup_multi: each client closes its character editor when its join turn comes (with the
+        # join queue, the next client waits until then)
+        host, clis, _ids = setup_multi(a.save, max(2, a.clients))
         arrange_grid([host] + clis)
         try:
             exp_map(host, clis)

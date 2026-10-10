@@ -802,7 +802,9 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
 - **Une couleur par joueur**, la même partout et chez tout le monde (`kc::PlayerColor`,
   `common/include/kc/colors.h`) : or (l'hôte), bleu, vert, magenta, orange, cyan, blanc, violet.
   Le rouge est réservé aux ennemis.
-- **Carte du monde (touche M)** : par-dessus la carte du jeu, chaque joueur voit **tous les persos
+- **Carte du monde** (l'onglet CARTE de la fenêtre de gestion du jeu, ouverte par son bouton « MAP »
+  à côté de la barre d'escouade ou par la touche « carte » des réglages du joueur ; le mod n'en
+  suppose aucune : dans la partie de l'utilisateur, M est la caméra libre) : par-dessus la carte du jeu, chaque joueur voit **tous les persos
   de tous les joueurs** (gros point : le perso du joueur, petit : une recrue), à la couleur de leur
   joueur, même ceux qui sont très loin de lui (hors de la zone que son jeu a chargée). En rouge,
   les **escouades hostiles qui nous visent** : un raid ou une vague d'attaque du jeu dont la cible
@@ -823,8 +825,13 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   la couleur du joueur, avec son nom, projeté avec la caméra du jeu ; rien quand le perso est hors
   de l'écran ou derrière la caméra.
 - **Barre d'escouade** : le portrait des persos des joueurs reçoit un cadre à la couleur du joueur
-  (dessiné par l'overlay sur le rectangle du portrait lu dans le jeu) ; les recrues gardent le
-  cadre normal.
+  (dessiné par l'overlay sur la partie visible du portrait, relue dans le jeu à chaque image) ; les
+  recrues gardent le cadre normal. Pas de cadre pour une case cachée (cases recyclées par la liste),
+  coupée par le défilement, ou sous une fenêtre du jeu (fenêtre de gestion, inventaire…).
+- **Fenêtre déplacée ou redimensionnée** : les rectangles lus dans l'interface du jeu (MyGUI) sont
+  convertis à chaque image de la taille de la vue MyGUI vers celle du tampon d'affichage (celle où
+  l'overlay dessine), axe par axe ; la souris, elle, va des pixels de la fenêtre (DPI compris) à ceux
+  du tampon. Aucune position n'est gardée d'une image à l'autre.
 - **Pings** : clic molette ou Alt+clic sur la carte, sur la minicarte ou sur le sol (un clic
   molette court : le clic molette tenu tourne toujours la caméra). Sans touche : « Aller ici » ;
   Maj : « Danger / ennemis » ; Ctrl : « Butin » ; Maj+Ctrl : « À l'aide ». Le ping apparaît chez
@@ -841,10 +848,14 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   chaque joueur, l'hôte compris, en sont tirés ; un perso présent dans le monde local est placé à
   sa position locale (fluide). Un ping de client part à l'hôte (`MapPing`), qui vérifie le rythme
   et le renvoie à tous. **Protocole 33.**
+- **Journal** : ouverture / fermeture de l'écran de carte (et la raison quand rien n'y est dessiné :
+  écran de gestion fermé, autre onglet, réglage…), rectangle de l'image, nombre de marqueurs dessinés,
+  nombre de cadres de la barre (cachés, coupés, sous une fenêtre), tailles du tampon, de la fenêtre,
+  de la vue MyGUI et DPI quand elles changent ; au plus une ligne par seconde ou deux.
 - **Limites / à vérifier en jeu** : tout (aucun essai en jeu encore) ; un raid lointain encore
   « abstrait » (escouade pas chargée chez l'hôte) n'est pas montré ; le sol d'un ping 3D est pris
-  plat à la hauteur du perso centré ; la vue de la caméra et l'échelle des coordonnées MyGUI sont
-  supposées (docs/MOTEUR.md § 11) ; un Alt+clic gauche ne va plus au jeu tant que les pings sont
+  plat à la hauteur du perso centré ; la vue de la caméra est supposée (docs/MOTEUR.md § 11) ; une fenêtre du jeu posée
+  sur l'écran de carte n'en cache pas les marqueurs ; un Alt+clic gauche ne va plus au jeu tant que les pings sont
   actifs ; hors session (partie solo) la minicarte montre l'escouade locale, sans ennemis ni pings.
 
 ### Précision des PNJ lointains 🟡 implémenté, à vérifier en jeu

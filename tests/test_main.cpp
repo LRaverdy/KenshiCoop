@@ -20,6 +20,7 @@
 #include "kc/admin.h"
 #include "kc/protocol.h"
 #include "kc/session.h"
+#include "../plugin/map_view.h"
 
 using namespace kc;
 
@@ -2508,6 +2509,41 @@ static void TestCaptives() {
     CHECK(cw.captiveApplies == applies);
 }
 
+// The overlay's GUI -> display conversion (plugin/map_view.h): MyGUI view pixels to back buffer pixels.
+static void TestGuiToDisplay() {
+    std::printf("overlay: MyGUI coordinates converted to the display, per axis, every frame\n");
+    using kcp::MapScene;
+    // same size: unchanged
+    auto g = kcp::MakeGuiToDisplay(844, 774, 844, 774);
+    CHECK(g.known && g.fx == 1.0f && g.fy == 1.0f);
+    // the window was resized, the GUI still has its old view: stretched per axis
+    g = kcp::MakeGuiToDisplay(1280, 720, 640, 540);
+    CHECK(g.known && std::fabs(g.fx - 0.5f) < 1e-6f && std::fabs(g.fy - 0.75f) < 1e-6f);
+    const kcp::SceneRect r = kcp::GuiRectToDisplay({100, 600, 60, 60, 2}, g);
+    CHECK(std::fabs(r.x - 50) < 1e-4f && std::fabs(r.y - 450) < 1e-4f && std::fabs(r.w - 30) < 1e-4f && std::fabs(r.h - 45) < 1e-4f && r.owner == 2);
+    // unknown or absurd sizes: 1:1
+    g = kcp::MakeGuiToDisplay(0, 0, 800, 600);
+    CHECK(!g.known && g.fx == 1.0f && g.fy == 1.0f);
+    g = kcp::MakeGuiToDisplay(1280, 720, 0, 600);
+    CHECK(!g.known);
+    // a scene: map image, its visible part and the frames move together, once only
+    MapScene s;
+    s.guiW = 1600; s.guiH = 900;
+    s.mapOpen = true; s.boundsOk = true;
+    s.minX = 0; s.minZ = 0; s.sizeX = 1000; s.sizeZ = 1000;
+    s.imgX = 400; s.imgY = 100; s.imgW = 800; s.imgH = 800;
+    s.clipX0 = 400; s.clipY0 = 100; s.clipX1 = 1200; s.clipY1 = 900;
+    s.portraits.push_back({800, 850, 40, 40, 1});
+    kcp::SceneToDisplay(s, 800, 450);
+    CHECK(s.inDisplay && s.imgX == 200 && s.imgY == 50 && s.imgW == 400 && s.imgH == 400 && s.clipX1 == 600 && s.clipY1 == 450);
+    CHECK(s.portraits[0].x == 400 && s.portraits[0].y == 425 && s.portraits[0].w == 20 && s.portraits[0].h == 20);
+    kcp::SceneToDisplay(s, 800, 450);   // a second call changes nothing
+    CHECK(s.imgX == 200 && s.portraits[0].x == 400);
+    // the world point at the image's centre lands at the centre of the converted image
+    float sx = 0, sy = 0;
+    CHECK(kcp::WorldToMapScreen(s, {500, 0, 500}, sx, sy) && std::fabs(sx - 400) < 1e-3f && std::fabs(sy - 250) < 1e-3f);
+}
+
 static void TestMap() {
     std::printf("session: map markers (players' characters, hostile squads) and pings reach every player\n");
     FakeWorld hw;
@@ -3332,6 +3368,7 @@ int main() {
     TestAdmin();
     TestTaskTargets();   // actor safety
     TestActorSafety();
+    TestGuiToDisplay();
     TestMap();
     TestManyPlayers();
     TestJoinQueue();

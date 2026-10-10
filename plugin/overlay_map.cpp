@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "kc/colors.h"
+#include "map.h"
 #include "util.h"
 
 namespace kcp {
@@ -85,6 +86,10 @@ std::atomic<double> g_drawnAt{-1e9};       // the layer's last frame (a stale on
 float g_zoomPending = 0;             // a zoom change not yet back from the game thread's settings
 double g_zoomPendingAt = 0;
 int g_midDownX = -1, g_midDownY = -1;
+MapDrawn g_drawn;                    // what the last frame drew (tests: mapconv), under g_mx
+int g_frameHeads = 0, g_frameMarkers = 0, g_frameMarkersTotal = 0;   // counted while drawing (render thread)
+std::string g_lastMarkersKey;        // map screen markers log: on change, every 2 s at most
+double g_lastMarkersAt = -1e9;
 double g_midDownAt = 0;
 
 // ---- the world map texture (GUI_Map.dds, what the map screen shows): one mip of 2048 px or less
@@ -141,6 +146,8 @@ bool LoadMapTexture(ID3D11Device* dev) {
 // ---- the map screen
 void DrawMapScreen(const MapScene& s, float w, float h) {
     (void)w; (void)h;
+    g_frameMarkers = 0;
+    g_frameMarkersTotal = int(s.threats.size() + s.chars.size() + (s.showPings ? s.pings.size() : 0));
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     dl->PushClipRect(ImVec2(s.clipX0, s.clipY0), ImVec2(s.clipX1, s.clipY1), true);
     const float cx = g_curX.load(), cy = g_curY.load();
@@ -149,6 +156,7 @@ void DrawMapScreen(const MapScene& s, float w, float h) {
     for (const auto& t : s.threats) {
         float x, y;
         if (!WorldToMapScreen(s, t.pos, x, y) || !InMapClip(s, x, y)) continue;
+        ++g_frameMarkers;
         const float r = t.kind == 3 ? 7.0f : 6.0f;
         if (t.kind == 3) dl->AddCircle(ImVec2(x, y), r + 3.0f + 2.0f * std::sin(float(ImGui::GetTime()) * 5.0f), kEnemy, 20, 2.0f);
         dl->AddCircleFilled(ImVec2(x, y), r, kEnemy, 16);
@@ -164,6 +172,7 @@ void DrawMapScreen(const MapScene& s, float w, float h) {
     for (const auto& c : s.chars) {
         float x, y;
         if (!WorldToMapScreen(s, c.pos, x, y) || !InMapClip(s, x, y)) continue;
+        ++g_frameMarkers;
         const float r = c.avatar ? 6.0f : 4.0f;
         dl->AddCircleFilled(ImVec2(x, y), r, Col(c.owner, c.dead ? 0.5f : 1.0f), 16);
         dl->AddCircle(ImVec2(x, y), r, kShadow, 16, 1.5f);
@@ -183,6 +192,7 @@ void DrawMapScreen(const MapScene& s, float w, float h) {
         for (const auto& p : s.pings) {
             float x, y;
             if (!WorldToMapScreen(s, p.pos, x, y) || !InMapClip(s, x, y)) continue;
+            ++g_frameMarkers;
             const float a = PingAlpha(p.age);
             const float pulse = std::fmod(p.age, 1.0f);
             dl->AddCircle(ImVec2(x, y), 6.0f + 14.0f * pulse, Col(p.owner, a * (1.0f - pulse)), 24, 2.0f);
@@ -229,6 +239,7 @@ void DrawWorldMarkers(const MapScene& s, float w, float h) {
             float x, y;
             if (!WorldToScreen(s, {c.pos.x, c.pos.y + kHeadHeight, c.pos.z}, w, h, x, y)) continue;
             if (x < -50 || y < -50 || x > w + 50 || y > h + 50) continue;
+            ++g_frameHeads;
             const ImU32 col = Col(c.owner, c.down ? 0.6f : 1.0f);
             // a small cursor pointing down at the head, the name above it
             dl->AddTriangleFilled(ImVec2(x - 6, y - 10), ImVec2(x + 6, y - 10), ImVec2(x, y), col);
@@ -502,7 +513,14 @@ bool OverMinimap(float x, float y) {
 
 } // namespace
 
-void MapOverlayDraw(const MapScene& s, float w, float h, ID3D11Device* device) {
+void MapOverlayDraw(const MapScene& in, float w, float h, ID3D11Device* device) {
+    // The scene's GUI rectangles are MyGUI view pixels read by the game thread: read them again now
+    // when this frame runs on that thread (no lag behind a window being dragged), then convert them
+    // to this frame's display pixels (the back buffer: io.DisplaySize). Nothing is kept from a
+    // previous frame.
+    MapScene s = in;
+    const bool refreshed = MapRefreshGui(s);
+    SceneToDisplay(s, w, h);
     {
         std::lock_guard<std::mutex> lk(g_mx);
         g_inScene = s;
@@ -512,11 +530,53 @@ void MapOverlayDraw(const MapScene& s, float w, float h, ID3D11Device* device) {
     }
     g_drawnAt = NowSeconds();
     g_pingsArmed = s.live && s.showPings;
-    if (!s.live) { g_overMinimap = false; return; }
-    if (s.mapOpen && s.showMap) DrawMapScreen(s, w, h);
-    DrawWorldMarkers(s, w, h);
-    if (s.showMinimap && !s.covered && s.centreOk) DrawMinimap(s, w, h, device);
-    g_overMinimap = OverMinimap(g_curX.load(), g_curY.load());
+    g_frameHeads = 0;
+    g_frameMarkers = 0;
+    bool minimap = false;
+    if (s.live) {
+        if (s.mapOpen && s.showMap) DrawMapScreen(s, w, h);
+        DrawWorldMarkers(s, w, h);
+        minimap = s.showMinimap && !s.covered && s.centreOk;
+        if (minimap) DrawMinimap(s, w, h, device);
+        g_overMinimap = OverMinimap(g_curX.load(), g_curY.load());
+    } else {
+        g_overMinimap = false;
+    }
+    MapDrawn d;
+    d.at = NowSeconds();
+    d.w = w; d.h = h;
+    d.refreshed = refreshed;
+    d.heads = g_frameHeads;
+    d.minimap = minimap;
+    d.mapOpen = s.live && s.mapOpen && s.showMap;
+    d.mapMarkers = d.mapOpen ? g_frameMarkers : 0;
+    d.imgX = s.imgX; d.imgY = s.imgY; d.imgW = s.imgW; d.imgH = s.imgH;
+    if (s.live && s.showPortraits) d.frames = s.portraits;
+    // the map screen's markers, in the log: how many, or why none (on change, 2 s apart at most)
+    if (d.mapOpen) {
+        char k[64];
+        snprintf(k, sizeof(k), "%d/%d", d.mapMarkers, g_frameMarkersTotal);
+        if (g_lastMarkersKey != k && NowSeconds() - g_lastMarkersAt >= 2.0) {
+            g_lastMarkersKey = k;
+            g_lastMarkersAt = NowSeconds();
+            if (d.mapMarkers > 0)
+                Log("map screen: drew %d of %d marker(s) (chars %zu, hostile squads %zu, pings %zu) in (%.0f,%.0f)-(%.0f,%.0f), display %.0fx%.0f",
+                    d.mapMarkers, g_frameMarkersTotal, s.chars.size(), s.threats.size(), s.showPings ? s.pings.size() : size_t(0), double(s.clipX0),
+                    double(s.clipY0), double(s.clipX1), double(s.clipY1), double(w), double(h));
+            else
+                Log("map screen: open but no marker drawn (%s)", g_frameMarkersTotal == 0 ? "nothing in the map feed"
+                                                                                      : "every marker is outside the visible part of the map");
+        }
+    } else {
+        g_lastMarkersKey.clear();
+    }
+    std::lock_guard<std::mutex> lk(g_mx);
+    g_drawn = std::move(d);
+}
+
+MapDrawn MapOverlayLastDrawn() {
+    std::lock_guard<std::mutex> lk(g_mx);
+    return g_drawn;
 }
 
 bool MapOverlayMessage(UINT msg, WPARAM wp, float x, float y) {

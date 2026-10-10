@@ -151,7 +151,7 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
   Si on te voit, la fenêtre se ferme et l'objet reste.
 - **Objets au sol** : posés et ramassés, au même endroit pour tout le monde.
 - **Cadavres** : restent synchronisés et se fouillent, près des joueurs.
-- **Carte et repères** : sur la carte du jeu (M), tous les persos de tous les joueurs à la couleur
+- **Carte et repères** : sur la carte du jeu (onglet CARTE de la fenêtre de gestion, bouton MAP), tous les persos de tous les joueurs à la couleur
   de leur joueur et les escouades hostiles qui nous visent en rouge ; une minicarte ronde ; un
   repère au-dessus de la tête des persos des joueurs ; leur cadre de portrait coloré ; des pings
   partagés. Réglages : fenêtre Multijoueur, « Affichage ».
