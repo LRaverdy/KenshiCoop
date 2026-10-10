@@ -411,6 +411,99 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         snprintf(b, sizeof(b), "ok on-ground %s %.1f,%.1f,%.1f", st.templateSid.c_str(), p.x, p.y, p.z);
         return b;
     }
+    if (cmd == "uidrop") {   // uidrop <squadIndex> <weapon|armour|item|sid|name_part>: drop it as the inventory window does (Inventory::dropItem)
+        size_t idx = 0;
+        std::string kind;
+        in >> idx >> kind;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size() || kind.empty()) return "err usage: uidrop <squadIndex> <weapon|armour|item|sid>";
+        kenshi::Character* c = w.FindSquad(squad[idx]);
+        void* item = kenshi::FindItemOfKind(c, kind);
+        if (!item) return "err no " + kind + " carried";
+        kc::ItemState st;
+        kenshi::DescribeInventoryItem(item, st);
+        // no HostCallScope: the hooks see it as the player's own drop (a client asks the host)
+        if (!kenshi::InventoryDrop(kenshi::InventoryOfHolder(c), item)) return "err drop failed";
+        if (!s.isHost()) return "ok asked " + st.templateSid + " x" + std::to_string(st.quantity);
+        kc::Handle ih;
+        kc::Vec3 p;
+        if (!kenshi::ItemInWorld(item) || !kenshi::DescribeGroundItem(item, ih, st, p)) return "err not in the world after the drop";
+        char b[220];
+        snprintf(b, sizeof(b), "ok %s %s %d %.1f,%.1f,%.1f", Key(ih).c_str(), st.templateSid.c_str(), st.quantity, p.x, p.y, p.z);
+        return b;
+    }
+    if (cmd == "fetchitem") {   // fetchitem <squadIndex> <weapon|armour|sid>: (host) one from another squad member (worn or not) into its bag
+        size_t idx = 0;
+        std::string kind;
+        in >> idx >> kind;
+        if (!s.isHost()) return "err host only";
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        kenshi::Character* to = w.FindSquad(squad[idx]);
+        if (void* mine = kenshi::FindItemOfKind(to, kind)) {
+            kc::ItemState st;
+            kenshi::DescribeInventoryItem(mine, st);
+            if (st.section == "main") return "ok " + st.templateSid + " (already carried)";
+        }
+        HostCallScope scope;
+        for (size_t j = 0; j < squad.size(); ++j) {
+            if (j == idx) continue;
+            kenshi::Character* from = w.FindSquad(squad[j]);
+            void* it = kenshi::FindItemOfKind(from, kind);
+            kc::InvOp op;
+            if (!it || !kenshi::DescribeInventoryItem(it, op.item)) continue;
+            op.toSection = "main";
+            op.toX = op.toY = -1;
+            std::string e;
+            if (kenshi::MoveInventoryItem(from, to, op, &e)) return "ok " + op.item.templateSid + " from squad" + std::to_string(j);
+        }
+        return "err no " + kind + " to fetch";
+    }
+    if (cmd == "groundall") {   // groundall <radius> [squadIndex]: items lying in the world around it, "key|sid|qty|x,y,z"
+        float radius = 500;
+        size_t sel = 0;
+        in >> radius >> sel;
+        auto squad = SortedSquad(w);
+        kc::Vec3 base;
+        if (sel >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[sel]), base)) return "err no squad";
+        std::vector<void*> items;
+        kenshi::WorldItemsNear(base, radius, items);
+        std::string out = "ok " + std::to_string(items.size());
+        for (void* it : items) {
+            kc::Handle ih;
+            kc::ItemState st;
+            kc::Vec3 p;
+            if (!kenshi::DescribeGroundItem(it, ih, st, p)) continue;
+            char b[200];
+            snprintf(b, sizeof(b), " %s|%s|%d|%.1f,%.1f,%.1f", Key(ih).c_str(), st.templateSid.c_str(), st.quantity, p.x, p.y, p.z);
+            out += b;
+            if (out.size() > 6000) break;
+        }
+        return out;
+    }
+    if (cmd == "groundcopy") {   // groundcopy <hostItemKey>: (client) our copy of that host item: "key|sid|qty|x,y,z" or "none"
+        std::string k;
+        in >> k;
+        kc::Handle ih;
+        sscanf(k.c_str(), "%u:%u:%u:%u:%u", &ih.type, &ih.container, &ih.containerSerial, &ih.index, &ih.serial);
+        void* item = kenshi::ResolveItem(w.GroundCopyOf(ih));
+        kc::Handle h2;
+        kc::ItemState st;
+        kc::Vec3 p;
+        if (!item || !kenshi::ItemInWorld(item) || !kenshi::DescribeGroundItem(item, h2, st, p)) return "ok none";
+        char b[200];
+        snprintf(b, sizeof(b), "ok %s|%s|%d|%.1f,%.1f,%.1f", Key(h2).c_str(), st.templateSid.c_str(), st.quantity, p.x, p.y, p.z);
+        return b;
+    }
+    if (cmd == "groundstats") {   // groundstats: drop / pickup bookkeeping counters (plugin/ground.cpp)
+        const auto g = w.GroundCounters();
+        char b[300];
+        snprintf(b, sizeof(b), "ok hookDrops=%llu scanDrops=%llu scanGone=%llu scanChanged=%llu repeatsSkipped=%llu created=%llu matched=%llu repeats=%llu merged=%llu removed=%llu",
+                 (unsigned long long)g.hookDrops, (unsigned long long)g.scanDrops, (unsigned long long)g.scanGone, (unsigned long long)g.scanChanged,
+                 (unsigned long long)g.repeatsSkipped, (unsigned long long)g.created, (unsigned long long)g.matched, (unsigned long long)g.repeats,
+                 (unsigned long long)g.merged, (unsigned long long)g.removed);
+        return b;
+    }
     if (cmd == "stats") {   // stats <squadIndex>: its skill levels, comma separated
         size_t idx = 0;
         in >> idx;

@@ -3133,6 +3133,124 @@ def exp_ground(host, cli):
         log("  client after pickup:", cmd(cli, f"ground {key}"), "| host:", cmd(host, f"ground {key}"))
 
 
+def exp_grounddrop(host, cli):
+    """Items dropped the way the inventory window does (Inventory::dropItem, debug "uidrop"): a stack
+    of ore, a weapon and armour, by the host, by the client, both at once, plus whatever a knockout and
+    a death leave on the ground. Each must lie once on both sides, same place, same stack; a pickup
+    removes it everywhere."""
+    time.sleep(8)
+    cmd(cli, "editdone")   # the joiner's character editor holds the whole game paused
+    time.sleep(3)
+    own = own_index(host)
+    hidx = 0 if own != 0 else 1
+    ore = None
+    for part in ("Iron_Ore", "Copper_Ore", "Ore", "Stone"):
+        t = cmd(host, f"itemtypes {part}")[1].split()
+        if len(t) > 2 and "=" in t[2]:
+            ore = t[2].split("=")[0]
+            break
+    check("objet au sol : un minerai trouve", ore is not None, ore)
+    for i in (hidx, own):
+        if ore:
+            log(f"ore for squad{i}:", cmd(host, f"giveitem {ore} 12 {i}"))
+        for kind in ("weapon", "armour"):
+            log(f"{kind} for squad{i}:", cmd(host, f"fetchitem {i} {kind}"))
+    time.sleep(4)   # the client's inventory follows the host's
+
+    def ground(pid, idx):
+        ok, t = cmd(pid, f"groundall 700 {idx}")
+        out = {}
+        for x in (t.split()[2:] if ok and t.startswith("ok") else []):
+            k, sid, q, pos = x.split("|")
+            out[k] = (sid, int(q), tuple(map(float, pos.split(","))))
+        return out
+
+    def new_items(before, after):
+        return {k: v for k, v in after.items() if k not in before}
+
+    def twins(v, items):   # the same stack lying within 5 units
+        return [k for k, w in items.items() if w[0] == v[0] and w[1] == v[1] and dist(w[2], v[2]) < 5.0]
+
+    def compare(label, hn, cn, expect=None):
+        if expect is not None:
+            check(f"objet au sol : {label} : {expect} objet(s) chez l'hote", len(hn) == expect, list(hn.values()))
+        check(f"objet au sol : {label} : autant d'objets chez le client", len(cn) == len(hn),
+              f"hote {sorted(v[:2] for v in hn.values())} / client {sorted(v[:2] for v in cn.values())}")
+        for hk, v in hn.items():
+            tw = twins(v, cn)
+            near = min((dist(w[2], v[2]) for w in cn.values() if w[0] == v[0]), default=-1)
+            check(f"objet au sol : {label} : {v[0]} x{v[1]} une seule fois chez le client, meme endroit, meme pile", len(tw) == 1,
+                  f"{len(tw)} copie(s), ecart {near:.1f}")
+
+    def pickup_everywhere(label, idx, hn, cn):
+        for hk, v in hn.items():
+            log(f"  host pickup {v[0]}:", cmd(host, f"pickup {idx} {hk}"))
+        time.sleep(2.5)
+        hl, cl = ground(host, idx), ground(cli, idx)
+        left_h = [k for k in hn if k in hl]
+        left_c = [k for k in cn if k in cl]
+        check(f"objet au sol : {label} : ramasse, disparu chez l'hote", not left_h, left_h)
+        check(f"objet au sol : {label} : ramasse, disparu chez le client", not left_c, left_c)
+
+    def drop(label, pid, idx, kind):
+        hb, cb = ground(host, idx), ground(cli, idx)
+        ok, t = cmd(pid, f"uidrop {idx} {kind}")
+        log(f"{label}: uidrop {idx} {kind} ->", t)
+        if not ok or not t.startswith("ok"):
+            check(f"objet au sol : {label} : lache", False, t)
+            return
+        time.sleep(2.5)
+        hn, cn = new_items(hb, ground(host, idx)), new_items(cb, ground(cli, idx))
+        compare(label, hn, cn, 1)
+        pickup_everywhere(label, idx, hn, cn)
+
+    # 1. the host drops, through the inventory window's path
+    for kind in ("ore", "weapon", "armour"):
+        drop(f"l'hote lache ({kind})", host, hidx, ore if kind == "ore" and ore else kind)
+    # 2. the client drops from its own character: the host's game does it
+    for kind in ("ore", "weapon", "armour"):
+        drop(f"le client lache ({kind})", cli, own, ore if kind == "ore" and ore else kind)
+    # 3. both at once
+    if ore:
+        log("ore again:", cmd(host, f"giveitem {ore} 7 {hidx}"), cmd(host, f"giveitem {ore} 9 {own}"))
+        time.sleep(4)
+        hb, cb = ground(host, own), ground(cli, own)
+        hb.update(ground(host, hidx))
+        cb.update(ground(cli, hidx))
+        res = {}
+        th = [threading.Thread(target=lambda: res.__setitem__("h", cmd(host, f"uidrop {hidx} {ore}"))),
+              threading.Thread(target=lambda: res.__setitem__("c", cmd(cli, f"uidrop {own} {ore}")))]
+        for t in th:
+            t.start()
+        for t in th:
+            t.join()
+        log("both at once:", res)
+        time.sleep(3)
+        ha, ca = ground(host, own), ground(cli, own)
+        ha.update(ground(host, hidx))
+        ca.update(ground(cli, hidx))
+        hn, cn = new_items(hb, ha), new_items(cb, ca)
+        compare("les deux en meme temps", hn, cn, 2)
+        pickup_everywhere("les deux en meme temps", hidx, hn, cn)
+    # 4. a knockout, then a death: whatever falls to the ground (the scan finds what no hook saw)
+    ok, t = cmd(host, "spawnnpc 12 8")
+    log("spawn", ok, t)
+    if ok and t.startswith("ok"):
+        time.sleep(5)
+        for what in ("ko", "kill"):
+            hb, cb = ground(host, hidx), ground(cli, hidx)
+            log(what, cmd(host, what))
+            time.sleep(5)
+            hn, cn = new_items(hb, ground(host, hidx)), new_items(cb, ground(cli, hidx))
+            log(f"  {what}: fell to the ground on the host: {sorted(v[:2] for v in hn.values())}")
+            compare("assomme" if what == "ko" else "mort", hn, cn)
+    log("host ground stats:", cmd(host, "groundstats")[1])
+    log("client ground stats:", cmd(cli, "groundstats")[1])
+    for l in [l for l in host_log().splitlines()[-400:] if "ground:" in l][-10:]:
+        log("  host:", l.strip()[:220])
+    summary()
+
+
 def exp_clientpickup(host, cli):
     """The client asks to pick up an item: its character walks there, the item leaves the ground everywhere."""
     time.sleep(8)
@@ -4813,6 +4931,9 @@ def main():
     gr = sub.add_parser("ground")
     gr.add_argument("--save", default="kctest_base")
     gr.add_argument("--keep", action="store_true")
+    gd = sub.add_parser("grounddrop", help="items dropped the inventory window's way (host, client, both, KO/death): once, same place, everywhere")
+    gd.add_argument("--save", default="kctest_base")
+    gd.add_argument("--keep", action="store_true")
     af = sub.add_parser("animframe")
     af.add_argument("--save", default="kctest_base")
     af.add_argument("--keep", action="store_true")
@@ -4964,6 +5085,8 @@ def main():
             exp_clientpickup(host, cli)
         elif a.what == "ground":
             exp_ground(host, cli)
+        elif a.what == "grounddrop":
+            exp_grounddrop(host, cli)
         elif a.what == "animframe":
             exp_animframe(host, cli)
         elif a.what == "anim":

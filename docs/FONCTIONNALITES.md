@@ -319,12 +319,39 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   stockage des PNJ (124, 284). Le joueur voit le message « Commercer et ouvrir un coffre ne sont
   pas encore synchronises. » (texte à mettre à jour : les coffres marchent, voir plus bas).
 
-### Objets au sol ✅
+### Objets au sol ✅ (glisser-déposer : 🟡 pas encore vérifié en jeu)
 - **Le joueur** voit un objet posé par l'hôte au même endroit chez tout le monde, puis disparaître
   partout quand quelqu'un le ramasse. Un client qui ramasse ou dépose le demande à l'hôte : son
   personnage va chercher l'objet chez l'hôte.
+- **Toutes les façons de poser** : glisser un objet d'une fenêtre d'inventaire vers le monde (perso,
+  bête de somme, coffre, sac à dos), inventaire plein, l'IA d'un PNJ, et tout ce qu'aucun crochet ne
+  voit (sur K.-O. ou mort s'il en tombe quelque chose, sortie d'une machine, etc.).
+- **Fonctionnement** :
+  - l'hôte annonce l'objet dès qu'il est au sol : crochets sur `Inventory::dropItem` (le chemin du
+    glisser-déposer), `CharacterHuman::dropItem` et `CharacterAnimal::dropItem`. L'objet compte
+    comme posé dès qu'il est actif hors de tout inventaire, sans attendre son corps physique (que le
+    jeu crée parfois quelques images plus tard : l'ancien test l'exigeait et l'objet n'était alors
+    jamais annoncé) ;
+  - en plus, deux fois par seconde, l'hôte relève les objets à 30 m autour de chaque perso des
+    joueurs. Un objet qui apparaît là où un perso regardait déjà est annoncé (posé par un chemin sans
+    crochet) ; un objet qui disparaît de là est annoncé ramassé ; une pile qui change de nombre (ou un
+    objet annoncé qui a roulé à plus de 3 m) est annoncée de nouveau. Un objet qui entre dans le champ
+    parce qu'on marche, qu'on est téléporté ou qu'une zone charge est seulement noté : les clients
+    l'ont par la sauvegarde ;
+  - chaque objet n'est annoncé qu'une fois (les crochets s'emboîtent) ; chez le client, une annonce
+    répétée est ignorée, et un objet identique (même pile) déjà posé à moins de 0,3 m et qui ne
+    représente aucun autre objet de l'hôte (sa copie de la sauvegarde) est adopté au lieu d'être créé
+    en double. Si la zone du client charge après coup sa propre copie au même endroit, la copie créée
+    est retirée (toutes les 2 s) ;
+  - un client qui lâche un objet (son perso, sa bête, un coffre qu'il a ouvert) le demande à l'hôte ;
+    pour un coffre, c'est son perso le plus proche du coffre qui le pose. L'hôte refuse depuis le
+    perso d'un autre joueur.
 - Vérifié par les expériences `ground` (objets posés puis ramassés par l'hôte) et `clientpickup`
-  (ramassage demandé par un client).
+  (ramassage demandé par un client) ; `grounddrop` (chemin du glisser-déposer : minerai, arme,
+  armure, par l'hôte, par le client, les deux à la fois, K.-O. et mort) écrite, pas encore lancée.
+  Test unitaire `TestGroundDrops`.
+- 🟡 Limites : un objet lâché depuis un sac à dos par un client passe par le perso qui le porte
+  (comme avant) ; les objets à plus de 30 m de tout joueur ne sont vus que par les crochets.
 - 🟡 Un objet qui traînait déjà dans la sauvegarde a un autre handle chez chaque joueur : l'hôte le
   retrouve par type et endroit, le plus proche à moins de 40 unités, parmi **tous** les objets hors
   inventaire (marchandises de magasin, objets de décor de la ville, que le jeu range dans un groupe

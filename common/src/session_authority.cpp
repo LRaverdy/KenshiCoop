@@ -138,7 +138,9 @@ bool Session::Authorize(RemotePlayer& pl, Msg type, Reader r) {
         InvOp op;
         if (!Decode(r, op)) return malformed();
         if (op.kind != InvOpKind::Drop) return true;   // moves: HostInvOp's rules (own, opened, bodies)
-        return AdmitActor(pl.id, DropActor(op.fromNetId), "drop an item", type, 0);   // from a worn backpack: its wearer
+        // the character that drops it: the source itself (or a worn backpack's wearer), else the one the
+        // request names (a chest it has open, a body: HostInvOp also checks it stands by it)
+        return AdmitActor(pl.id, DropRequestActor(op), "drop an item", type, 0);
     }
     }
     return false;
@@ -159,7 +161,6 @@ bool Session::ClientMaySend(Msg type, uint32_t netId, const char* what) {
     const MessageRule* rule = MessageRuleFor(type);
     if (!rule) return false;
     if (rule->subject != AuthSubject::OwnCharacter && !(rule->subject == AuthSubject::Inventory && netId)) return true;
-    if (rule->subject == AuthSubject::Inventory) netId = DropActor(netId);   // a worn backpack: its wearer drops
     const ActorVerdict v = CheckActor(localId_, netId);
     if (v == ActorVerdict::Ok) return true;
     std::string owner;

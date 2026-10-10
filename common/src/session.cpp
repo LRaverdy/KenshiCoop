@@ -1151,6 +1151,23 @@ uint32_t Session::DropActor(uint32_t netId) const {
     return it != entities_.end() && it->second.bag ? it->second.bagOwner : netId;
 }
 
+bool Session::SelfDrop(uint32_t netId) const {
+    auto it = entities_.find(netId);
+    if (it == entities_.end()) return false;
+    const Entity* w = Wearer(it->second);
+    return w && w->squad && !w->container;
+}
+
+bool Session::DropSourcePos(const Entity& e, Vec3& out) {
+    const Entity* w = Wearer(e);
+    if (!w) return false;
+    if (w->container) { out = w->containerPos; return true; }
+    EntityState st;
+    if (!world_.Read(w->handle, st)) return false;
+    out = st.pos;
+    return true;
+}
+
 uint32_t Session::EnsureBag(uint32_t wearer, const Handle& bag, const std::string& sid) {
     if (auto b = bagOf_.find(wearer); b != bagOf_.end()) {
         auto it = entities_.find(b->second);
@@ -1956,7 +1973,27 @@ void Session::HostInvOp(uint8_t from, const InvOp& op, const InvOp* swapWith) {
     };
     const bool srcOk = mayTouch(src->second);
     if (op.kind == InvOpKind::Drop) {
-        if (AdmitActor(from, DropActor(op.fromNetId), "drop an item", Msg::InvOp)) world_.ExecuteInvOp(src->second.handle, src->second.handle, op);
+        // From its own character (or pack animal) or the backpack one of them wears: that character
+        // drops it. From a chest it has open, a body it may strip, an NPC's backpack: the request names
+        // the player's character that drops it (op.toNetId), standing by it; a chest's item is dropped
+        // by that character (where the game drops it), the others by their inventory. Either way the
+        // actor is checked like every other request's (actor safety).
+        const bool self = SelfDrop(op.fromNetId);
+        const uint32_t actor = DropRequestActor(op);
+        if (!AdmitActor(from, actor, "drop an item", Msg::InvOp)) { src->second.invHash = 0; return; }
+        Handle dropper = src->second.handle;
+        if (!self) {
+            const Entity& a = entities_.at(actor);   // AdmitActor: a squad member of that player
+            Vec3 at;
+            if (!srcOk || !DropSourcePos(src->second, at) || world_.DistanceTo(a.handle, at) > kDropReach) {
+                log_("refused a drop to the ground from player " + std::to_string(from) + ": " + op.item.templateSid +
+                     (srcOk ? " (its character is not by it)" : " (not an inventory it may touch)"));
+                src->second.invHash = 0;
+                return;
+            }
+            if (src->second.container && !src->second.bag) dropper = a.handle;
+        }
+        world_.ExecuteInvOp(src->second.handle, dropper, op);
         src->second.invHash = 0;
         return;
     }
@@ -2264,18 +2301,37 @@ void Session::SendLocalDrops() {
     std::vector<std::pair<Handle, ItemState>> drops;
     world_.TakeLocalDrops(drops);
     for (const auto& [h, item] : drops) {
+        bool sent = false;
         for (auto& [id, e] : entities_) {
             if (e.handle != h) continue;
-            if (!ClientMaySend(Msg::InvOp, id, "item drop")) break;   // only our own characters drop things
             InvOp op;
             op.kind = InvOpKind::Drop;
             op.fromNetId = id;
             op.item = item;
+            // a chest we have open, a body, an NPC's backpack: our character nearest to it drops the item
+            // (named, the host checks it is ours and standing by it); our characters and their bags: themselves
+            Vec3 at;
+            if (!SelfDrop(id) && DropSourcePos(e, at)) {
+                float best = kDropReach;
+                for (const auto& [oid, o] : entities_) {
+                    if (!o.squad || o.container || o.owner != localId_) continue;
+                    const float d = world_.DistanceTo(o.handle, at);
+                    if (d <= best) { best = d; op.toNetId = oid; }
+                }
+            }
+            if (!DropRequestActor(op)) {   // nobody of ours by that chest or body: the host would refuse it
+                log_("drop to the ground not sent: no character of ours by it (" + item.templateSid + ")");
+                sent = true;
+                break;
+            }
+            if (!ClientMaySend(Msg::InvOp, DropRequestActor(op), "item drop")) { sent = true; break; }   // only our own characters drop things
             Writer w;
             Encode(w, op);
             SendReliable(net_.serverPeer(), w);
+            sent = true;
             break;
         }
+        if (!sent) log_("drop to the ground not sent: the host does not know that inventory (" + item.templateSid + ")");
     }
 }
 

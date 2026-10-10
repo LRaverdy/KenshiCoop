@@ -193,6 +193,8 @@ Les signatures sont celles du commentaire du code.
 | carte | `FnWarCurrentCampaign` | `FactionWarMgr::getCurrentCampaign(Platoon*)` | `0x283500` | — | la campagne (raid, vague d'attaque, visite) d'une escouade, ou nul ; recherche dans `forces` (+0x28), sans insertion |
 | carte | `FnPortraitCellUpdate` | `PortraitMainCellView::update(const IBDrawItemInfo&, PortraitData*)` | `0x415150` | oui | un portrait de la barre d'escouade est (re)dessiné : le mod retient la cellule |
 | carte | `FnPortraitCellDtor` | `PortraitMainCellView::~PortraitMainCellView()` | `0x426450` | oui | destructeur complet (le destructeur virtuel `0x4264E0` l'appelle) : le mod oublie la cellule |
+| sol | `FnInventoryDropItem` | `Inventory::dropItem(Item*)` | `0x745D90` | oui | ce que fait une fenêtre d'inventaire d'un objet lâché sur le monde ; vt 0x38 de `Inventory` et `ShopTraderInventory` |
+| sol | `FnDropItemAnimal` | `CharacterAnimal::dropItem(RootObject*)` | `0x5CA4A0` | oui | même code que `CharacterHuman::dropItem`, pour les bêtes de somme |
 
 | validité | `FnTerrainHeight` | `UtilityT::getTerrainHeight(float x, float z)` | `0x9B3710` | — | le sol sous l'eau éventuelle ; -99 où aucun terrain n'est connu (saut vers `getTerrainHeightFast(x, z, nullptr)` `0x9B32F0`) |
 | validité | `FnTerrainWithWaterHeight` | `UtilityT::getTerrainWithWaterHeight(float x, float z)` | `0x9B3720` | — | max(sol, 100) : la hauteur que `createBuildings` retire à la position (appel vérifié à `0x4D7512`) |
@@ -432,6 +434,33 @@ Emplacements de vtable :
   largeur / hauteur, +0x188 groupe d'objets.
   - vt 0x228 `activate`, vt 0x238 `deactivate`, vt 0x2B8 `getLevel`, vt 0x358
     `setInventoryWeAreIn`.
+  - +0x190 actif dans le monde (mis à 1 par `activate` via vt 0x230, à 0 par `deactivate`) ;
+    +0x1C8 / +0x1D8 : ce que lit `isPhysical` (vt 0xF8, `0xD2210`). Le corps physique est créé par
+    vt 0x220 (`0x75E5D0`) seulement si l'objet a déjà son visuel (vt 0xC8 non nul) et que sa zone
+    est prête (`0x3B0E3`) : juste après un `activate`, un objet peut être au sol sans être
+    « physique ». [D]
+  - `Item::activate` (`0x75D9B0`) est partagé par les 14 classes d'objets (`Item`, `Weapon`,
+    `Sword`, `Crossbow`, `Armour`, `LockedArmour`, `MoneyItem`, `ContainerItem`, `MapItem`,
+    `NestItem`, `BlueprintItem`, `Gear`, `SeveredLimbItem`, `RobotLimbItem` ; vtables listées dans
+    `kItemVtables`, `plugin/kenshi.cpp`). Il est aussi appelé quand une zone charge les objets de la
+    sauvegarde : il ne distingue pas un objet lâché. [D]
+- **Comment un objet arrive au sol** [D] :
+  - glisser-déposer d'une fenêtre d'inventaire vers le monde : `MouseInventory` (`0x7136A0`, son
+    « Character_Drop_Ground ») appelle `Inventory::dropItem` (vt 0x38) de l'inventaire de la
+    fenêtre. Celui-ci appelle `callbackObject->dropItem` (vt 0x1A8 ; `Inventory` +0x80) puis
+    `removeItemDontDestroy(item, -1, true)` ;
+  - `dropItem` (vt 0x1A8) selon le propriétaire : `CharacterHuman` `0x5CA740`, `CharacterAnimal`
+    `0x5CA4A0` (même code), bâtiments à inventaire (coffres, production, fermes…) `0x54E630` (fait
+    lâcher le personnage dont le `hand` est en +0x380 du bâtiment), sac à dos `ContainerItem`
+    `0x75D810` (fait lâcher son porteur, +0x230) ; `RootObject` et les autres : rien (`0xD2040`) ;
+  - `CharacterHuman::dropItem` : position = devant le perso (`CharMovement`+0xD0),
+    `setInventoryWeAreIn(hand vide 0x1E3A5F8)`, vt 0x1C8 (propriétaire), `activate(true, pos,
+    IDENTITY, false, &2, false)`, puis retrait de **son propre** inventaire. Pour un objet d'un
+    coffre, le drapeau « dans un inventaire » (+0xD8) n'est remis à 0 qu'au retour, par
+    `Inventory::dropItem` ;
+  - une fenêtre qui n'a pas de place pour un objet (`0x70EAA0`) le lâche par vt 0x38 ou par
+    `callbackObject->dropItem` ;
+  - `Character::giveItem(dropOnFail)` : un inventaire plein lâche l'objet.
 - Les armes se créent à partir de leur fabricant :
   `createItem(factory, fabricant, hand, type d'arme, matériau, niveau)`. Le fabricant vient en
   premier, comme dans le code du jeu.
@@ -626,7 +655,7 @@ Tâches par défaut d'un clic droit sur un meuble, selon la recherche :
 - Lits, entraînement, tables, lits squelette et équarrissage deviennent aussi des `UseableStuff`.
 
 ### Types d'objets (`itemType`, valeurs utilisées)
-0 bâtiment ; 1 personnage ; 2 arme ; 7 race ; 0x5B personnage animal.
+0 bâtiment ; 1 personnage ; 2 arme ; 3 armure ; 7 race ; 0x5B personnage animal.
 
 ### Factions, relations et primes (lot B, vérifié par désassemblage)
 - `Faction` : +0x78 `FactionRelations*`, +0x240 `GameData*` (identifiant de chaîne de la faction),

@@ -131,7 +131,7 @@ void KenshiWorld::ResetWorldBound() {
     captiveHold_.clear();
     captiveMissing_.clear();
     resolved_.clear();
-    { std::lock_guard<std::mutex> lk(groundMutex_); localDrops_.clear(); groundAlias_.clear(); }
+    ResetGround();
     { std::lock_guard<std::mutex> lk(doorMutex_); doorReqs_.clear(); doorCache_.clear(); }
     { std::lock_guard<std::mutex> lk(tradeMutex_); tradeReqs_.clear(); hostTradeLooter_ = {}; hostTradeTrader_ = {}; }
     { std::lock_guard<std::mutex> lk(buildMutex_); trackedBuildings_.clear(); localPlacements_.clear(); localBuildActions_.clear(); removedBuildings_.clear(); }
@@ -181,6 +181,7 @@ void KenshiWorld::EndFrame() {
     if (active_ && client_ && live_ && !pendingLoot_.empty()) UpdatePendingLoot();
     if (active_ && !client_ && live_ && !pickups_.empty()) UpdatePendingPickups();
     if (active_ && !client_ && live_ && !reRagdoll_.empty()) UpdateReRagdolls();
+    if (active_ && client_ && live_) GroundReconcile();
     auto v = std::make_shared<HookView>();
     v->active = active_;
     v->client = client_;
@@ -1696,26 +1697,6 @@ void KenshiWorld::DialogAnswer(uint32_t dialogId, int index) {
     Log("conversation %u: the player answered %d (%s)", dialogId, index, CallReplyClicked(dialogue, index) ? "ok" : "failed");
 }
 
-void KenshiWorld::QueueLocalDrop(kenshi::Character* c, void* item) {
-    kc::ItemState s;
-    if (!kenshi::DescribeInventoryItem(item, s)) return;
-    std::lock_guard<std::mutex> lk(groundMutex_);
-    if (localDrops_.size() < 256) localDrops_.emplace_back(c, s);
-}
-
-void KenshiWorld::TakeLocalDrops(std::vector<std::pair<kc::Handle, kc::ItemState>>& out) {
-    out.clear();
-    std::vector<std::pair<kenshi::Character*, kc::ItemState>> raw;
-    {
-        std::lock_guard<std::mutex> lk(groundMutex_);
-        raw.swap(localDrops_);
-    }
-    for (auto& [c, s] : raw) {
-        kc::Handle h;
-        if (kenshi::IsCharacter(c) && kenshi::GetHandle(c, h) && h.valid()) out.emplace_back(h, std::move(s));
-    }
-}
-
 void KenshiWorld::UpdatePendingPickups() {
     constexpr float kReach = 15.0f;
     const double now = NowSeconds();
@@ -2149,54 +2130,6 @@ void KenshiWorld::TakeAnimEvents(std::vector<std::pair<kc::Handle, kc::AnimEvent
         if (kenshi::WeaponInHands(c, sid, sec)) w.name = sid + "\t" + sec;
         out.emplace_back(h, std::move(w));
     }
-}
-
-void KenshiWorld::NoteGround(kc::GroundEvent e) {
-    if (client_ || !active_) return;
-    std::lock_guard<std::mutex> lk(groundMutex_);
-    if (groundOut_.size() < 4096) groundOut_.push_back(std::move(e));
-}
-
-void KenshiWorld::TakeGroundEvents(std::vector<kc::GroundEvent>& out) {
-    std::lock_guard<std::mutex> lk(groundMutex_);
-    out.swap(groundOut_);
-    groundOut_.clear();
-}
-
-void KenshiWorld::ApplyGround(const kc::GroundEvent& e) {
-    if (!client_) return;
-    HostCallScope scope;
-    if (e.kind == kc::GroundKind::PickedUp) {
-        // the same item here (from the shared save), or the copy we made when the host dropped it
-        auto a = groundAlias_.find(e.item);
-        void* item = kenshi::ResolveItem(a != groundAlias_.end() ? a->second : e.item);
-        if (!item || !kenshi::ItemLoose(item)) {   // an item from the save: same thing at the same spot
-            std::vector<void*> around;
-            kenshi::LooseItemsNear(e.pos, 30.0f, around);
-            float best = 15.0f;
-            for (void* it : around) {
-                kc::Handle ih;
-                kc::ItemState st;
-                kc::Vec3 p;
-                if (!kenshi::DescribeGroundItem(it, ih, st, p) || st.templateSid != e.state.templateSid) continue;
-                const float d = Dist(p, e.pos);
-                if (d < best) { best = d; item = it; }
-            }
-        }
-        const bool onGround = item && kenshi::ItemLoose(item);
-        const bool gone = onGround && kenshi::DestroyItem(item);
-        Log("host picked up item %u:%u: %s", e.item.index, e.item.serial,
-            gone ? "removed here" : !item ? "we do not have it" : !onGround ? "not on the ground here" : "could not remove it");
-        if (a != groundAlias_.end()) groundAlias_.erase(a);
-        return;
-    }
-    kc::Handle mine;
-    std::string why;
-    if (kenshi::CreateGroundItem(e.state, e.pos, mine, &why)) {
-        groundAlias_[e.item] = mine;
-        Log("host dropped item %u:%u (%s): placed here as %u:%u", e.item.index, e.item.serial, e.state.templateSid.c_str(), mine.index, mine.serial);
-    }
-    else Log("cannot place the host's dropped item %s: %s", e.state.templateSid.c_str(), why.c_str());
 }
 
 bool KenshiWorld::ReadAnimFrame(const kc::Handle& h, kc::AnimFrame& frame) {
@@ -2793,8 +2726,8 @@ void KenshiWorld::SetRole(bool client, bool active) {
         fxFullDone_.clear();
         fxStopped_.clear();
         fxRebuild_.clear();
-        groundAlias_.clear();
     }
+    ResetGround();
     if (!active) controllable_.clear();
 }
 

@@ -228,6 +228,9 @@ enum Fn : int {
     FnWarCurrentCampaign,       // CampaignInstance* FactionWarMgr::getCurrentCampaign(Platoon*)   (the raid or attack wave a squad belongs to, or null)
     FnPortraitCellUpdate,       // void PortraitMainCellView::update(const IBDrawItemInfo&, PortraitData*)   (a squad bar portrait is (re)drawn)
     FnPortraitCellDtor,         // PortraitMainCellView::~PortraitMainCellView()
+    // ---- ground drops
+    FnInventoryDropItem,        // void Inventory::dropItem(Item*)   (inventory window drag to the world: callbackObject->dropItem, then removeItemDontDestroy)
+    FnDropItemAnimal,           // void CharacterAnimal::dropItem(RootObject*)   (pack animals)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -661,6 +664,25 @@ void GroundItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out)
 // as a non-physical prop (shop goods, town clutter): what a player can still pick up or steal.
 bool ItemLoose(void* item);
 void LooseItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out);
+// An item object (Item and its 13 subclasses: weapons, armour, money, backpacks, limbs...) put in
+// the world by Item::activate and lying there: out of every inventory, active (+0x190), not in an item
+// group. Unlike ItemOnGround it does not wait for the physics body, which the game may create frames
+// after the drop (Item vt 0x220 builds it only once the item's zone/visual is ready).
+bool IsItemObject(const void* obj);
+bool ItemInWorld(void* item);
+void WorldItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out);
+void* InventoryCallback(void* inventory);      // Inventory +0x80: the object whose dropItem the inventory calls
+void* InventoryOfHolder(void* holder);         // a character's or a building's inventory
+// What an inventory window does when an item held by the mouse is released over the world:
+// Inventory::dropItem on the window's inventory (vt 0x38).
+bool InventoryDrop(void* inventory, void* item);
+bool InventoryRemove(void* inventory, void* item);   // Inventory::removeItemDontDestroy(item, all, true): what dropItem does after the drop
+// Host: an item of a building's inventory (a chest) dropped by a character standing by it: out of
+// the chest, then that character's dropItem (what the game's Building::dropItem does with its user).
+bool DropFromHolder(void* holder, void* item, Character* dropper);
+// tests: an item of that kind in that holder's inventory: "weapon", "armour", "item" (anything
+// else), or a template id / name part. Unequipped ones first; nullptr when none.
+void* FindItemOfKind(void* holder, const std::string& kind);
 // The player's own "pick up" order (PlayerInterface::pickupItem) given to that character alone: it
 // walks there and the game takes the item, as a theft when it belongs to someone.
 bool OrderPickupItem(Character* c, void* item);

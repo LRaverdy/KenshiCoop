@@ -315,10 +315,15 @@ struct FakeWorld : IWorld {
         *mine = items;
         return true;
     }
+    std::vector<std::pair<Handle, ItemState>> localDrops;   // client: items the player dropped to the ground
+    void TakeLocalDrops(std::vector<std::pair<Handle, ItemState>>& out) override { out.swap(localDrops); localDrops.clear(); }
+    int drops = 0;
+    Handle lastDropper;
     bool ExecuteInvOp(const Handle& from, const Handle& to, const InvOp& op) override {
         auto* a = ItemsOf(from);
         auto* b = ItemsOf(to);
         if (!a || !b) return false;
+        if (op.kind == InvOpKind::Drop) { ++drops; lastDropper = to; }
         for (size_t i = 0; i < a->size(); ++i) {
             ItemState& it = (*a)[i];
             if (!it.sameKind(op.item) || it.quantity < op.item.quantity) continue;
@@ -380,6 +385,12 @@ struct FakeWorld : IWorld {
         (void)radius;
         ++threatCalls;
         out = centers.empty() ? std::vector<MapThreat>{} : threats;
+    }
+    bool ContainerKind(const Handle& h, std::string& sid) override {
+        auto b = h.type == 0 ? boxes.find(h.serial) : boxes.end();
+        if (b == boxes.end()) return false;
+        sid = b->second.sid;
+        return true;
     }
     bool FindContainer(const std::string& sid, const Vec3& pos, Handle& out) override {
         for (auto& [s, b] : boxes)
@@ -1799,6 +1810,67 @@ static void TestInventories() {
     CHECK(hw.chars[2].items.size() == 2 && cw.chars[2].items == hw.chars[2].items);
 }
 
+static void TestGroundDrops() {
+    std::printf("session: a client's drop to the ground (its character, a chest it has open) is done by the host; others' refused\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    auto item = [](const char* sid, int q, const char* sec, int x, int y) {
+        ItemState i; i.templateSid = sid; i.quantity = q; i.section = sec; i.x = int16_t(x); i.y = int16_t(y); return i;
+    };
+    hw.chars[1].items = {item("bread", 2, "main", 0, 0)};
+    hw.chars[2].items = {item("ore", 12, "main", 0, 0), item("sword", 1, "main", 2, 0)};
+    hw.boxes[700] = {"chest", {210, 0, 5}, {item("ore", 5, "main", 0, 0)}};
+    AtMenu(cw);
+    cw.boxes = hw.boxes;
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    host.Assign(FakeWorld::H(2), 2);
+    Run({{&host, &hw}, {&cli, &cw}}, 1.5);
+    // from its own character: the host's game drops it (the stack leaves the host's inventory)
+    cw.localDrops.push_back({FakeWorld::H(2), item("ore", 12, "main", 0, 0)});
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return hw.chars[2].items.size() == 1; });
+    CHECK(hw.chars[2].items.size() == 1 && hw.chars[2].items[0].templateSid == "sword");
+    CHECK(hw.drops == 1 && hw.lastDropper == FakeWorld::H(2));
+    // from a chest it opened: dropped by its character standing by the chest
+    cw.containerReqs.push_back({FakeWorld::H(2), "chest", {210, 0, 5}});
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cli.entityCount() == 4; });
+    CHECK(cli.entityCount() == 4);
+    cw.localDrops.push_back({FakeWorld::B(700), item("ore", 5, "main", 0, 0)});
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return hw.boxes[700].items.empty(); });
+    CHECK(hw.boxes[700].items.empty());
+    CHECK(hw.drops == 2 && hw.lastDropper == FakeWorld::H(2));
+    // from the host's own character: refused, nothing leaves it
+    cw.localDrops.push_back({FakeWorld::H(1), item("bread", 2, "main", 0, 0)});
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0);
+    CHECK(hw.chars[1].items.size() == 1 && hw.drops == 2);
+    // actor safety: a drop from a chest names the character that drops it; forged ones are refused
+    std::map<Handle, uint32_t, bool (*)(const Handle&, const Handle&)> net([](const Handle& a, const Handle& b) { return a.serial < b.serial || (a.serial == b.serial && a.type < b.type); });
+    host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { net[h] = id; });
+    CHECK(net.count(FakeWorld::B(700)) && net.count(FakeWorld::H(1)) && net.count(FakeWorld::H(2)));
+    hw.boxes[700].items = {item("ore", 5, "main", 0, 0)};
+    const uint8_t me = cli.localId();
+    auto forge = [&](uint32_t actor) {
+        InvOp op; op.kind = InvOpKind::Drop; op.fromNetId = net[FakeWorld::B(700)]; op.toNetId = actor; op.item = item("ore", 5, "main", 0, 0);
+        Writer w; Encode(w, op); CHECK(host.InjectForTest(me, w));
+        Run({{&host, &hw}, {&cli, &cw}}, 0.5);
+    };
+    const uint32_t refused0 = host.actorRefusals();
+    forge(net[FakeWorld::H(1)]);   // the host's character
+    forge(0);                      // nobody
+    CHECK(hw.drops == 2 && hw.boxes[700].items.size() == 1 && host.actorRefusals() == refused0 + 2);
+    forge(net[FakeWorld::H(2)]);   // ours, standing by it: dropped by it
+    CHECK(hw.drops == 3 && hw.lastDropper == FakeWorld::H(2) && hw.boxes[700].items.empty());
+    hw.boxes[700].items = {item("ore", 5, "main", 0, 0)};
+    hw.chars[2].pos = {5000, 0, 5000};   // ours, but far from the chest
+    hw.chars[2].dest = hw.chars[2].pos;
+    forge(net[FakeWorld::H(2)]);
+    CHECK(hw.drops == 3 && hw.boxes[700].items.size() == 1);
+}
+
 // ---- fix G2: swaps, merges and refusals in looting
 static void TestInventorySwaps() {
     std::printf("session: loot swaps, stack merges, moves into a freed slot, refusals\n");
@@ -3172,6 +3244,7 @@ int main() {
     TestSpawnReplication();
     TestInventories();
     TestInventorySwaps();
+    TestGroundDrops();
     TestTrade();
     TestTravellingTrade();
     TestCrashRejoin();

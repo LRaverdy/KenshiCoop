@@ -754,7 +754,14 @@ private:
     void ClientBags(double now);
     double nextClientBags_ = 0;
     const Entity* Wearer(const Entity& e) const;   // a bag's wearer, else the entity itself (null: unknown wearer)
+    static constexpr float kDropReach = 160.0f;   // a drop from a chest or a body: the dropping character stands this close (a looter's reach x 2)
     uint32_t DropActor(uint32_t netId) const;      // who drops an item from that inventory: a worn bag's wearer, else netId itself
+    // A drop to the ground names the character that drops it (actor safety). From a squad character or
+    // the backpack one wears (SelfDrop): that character (DropActor). From anything else (a chest one has
+    // open, a body, an NPC's backpack): InvOp::toNetId, a character of that player standing by it.
+    bool SelfDrop(uint32_t netId) const;
+    uint32_t DropRequestActor(const InvOp& op) const { return SelfDrop(op.fromNetId) ? DropActor(op.fromNetId) : op.toNetId; }
+    bool DropSourcePos(const Entity& e, Vec3& out);   // where that inventory is (a chest's place, a character's or a wearer's position)
     std::map<uint8_t, double> lastDialogAnswer_;   // host: when each player last answered a conversation
     bool squadKnown_ = false;                      // host: the squad was listed once (later arrivals are newcomers)
     void EndTrade(uint8_t player, const std::string& reason);   // host: close it (reason shown to the player)

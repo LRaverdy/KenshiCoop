@@ -212,6 +212,15 @@ public:
     void TakeGroundEvents(std::vector<kc::GroundEvent>& out) override;
     void ApplyGround(const kc::GroundEvent& e) override;
     void NoteGround(kc::GroundEvent e);   // host: a hook saw an item dropped / picked up (any thread)
+    void NoteItemDropped(void* item);     // host: a drop hook put this item into the world (any thread)
+    // Client (game thread, EndFrame): a copy we made of a host item, with the same thing from our own
+    // save lying on the same spot (its zone loaded after the host's drop arrived): ours goes.
+    void GroundReconcile();
+    struct GroundStats {   // tests (plugin/ground.cpp)
+        uint64_t hookDrops = 0, scanDrops = 0, scanGone = 0, scanChanged = 0, repeatsSkipped = 0;   // host
+        uint64_t created = 0, matched = 0, repeats = 0, merged = 0, removed = 0;                    // client
+    };
+    GroundStats GroundCounters();
     kc::Handle GroundCopyOf(const kc::Handle& hostItem) const {   // tests (client)
         auto it = groundAlias_.find(hostItem);
         return it != groundAlias_.end() ? it->second : hostItem;
@@ -278,7 +287,8 @@ public:
     void DialogAnswer(uint32_t dialogId, int index) override;
     int saysApplied = 0;          // tests (client): speech bubbles replayed
     std::string lastSay;
-    void QueueLocalDrop(kenshi::Character* c, void* item);   // client: the player dropped it (any thread)
+    // Client: the player dropped it from that character or that building's inventory (any thread).
+    void QueueLocalDrop(void* holder, void* item);
     // Client: the local player wants `looter` (one of its characters) to loot `target`, a knocked-out
     // or dead character. It walks there through the host; the loot window opens once it is close.
     void RequestLoot(const kc::Handle& looter, kenshi::Character* target);
@@ -423,7 +433,21 @@ private:   // first few lifecycle events (tests)
     std::mutex groundMutex_;
     std::vector<kc::GroundEvent> groundOut_;                                // host: not sent yet
     std::unordered_map<kc::Handle, kc::Handle, kc::HandleHash> groundAlias_;   // client: host item -> our copy
-    std::vector<std::pair<kenshi::Character*, kc::ItemState>> localDrops_;   // client, under groundMutex_
+    std::vector<std::pair<void*, kc::ItemState>> localDrops_;   // client, under groundMutex_
+    // Host: every item lying near a player's character, as last seen (plugin/ground.cpp). An item
+    // that turns up where a character already stood watching (not one carried into view by a walk or
+    // a zone loading) was dropped by some path no hook saw: it is announced; one that leaves the
+    // ground there was taken; a stack that changes is announced again.
+    struct GroundTrack { kc::ItemState st; kc::Vec3 pos; bool announced = false; double seen = 0; };
+    std::unordered_map<kc::Handle, GroundTrack, kc::HandleHash> groundTrack_;   // under groundMutex_
+    std::vector<kc::Vec3> groundWatch_;                                         // game thread
+    std::unordered_map<const void*, std::pair<kc::Vec3, double>> groundCentre_; // character -> position, settled since
+    double groundScanAt_ = 0, groundSince_ = 0, groundReconcileAt_ = 0;
+    std::unordered_set<kc::Handle, kc::HandleHash> groundMade_;                 // client: copies we created
+    GroundStats groundStats_;                                                   // under groundMutex_
+    void GroundScan(double now);                                                // host, game thread
+    void GroundOutLocked(kc::GroundEvent e);                                    // under groundMutex_
+    void ResetGround();                                                         // world (re)loaded, role changed
     std::vector<kenshi::Character*> edited_;   // characters whose looks the editor just changed
     std::vector<ContainerRequest> containerReqs_;   // client: right clicks on containers, for the host
     // ---- lot A: doors

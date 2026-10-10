@@ -270,7 +270,9 @@ Ordre dans `Tick()` (`main.cpp`) :
   l'applique **avant** le gestionnaire (`HostPacket`) ; le client filtre ce qu'il envoie avec la même
   table (`ClientMaySend`). Sujet `OwnCharacter` (Command, ContainerOpen, Appearance, dépôt d'objet) :
   l'acteur nommé doit être un membre d'escouade attribué à ce joueur (`CheckActor` ; pour un dépôt
-  depuis un sac à dos porté, son porteur : `DropActor`) ; revérifié au
+  depuis un sac à dos porté, son porteur : `DropActor` ; pour un dépôt depuis un coffre ouvert, un
+  corps ou le sac d'un PNJ, le perso du joueur nommé dans `InvOp::toNetId`, qui doit se tenir à moins de
+  `kDropReach` (160) : `DropRequestActor`) ; revérifié au
   moment de l'exécution (`AdmitActor`). Un refus : une ligne `auth: [nom] <message> refused: <règle>
   (...)` (et `refused: actor N not owned by player P`), un compteur par joueur et par règle qui
   décroît (demi-vie 60 s, `recentRefusals`), et un `Result` rejeté avec un texte français.
@@ -306,7 +308,7 @@ format, et une version différente est refusée à la connexion.
 | 18 | Ready | C→H | monde chargé (empreinte vérifiée par l'hôte) |
 | 19 | Weather | H→C | météo de chaque région |
 | 20 | Inventory | H→C | inventaire complet d'une entité |
-| 21 | InvOp | C→H | déplacement ou dépôt d'objet fait dans l'interface d'inventaire |
+| 21 | InvOp | C→H | déplacement ou dépôt d'objet fait dans l'interface d'inventaire (dépôt depuis un coffre ou un corps : `toNetId` = le perso du joueur qui le lâche) |
 | 22 | Effects | H→C | effets météo placés, déplacés ou terminés |
 | 23 | Anim | H→C | début ou fin d'animation (attaque, action, trébuché, modes, arme, chiffres de dégâts) |
 | 24 | AnimFrame | H→C (non fiable) | tout ce que joue chaque personnage proche (nom, temps, poids, vitesse, horloge) |
