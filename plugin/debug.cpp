@@ -839,7 +839,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         if (!c || !kenshi::ReadFloorGroup(c, cur)) return "err";
         if (g >= 0) {
             HostCallScope scope;
-            kenshi::WriteFloorGroup(c, g);
+            if (g < 9 || !kenshi::PlaceOnFloor(c, g)) kenshi::WriteFloorGroup(c, g);   // the game's own path when it can
             kenshi::ReadFloorGroup(c, cur);
         }
         return "ok " + std::to_string(cur);
@@ -1428,32 +1428,40 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         return w.DebugPlace(p) ? "ok " + sid + (s.isHost() ? " built" : " asked") : "err placement failed";
     }
-    if (cmd == "buildlist") {   // buildlist [name part]: buildings around squad member 0 ("sid@x,y,z:progress/flags" each)
+    if (cmd == "buildlist") {   // buildlist [name part] [radius]: buildings around squad member 0 ("sid@x,y,z:progress/flags" each)
         std::string part = "any";
-        in >> part;
+        float radius = 1500.0f;
+        in >> part >> radius;
+        if (!(radius > 0) || radius > 5000.0f) radius = 1500.0f;
         std::replace(part.begin(), part.end(), '_', ' ');
         auto squad = SortedSquad(w);
         kc::Vec3 me;
         if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), me)) return "err no squad";
         std::vector<void*> objs;
-        kenshi::ObjectsNear(me, 300.0f, objs);
-        std::string out;
-        int n = 0;
+        kenshi::ObjectsNear(me, radius, objs);
+        std::vector<std::pair<float, std::string>> found;   // nearest first: both games list the same ones
+        int buildings = 0;
         for (void* o : objs) {
-            kc::Handle h;
             std::string sid, name;
             kc::Vec3 p;
             float progress = 0;
             uint8_t flags = 0;
-            if (kenshi::IsCharacter(o) || !kenshi::ObjectHandle(o, h) || h.type != 0 || !kenshi::ObjectTemplate(o, sid) || !kenshi::ObjectPosition(o, p)) continue;
+            // the object itself, not a handle round trip (furniture and town buildings resolve badly)
+            if (kenshi::IsCharacter(o) || !KenshiWorld::ReadBuildStateOf(o, progress, flags)) continue;
+            ++buildings;
+            if (!kenshi::ObjectTemplate(o, sid) || !kenshi::ObjectPosition(o, p)) continue;
             if (!kenshi::TemplateDisplayName(sid, name)) name = sid;
             if (part != "any" && name.find(part) == std::string::npos && sid.find(part) == std::string::npos) continue;
-            if (!w.ReadBuildState(h, progress, flags)) continue;
             char b[200];
             snprintf(b, sizeof(b), " %s@%.1f,%.1f,%.1f:%.1f/%u", sid.c_str(), p.x, p.y, p.z, progress, unsigned(flags));
-            out += b;
-            if (++n >= 40) break;
+            const float dx = p.x - me.x, dz = p.z - me.z;
+            found.push_back({dx * dx + dz * dz, b});
         }
+        std::sort(found.begin(), found.end());
+        const int n = int(std::min<size_t>(found.size(), 40));
+        std::string out;
+        for (int i = 0; i < n; ++i) out += found[size_t(i)].second;
+        if (n == 0) return "ok 0 (objects=" + std::to_string(objs.size()) + " buildings=" + std::to_string(buildings) + " radius=" + std::to_string(int(radius)) + ")";
         return "ok " + std::to_string(n) + out;
     }
     if (cmd == "buildcount") return "ok followed=" + std::to_string(s.buildingCount()) + " found=" + std::to_string(s.buildingsResolved());

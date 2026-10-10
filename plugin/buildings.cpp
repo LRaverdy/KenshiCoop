@@ -301,7 +301,11 @@ bool KenshiWorld::DebugPlace(const kc::BuildPlace& p) {
 // ---------------------------------------------------------------- construction state
 
 bool KenshiWorld::ReadBuildState(const kc::Handle& h, float& progress, uint8_t& flags) {
-    void* st = BuildState(kenshi::ResolveObject(h));
+    return ReadBuildStateOf(kenshi::ResolveObject(h), progress, flags);
+}
+
+bool KenshiWorld::ReadBuildStateOf(void* b, float& progress, uint8_t& flags) {
+    void* st = BuildState(b);
     uint8_t complete = 0, paused = 0, dismantled = 0;
     if (!st || !Rd(st, CS_progress, progress) || !Rd(st, CS_complete, complete) || !Rd(st, CS_paused, paused) || !Rd(st, CS_dismantled, dismantled))
         return false;

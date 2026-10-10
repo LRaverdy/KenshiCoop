@@ -154,6 +154,7 @@ public:
     bool DebugPlace(const kc::BuildPlace& p);
     void* BuildingAt(const std::string& sid, const kc::Vec3& pos);
     static bool IsPlayerBuilding(void* b);
+    static bool ReadBuildStateOf(void* building, float& progress, uint8_t& flags);   // false: not a building
     void* NearestBuilding(const kc::Vec3& from, const std::string& part, float radius, int want);   // want: 0 any, 1 for sale, 2 ours, 3 ours unfinished
     void TakeEditedCharacters(std::vector<kc::Handle>& out) override;
     bool ReadAppearance(const kc::Handle& h, kc::AppearanceMsg& out) override;
@@ -271,6 +272,8 @@ private:
     // client: host handle -> handle of the local stand-in we created for it
     std::unordered_map<kc::Handle, kc::Handle, HandleHash> alias_;
     std::unordered_map<kc::Handle, double, HandleHash> strangerSince_;   // client: local-only NPCs, first seen
+    struct FloorTry { uint8_t group = 0; double at = 0; int tries = 0; };
+    std::unordered_map<kc::Handle, FloorTry, HandleHash> floorTry_;   // client: floor placements tried (fix G7)
     std::unordered_map<kc::Handle, kc::Vec3, HandleHash> lastDest_;   // client: destination last issued
     std::unordered_map<kc::Handle, double, HandleHash> postureSince_; // client: when host/local posture started to differ
     std::unordered_map<kc::Handle, double, HandleHash> postureFixed_; // client: last forced posture change
@@ -402,7 +405,7 @@ private:
     std::unordered_map<kc::Handle, Stuck, kc::HandleHash> stuck_;          // client: no progress toward the host's position since
     std::unordered_map<kc::Handle, double, kc::HandleHash> farSnapAt_;     // client: last time a far walker was put back
     float NearestSquadDistance(const kc::Vec3& p);                         // client: how far from our squad (far: the game moves it rarely)
-    struct ReRagdoll { kc::Handle h; double at; };
+    struct ReRagdoll { kc::Handle h; double at; kc::Vec3 to; kc::Quat rot; bool body; int tries; };   // fix G7: checked, retried
     std::vector<ReRagdoll> reRagdoll_;                                     // host: teleported bodies to lay down again
     void UpdateReRagdolls();
     std::unordered_map<kc::Handle, float, kc::HandleHash> syncErr_;   // client: last error per standing character

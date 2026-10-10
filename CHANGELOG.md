@@ -12,6 +12,12 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
   d'un autre joueur dans sa sélection s'applique bien au perso de l'hôte (le jeu décidait
   activé/désactivé d'après le perso du client). Test `jobs` : la commande de test donne maintenant une
   vraie tâche permanente (`shift`), et le test échoue s'il n'y a rien à retirer.
+- **Fix G7 (TP admin, étages, test des bâtiments)** : le TP admin vérifie que chaque perso est arrivé et
+  le re-téléporte (jusqu'à 5 fois) sinon ; un perso K.-O. (ragdoll encore active) restait à 470 unités.
+  L'étage d'un perso placé passe par la fonction du jeu `_setPositionAndTeleport(pos, étage)`
+  (0x65E940, prologue vérifié) au lieu d'écrire `floorGroup` : seulement si la valeur diffère, au plus
+  toutes les 2 s et 3 fois par valeur, sous SEH. `buildlist` lit l'état directement sur les objets
+  (rayon 1500, les plus proches d'abord). Tests `suite`, `floor`, `buildstate` adaptés.
 - **État de construction des bâtiments existants** : une ville chargée par un client seul ne reste plus
   en « bâtons rouges » (le client refusait toute avancée de construction, y compris celle que le jeu
   fait en montant les bâtiments d'une ville) ; seuls les bâtiments des joueurs attendent l'hôte. L'hôte

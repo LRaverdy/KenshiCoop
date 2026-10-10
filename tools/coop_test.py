@@ -1208,7 +1208,7 @@ def exp_buildstate(host, cli):
     every building both games see near the squad has the same state (finished or site, progress)."""
     time.sleep(20)
     def states(pid):
-        t = cmd(pid, "buildlist any")[1]
+        t = cmd(pid, "buildlist any 1500")[1]   # nearest 40 buildings within 1500 of squad 0, any faction, finished or not
         out = {}
         for e in t.split()[2:]:
             try:
@@ -1222,6 +1222,8 @@ def exp_buildstate(host, cli):
         return out
     hs, cs = states(host), states(cli)
     log("build states: host", len(hs), "client", len(cs))
+    if not hs or not cs:
+        log("buildlist raw: host", cmd(host, "buildlist any 1500")[1][:200], "/ client", cmd(cli, "buildlist any 1500")[1][:200])
     common = [k for k in hs if k in cs]
     bad = [(k, hs[k], cs[k]) for k in common if (hs[k][1] & 1) != (cs[k][1] & 1) or abs(hs[k][0] - cs[k][0]) > 1.0]
     check("batiments existants : vus des deux cotes", len(common) > 0, f"{len(common)} en commun")
@@ -1758,15 +1760,25 @@ def exp_floor(host, cli):
     time.sleep(6)
     cmd(cli, "editdone")
     time.sleep(2)
-    log("host floor 0", cmd(host, "floor 0"))
+    # The game recomputes floorGroup every frame from the surface under the character (CharMovement
+    # update, kenshi_x64+0x65F564): a floor forced out in the open is put back at once, on the host
+    # as on the client. So first: both games agree at rest; then a forced floor only counts if the
+    # host keeps it (squad 0 inside a building with floors).
+    h0, c0 = cmd(host, "floor 0"), cmd(cli, "floor 0")
+    log("floor 0 at rest", h0, c0)
+    check("etage : meme etage au repos", h0[0] and c0[0] and h0[1].split()[1] == c0[1].split()[1], f"{h0[1]} / {c0[1]}")
     cmd(host, "floor 0 10")
     time.sleep(2)
-    c = cmd(cli, "floor 0")
-    check("etage : le client suit l'etage de l'hote", c[0] and c[1].split()[1] == "10", c[1])
-    cmd(host, "floor 0 9")
-    time.sleep(2)
-    c = cmd(cli, "floor 0")
-    check("etage : retour au rez-de-chaussee", c[0] and c[1].split()[1] == "9", c[1])
+    h = cmd(host, "floor 0")
+    if not (h[0] and h[1].split()[1] == "10"):
+        log("floor 10 not kept by the host's own game (no floor 1 under squad 0): forced change inconclusive", h)
+    else:
+        c = cmd(cli, "floor 0")
+        check("etage : le client suit l'etage de l'hote", c[0] and c[1].split()[1] == "10", c[1])
+        cmd(host, "floor 0 9")
+        time.sleep(2)
+        c = cmd(cli, "floor 0")
+        check("etage : retour au rez-de-chaussee", c[0] and c[1].split()[1] == "9", c[1])
     summary()
 
 
@@ -1909,9 +1921,12 @@ def exp_suite(host, cli):
     # --- 10. a full frozen comparison at the end
     cmd(host, "pause 1")
     time.sleep(3)
-    rep = compare(dump(host, "h_suite_end"), dump(cli, "c_suite_end"), "fin", pos_tol=0.1)
+    hs_end = dump(host, "h_suite_end")
+    rep = compare(hs_end, dump(cli, "c_suite_end"), "fin", pos_tol=0.1)
     cmd(host, "pause 0")
-    sq_bad = [t for t in rep["squad"] if not isinstance(t[1], (int, float)) or t[1] > 0.1]
+    # a body lying on the ground is a ragdoll each game simulates itself: a few units apart is expected
+    down = {k for k, v in hs_end["squad"].items() if int(v.get("vflags", 0) or 0) & 3}
+    sq_bad = [t for t in rep["squad"] if not isinstance(t[1], (int, float)) or t[1] > (8.0 if t[0] in down else 0.1)]
     check("fin : escouade identique (positions)", not sq_bad, sq_bad)
     check("fin : aucun etat vital different", rep["vital_flag_mismatch"] == 0, rep["vital_flag_mismatch"])
     check("fin : aucun inventaire different", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])

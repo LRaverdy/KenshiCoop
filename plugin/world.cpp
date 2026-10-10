@@ -100,6 +100,7 @@ void KenshiWorld::ResetWorldBound() {
     stuck_.clear();
     farSnapAt_.clear();
     reRagdoll_.clear();
+    floorTry_.clear();
     syncErr_.clear();
     syncMaxErr_ = 0;
     remoteDialogs_.clear();
@@ -1035,8 +1036,23 @@ void KenshiWorld::ApplyFloor(const kc::Handle& h, uint8_t group) {
     if (!kWriteFloors) { (void)h; (void)group; return; }
     kenshi::Character* c = Find(h);
     int32_t g = 0;
-    if (!c || !kenshi::ReadFloorGroup(c, g) || g == group) return;
-    if (kenshi::WriteFloorGroup(c, group)) Log("floor: %s now on floor group %d (was %d), as on the host", KeyOf(h).c_str(), int(group), int(g));
+    if (!c || !kenshi::ReadFloorGroup(c, g) || g == group) { floorTry_.erase(h); return; }
+    // Not a raw write of floorGroup (the game put its value back every frame): the game's own
+    // _setPositionAndTeleport(here, floor), at most every 2 s per character and 3 times per
+    // target value. Groups below 9 have no floor number; a ragdoll is not teleported.
+    if (group < 9 || kenshi::IsRagdoll(c)) return;
+    const double now = NowSeconds();
+    FloorTry& t = floorTry_[h];
+    if (t.group != group) t = FloorTry{group, 0, 0};
+    if (t.tries >= 3 || now < t.at) return;
+    t.at = now + 2.0;
+    ++t.tries;
+    HostCallScope scope;
+    const bool ok = kenshi::PlaceOnFloor(c, group);
+    int32_t after = g;
+    kenshi::ReadFloorGroup(c, after);
+    Log("floor: %s placed on floor group %d as on the host (was %d, now %d%s)%s", KeyOf(h).c_str(), int(group), int(g), int(after),
+        ok ? "" : ", call failed", t.tries >= 3 && after != group ? ": the game keeps its own floor, giving up" : "");
 }
 
 // ---- fix G5: job lists
@@ -1094,7 +1110,8 @@ int KenshiWorld::TeleportCharacters(const std::vector<kc::Handle>& who, const kc
         const kc::Vec3 p{to.x + 6.0f * float(n + 1), to.y + 2.0f, to.z + 4.0f};
         if (kenshi::Teleport(c, p, rot)) {
             ++n;
-            if (body) reRagdoll_.push_back({h, NowSeconds() + 0.5});
+            // checked a moment later: a body (or a character the game was still moving) may stay put
+            reRagdoll_.push_back({h, NowSeconds() + 0.3, p, rot, body, 0});
             Log("tp: %s moved%s", KeyOf(h).c_str(), body ? " (it was lying on the ground)" : "");
         }
     }
@@ -1107,7 +1124,22 @@ void KenshiWorld::UpdateReRagdolls() {
     for (auto it = reRagdoll_.begin(); it != reRagdoll_.end();) {
         if (now < it->at) { ++it; continue; }
         kenshi::Character* c = FindSquad(it->h);
-        if (c && (kenshi::IsUnconscious(c) || kenshi::IsDead(c)) && !kenshi::IsRagdoll(c)) kenshi::SetRagdoll(c, true);
+        if (!c) { it = reRagdoll_.erase(it); continue; }
+        // fix G7: a teleport that did not take (a lying body whose ragdoll was still active this frame:
+        // the suite's admin TP left one 470 units away) is done again, a few times, before lying down
+        kc::Vec3 at;
+        const bool arrived = kenshi::GetPosition(c, at) && Dist(at, it->to) < 15.0f;
+        if (!arrived && it->tries < 5) {
+            if (kenshi::IsRagdoll(c)) kenshi::SetRagdoll(c, false);
+            kenshi::Teleport(c, it->to, it->rot);
+            ++it->tries;
+            it->at = now + 0.4;
+            Log("tp: %s still %.0f away from where it was sent: teleported again (%d)", KeyOf(it->h).c_str(), Dist(at, it->to), it->tries);
+            ++it;
+            continue;
+        }
+        if (!arrived) Log("tp: %s did not reach its destination", KeyOf(it->h).c_str());
+        if (it->body && (kenshi::IsUnconscious(c) || kenshi::IsDead(c)) && !kenshi::IsRagdoll(c)) kenshi::SetRagdoll(c, true);
         it = reRagdoll_.erase(it);
     }
 }

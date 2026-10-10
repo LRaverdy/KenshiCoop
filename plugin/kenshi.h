@@ -202,6 +202,7 @@ enum Fn : int {
     FnCharRemoveJob,            // void Character::removeJob(TaskType)   (every job of that kind)
     FnCharGetPermajob,          // TaskType Character::getPermajob(int slot) const
     FnCharPermajobCount,        // int Character::getPermajobCount() const
+    FnCMSetPositionAndTeleport, // void CharMovement::_setPositionAndTeleport(const Vector3&, int floor)   (floor >= 0: floorGroup = floor + 9)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -409,6 +410,8 @@ void ForgetGodModes();   // a new world: the characters it named are gone
 // ---- fix G6: the floor a character is on (CharMovement::floorGroup; 9 = ground floor)
 bool ReadFloorGroup(const Character* c, int32_t& group);
 bool WriteFloorGroup(Character* c, int32_t group);
+// The game's own way to put a character on a floor group (>= 9): _setPositionAndTeleport(here, group - 9).
+bool PlaceOnFloor(Character* c, int32_t group);
 bool GodMode(const void* c);   // tests: increaseStat on that stat
 bool CallSay(Character* c, const std::string& text);
 bool FocusCamera(Character* c);   // tests: the camera goes to that character

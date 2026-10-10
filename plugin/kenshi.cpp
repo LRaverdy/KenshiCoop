@@ -167,6 +167,7 @@ const FunctionSig kFunctions[FnCount] = {
     {"Character::removeJob", 0x5C8EB0, {0x48, 0x8B, 0x89, 0x50, 0x06, 0x00, 0x00, 0x48, 0x8B, 0x49, 0x20, 0xE9}},
     {"Character::getPermajob", 0x5C8EF0, {0x48, 0x8B, 0x81, 0x50, 0x06, 0x00, 0x00, 0x48, 0x8B, 0x48, 0x20, 0xE9}},
     {"Character::getPermajobCount", 0x5C8F30, {0x48, 0x8B, 0x81, 0x50, 0x06, 0x00, 0x00, 0x48, 0x8B, 0x48, 0x20, 0xE9}},
+    {"CharMovement::_setPositionAndTeleport", 0x65E940, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48}},
 };
 
 namespace {
@@ -3574,6 +3575,29 @@ bool WriteFloorGroup(Character* c, int32_t group) {
         return false;
     }
     return true;
+}
+
+// _setPositionAndTeleport(p, floor) (0x65E940, checked at start): halts, sets the position, then
+// floorGroup = floor + 9 when floor >= 0 (the 0xC0 teleport calls it with -1: floor untouched).
+// Groups below 9 have no floor number and cannot be set this way.
+namespace {
+using FnSetPosFloor = void (*)(void* self, const float* pos, int floor);
+bool CallSetPosFloor(void* fn, void* self, const float* pos, int floor) {
+    __try {
+        reinterpret_cast<FnSetPosFloor>(fn)(self, pos, floor);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool PlaceOnFloor(Character* c, int32_t group) {
+    void* m = Movement(c);
+    kc::Vec3 p;
+    if (!m || group < 9 || !GetPosition(c, p) || !Finite(p)) return false;
+    const float v[3] = {p.x, p.y, p.z};
+    return CallSetPosFloor(FnAddr(FnCMSetPositionAndTeleport), m, v, group - 9);
 }
 
 // ---- fix G5: selection kept, job lists

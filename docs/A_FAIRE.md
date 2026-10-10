@@ -48,6 +48,15 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   perso monte ou descend dans un bâtiment (comme le fait le jeu en solo). Piste : chez le client, les persos
   sont placés à la position de l'hôte au lieu de prendre l'escalier eux-mêmes, et l'étage courant du
   personnage (qui pilote l'affichage) n'est pas mis à jour.
+  Fix G7 : l'écriture brute était effacée à chaque image (le jeu recalcule `floorGroup` depuis la
+  surface sous le perso, kenshi_x64+0x65F564). Remplacée par `_setPositionAndTeleport(pos, groupe - 9)`
+  (groupes >= 9 seulement, valeur différente, 2 s d'écart, 3 essais par valeur). À vérifier en jeu dans
+  un bâtiment à étages ; si le jeu remet encore sa valeur, l'écart vient de la position (hauteur) du perso.
+- **TP admin d'un perso K.-O.** (fix G7, à vérifier en jeu) : la téléportation est vérifiée et refaite
+  si le perso n'est pas arrivé. Les écarts de 2-4 unités en fin de `suite` venaient des corps à terre
+  (ragdoll simulée par chaque jeu) : tolérance de 8 pour les persos K.-O./morts.
+- **Test `buildstate`** (fix G7) : `buildlist` ne trouvait aucun bâtiment (rayon 300, aller-retour par
+  handle) ; lit maintenant l'état sur l'objet, rayon 1500, et donne un diagnostic si vide.
 - ✅ **Tâches qu'un client ne peut pas supprimer** (corrigé, fix G5, à vérifier en jeu). Trouvé : la croix
   du panneau Tâches (`OrderCellView::onRemove`), `OrdersPanel::removeJob` et le glisser
   (`movePermajob`) appellent directement `Character::removePermajob` / `movePermajob` du perso, sans
