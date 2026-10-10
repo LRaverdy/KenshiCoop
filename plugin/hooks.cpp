@@ -177,7 +177,16 @@ bool HostDropForeign(const SelectionInfo& s) {
     return !s.mine.empty();
 }
 
+// Admin panel: the last ground point the local player ordered a move to (right click on the ground),
+// the "point" an admin teleport can send characters to.
+std::atomic<bool> g_haveMovePoint{false};
+float g_movePoint[3] = {};
+
 void hk_playerMove(void* pi, const float* pos, void* building) {
+    if (!g_hostCall && pos && std::isfinite(pos[0]) && std::isfinite(pos[1]) && std::isfinite(pos[2])) {
+        g_movePoint[0] = pos[0], g_movePoint[1] = pos[1], g_movePoint[2] = pos[2];
+        g_haveMovePoint = true;
+    }
     auto v = KenshiWorld::View();
     if (g_hostCall || !v->active) return o_playerMove(pi, pos, building);
     const SelectionInfo s = ClassifySelection(*v);
@@ -1296,6 +1305,14 @@ bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, 
     });
     return ok;
 }
+
+bool LastMoveOrderPoint(kc::Vec3& out) {
+    if (!g_haveMovePoint) return false;
+    out = {g_movePoint[0], g_movePoint[1], g_movePoint[2]};
+    return true;
+}
+
+void ForgetMoveOrderPoint() { g_haveMovePoint = false; }
 
 bool CallPlayerMoveOrder(kenshi::Character* c, const kc::Vec3& pos) {
     if (!o_moveOrder || !kenshi::IsCharacter(c)) return false;

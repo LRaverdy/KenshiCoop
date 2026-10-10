@@ -398,6 +398,8 @@ bool ReadPlayerMoney(int32_t& out);
 bool WritePlayerMoney(int32_t money);
 bool IsStatOfCharacter(const void* statField);
 bool GainExperience(Character* c, size_t statIndex, float amount);
+bool ReadStat(Character* c, size_t statIndex, float& out);    // one skill level
+bool WriteStat(Character* c, size_t statIndex, float value);
 bool HealCompletely(Character* c);                 // every wound healed, blood back, awake
 // The tool its current job (Task_OperateMachine: mining, farming...) put in its hands, or null.
 void* JobTool(Character* c);
@@ -407,6 +409,10 @@ void* SetHandTool(Character* c, void* current, const std::string& sid);
 // God mode (host): these characters take no damage and are never knocked out.
 void SetGodMode(Character* c, bool on);
 void ForgetGodModes();   // a new world: the characters it named are gone
+// Admin panel: exactly these characters are in god mode now (re-resolved every tick: zone changes,
+// rejoins); how many are.
+void SetGodModes(const std::vector<Character*>& chars);
+size_t GodModeCount();
 // ---- fix G6: the floor a character is on (CharMovement::floorGroup; 9 = ground floor)
 bool ReadFloorGroup(const Character* c, int32_t& group);
 bool WriteFloorGroup(Character* c, int32_t group);

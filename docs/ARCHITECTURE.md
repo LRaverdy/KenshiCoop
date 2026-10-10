@@ -586,6 +586,8 @@ format, et une version différente est refusée à la connexion.
 | `plugin/world.cpp`, `world.h` | `KenshiWorld` (`IWorld`), `HookView` |
 | `plugin/overlay.cpp`, `overlay.h` | overlay ImGui : panneau d'état, fenêtre Multijoueur, console, conversation |
 | `plugin/host_console.cpp`, `host_console.h` | console Windows hors du jeu |
+| `plugin/admin.cpp`, `admin.h` | administration de l'hôte : mode dieu par joueur, TP, XP, soins, argent (sur le fil du jeu de l'hôte) |
+| `common/include/kc/admin.h`, `src/admin.cpp` | syntaxe des commandes `admin`, calcul de l'XP du jeu, registre du mode dieu (testés par `TestAdmin`) |
 | `plugin/steam_link.cpp`, `steam_link.h` | relais Steam P2P, amis, présence |
 | `plugin/util.cpp`, `util.h` | journal (et son archive), configuration, SHA-256 |
 | `plugin/debug.cpp`, `debug.h` | canal de commandes de test |

@@ -366,6 +366,9 @@ public:
     // Host: that player's game is about to freeze (a far teleport): the link survives it. fix G6
     void ExpectStall(uint8_t playerId, double seconds);
     void SendChat(const std::string& text);
+    // Host: a notice (French) for that player alone, shown in their chat as "* text" (a Chat with
+    // from = 0, as for a refused trade). False: no such player.
+    bool SendNotice(uint8_t playerId, const std::string& text);
 
     SessionState state() const { return state_; }
     bool isHost() const { return state_ == SessionState::Hosting; }

@@ -1086,35 +1086,145 @@ def exp_prison(host, cli):
 
 
 def exp_admin(host, cli):
-    """Host console admin commands: money, xp, heal, god (checked on the host and the client)."""
+    """The host's Administration section (plugin/admin.cpp), through its debug mirror 'admin ...':
+    refused on the client; god mode holds through a fight and survives a rejoin; experience (points in
+    one skill, levels in all) is the game's own and identical on the client; teleports (player to host,
+    host to player, player to a map point) land where the client sees them; heal; money."""
     time.sleep(6)
     cmd(cli, "editdone")
     time.sleep(3)
     own = own_index(host)
-    m0 = cmd(host, "money")[1]
-    cmd(host, "console money 5000")
+    pid = player_id(cli) or 2
+
+    def stats(p, i):
+        ok, t = cmd(p, f"stats {i}")
+        return [float(x) for x in t.split()[1].split(",")] if ok else None
+
+    def vit(p, i):
+        t = cmd(p, f"vitals {i}")[1]
+        d = dict(kv.split("=", 1) for kv in t.split()[1:] if "=" in kv)
+        return float(d.get("blood", "nan")), float(d.get("lowest", "nan")), d.get("flags", "?"), t
+
+    def state():
+        return cmd(host, "admin state")[1]
+
+    def near_host_chars(p):
+        best = 1e9
+        for i in own_indices(host):
+            ok, t = cmd(host, f"where {i}")
+            if ok:
+                best = min(best, dist(vec(t), p))
+        return best
+
+    # 1. clients have no admin: the debug mirror and the console both refuse
+    ok, t = cmd(cli, "admin god all on")
+    check("admin : refuse chez le client (commande)", not ok, t)
+    cmd(cli, "console admin god all on")
+    time.sleep(1)
+    check("admin : refuse chez le client (console)", "godall=0" in state(), state())
+    # 2. god mode holds through a fight, on the host and as the client sees it
+    ok, t = cmd(host, f"admin god {pid} on")
+    check("admin : mode dieu active", ok and f"p{pid}=1/" in state(), f"{t} | {state()}")
+    time.sleep(1)
+    b0 = vit(host, own)
+    log("spawn an NPC next to the client's character:", cmd(host, f"spawnnpc 15 10 {own}"))
+    time.sleep(2)
+    log("fight:", cmd(host, f"fight {own}"))
+    worst_blood, worst_low, fought = b0[0], b0[1], False
+    for _ in range(12):
+        time.sleep(2.5)
+        v = vit(host, own)
+        worst_blood, worst_low = min(worst_blood, v[0]), min(worst_low, v[1])
+        fought |= cmd(host, f"combat {own}")[1].startswith("ok 1")
+    check("admin : le combat a bien eu lieu", fought, cmd(host, f"combat {own}")[1])
+    check("admin : dieu tient sous les coups (hote)", worst_blood >= b0[0] - 0.05 and worst_low >= b0[1] - 0.05,
+          f"avant {b0[3]} | pire sang {worst_blood} membre {worst_low}")
+    time.sleep(2)
+    vh, vc = vit(host, own), vit(cli, own)
+    check("admin : dieu, meme etat chez le client", abs(vh[0] - vc[0]) < 0.5 and abs(vh[1] - vc[1]) < 0.5 and vh[2] == vc[2] == "0",
+          f"hote {vh[3]} / client {vc[3]}")
+    log("kill the NPC:", cmd(host, "kill"))
+    # 3. god mode survives a rejoin (resync: the client leaves and joins again)
+    log("resync:", cmd(host, f"resync {pid}"))
+    time.sleep(3)
+    wait_for(cli, lambda f: f.get("state") == "connected" and f.get("ready") == "1", 240, "client back in the host's world")
+    time.sleep(6)
+    pid = player_id(cli) or pid
+    own = own_index(host)
+    st = state()
+    engine = int(re.search(r"engine=(\d+)", st).group(1)) if re.search(r"engine=(\d+)", st) else 0
+    check("admin : dieu persiste apres reconnexion", f"p{pid}=1/" in st and engine >= 1, st)
+    ok, t = cmd(host, f"admin god {pid} off")
+    time.sleep(1)
+    check("admin : mode dieu retire", ok and f"p{pid}=0/" in state() and "engine=0" in state(), f"{t} | {state()}")
+    # 4. experience points in one skill: the game's own gains (5 calls of 20), the same on the client
+    s0 = stats(host, own)
+    ok, t = cmd(host, f"admin xp {pid} melee_attack 100")
+    time.sleep(3)
+    s1h, s1c = stats(host, own), stats(cli, own)
+    expect = s0[1]
+    for _ in range(5):
+        expect += 20 * ((100 - expect) / 100) ** 2
+    check("admin : xp monte l'attaque comme le jeu (hote)", ok and abs(s1h[1] - expect) < 0.01, f"{s0[1]:.3f} -> {s1h[1]:.3f} (attendu {expect:.3f}) | {t}")
+    check("admin : xp, meme valeur chez le client", s1c is not None and max(abs(a - b) for a, b in zip(s1h, s1c)) < 1e-3,
+          f"attaque hote {s1h[1]:.4f} / client {s1c[1] if s1c else None}")
+    # 5. levels in every skill
+    ok, t = cmd(host, f"admin xp {pid} all 3 levels")
+    time.sleep(3)
+    s2h, s2c = stats(host, own), stats(cli, own)
+    off = [i for i in range(len(s2h)) if abs(s2h[i] - min(100.0, s1h[i] + 3)) > 0.01]
+    check("admin : +3 niveaux dans chaque competence (hote)", ok and not off, f"ecarts {off[:5]} | {t}")
+    check("admin : niveaux, memes valeurs chez le client", s2c is not None and max(abs(a - b) for a, b in zip(s2h, s2c)) < 1e-3, "")
+    # 6. teleport: player -> host
+    mine = own_indices(host)
+    mine = mine[0] if mine else 0
+    ground = vec(cmd(host, f"where {mine}")[1])   # a point on the ground, for the map-point TP later
+    log("host walks away:", cmd(host, f"moverel {mine} 250 0"))
+    time.sleep(12)
+    ok, t = cmd(host, f"admin tp {pid} host")
+    time.sleep(5)
+    pc, pcc = vec(cmd(host, f"where {own}")[1]), vec(cmd(cli, f"where {own}")[1])
+    check("admin : tp joueur -> hote", ok and near_host_chars(pc) < 40, f"{near_host_chars(pc):.1f} | {t}")
+    check("admin : tp joueur -> hote, meme position chez le client", dist(pc, pcc) < 3, f"{dist(pc, pcc):.2f}")
+    # 7. teleport: host -> player (the client's character walked off first)
+    log("client's character walks away:", cmd(host, f"moverel {own} -300 0"))
+    time.sleep(15)
+    ok, t = cmd(host, f"admin tp host {pid}")
+    time.sleep(5)
+    pc = vec(cmd(host, f"where {own}")[1])
+    ph, phc = vec(cmd(host, f"where {mine}")[1]), vec(cmd(cli, f"where {mine}")[1])
+    check("admin : tp hote -> joueur", ok and dist(ph, pc) < 40, f"{dist(ph, pc):.1f} | {t}")
+    check("admin : tp hote -> joueur, meme position chez le client", dist(ph, phc) < 3, f"{dist(ph, phc):.2f}")
+    # 8. teleport: player -> a point of the map (where the host's character stood at first)
+    ok, t = cmd(host, f"admin tp {pid} {ground[0]:.2f} {ground[1]:.2f} {ground[2]:.2f}")
+    time.sleep(6)
+    pc, pcc = vec(cmd(host, f"where {own}")[1]), vec(cmd(cli, f"where {own}")[1])
+    flat = math.hypot(pc[0] - ground[0], pc[2] - ground[2])
+    check("admin : tp joueur -> point de la carte", ok and flat < 40, f"{flat:.1f} | {t}")
+    check("admin : tp point, meme position chez le client", dist(pc, pcc) < 3, f"{dist(pc, pcc):.2f}")
+    # 9. heal wakes a knocked-out character
+    cmd(host, f"kosquad {own}")
+    time.sleep(3)
+    v0 = vit(host, own)
+    ok, t = cmd(host, f"admin heal {pid}")
+    time.sleep(4)
+    vh, vc = vit(host, own), vit(cli, own)
+    check("admin : soigner reveille et soigne", ok and vh[2] == "0" and vc[2] == "0", f"{v0[3]} -> hote {vh[3]} / client {vc[3]}")
+    # 10. money (shared by the whole squad)
+    m0 = int(cmd(host, "money")[1].split()[1])
+    ok, t = cmd(host, "admin money 5000")
     time.sleep(3)
     m1h, m1c = cmd(host, "money")[1], cmd(cli, "money")[1]
-    check("admin : money ajoute 5000", int(m1h.split()[1]) == int(m0.split()[1]) + 5000 and m1h == m1c, f"{m0} -> hote {m1h} / client {m1c}")
-    s0 = cmd(host, f"stats {own}")[1]
-    cmd(host, "console xp 2 10")
-    time.sleep(3)
-    s1h, s1c = cmd(host, f"stats {own}")[1], cmd(cli, f"stats {own}")[1]
-    check("admin : xp monte les competences", s1h != s0 and s1h == s1c, f"{s0[:60]} -> {s1h[:60]} / client {s1c[:60]}")
-    cmd(host, f"kosquad {own}")
-    time.sleep(3)
-    v0 = cmd(host, f"vitals {own}")[1]
-    cmd(host, "console heal 2")
-    time.sleep(3)
-    v1h, v1c = cmd(host, f"vitals {own}")[1], cmd(cli, f"vitals {own}")[1]
-    check("admin : heal soigne", v1h != v0 and "flags=0" in v1h, f"{v0} -> hote {v1h} / client {v1c}")
-    cmd(host, "console god 2")
+    check("admin : argent +5000, pareil chez le client", ok and int(m1h.split()[1]) == m0 + 5000 and m1h == m1c, f"{m0} -> hote {m1h} / client {m1c}")
+    # 11. everyone at once, the host included
+    ok, t = cmd(host, "admin god all on")
     time.sleep(1)
-    cmd(host, f"kosquad {own}")
-    time.sleep(3)
-    v2 = cmd(host, f"vitals {own}")[1]
-    check("admin : god empeche le K.-O.", "flags=0" in v2, v2)
-    cmd(host, "console god 2 off")
+    st = state()
+    squad = sum(int(n) for n in re.findall(r" p\d+=\d/(\d+)", st))
+    check("admin : dieu pour tout le monde", ok and "godall=1" in st and squad > 0 and f"engine={squad}" in st, f"{squad} persos | {st}")
+    cmd(host, "admin god all off")
+    time.sleep(1)
+    check("admin : dieu retire pour tout le monde", "godall=0" in state() and "engine=0" in state(), state())
     summary()
 
 

@@ -17,6 +17,7 @@
 
 #include <process.h>
 
+#include "kc/admin.h"
 #include "kc/protocol.h"
 #include "kc/session.h"
 
@@ -2124,6 +2125,97 @@ static void TestRanged() {   // lot C
     CHECK(cw.turretsApplied.size() <= n + 1);   // at most the 2 s refresh, not one every 0.2 s
 }
 
+// Host administration: the command syntax, the game's experience arithmetic, the god-mode registry
+// (kept by player identity across rejoins) and the notice sent to one player.
+static void TestAdmin() {
+    std::printf("admin: commands, experience, god mode registry, notices\n");
+    namespace adm = kc::admin;
+    adm::Command c;
+    std::string err;
+    CHECK(adm::Parse("god 2 on", c, err) && c.verb == adm::Verb::God && c.who.id == 2 && c.on);
+    CHECK(adm::Parse("GOD all off", c, err) && c.who.all && !c.on);
+    CHECK(adm::Parse("god host", c, err) && c.who.host && c.on);
+    CHECK(!adm::Parse("god bob on", c, err) && !err.empty());
+    CHECK(!adm::Parse("god 2 maybe", c, err));
+    CHECK(adm::Parse("xp 2 melee_attack 100", c, err) && c.verb == adm::Verb::Xp && c.skill == 1 && c.amount == 100 && !c.levels);
+    CHECK(adm::Parse("xp all all 5 levels", c, err) && c.who.all && c.skill == adm::kAllSkills && c.amount == 5 && c.levels);
+    CHECK(adm::Parse("xp host Attaque 2.5 niveaux", c, err) && c.who.host && c.skill == 1 && c.amount == 2.5 && c.levels);
+    CHECK(!adm::Parse("xp 2 bogus 5", c, err));
+    CHECK(!adm::Parse("xp 2 1 30000", c, err));       // above the per-command limit
+    CHECK(!adm::Parse("xp 2 1 101 levels", c, err));
+    CHECK(!adm::Parse("xp 2 1 -5", c, err));
+    CHECK(!adm::Parse("xp 2 1 1,5", c, err));         // the decimal point only, whatever the locale
+    CHECK(adm::Parse("tp 2 host", c, err) && c.verb == adm::Verb::Tp && c.who.id == 2 && c.tp == adm::TpTo::Host);
+    CHECK(adm::Parse("tp host 3", c, err) && c.who.host && c.tp == adm::TpTo::Player && c.to.id == 3);
+    CHECK(adm::Parse("tp 2 3", c, err) && c.tp == adm::TpTo::Player && c.to.id == 3);
+    CHECK(adm::Parse("tp all point", c, err) && c.who.all && c.tp == adm::TpTo::Point);
+    CHECK(adm::Parse("tp 2 1.5 -2 300", c, err) && c.tp == adm::TpTo::Pos && c.pos.x == 1.5f && c.pos.y == -2.0f && c.pos.z == 300.0f);
+    CHECK(!adm::Parse("tp 2 all", c, err));
+    CHECK(!adm::Parse("tp 2", c, err));
+    CHECK(adm::Parse("money 5000", c, err) && c.verb == adm::Verb::Money && c.money == 5000);
+    CHECK(adm::Parse("money -200", c, err) && c.money == -200);
+    CHECK(!adm::Parse("money 0", c, err));
+    CHECK(adm::Parse("heal all", c, err) && c.verb == adm::Verb::Heal && c.who.all);
+    CHECK(adm::Parse("list", c, err) && c.verb == adm::Verb::List);
+    CHECK(!adm::Parse("", c, err) && !adm::Parse("explode 2", c, err));
+    // skills
+    CHECK(adm::FindSkill("melee_attack") == 1 && adm::FindSkill("Attaque") == 1 && adm::FindSkill("33") == 33);
+    CHECK(adm::FindSkill("34") == -1 && adm::FindSkill("TOUTES") == adm::kAllSkills && adm::FindSkill("armes_lourdes") == 24);
+    for (size_t i = 0; i < kStatCount; ++i) CHECK(adm::FindSkill(adm::kSkills[i].key) == int(i));
+    // the game's increaseStat: amount * ((100 - stat) / 100)^2, nothing above 20 per call
+    CHECK(adm::IncreaseStatModel(0, 20) == 20.0f);
+    CHECK(std::fabs(adm::IncreaseStatModel(50, 20) - 55.0f) < 1e-4f);
+    CHECK(adm::IncreaseStatModel(10, 21) == 10.0f && adm::IncreaseStatModel(10, 0) == 10.0f && adm::IncreaseStatModel(100, 5) == 100.0f);
+    std::vector<float> calls;
+    float stat = 0;
+    auto inc = [&](float a) { calls.push_back(a); stat = adm::IncreaseStatModel(stat, a); };
+    auto read = [&] { return stat; };
+    CHECK(adm::GiveXp(45, inc) == 3 && calls.size() == 3 && calls[0] == 20.0f && calls[2] == 5.0f);
+    CHECK(stat > 20.0f && stat < 45.0f);   // diminishing returns, as in the game
+    calls.clear();
+    stat = 10;
+    int n = 0;
+    CHECK(adm::RaiseTo(15, read, inc, 600, &n) && std::fabs(stat - 15.0f) < 2e-3f && n >= 1);
+    for (float a : calls) CHECK(a > 0 && a <= 20.0f);
+    stat = 60;
+    CHECK(adm::RaiseTo(70, read, inc, 600) && std::fabs(stat - 70.0f) < 2e-3f);
+    stat = 99;
+    CHECK(!adm::RaiseTo(100, read, inc, 50) && stat > 99.0f && stat < 100.0f);   // the caller writes the rest
+    calls.clear();
+    stat = 5;
+    CHECK(!adm::RaiseTo(10, read, [&](float a) { calls.push_back(a); }, 600, &n) && calls.size() == 1);   // refused (client): stops at once
+    // god mode follows the player, not the player id
+    adm::GodRegistry g;
+    const std::string alice = adm::PlayerKey(76561198000000001ull, "Alice"), bob = adm::PlayerKey(0, "Bob");
+    CHECK(alice == "steam:76561198000000001" && bob == "name:Bob");
+    CHECK(!g.any() && !g.On(alice));
+    g.Set(alice, true, {adm::kHostKey, alice, bob});
+    CHECK(g.On(alice) && !g.On(bob) && !g.On(adm::kHostKey));
+    CHECK(g.On(adm::PlayerKey(76561198000000001ull, "Alice2")));   // renamed, same Steam account: still on
+    g.SetAll(true);
+    CHECK(g.all() && g.On("name:Newcomer") && g.On(adm::kHostKey));
+    g.Set(alice, false, {adm::kHostKey, alice, bob});   // one off while everyone is on: the others stay on
+    CHECK(!g.all() && !g.On(alice) && g.On(bob) && g.On(adm::kHostKey) && !g.On("name:Newcomer"));
+    g.SetAll(false);
+    CHECK(!g.any() && !g.On(bob));
+    // the notice: to that player alone, never from a client
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    AtMenu(cw);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    CHECK(!host.SendNotice(99, "personne"));
+    CHECK(!cli.SendNotice(1, "un client ne peut pas"));
+    const size_t hostLines = host.chatLog().size();
+    CHECK(host.SendNotice(cli.localId(), "L'hôte t'a téléporté près de lui."));
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return !cli.chatLog().empty() && cli.chatLog().back() == "* L'hôte t'a téléporté près de lui."; });
+    CHECK(!cli.chatLog().empty() && cli.chatLog().back() == "* L'hôte t'a téléporté près de lui.");
+    CHECK(host.chatLog().size() == hostLines);   // not a chat line of the host's
+}
+
 static void TestManyPlayers() {
     std::printf("session: 1 host + 4 clients joining at once, 120 characters\n");
     FakeWorld hw;
@@ -2194,6 +2286,7 @@ int main() {
     TestDoors();   // lot A
     TestFloorsAndStall();   // fix G6
     TestJobs();   // fix G5
+    TestAdmin();
     TestManyPlayers();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

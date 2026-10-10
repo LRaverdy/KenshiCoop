@@ -12,11 +12,14 @@
 #include <imgui_impl_win32.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <string>
 #include <atomic>
 #include <cstring>
 #include <mutex>
 #include <unordered_map>
 
+#include "kc/admin.h"
 #include "util.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -170,6 +173,172 @@ void DrawDialog(const OverlayModel& m, float w, float h) {
     ImGui::End();
 }
 
+// ---- the host's Administration section (render thread state)
+int g_xpSkill = -1;           // -1: every skill
+float g_xpAmount = 100.0f;
+int g_xpLevels = 0;           // 0: experience points, 1: levels
+int g_moneyAmount = 1000;
+std::string g_armedKey;       // a risky button clicked once: the second click within 4 s confirms
+double g_armedAt = -1e9;
+
+void Admin(const std::string& args) { PushAction({OverlayAction::Kind::Command, {}, {}, "admin " + args, 0}); }
+
+// A small button; risky: the first click turns it into "Confirmer ?", the second one acts.
+bool ConfirmButton(const char* label, const std::string& key, bool risky, const char* tip) {
+    const bool armed = g_armedKey == key && ImGui::GetTime() - g_armedAt < 4.0;
+    const std::string text = std::string(armed ? "Confirmer ?" : label) + "###" + key;
+    if (armed) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.30f, 0.20f, 1.0f));
+    const bool clicked = ImGui::SmallButton(text.c_str());
+    if (armed) ImGui::PopStyleColor();
+    if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", armed ? "Clique encore pour confirmer." : tip);
+    if (!clicked) return false;
+    if (!risky || armed) { g_armedKey.clear(); return true; }
+    g_armedKey = key;
+    g_armedAt = ImGui::GetTime();
+    return false;
+}
+
+std::string XpArgs() {
+    char amount[32];
+    snprintf(amount, sizeof(amount), "%g", double(g_xpAmount));
+    return std::string(g_xpSkill < 0 ? "all" : kc::admin::kSkills[g_xpSkill].key) + " " + amount + (g_xpLevels ? " levels" : "");
+}
+
+bool XpRisky() { return g_xpLevels ? g_xpAmount > kc::admin::kConfirmLevels : g_xpAmount > kc::admin::kConfirmXp; }
+
+// "TP à..." : near another player, or on the host's marked point. who: "<id>", "host" or "all".
+void TpPopup(const OverlayModel& m, const std::string& who, int selfId, bool risky) {
+    if (!ImGui::BeginPopup("tpto")) return;
+    if (risky) ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "Des persos sont à terre : ils seront relevés pour le TP.");
+    for (const auto& p : m.players) {
+        if (int(p.id) == selfId || (who == "all" && p.you)) continue;
+        const std::string label = "près de " + p.name;
+        if (ConfirmButton(label.c_str(), who + "-to-" + std::to_string(p.id), risky, nullptr)) {
+            Admin("tp " + who + " " + std::to_string(p.id));
+            ImGui::CloseCurrentPopup();
+        }
+    }
+    if (!m.movePoint.empty()) {
+        const std::string label = "au point marqué (" + m.movePoint + ")";
+        if (ConfirmButton(label.c_str(), who + "-to-point", risky, "Le dernier endroit où tu as ordonné un déplacement (clic droit au sol).")) {
+            Admin("tp " + who + " point");
+            ImGui::CloseCurrentPopup();
+        }
+    } else {
+        ImGui::TextDisabled("Point marqué : fais un clic droit au sol (ordre de déplacement).");
+    }
+    ImGui::EndPopup();
+}
+
+// The host's player list with an admin row per player and one for everyone (host included).
+void DrawAdmin(const OverlayModel& m) {
+    size_t othersDown = 0, hostDown = 0, allDown = 0;
+    for (const auto& p : m.players) {
+        allDown += p.down;
+        (p.you ? hostDown : othersDown) += p.down;
+    }
+    const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingFixedFit;
+    if (ImGui::BeginTable("admin", 5, flags)) {
+        ImGui::TableSetupColumn("Joueur");
+        ImGui::TableSetupColumn("Ping");
+        ImGui::TableSetupColumn("Persos");
+        ImGui::TableSetupColumn("Dieu");
+        ImGui::TableSetupColumn("Actions");
+        ImGui::TableHeadersRow();
+        for (const auto& p : m.players) {
+            const std::string id = std::to_string(p.id);
+            ImGui::PushID(int(p.id));
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%u. %s%s", unsigned(p.id), p.name.c_str(), p.you ? " (toi)" : "");
+            if (p.down) {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%zu à terre", p.down);
+            }
+            ImGui::TableNextColumn();
+            if (p.you) ImGui::TextUnformatted("hôte");
+            else ImGui::Text("%u ms", p.pingMs);
+            ImGui::TableNextColumn();
+            ImGui::Text("%zu", p.characters);
+            ImGui::TableNextColumn();
+            bool god = p.god;
+            if (ImGui::Checkbox("##god", &god)) Admin("god " + id + (god ? " on" : " off"));
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Mode dieu : plus aucun dégât ni K.-O. Reste actif aux changements de zone et reconnexions.");
+            ImGui::TableNextColumn();
+            if (!p.you) {
+                if (ConfirmButton("TP moi", "tpme", p.down > 0, "Ses personnages viennent près de ton perso sélectionné."))
+                    Admin("tp " + id + " host");
+                ImGui::SameLine();
+                if (ConfirmButton("Aller", "goto", hostDown > 0, "Tes personnages vont près des siens.")) Admin("tp host " + id);
+                ImGui::SameLine();
+            }
+            if (ImGui::SmallButton("TP à...")) ImGui::OpenPopup("tpto");
+            TpPopup(m, p.you ? "host" : id, p.id, p.down > 0);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Soigner")) Admin("heal " + id);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Soigne toutes les blessures et réveille un perso K.-O.");
+            ImGui::SameLine();
+            if (ConfirmButton("XP", "xp", XpRisky(), "Donne l'expérience réglée plus bas (compétence, quantité).")) Admin("xp " + id + " " + XpArgs());
+            if (!p.you) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Resync")) PushAction({OverlayAction::Kind::Command, {}, {}, "resync " + id, 0});
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Il recharge ton monde tel qu'il est maintenant (en cas de désynchro).");
+            }
+            ImGui::PopID();
+        }
+        // everyone, the host included
+        ImGui::PushID("all");
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Tout le monde");
+        ImGui::TableNextColumn();
+        ImGui::TableNextColumn();
+        ImGui::TableNextColumn();
+        bool godAll = m.godAll;
+        if (ImGui::Checkbox("##god", &godAll)) Admin(std::string("god all ") + (godAll ? "on" : "off"));
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Mode dieu pour tous les persos de l'escouade, nouveaux venus compris.");
+        ImGui::TableNextColumn();
+        if (m.players.size() > 1) {
+            if (ConfirmButton("TP moi", "tpme", othersDown > 0, "Les personnages de tous les joueurs viennent près de toi.")) Admin("tp all host");
+            ImGui::SameLine();
+        }
+        if (ImGui::SmallButton("TP à...")) ImGui::OpenPopup("tpto");
+        TpPopup(m, "all", -1, allDown > 0);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Soigner")) Admin("heal all");
+        ImGui::SameLine();
+        if (ConfirmButton("XP", "xp", XpRisky(), "Donne l'expérience réglée plus bas à tous les persos de l'escouade.")) Admin("xp all " + XpArgs());
+        ImGui::PopID();
+        ImGui::EndTable();
+    }
+    // the experience to give, and the shared money
+    ImGui::SetNextItemWidth(170.0f);
+    const char* preview = g_xpSkill < 0 ? "Toutes les compétences" : kc::admin::kSkills[g_xpSkill].fr;
+    if (ImGui::BeginCombo("##skill", preview)) {
+        if (ImGui::Selectable("Toutes les compétences", g_xpSkill < 0)) g_xpSkill = -1;
+        for (int i = 0; i < int(kc::kStatCount); ++i)
+            if (ImGui::Selectable(kc::admin::kSkills[i].fr, g_xpSkill == i)) g_xpSkill = i;
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80.0f);
+    ImGui::InputFloat("##xpamount", &g_xpAmount, 0.0f, 0.0f, "%g");
+    g_xpAmount = std::clamp(g_xpAmount, 0.0f, float(g_xpLevels ? kc::admin::kMaxLevels : kc::admin::kMaxXp));
+    ImGui::SameLine();
+    ImGui::RadioButton("points d'XP", &g_xpLevels, 0);
+    ImGui::SameLine();
+    ImGui::RadioButton("niveaux", &g_xpLevels, 1);
+    ImGui::SetNextItemWidth(110.0f);
+    ImGui::InputInt("##money", &g_moneyAmount, 0, 0);
+    g_moneyAmount = std::clamp(g_moneyAmount, -2000000000, 2000000000);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(g_moneyAmount == 0);
+    if (ImGui::SmallButton("cats à l'argent commun")) Admin("money " + std::to_string(g_moneyAmount));
+    ImGui::EndDisabled();
+    if (m.movePoint.empty()) ImGui::TextDisabled("Point marqué : aucun (clic droit au sol pour en marquer un).");
+    else ImGui::TextDisabled("Point marqué : %s (dernier clic droit au sol).", m.movePoint.c_str());
+}
+
 void DrawMultiplayer(const OverlayModel& m, float w, float h) {
     if (g_mpOpened.exchange(false)) {
         CopyTo(g_nameBuf, sizeof(g_nameBuf), m.name);
@@ -259,33 +428,21 @@ void DrawMultiplayer(const OverlayModel& m, float w, float h) {
             ImGui::TextDisabled("ou ce code dans leur fenêtre Multijoueur.");
             ImGui::Separator();
         }
-        if (ImGui::BeginTable("players", m.hosting ? 4 : 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
+        if (m.hosting) {
+            DrawAdmin(m);
+        } else if (ImGui::BeginTable("players", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
             ImGui::TableSetupColumn("Joueur");
             ImGui::TableSetupColumn("Ping", ImGuiTableColumnFlags_WidthFixed, 70.0f);
             ImGui::TableSetupColumn("Persos", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-            if (m.hosting) ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 160.0f);
             ImGui::TableHeadersRow();
             for (const auto& p : m.players) {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::Text("%u. %s%s", unsigned(p.id), p.name.c_str(), p.you ? " (toi)" : "");
                 ImGui::TableNextColumn();
-                if (p.you && m.hosting) ImGui::TextUnformatted("hôte");
-                else ImGui::Text("%u ms", p.pingMs);
+                ImGui::Text("%u ms", p.pingMs);
                 ImGui::TableNextColumn();
                 ImGui::Text("%zu", p.characters);
-                if (m.hosting) {
-                    ImGui::TableNextColumn();
-                    if (!p.you && p.characters > 0) {
-                        ImGui::PushID(int(p.id));
-                        if (ImGui::SmallButton("TP vers moi")) PushAction({OverlayAction::Kind::Command, {}, {}, "tp " + std::to_string(p.id), 0});
-                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Amène ses personnages près de ton personnage sélectionné (pour le débloquer).");
-                        ImGui::SameLine();
-                        if (ImGui::SmallButton("Resync")) PushAction({OverlayAction::Kind::Command, {}, {}, "resync " + std::to_string(p.id), 0});
-                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Il recharge ton monde tel qu'il est maintenant (en cas de désynchro).");
-                        ImGui::PopID();
-                    }
-                }
             }
             ImGui::EndTable();
         }

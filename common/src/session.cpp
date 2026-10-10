@@ -2766,6 +2766,19 @@ void Session::SendChat(const std::string& text) {
     }
 }
 
+bool Session::SendNotice(uint8_t playerId, const std::string& text) {
+    auto it = players_.find(playerId);
+    const std::string clean = SanitizeChat(text);
+    if (!isHost() || it == players_.end() || clean.empty()) return false;
+    Chat c;
+    c.from = 0;   // a notice, not a player's line
+    c.text = clean;
+    Writer w;
+    Encode(w, c);
+    SendReliable(it->second.peer, w);
+    return true;
+}
+
 void Session::SendReliable(PeerId to, const Writer& w) { net_.Send(to, kChanReliable, w.data(), w.size(), true); }
 
 void Session::BroadcastReliable(const Writer& w, bool inGameOnly, PeerId except) {

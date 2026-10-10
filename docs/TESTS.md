@@ -9,7 +9,7 @@ Deux niveaux de tests :
 
 ```powershell
 .\build.ps1                            # compile aussi kc_tests
-.\build\bin\Release\kc_tests.exe       # dernière ligne : "775 checks, 0 failed" (10 octobre 2026)
+.\build\bin\Release\kc_tests.exe       # dernière ligne : "860 checks, 0 failed" (10 octobre 2026)
 .\build.ps1 -Asan                      # variante AddressSanitizer, dans build-asan\
 ```
 
@@ -29,6 +29,7 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `TestSpawnReplication` | personnages créés chez l'hôte puis recréés chez le client |
 | `TestInventories` | inventaires identiques, fouille rejouée par l'hôte |
 | `TestCrashRejoin` | client figé 7 s (gardé), puis relancé avec le même compte avant la coupure : remplacé, même nom, même perso, pas de doublon, fenêtre de commerce fermée, perso arrêté |
+| `TestAdmin` | administration de l'hôte : syntaxe des commandes `admin`, calcul de l'XP du jeu (`increaseStat`, 20 au plus par appel, niveaux visés au plus juste), mode dieu retenu par joueur (même compte Steam = même joueur, « tout le monde » puis un seul retiré), message envoyé à un seul joueur et jamais par un client |
 | `TestManyPlayers` | 1 hôte + 4 clients arrivant ensemble, 120 personnages |
 
 ## 2. Tests en jeu (`tools/coop_test.py`)
@@ -91,6 +92,7 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `farnpc` | écart des PNJ qui marchent loin de l'escouade du client |
 | `beds` (`kctest_town`) | le perso du client dort dans le lit libre le plus proche, puis mine |
 | `tpdown` | TP admin du perso du client mis K.-O. |
+| `admin` | administration de l'hôte (commandes `admin …`) : refusée chez le client (commande et console) ; mode dieu sur le perso du client, combat contre un PNJ créé : ni sang ni membre perdus chez l'hôte, même état chez le client ; le mode dieu tient après un resync (reconnexion), puis retiré ; 100 points d'XP en attaque = le calcul du jeu (5 × 20), même valeur chez le client ; +3 niveaux dans chaque compétence, mêmes valeurs ; TP joueur → hôte, hôte → joueur, joueur → point de la carte : arrivée et même position chez le client ; soigner réveille un K.-O. ; argent +5000 partout ; dieu pour tout le monde puis retiré. Pas encore lancée en jeu |
 | `talk` | un PNJ parle au personnage du client : la conversation tourne chez l'hôte, la fenêtre s'ouvre chez le client |
 | `factions` | lot B : mêmes relations au départ ; relation changée par l'hôte identique chez le client ; prime donnée puis levée par l'hôte visible chez le client ; une relation changée par le jeu du client revient à celle de l'hôte |
 | `ranged` (`--shooter <clé>`) | (lot C) 3 tirs d'un arbalétrier de l'hôte sur l'escouade sont refaits chez le client, sur la même trajectoire ; même point visé ; une tourelle proche tournée chez l'hôte tourne pareil chez le client ; santé et inventaires identiques ensuite |
@@ -205,6 +207,7 @@ l'escouade triée par handle.
 | `give <joueur> <index\|all>` | donner un ou tous les membres de l'escouade à un joueur |
 | `resync [joueur]` | (hôte) ce joueur, ou 0 pour tout le monde, recharge le monde de l'hôte |
 | `tpplayer <joueur>` | (hôte) les personnages de ce joueur à côté du membre 0 de l'escouade |
+| `admin <verbe> …` | (hôte seulement, `err` ailleurs) les actions de la section Administration, comme la console : `god <id\|all\|host> on\|off`, `xp <id\|all\|host> <compétence\|all> <n> [levels]`, `tp <id\|all> host`, `tp host <id>`, `tp <id> <id>`, `tp <id> point`, `tp <id> <x> <y> <z>`, `heal <id\|all\|host>`, `money <n>`, `list` ; `state` pour les tests : `godall=0 engine=<persos en mode dieu> p<id>=<dieu 0/1>/<persos> … point=x,z` |
 | `consolewin` | la console hors du jeu est-elle là, et combien de texte montre-t-elle |
 | `pause [0\|1]` / `paused` / `speed <x>` | pause ; état de la pause et vitesse ; vitesse |
 | `hours` | heure du jeu |
