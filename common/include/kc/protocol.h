@@ -705,6 +705,11 @@ enum TargetFlags : uint32_t {
 // True when task `task`, asked through `via`, may be given with that subject (flags above); else
 // false and `why` (English, for the log) says what it needed. Unknown task ids are refused.
 bool TaskTargetAllowed(TaskVia via, int task, uint32_t subject, std::string* why);
+// For a task the game itself gave (the host's job lists copied to a client): true only when the
+// table knows the task and its subject is of the wrong kind. A task the table does not know (or one
+// that opens a window) is not judged here. Never hand the game such a job: a BUILD job aimed at an
+// NPC crashes it (kenshi_x64+0x883B78).
+bool TaskTargetWrongKind(TaskVia via, int task, uint32_t subject, std::string* why);
 
 // The host's answer to a client's request (a Command: its seq; other requests: seq 0). Rejected
 // carries the reason and a French text for the player; the client undoes what it predicted.

@@ -701,6 +701,24 @@ bool TaskTargetAllowed(TaskVia via, int task, uint32_t t, std::string* why) {
     }
 }
 
+bool TaskTargetWrongKind(TaskVia via, int task, uint32_t t, std::string* why) {
+    std::string w;
+    if (TaskTargetAllowed(via, task, t, &w)) return false;
+    // known: some kind of subject is accepted for it (every case of the table accepts one)
+    static const uint32_t F = kTgtNamed | kTgtFound;
+    static const uint32_t kinds[] = {
+        0, F | kTgtCharacter | kTgtSelf | kTgtConscious | kTgtSquad, F | kTgtCharacter | kTgtConscious,
+        F | kTgtCharacter | kTgtDown, F | kTgtCharacter | kTgtDead | kTgtDown, F | kTgtItem, F | kTgtContainer,
+        F | kTgtBuilding, F | kTgtBuilding | kTgtUnfinished | kTgtOurs, F | kTgtBuilding | kTgtOurs, F | kTgtBuilding | kTgtBed,
+        F | kTgtBuilding | kTgtCage, F | kTgtBuilding | kTgtMachine, F | kTgtBuilding | kTgtDoor,
+    };
+    bool known = false;
+    for (uint32_t k : kinds) known = known || TaskTargetAllowed(via, task, k, nullptr);
+    if (!known) return false;
+    if (why) *why = w;
+    return true;
+}
+
 const char* ToString(ResultReason r) {
     switch (r) {
     case ResultReason::None: return "none";

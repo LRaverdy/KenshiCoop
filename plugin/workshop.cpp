@@ -298,6 +298,7 @@ size_t KenshiWorld::ApplyResearch(const kc::ResearchState& s) {
     void* r = ResearchObj();
     if (!r) return 0;
     size_t changes = 0;
+    CallScopeGuard scopeRepair("workshop");
     HostCallScope scope;   // our own calls go through the research hooks
     int32_t level = 0;
     if (Rd(r, RS_deskLevel, level) && level != s.deskLevel) {   // startResearch checks it
@@ -362,6 +363,7 @@ bool KenshiWorld::ExecuteResearchRequest(const kc::ResearchRequest& req, const k
     why.clear();
     void* r = ResearchObj();
     if (!r) { why = "La recherche n'est pas disponible chez l'hôte."; return false; }
+    CallScopeGuard scopeRepair("workshop");
     HostCallScope scope;
     if (req.action == kc::ResearchAction::LearnBlueprint) {
         kenshi::Character* c = Find(actor);
@@ -523,6 +525,7 @@ bool KenshiWorld::ApplyMachine(const kc::MachineState& s, const std::vector<kc::
         if (said.insert(s.sid).second) Log("machine: %s of the host not found here", TemplateName(s.sid).c_str());
         return false;
     }
+    CallScopeGuard scopeRepair("workshop");
     HostCallScope scope;
     auto setByte = [&](uintptr_t off, bool v) {
         uint8_t cur = 0;
@@ -628,6 +631,7 @@ bool KenshiWorld::ExecuteMachineRequest(const kc::MachineRequest& req, const kc:
     void* b = BuildingAt(req.sid, req.pos);
     if (!b || !IsUseable(b)) { why = "Machine introuvable chez l'hôte."; return false; }
     if (!IsPlayerBuilding(b)) { why = "Cette machine n'appartient pas aux joueurs."; return false; }
+    CallScopeGuard scopeRepair("workshop");
     HostCallScope scope;
     const bool bench = IsCraftingBench(b);
     switch (req.action) {
@@ -855,6 +859,7 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
         std::vector<std::pair<std::string, std::string>> found;
         kenshi::ItemTemplates(what, found, 32);
         for (const auto& f : found) cands.push_back(f.first);
+        CallScopeGuard scopeRepair("workshop");
         HostCallScope scope;
         std::string why;
         for (const auto& sid : cands) {

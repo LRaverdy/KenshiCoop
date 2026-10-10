@@ -18,6 +18,7 @@
 #include <process.h>
 
 #include "kc/admin.h"
+#include "kc/call_scopes.h"
 #include "kc/protocol.h"
 #include "kc/session.h"
 #include "../plugin/map_view.h"
@@ -3336,6 +3337,72 @@ static void TestTaskTargets() {
           back.reason == ResultReason::WrongTarget && back.text == r.text);
 }
 
+// The crash at kenshi_x64+0x883B78 (10 oct.): a client's local copy of a job with a wrong subject
+// (task 27 on a squad mate) raised an exception inside the game; the tick caught it, but the
+// destructor of the "KenshiCoop is calling" scope opened around the call never ran, and from then on
+// the client's game ran every order itself, until a BUILD on an NPC crashed it.
+extern "C" __declspec(dllimport) void __stdcall RaiseException(unsigned long code, unsigned long flags, unsigned long n, const unsigned __int64* args);
+static thread_local ScopeCounts t_scopes;
+struct TestCallScope {
+    TestCallScope() { ++t_scopes.host; }
+    ~TestCallScope() { --t_scopes.host; }
+};
+static void RaiseInGame() { RaiseException(0xE04B4301u, 0, 0, nullptr); }   // not a C++ exception, like an access violation
+static void (*volatile g_gameCall)() = RaiseInGame;
+__declspec(noinline) static void ScopedGameCall() {
+    TestCallScope scope;
+    g_gameCall();
+}
+static bool GuardedGameCall() {   // the tick's barrier (TickSEH)
+    __try {
+        ScopedGameCall();
+        return true;
+    } __except (1) {
+        return false;
+    }
+}
+static void TestCallScopeRepair() {
+    std::printf("call scopes: an exception caught by __except leaves no scope counted, and orders are checked before our own copy runs them\n");
+    // the repair itself
+    ScopeCounts live{3, 1}, mark{1, 0};
+    CHECK(RepairScopeCounts(live, mark) == 2 && live.host == 1 && live.anim == 0);
+    live = {1, 0};
+    CHECK(RepairScopeCounts(live, mark) == 0 && live.host == 1);
+    live = {0, 0};   // closed twice: put back too, nothing "left open"
+    CHECK(RepairScopeCounts(live, mark) == 0 && live.host == 1 && live.anim == 0);
+    // what /EHsc does: the scope's destructor is skipped by the __except (the count stays up), and
+    // the repair brings it back to the mark
+    t_scopes = {};
+    const ScopeCounts before = t_scopes;
+    CHECK(!GuardedGameCall());
+    std::printf("  scopes left open by the caught exception: %d\n", t_scopes.host - before.host);
+    CHECK(t_scopes.host >= before.host);
+    RepairScopeCounts(t_scopes, before);
+    CHECK(t_scopes.host == 0 && t_scopes.anim == 0);
+    // the two orders of the crash, checked the way the client's local copy (RouteOrder) and the
+    // debug commands now check them before the game sees them
+    const uint32_t F = kTgtNamed | kTgtFound;
+    const uint32_t mate = F | kTgtCharacter | kTgtConscious | kTgtSquad, npc = F | kTgtCharacter | kTgtConscious;
+    std::string why;
+    CHECK(!TaskTargetAllowed(TaskVia::AddJob, 27, mate, &why) && !why.empty());   // the job that faulted on the client
+    for (TaskVia via : {TaskVia::AddOrder, TaskVia::NewTask, TaskVia::TaskNearest, TaskVia::AddJob}) {
+        CHECK(!TaskTargetAllowed(via, 2, npc, nullptr));                           // BUILD on an NPC (stress4, the crash)
+        CHECK(!TaskTargetAllowed(via, 2, F | kTgtCharacter | kTgtDown, nullptr));
+        CHECK(!TaskTargetAllowed(via, 2, mate, nullptr));
+        CHECK(!TaskTargetAllowed(via, 2, 0, nullptr));                              // BUILD on nothing
+        CHECK(!TaskTargetAllowed(via, 2, F | kTgtBuilding | kTgtOurs, nullptr));    // a finished building
+        CHECK(TaskTargetAllowed(via, 2, F | kTgtBuilding | kTgtUnfinished | kTgtOurs, nullptr));
+    }
+    // the host's job lists copied to a client copy (ApplyJobList): a known task with a subject of the
+    // wrong kind is never handed to the game; tasks the table does not know are not judged
+    CHECK(TaskTargetWrongKind(TaskVia::AddJob, 2, npc, &why) && !why.empty());
+    CHECK(TaskTargetWrongKind(TaskVia::AddJob, 87, npc, nullptr));                  // operate a machine: an NPC
+    CHECK(!TaskTargetWrongKind(TaskVia::AddJob, 87, F | kTgtBuilding | kTgtMachine, nullptr));
+    CHECK(!TaskTargetWrongKind(TaskVia::AddJob, 2, F | kTgtBuilding | kTgtUnfinished | kTgtOurs, nullptr));
+    CHECK(!TaskTargetWrongKind(TaskVia::AddJob, 31, mate, nullptr));                // follow a squad mate
+    for (int task : {0, 1, 17, 22, 40, 55, 118, 124, 599}) CHECK(!TaskTargetWrongKind(TaskVia::AddJob, task, npc, nullptr));
+}
+
 // Forged requests naming a character the sender does not own (the host's, another player's, an NPC,
 // none, unknown) are refused on the host for every request type; the client's own pass; the client
 // refuses to send them in the first place; orders aimed at the wrong kind of target are refused.
@@ -4159,6 +4226,7 @@ int main() {
     TestSquadWindow();   // squad window and AI settings
     TestAdmin();
     TestTaskTargets();   // actor safety
+    TestCallScopeRepair();   // crash at kenshi_x64+0x883B78
     TestActorSafety();
     TestGuiToDisplay();
     TestDialogue();

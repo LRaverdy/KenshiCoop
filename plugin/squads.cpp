@@ -77,6 +77,7 @@ bool KenshiWorld::SquadMove(const kc::Handle& who, const kc::Handle& squad, int 
     void* target = squad.valid() ? SquadById(squad) : nullptr;
     if (!c || (squad.valid() && !target)) return false;
     bool ok = false;
+    CallScopeGuard scopeRepair("squads");
     HostCallScope scope;
     // creating or filling a squad selects it in the host's squad bar: the host's selection stays
     kenshi::KeepSelection([&] {
@@ -100,6 +101,7 @@ bool KenshiWorld::SquadMove(const kc::Handle& who, const kc::Handle& squad, int 
 
 bool KenshiWorld::SquadCreate(const std::string& name, kc::Handle& created) {
     void* sq = nullptr;
+    CallScopeGuard scopeRepair("squads");
     HostCallScope scope;
     kenshi::KeepSelection([&] { sq = kenshi::NewSquad(); });
     if (!sq) return false;
@@ -128,6 +130,7 @@ bool KenshiWorld::SquadOrder(const kc::Handle& squad, int index) {
     // faction indices once ours is taken out (changePlatoonIndex removes it, then inserts it there)
     auto shrunk = [&](void* s) { const int i = kenshi::SquadFactionIndex(s); return i > cur ? i - 1 : i; };
     const int at = index < int(rest.size()) ? shrunk(rest[size_t(index)]) : shrunk(rest.back()) + 1;
+    CallScopeGuard scopeRepair("squads");
     HostCallScope scope;
     return kenshi::SetSquadOrder(sq, at);
 }
@@ -135,6 +138,7 @@ bool KenshiWorld::SquadOrder(const kc::Handle& squad, int index) {
 bool KenshiWorld::SquadRemove(const kc::Handle& squad) {
     void* sq = SquadById(squad);
     if (!sq || kenshi::SquadSize(sq) != 0) return false;
+    CallScopeGuard scopeRepair("squads");
     HostCallScope scope;
     bool ok = false;
     kenshi::KeepSelection([&] { ok = kenshi::DestroySquad(sq); });
@@ -143,6 +147,7 @@ bool KenshiWorld::SquadRemove(const kc::Handle& squad) {
 
 bool KenshiWorld::RenameCharacter(const kc::Handle& h, const std::string& name) {
     kenshi::Character* c = FindSquad(h);
+    CallScopeGuard scopeRepair("squads");
     HostCallScope scope;
     return c && kenshi::SetCharacterName(c, name);
 }
@@ -222,6 +227,7 @@ void KenshiWorld::ApplySquadViews(const std::vector<SquadView>& host) {
         if (target[i]) taken.insert(target[i]);
     }
     int created = 0;
+    CallScopeGuard scopeRepair("squads");
     HostCallScope scope;
     for (size_t i = 0; i < host.size(); ++i) {
         if (target[i]) continue;
@@ -284,6 +290,7 @@ void KenshiWorld::RemoveLocalSquad(uint64_t key) {
     kenshi::PlayerSquads(all);
     for (void* sq : all) {
         if (LocalKey(sq) != key || kenshi::SquadSize(sq) != 0) continue;
+        CallScopeGuard scopeRepair("squads");
         HostCallScope scope;
         bool ok = false;
         kenshi::KeepSelection([&] { ok = kenshi::DestroySquad(sq); });
@@ -295,6 +302,7 @@ void KenshiWorld::RemoveLocalSquad(uint64_t key) {
 void KenshiWorld::ApplyCharacterName(const kc::Handle& h, const std::string& name) {
     kenshi::Character* c = FindSquad(h);
     if (!c) return;
+    CallScopeGuard scopeRepair("squads");
     HostCallScope scope;
     if (kenshi::SetCharacterName(c, name)) Log("names: a squad character takes the host's name '%s'", name.c_str());
 }
@@ -392,6 +400,7 @@ void KenshiWorld::ApplyJobList(const kc::Handle& h, const std::vector<kc::JobEnt
         for (const auto& p : lj->second)
             if (p.second >= now && std::none_of(jobs.begin(), jobs.end(), [&](const kc::JobEntry& e) { return e.task == p.first; })) grace.push_back(p.first);
     }
+    CallScopeGuard scopeRepair("squads");
     HostCallScope scope;
     // 1. ours the host does not have: removed
     std::vector<LocalJob> local = readLocal();
@@ -409,7 +418,7 @@ void KenshiWorld::ApplyJobList(const kc::Handle& h, const std::vector<kc::JobEnt
     }
     for (auto it = drop.rbegin(); it != drop.rend(); ++it) kenshi::RemovePermajob(c, *it);
     // 2. the host's we lack: added (the same subject here: a character by its handle, furniture by kind and place)
-    int added = 0, missing = 0;
+    int added = 0, missing = 0, wrong = 0;
     for (size_t k = 0; k < jobs.size(); ++k) {
         if (used[k]) continue;
         const kc::JobEntry& e = jobs[k];
@@ -428,6 +437,16 @@ void KenshiWorld::ApplyJobList(const kc::Handle& h, const std::vector<kc::JobEnt
             subject = Find(e.subject);
         }
         if ((e.subject.valid() || !e.subjectSid.empty()) && !subject) { ++missing; continue; }   // not here (yet): next time
+        // what this copy found must be of the kind the task expects: a character found for a
+        // building's job (a stand-in, a handle that names something else here) is never handed to
+        // the game (a BUILD job on an NPC crashes it: kenshi_x64+0x883B78)
+        std::string why;
+        const uint32_t flags = TargetFlagsOf(c, subject, subject != nullptr);
+        if (kc::TaskTargetWrongKind(kc::TaskVia::AddJob, e.task, flags, &why)) {
+            ++wrong;
+            Log("jobs: %s: the host's job %d not copied here: %s (subject flags %#x)", KeyOf(h).c_str(), e.task, why.c_str(), unsigned(flags));
+            continue;
+        }
         if (kenshi::AddPermajob(c, e.task, subject, e.location)) ++added;
     }
     // 3. the host's order
@@ -441,9 +460,9 @@ void KenshiWorld::ApplyJobList(const kc::Handle& h, const std::vector<kc::JobEnt
             break;
         }
     }
-    if (!drop.empty() || added || moved || missing)
-        Log("jobs: %s made like the host's: %zu removed, %d added, %d moved%s", KeyOf(h).c_str(), drop.size(), added, moved,
-            missing ? " (some targets are not here yet)" : "");
+    if (!drop.empty() || added || moved || missing || wrong)
+        Log("jobs: %s made like the host's: %zu removed, %d added, %d moved%s%s", KeyOf(h).c_str(), drop.size(), added, moved,
+            missing ? " (some targets are not here yet)" : "", wrong ? " (some targets are of the wrong kind here)" : "");
 }
 
 } // namespace kcp

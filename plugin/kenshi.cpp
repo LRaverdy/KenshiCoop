@@ -1634,10 +1634,10 @@ std::unordered_map<std::string, void*> g_gameDataBySid;   // built once per worl
 bool g_gameDataBuilt = false;
 
 using FnCreateChar = void* (*)(void* factory, void* faction, const float* pos, void* owner, void* data, void* home, float age);
-void* CallCreateChar(void* fn, void* factory, void* faction, const float* pos, void* data, float age) {
+void* CallCreateChar(void* fn, void* factory, void* faction, const float* pos, void* data, float age, unsigned long* fault) {
     __try {
         return reinterpret_cast<FnCreateChar>(fn)(factory, faction, pos, nullptr, data, nullptr, age);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } __except (*fault = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
         return nullptr;
     }
 }
@@ -1742,7 +1742,17 @@ Character* CreateCharacter(const kc::SpawnInfo& info, const kc::Vec3& pos, std::
     void* faction = FindFaction(info.factionSid);
     if (!faction) { if (err) *err = "unknown faction " + info.factionSid; return nullptr; }
     const float p[3] = {pos.x, pos.y, pos.z};
-    void* obj = CallCreateChar(FnAddr(FnCreateRandomCharacter), factory, faction, p, gd, info.age);
+    unsigned long fault = 0;
+    void* obj = CallCreateChar(FnAddr(FnCreateRandomCharacter), factory, faction, p, gd, info.age, &fault);
+    if (fault && err) {
+        // the factory faulted part way: a character it had begun may stay in the game's update lists
+        // half set up (Character::update on one whose CharStats has no MedicalSystem yet crashes at
+        // kenshi_x64+0x883B78); the caller stops recreating this template
+        char buf[160];
+        snprintf(buf, sizeof buf, "exception %08lx inside the game's character factory", fault);
+        *err = buf;
+        return nullptr;
+    }
     if (!IsCharacter(obj)) {
         if (err) {
             int type = -1;

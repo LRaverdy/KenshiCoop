@@ -109,6 +109,20 @@ void DumpCharacter(std::ostream& o, const char* tag, KenshiWorld& w, const kc::H
     o << '\n';
 }
 
+// A test order this machine's game runs itself (a client's goes to the host, which checks it there):
+// the same subject check as a client's order (kc::TaskTargetAllowed), so a test command never hands
+// the game a subject of the wrong kind (a BUILD on an NPC crashes it: kenshi_x64+0x883B78). Empty:
+// allowed; otherwise the command's answer.
+std::string LocalTaskRefused(kc::Session& s, KenshiWorld& w, kenshi::Character* actor, kc::TaskVia via, int task, void* subject) {
+    if (s.isClient()) return "";
+    if (!actor) return "err no actor";
+    const uint32_t flags = w.TargetFlagsOf(actor, subject, subject != nullptr);
+    std::string why;
+    if (kc::TaskTargetAllowed(via, task, flags, &why)) return "";
+    Log("debug: task %d (via %d) not given here: %s (subject flags %#x)", task, int(via), why.c_str(), unsigned(flags));
+    return "err refused: " + why;
+}
+
 std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstream& in, const std::string& cmd) {
     std::string err;
     if (cmd == "echo") return "ok";
@@ -766,6 +780,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         in >> sel >> task >> subj;
         auto squad = SortedSquad(w);
         if (sel >= squad.size() || subj >= squad.size()) return "err no such squad member";
+        if (auto r = LocalTaskRefused(s, w, w.FindSquad(squad[sel]), kc::TaskVia::TaskNearest, task, w.FindSquad(squad[subj])); !r.empty()) return r;
         bool ok = false;
         kenshi::WithSelection(w.FindSquad(squad[sel]), [&] { ok = kenshi::CallAddTaskNearest(task, w.FindSquad(squad[subj])); });
         return ok ? "ok" : "err call failed";
@@ -789,6 +804,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             if (d < bestD) { bestD = d; best = c; }
         }
         if (!best) return "err no NPC around";
+        if (auto r = LocalTaskRefused(s, w, me, kc::TaskVia::TaskNearest, 12, best); !r.empty()) return r;
         std::string name;
         kenshi::CharacterName(best, name);
         bool ok = false;
@@ -1096,6 +1112,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         kenshi::Character* t = w.Find(lastSpawned_);
         kc::Vec3 tp;
         if (sel >= squad.size() || !t || !kenshi::GetPosition(t, tp)) return "err need a squad member and a spawned NPC";
+        if (auto r = LocalTaskRefused(s, w, w.FindSquad(squad[sel]), kc::TaskVia::AddOrder, 5, t); !r.empty()) return r;
         const float loc[3] = {tp.x, tp.y, tp.z};
         using FnAddOrder = void (*)(void*, void*, int, void*, bool, bool, const float*);
         kenshi::WithSelection(w.FindSquad(squad[sel]), [&] {
@@ -1264,6 +1281,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             if (d < bestD) { bestD = d; best = c; }
         }
         if (!best) return "err no such NPC around";
+        if (auto r = LocalTaskRefused(s, w, me, kc::TaskVia::TaskNearest, task, best); !r.empty()) return r;
         std::string name;
         kenshi::CharacterName(best, name);
         bool ok = false;
@@ -1290,6 +1308,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         kenshi::Character* s2 = w.FindSquad(squad[subj]);
         kc::Vec3 p;
         if (!kenshi::GetPosition(s2, p)) return "err";
+        if (auto r = LocalTaskRefused(s, w, w.FindSquad(squad[sel]), kc::TaskVia::AddJob, task, s2); !r.empty()) return r;
         const float loc[3] = {p.x, p.y, p.z};
         using FnAddJob = void (*)(void*, int, void*, bool, bool, const float*);
         kenshi::WithSelection(w.FindSquad(squad[sel]), [&] {
@@ -1317,6 +1336,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         in >> sel >> tgt;
         auto squad = SortedSquad(w);
         if (sel >= squad.size() || tgt >= squad.size()) return "err";
+        if (auto r = LocalTaskRefused(s, w, w.FindSquad(squad[sel]), kc::TaskVia::TaskNearest, 225, w.FindSquad(squad[tgt])); !r.empty()) return r;
         bool ok = false;
         kenshi::WithSelection(w.FindSquad(squad[sel]), [&] { ok = kenshi::CallAddTaskNearest(225, w.FindSquad(squad[tgt])); });   // LIFT_PERSON_PLAYER_ORDER
         return ok ? "ok" : "err";
@@ -1513,6 +1533,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         if (!best) return "err no container called " + part;
         kenshi::ObjectPosition(best, op);
         if (cmd == "containerreq") {
+            if (auto r = LocalTaskRefused(s, w, me, kc::TaskVia::TaskNearest, 26, best); !r.empty()) return r;
             bool ok = false;
             kenshi::WithSelection(me, [&] { ok = kenshi::CallAddTaskNearestObject(26, best, op); });
             return (ok ? "ok " : "err ") + bestName + " at " + std::to_string(int(std::sqrt(bestD)));
@@ -1743,6 +1764,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             if (k < nearby.size()) npc = nearby[k].second;
         }
         if (!npc) return "err no such NPC";
+        if (auto r = LocalTaskRefused(s, w, me, kc::TaskVia::TaskNearest, kc::kTaskTalk, npc); !r.empty()) return r;
         std::string name;
         kenshi::CharacterName(npc, name);
         bool ok = false;
@@ -2053,6 +2075,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         if (cmd == "doororder") {   // the order a right click gives (72 open, 73 close, 76 pick lock, 77 lock, 78 unlock, 81 bash)
             kenshi::GetPosition(me, mp);
             kenshi::ObjectPosition(best, p);
+            if (auto r = LocalTaskRefused(s, w, me, kc::TaskVia::TaskNearest, task, best); !r.empty()) return r;
             bool ok = false;
             kenshi::WithSelection(me, [&] { ok = kenshi::CallAddTaskNearestObject(task, best, p); });
             return (ok ? "ok " : "err ") + bestName + " at " + std::to_string(int(std::sqrt(bestD)));

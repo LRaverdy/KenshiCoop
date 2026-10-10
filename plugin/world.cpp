@@ -361,14 +361,27 @@ bool KenshiWorld::ReadSpawnInfo(const kc::Handle& h, kc::SpawnInfo& out) {
 
 bool KenshiWorld::Spawn(const kc::Handle& h, const kc::SpawnInfo& info, const kc::EntityState& at) {
     if (alias_.count(h)) return false;
+    // a template whose factory call faulted once is not tried again: each try may leave another
+    // half set-up character in the game's update lists (see kenshi::CreateCharacter)
+    if (factoryFaulted_.count(info.templateSid)) return false;
     std::string err;
-    HostCallScope scope;
-    kenshi::Character* c = kenshi::CreateCharacter(info, at.pos, &err);
+    const kc::ScopeCounts mark = MarkCallScopes();
+    kenshi::Character* c = nullptr;
+    {
+        HostCallScope scope;
+        c = kenshi::CreateCharacter(info, at.pos, &err);
+    }
+    // the factory runs our hooks: an exception it raised, caught by CreateCharacter, skipped the
+    // destructors of the scopes they had opened
+    RepairCallScopes(mark, "character factory");
     kc::Handle local;
     if (!c || !kenshi::GetHandle(c, local)) {
-        Log("cannot recreate host character %s: %s", info.templateSid.c_str(), err.c_str());
+        const bool faulted = err.rfind("exception", 0) == 0;
+        if (faulted) factoryFaulted_.insert(info.templateSid);
+        Log("cannot recreate host character %s: %s%s", info.templateSid.c_str(), err.c_str(), faulted ? " (not tried again)" : "");
         return false;
     }
+    HostCallScope scope;
     kenshi::Teleport(c, at.pos, at.rot);
     alias_[h] = local;
     resolved_.erase(h);
@@ -1802,7 +1815,10 @@ void KenshiWorld::SweepDialogs() {
     }
     for (const Gone& g : gone) {
         Log("conversation %u ends: %s", g.id, g.why);
-        if (g.end) kenshi::CallEndDialogue(g.d);   // closes the window through setInDialog(false) (hook: Close)
+        if (g.end) {
+            CallScopeGuard scopeRepair("dialogue end");   // the call runs our hooks (kc/call_scopes.h)
+            kenshi::CallEndDialogue(g.d);   // closes the window through setInDialog(false) (hook: Close)
+        }
         std::lock_guard<std::mutex> lk(dialogMutex_);
         auto it = remoteDialogs_.find(g.d);
         if (it == remoteDialogs_.end() || it->second.id != g.id) continue;   // closed by the game meanwhile
@@ -1852,7 +1868,11 @@ void KenshiWorld::EndDialog(uint32_t dialogId) {
             if (info.id == dialogId) { dialogue = d; r = info; break; }
     }
     if (!dialogue) return;
-    const bool ended = kenshi::CallEndDialogue(dialogue);
+    bool ended = false;
+    {
+        CallScopeGuard scopeRepair("dialogue end");   // the call runs our hooks (kc/call_scopes.h)
+        ended = kenshi::CallEndDialogue(dialogue);
+    }
     Log("conversation %u ended by the mod (%s)", dialogId, ended ? "ok" : "its dialogue is gone");
     std::lock_guard<std::mutex> lk(dialogMutex_);
     auto it = remoteDialogs_.find(dialogue);
