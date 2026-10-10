@@ -63,6 +63,8 @@ Raccourcis (Kenshi au premier plan) :
 | Ctrl+Shift+W | (hôte) montrer ou cacher la console hors du jeu |
 | Ctrl+Shift+O | afficher ou masquer le panneau |
 | Ctrl+Shift+D | écrire un diagnostic dans `KenshiCoop.log` |
+| Ctrl+Shift+N | afficher ou masquer la minicarte |
+| clic molette / Alt+clic | ping sur la carte, la minicarte ou le sol (Maj : danger, Ctrl : butin, Maj+Ctrl : à l'aide) |
 
 1. L'hôte charge sa partie et appuie sur **Ctrl+Shift+H**.
 2. L'ami clique **Rejoindre** à côté du nom de l'hôte dans sa fenêtre Multijoueur (ou colle son code
@@ -122,6 +124,10 @@ sauvegarde pas (tes propres parties ne sont jamais écrasées par le monde de l'
   Si on te voit, la fenêtre se ferme et l'objet reste.
 - **Objets au sol** : posés et ramassés, au même endroit pour tout le monde.
 - **Cadavres** : restent synchronisés et se fouillent, près des joueurs.
+- **Carte et repères** : sur la carte du jeu (M), tous les persos de tous les joueurs à la couleur
+  de leur joueur et les escouades hostiles qui nous visent en rouge ; une minicarte ronde ; un
+  repère au-dessus de la tête des persos des joueurs ; leur cadre de portrait coloré ; des pings
+  partagés. Réglages : fenêtre Multijoueur, « Affichage ».
 
 Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui reste à faire :
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).

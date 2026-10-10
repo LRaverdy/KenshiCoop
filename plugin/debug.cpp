@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "hooks.h"
+#include "map.h"
 #include "ranged.h"
 #include "steam_link.h"
 #include "kenshi.h"
@@ -109,6 +110,50 @@ void DumpCharacter(std::ostream& o, const char* tag, KenshiWorld& w, const kc::H
 std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstream& in, const std::string& cmd) {
     std::string err;
     if (cmd == "echo") return "ok";
+    // ---- map markers, minimap, heads, squad bar, pings (exp_map)
+    if (cmd == "mapscene") {   // mapscene <carte|minicarte|tetes|barre|pings>: what this machine draws
+        std::string what;
+        in >> what;
+        return DescribeMapScene(what);
+    }
+    if (cmd == "mapfeed") {   // mapfeed: the map feed as this machine has it (host: built, client: received)
+        const kc::MapMarkersMsg& m = s.mapMarkers();
+        std::ostringstream o;
+        o.setf(std::ios::fixed);
+        o.precision(1);
+        o << "ok age=" << std::min(999.0, s.mapMarkersAge()) << " players=" << m.players.size() << " chars=" << m.chars.size() << " threats=" << m.threats.size() << " ;";
+        for (const auto& c : m.chars) {
+            std::string n = c.name;
+            for (char& ch : n) if (ch == ' ' || ch == '=' || ch == ';' || (unsigned char)ch < 32) ch = '_';
+            o << ' ' << (n.empty() ? "-" : n) << ":owner=" << int(c.owner) << ":av=" << ((c.flags & kc::kMapAvatar) ? 1 : 0) << ":x=" << c.pos.x << ":z=" << c.pos.z;
+        }
+        o << " ;";
+        for (const auto& t : m.threats) o << " threat:kind=" << int(t.kind) << ":n=" << int(t.count) << ":x=" << t.pos.x << ":z=" << t.pos.z;
+        return o.str();
+    }
+    if (cmd == "mapproj") {   // mapproj <x> <z>: the game's MapScreen::worldToMapCoords against ours
+        float x = 0, z = 0;
+        if (!(in >> x >> z)) return "err usage: mapproj <x> <z>";
+        return CheckMapProjection(x, z);
+    }
+    if (cmd == "ping") {   // ping <x> <z> [type 0-3]: this player pings that spot (as a middle click would)
+        float x = 0, z = 0;
+        int type = 0;
+        if (!(in >> x >> z)) return "err usage: ping <x> <z> [type]";
+        in >> type;
+        if (type < 0 || type >= int(kc::kPingKinds)) return "err type 0-3";
+        return s.PlaceMapPing({x, 0, z}, kc::PingKind(type)) ? "ok" : "err refused (too soon, or no session)";
+    }
+    if (cmd == "pings") {   // pings: the live pings here
+        std::ostringstream o;
+        o.setf(std::ios::fixed);
+        o.precision(1);
+        o << "ok n=" << s.pings().size();
+        for (const auto& p : s.pings())
+            o << " id=" << p.ping.id << ":owner=" << int(p.ping.owner) << ":kind=" << int(p.ping.kind) << ":x=" << p.ping.pos.x << ":z=" << p.ping.pos.z
+              << ":age=" << s.pingAge(p);
+        return o.str();
+    }
     if (cmd == "status") {
         std::ostringstream o;
         o << "ok state=" << StateStr(s.state()) << " live=" << live << " ready=" << w.Ready() << " id=" << int(s.localId())

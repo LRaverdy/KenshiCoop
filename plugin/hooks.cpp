@@ -11,6 +11,7 @@
 #include <mutex>
 #include <vector>
 
+#include "map.h"
 #include "ranged.h"
 #include "util.h"
 #include "world.h"
@@ -1426,6 +1427,9 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnAddDismantleProgress, reinterpret_cast<void*>(&hk_addDismantle), reinterpret_cast<void**>(&o_addDismantle)},
         {kenshi::FnWorldDestroy, reinterpret_cast<void*>(&hk_worldDestroy), reinterpret_cast<void**>(&o_worldDestroy)},
         {kenshi::FnSaveManagerSave, reinterpret_cast<void*>(&hk_saveManagerSave), reinterpret_cast<void**>(&o_saveManagerSave)},
+        // ---- map markers: the squad bar's portraits
+        {kenshi::FnPortraitCellUpdate, reinterpret_cast<void*>(&mapmarks::hk_portraitUpdate), reinterpret_cast<void**>(&mapmarks::o_portraitUpdate)},
+        {kenshi::FnPortraitCellDtor, reinterpret_cast<void*>(&mapmarks::hk_portraitDtor), reinterpret_cast<void**>(&mapmarks::o_portraitDtor)},
     };
     const MH_STATUS init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {

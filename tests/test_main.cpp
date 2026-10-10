@@ -327,6 +327,13 @@ struct FakeWorld : IWorld {
         return it == chars.end() ? 1e9f : Dist(it->second.pos, pos);
     }
     std::string CharacterNameOf(const Handle& h) override { return "npc-" + std::to_string(h.serial); }
+    std::vector<MapThreat> threats;   // map: what ReadMapThreats answers
+    size_t threatCalls = 0;
+    void ReadMapThreats(const std::vector<Vec3>& centers, float radius, std::vector<MapThreat>& out) override {
+        (void)radius;
+        ++threatCalls;
+        out = centers.empty() ? std::vector<MapThreat>{} : threats;
+    }
     bool FindContainer(const std::string& sid, const Vec3& pos, Handle& out) override {
         for (auto& [s, b] : boxes)
             if (b.sid == sid && Dist(b.pos, pos) < 30) { out = B(s); return true; }
@@ -883,6 +890,32 @@ static void TestWire() {
         Reader xr(bad.data(), bad.size()); PeekType(xr);
         BountiesMsg bm3; CHECK(!Decode(xr, bm3));
     }
+    {   // map: markers and pings
+        MapMarkersMsg mm;
+        mm.players = {{1, "Hote"}, {2, "Bob"}};
+        MapChar a; a.netId = 3; a.owner = 2; a.flags = kMapAvatar | kMapDown; a.name = "Bob"; a.pos = {-1000.5f, 12, 77};
+        MapChar b; b.netId = 9; b.owner = 1; b.name = std::string(80, 'x'); b.pos = {1, 2, 3};
+        mm.chars = {a, b};
+        MapThreat t; t.pos = {5, 6, 7}; t.count = 4; t.kind = ThreatKind::Raid; t.label = "Holy Nation";
+        mm.threats = {t};
+        Writer mw; Encode(mw, mm);
+        Reader mr(mw.data(), mw.size()); CHECK(PeekType(mr) == Msg::MapMarkers);
+        MapMarkersMsg mm2; CHECK(Decode(mr, mm2));
+        CHECK(mm2.players == mm.players && mm2.chars.size() == 2 && mm2.chars[0] == a && mm2.threats.size() == 1 && mm2.threats[0] == t);
+        CHECK(mm2.chars[1].name.size() == kMaxMapLabelLen);   // long names are cut
+        mm.threats[0].kind = ThreatKind(9);   // no such kind
+        Writer mw2; Encode(mw2, mm);
+        Reader mr2(mw2.data(), mw2.size()); PeekType(mr2);
+        MapMarkersMsg mm3; CHECK(!Decode(mr2, mm3));
+        MapPingMsg pm; pm.id = 77; pm.owner = 3; pm.kind = PingKind::Loot; pm.pos = {1, 2, -3};
+        Writer pw; Encode(pw, pm);
+        Reader pr(pw.data(), pw.size()); CHECK(PeekType(pr) == Msg::MapPing);
+        MapPingMsg pm2; CHECK(Decode(pr, pm2) && pm2 == pm);
+        pm.kind = PingKind(7);
+        Writer pw2; Encode(pw2, pm);
+        Reader pr2(pw2.data(), pw2.size()); PeekType(pr2);
+        MapPingMsg pm3; CHECK(!Decode(pr2, pm3));
+    }
     {   // lot D: captive characters (a caged one with shackles and a sentence, a freed one)
         CaptivesMsg cm;
         CaptiveState a; a.netId = 7; a.caged = true; a.cageSid = "cage-1"; a.cagePos = {1, 2, 3}; a.chained = true;
@@ -1034,6 +1067,11 @@ static void TestFuzz() {
     { VitalsMsg v; v.entities.resize(2); for (auto& e : v.entities) { e.netId = 4; e.parts.resize(3); } seeds.push_back(EncodeVitals(v)[0]); }
     add([](Writer& w) { ShotsMsg m; ShotEvent e; e.shooterNetId = 2; e.turretSid = "t"; m.shots = {e, e}; Encode(w, m); });   // lot C
     add([](Writer& w) { RangedMsg m; m.aims.resize(2); m.aims[0].netId = 1; m.aims[1].netId = 2; m.turrets = {TurretAim{"t", {}, {}}}; m.stopped = {4}; Encode(w, m); });
+    add([](Writer& w) {   // map
+        MapMarkersMsg m; m.players = {{1, "h"}}; MapChar c; c.netId = 2; c.owner = 1; c.name = "a"; m.chars = {c, c};
+        MapThreat t; t.count = 3; t.label = "f"; m.threats = {t}; Encode(w, m);
+    });
+    add([](Writer& w) { MapPingMsg m; m.id = 4; m.owner = 2; m.kind = PingKind::Help; Encode(w, m); });
     add([](Writer& w) { ContainerOpen m; m.looterNetId = 2; m.sid = "chest"; Encode(w, m); });
     add([](Writer& w) {
         CaptivesMsg m; CaptiveState c; c.netId = 3; c.caged = true; c.cageSid = "cage"; c.chained = true; c.slaveOf = "f"; c.sentence = 2;
@@ -1113,6 +1151,8 @@ static void TestFuzz() {
         case Msg::Bounties: { BountiesMsg m; Decode(r, m); break; }
         case Msg::Doors: { DoorsMsg m; Decode(r, m); break; }          // lot A
         case Msg::DoorRequest: { DoorRequest m; Decode(r, m); break; } // lot A
+        case Msg::MapMarkers: { MapMarkersMsg m; Decode(r, m); break; }
+        case Msg::MapPing: { MapPingMsg m; Decode(r, m); break; }
         default: break;
         }
     };
@@ -1121,7 +1161,7 @@ static void TestFuzz() {
         if (i % 2) {
             p.resize(rng() % 64);
             for (auto& b : p) b = uint8_t(rng());
-            if (!p.empty()) p[0] = uint8_t(1 + rng() % 55);
+            if (!p.empty()) p[0] = uint8_t(1 + rng() % 82);
         } else {
             p = seeds[rng() % seeds.size()];
             const int muts = 1 + rng() % 4;
@@ -2057,6 +2097,73 @@ static void TestCaptives() {
     CHECK(cw.captiveApplies == applies);
 }
 
+static void TestMap() {
+    std::printf("session: map markers (players' characters, hostile squads) and pings reach every player\n");
+    FakeWorld hw;
+    SetupHost(hw);
+    hw.threats = {MapThreat{{150, 0, 40}, 5, ThreatKind::Attacking, "Bandits"}};
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; hc.name = "Hote";
+    Session host(hw, hc, Now, Quiet("host"));
+    std::string err;
+    CHECK(host.Host(&err));
+    FakeWorld w1, w2;
+    AtMenu(w1); AtMenu(w2);
+    SessionConfig c1; c1.port = hc.port; c1.name = "Un";
+    SessionConfig c2; c2.port = hc.port; c2.name = "Deux";
+    Session s1(w1, c1, Now, Quiet("c1")), s2(w2, c2, Now, Quiet("c2"));
+    CHECK(s1.Join("127.0.0.1", hc.port, &err));
+    CHECK(s2.Join("127.0.0.1", hc.port, &err));
+    std::vector<std::pair<Session*, FakeWorld*>> all{{&host, &hw}, {&s1, &w1}, {&s2, &w2}};
+    Run(all, 15.0, [&] { return s1.state() == SessionState::Connected && s2.state() == SessionState::Connected && s1.entityCount() == 3 && s2.entityCount() == 3; });
+    CHECK(s1.state() == SessionState::Connected && s2.state() == SessionState::Connected);
+    host.Assign(FakeWorld::H(2), s1.localId());
+    host.Assign(FakeWorld::H(3), s2.localId());
+    Run(all, 3.0, [&] {
+        const auto& m = s2.mapMarkers();
+        return m.chars.size() == 3 && m.players.size() == 3 && m.chars[2].owner == s2.localId() && !m.threats.empty();
+    });
+    const MapMarkersMsg& m = s2.mapMarkers();
+    CHECK(m.chars.size() == 3 && m.players.size() == 3);
+    CHECK(s2.mapMarkersAge() < 2.0);
+    CHECK(m == host.mapMarkers() || m.chars.size() == host.mapMarkers().chars.size());
+    if (m.chars.size() == 3) {
+        CHECK(m.chars[0].owner == 1 && m.chars[1].owner == s1.localId() && m.chars[2].owner == s2.localId());
+        // every player has one character marked as their own (here: their first one)
+        CHECK((m.chars[0].flags & kMapAvatar) && (m.chars[1].flags & kMapAvatar) && (m.chars[2].flags & kMapAvatar));
+        CHECK(Dist(m.chars[1].pos, hw.chars[2].pos) < 1.0f);
+        Handle h; CHECK(s2.netIdHandle(m.chars[1].netId, h) && h == FakeWorld::H(2));
+    }
+    CHECK(m.threats.size() == 1 && m.threats[0].label == "Bandits" && m.threats[0].kind == ThreatKind::Attacking && m.threats[0].count == 5);
+    // characters far from a client are on its map too: positions follow the host's
+    hw.chars[3].pos = hw.chars[3].dest = {90000, 0, -90000};
+    Run(all, 2.0, [&] { return s1.mapMarkers().chars.size() == 3 && Dist(s1.mapMarkers().chars[2].pos, hw.chars[3].pos) < 1.0f; });
+    CHECK(s1.mapMarkers().chars.size() == 3 && Dist(s1.mapMarkers().chars[2].pos, hw.chars[3].pos) < 1.0f);
+    // a client pings: the host and the other client show it, in the pinger's name
+    CHECK(s1.PlaceMapPing({10, 0, 20}, PingKind::Danger));
+    CHECK(!s1.PlaceMapPing({11, 0, 20}, PingKind::Go));   // too soon
+    Run(all, 2.0, [&] { return host.pings().size() == 1 && s2.pings().size() == 1 && s1.pings().size() == 1; });
+    CHECK(host.pings().size() == 1 && s2.pings().size() == 1 && s1.pings().size() == 1);
+    if (s2.pings().size() == 1) {
+        CHECK(s2.pings()[0].ping.owner == s1.localId() && s2.pings()[0].ping.kind == PingKind::Danger && s2.pings()[0].ping.pos.z == 20);
+        CHECK(host.pings()[0].ping.id == s2.pings()[0].ping.id);
+    }
+    // the host's own ping, and the cap of 5 alive per player
+    CHECK(host.PlaceMapPing({1, 0, 1}, PingKind::Help));
+    for (int i = 0; i < 6; ++i) {
+        Run(all, Session::kPingInterval + 0.05);
+        s1.PlaceMapPing({float(100 + i), 0, 0}, PingKind::Go);
+    }
+    Run(all, 1.0);
+    size_t ofS1 = 0;
+    for (const auto& p : s2.pings()) ofS1 += p.ping.owner == s1.localId() ? 1 : 0;
+    CHECK(ofS1 == Session::kPingsPerPlayer);
+    CHECK(s2.pings().size() == Session::kPingsPerPlayer + 1);
+    // they fade away
+    Run(all, Session::kPingLife + 0.5, [&] { return host.pings().empty() && s2.pings().empty(); });
+    CHECK(host.pings().empty() && s2.pings().empty());
+    CHECK(hw.threatCalls > 0);
+}
+
 static void TestJobs() {   // fix G5
     std::printf("session: a job the host's character no longer has is gone from the client's list too\n");
     FakeWorld hw, cw;
@@ -2194,6 +2301,7 @@ int main() {
     TestDoors();   // lot A
     TestFloorsAndStall();   // fix G6
     TestJobs();   // fix G5
+    TestMap();
     TestManyPlayers();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

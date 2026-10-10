@@ -456,6 +456,23 @@ format, et une version différente est refusée à la connexion.
 5. La fermeture vient du client (fenêtre fermée), ou de l'hôte : vol repéré, ou personnage à plus
    de 50 unités.
 
+### Carte, minicarte, repères, pings (`session_map.cpp`, `plugin/map.cpp`, `plugin/overlay_map.cpp`)
+1. L'hôte construit toutes les 1/3 s le flux de carte (`HostMapMarkers`) : joueurs, chaque perso de
+   l'escouade (netId, joueur, « son » perso, à terre, mort, position lue chez l'hôte) et les
+   escouades hostiles (`KenshiWorld::ReadMapThreats` : campagne du jeu contre notre faction,
+   combat contre un des nôtres, « ennemi » d'après `MapScreen::getMarkerColor` dans le rayon) ;
+   il le garde pour lui et l'envoie à tous (`MapMarkers`, fiable).
+2. Chaque image, `UpdateMapScene` (fil du jeu) fait une `MapScene` (`plugin/map_view.h`) : le flux
+   (positions locales quand le perso est chargé ici), l'état de la carte du jeu (rectangle de
+   l'image, partie visible, bornes du monde), la caméra (proj × vue d'Ogre), les cadres de portrait
+   des persos des joueurs (cellules suivies par les hooks `PortraitMainCellView::update` / destructeur),
+   les pings et les réglages ; elle passe à l'overlay.
+3. L'overlay (`MapOverlayDraw`, fil de rendu) dessine carte, minicarte, têtes, cadres et pings ;
+   la procédure de fenêtre (`MapOverlayMessage`) prend la molette et les boutons de la minicarte
+   et les clics de ping ; le filtre DirectInput cache ces clics au jeu.
+4. Ping : `Session::PlaceMapPing` (hôte : ajouté et diffusé ; client : `MapPing` à l'hôte, qui
+   vérifie 0,5 s par joueur, garde 5 pings par joueur et le renvoie à tous) ; 10 s de vie.
+
 ### Captivité (lot D : `HostCaptives`, `ClientCaptives`, `plugin/prisons.cpp`)
 1. L'hôte relit toutes les 0,5 s la captivité de chaque entité (`KenshiWorld::ReadCaptive` :
    cage par type et endroit, menottes, propriétaire, état d'esclave, faction maître, évadé,
@@ -585,6 +602,10 @@ format, et une version différente est refusée à la connexion.
 | `plugin/kenshi.cpp`, `kenshi.h` | table des fonctions, offsets, accès à la mémoire du jeu |
 | `plugin/world.cpp`, `world.h` | `KenshiWorld` (`IWorld`), `HookView` |
 | `plugin/overlay.cpp`, `overlay.h` | overlay ImGui : panneau d'état, fenêtre Multijoueur, console, conversation |
+| `common/include/kc/colors.h` | la couleur de chaque joueur (`kc::PlayerColor`) |
+| `common/src/protocol_map.cpp`, `src/session_map.cpp` | messages et session de la carte : flux de carte, pings |
+| `plugin/map.cpp`, `map.h`, `map_view.h` | carte : escouades hostiles (hôte), scène de chaque image, projections, hooks des portraits |
+| `plugin/overlay_map.cpp`, `overlay_map.h` | dessin de la carte, de la minicarte, des repères, des cadres et des pings ; souris |
 | `plugin/host_console.cpp`, `host_console.h` | console Windows hors du jeu |
 | `plugin/steam_link.cpp`, `steam_link.h` | relais Steam P2P, amis, présence |
 | `plugin/util.cpp`, `util.h` | journal (et son archive), configuration, SHA-256 |
@@ -605,6 +626,14 @@ format, et une version différente est refusée à la connexion.
 | `[sync] interest_radius` | 0 | 0 : tous les personnages actifs sont répliqués |
 | `[coop] own_character` | 1 | un personnage par joueur qui rejoint |
 | `[ui] overlay` | 1 | panneau d'état en haut à droite |
+| `[ui] map_markers` | 1 | joueurs et ennemis sur la carte du jeu |
+| `[ui] head_markers` | 1 | repère au-dessus des persos des joueurs |
+| `[ui] portrait_colours` | 1 | cadre coloré des portraits des joueurs |
+| `[ui] minimap` | 1 | minicarte (Ctrl+Shift+N) |
+| `[ui] minimap_rotate` | 0 | minicarte tournante (sinon nord en haut) |
+| `[ui] minimap_corner` | 1 | coin : 0 haut gauche, 1 haut droite, 2 bas gauche, 3 bas droite |
+| `[ui] minimap_zoom` | 1500 | unités du centre au bord de la minicarte (300 à 30000) |
+| `[ui] pings` | 1 | placer et voir les pings |
 | `[ui] host_console` | 1 | la console hors du jeu s'ouvre seule quand on héberge |
 | `[debug] commands` | 0 | canal de test (voir [TESTS.md](TESTS.md)) : **0 pour jouer** |
 | `[debug] steam_loopback` | 0 | relais « Steam » sur UDP local (tests à deux instances) |

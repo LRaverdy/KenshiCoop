@@ -9,7 +9,7 @@ Deux niveaux de tests :
 
 ```powershell
 .\build.ps1                            # compile aussi kc_tests
-.\build\bin\Release\kc_tests.exe       # dernière ligne : "775 checks, 0 failed" (10 octobre 2026)
+.\build\bin\Release\kc_tests.exe       # dernière ligne : "806 checks, 0 failed" (10 octobre 2026)
 .\build.ps1 -Asan                      # variante AddressSanitizer, dans build-asan\
 ```
 
@@ -29,6 +29,7 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `TestSpawnReplication` | personnages créés chez l'hôte puis recréés chez le client |
 | `TestInventories` | inventaires identiques, fouille rejouée par l'hôte |
 | `TestCrashRejoin` | client figé 7 s (gardé), puis relancé avec le même compte avant la coupure : remplacé, même nom, même perso, pas de doublon, fenêtre de commerce fermée, perso arrêté |
+| `TestMap` | marqueurs de carte : 1 hôte + 2 clients reçoivent les persos (propriétaires, perso de chaque joueur, positions même très loin) et les escouades hostiles de l'hôte ; un ping de client chez l'hôte et l'autre client, refusé s'il suit le précédent de moins de 0,5 s, 5 au plus par joueur, effacé après 10 s |
 | `TestManyPlayers` | 1 hôte + 4 clients arrivant ensemble, 120 personnages |
 
 ## 2. Tests en jeu (`tools/coop_test.py`)
@@ -109,6 +110,7 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `up` | un hôte et un client connectés, laissés ouverts pour un test manuel |
 | `prison` (lot D) | l'hôte met le personnage du client dans la cage la plus proche, l'enchaîne, le réduit en esclavage puis le libère : même état chez le client, gardé dans la cage, tout effacé à la fin. Il faut une cage à moins de 300 m de l'escouade (`--save` d'une sauvegarde près d'une prison ou d'un camp d'esclavagistes) |
 | `crashrejoin` (`--only abcdefg`) | client **tué** (`taskkill /F`) puis relancé avec le même faux id Steam et revenu : (a) au repos, (b) en combat à la vitesse 3, (c) en portant un corps, (d) fenêtre de commerce ouverte, (e) en fouillant un corps, (f) dans l'éditeur de personnage, (g) relancé avant que l'hôte ait vu la coupure. À chaque fois : l'hôte vit, voit la coupure (< 20 s) et nettoie (journal « disconnected (… » / « cleaned up: »), le joueur retrouve les mêmes persos (clés, inventaires ; sauf combat), pas de doublon, comparaison hôte / client propre, l'hôte n'est pas resté en pause |
+| `map` (`--clients 2`) | **carte, minicarte, repères, barre, pings** : chaque client reçoit le flux de l'hôte (âge < 2 s, mêmes persos, mêmes propriétaires et positions à 30 unités près, mêmes escouades hostiles ; un PNJ copié qui se bat contre l'escouade sert d'ennemi) ; chaque joueur a un perso « à lui » ; chaque machine dessine tous les persos, une couleur par joueur (`mapscene carte`) ; projection du jeu (`worldToMapCoords`) = la nôtre à 1,5 px près ; minicarte centrée sur son perso ; repères au-dessus des têtes ; cadres de la barre seulement aux couleurs des joueurs ; ping du client 1 visible chez l'hôte et chez le client 2 à son nom, second ping trop rapide refusé, 5 au plus, effacé après 10 s. Contrôles « carte : … », « minicarte : … », « tetes : … », « barre : … », « ping : … ». Pas encore lancée en jeu |
 | `cmd <pid> <commande…>` | envoie une commande de debug à une instance |
 
 ### La suite (`suite`) : 32 points
@@ -290,6 +292,20 @@ l'escouade triée par handle.
 | `chain <i> [off]` | (hôte, lot D) l'enchaîne à la manière du jeu (menottes créées) / le libère |
 | `enslave <i> <0-3>` | (hôte, lot D) état d'esclave : 0 non, 1 esclave, 2 en fuite, 3 ancien |
 | `captive <i>` | (lot D) `in=` (2 = en cage), cage, `chained`, `slave`, `slaveof`, évadé, enlevé, peine, position, nombre de captifs suivis |
+
+**Carte, minicarte, repères, pings**
+
+| Commande | Rôle |
+|---|---|
+| `mapfeed` | le flux de carte de cette machine (hôte : construit, client : reçu) : âge, joueurs, persos (`nom:owner=:av=:x=:z=`), escouades hostiles (`threat:kind=:n=:x=:z=`) |
+| `mapscene carte` | ce que la carte dessine : ouverte, bornes, chaque perso avec propriétaire, couleur (`col=or`…), position, et à l'écran si la carte est ouverte (`sx=`, `sy=`, `vis=`) ; escouades hostiles |
+| `mapscene minicarte` | centre, zoom, rotation, coin, persos et ennemis dans le cercle |
+| `mapscene tetes` | repères au-dessus des têtes : perso, propriétaire, couleur, à l'écran ou non, point projeté |
+| `mapscene barre` | cadres de la barre d'escouade (propriétaire, couleur, rectangle) et cellules de portrait suivies |
+| `mapscene pings` | pings dessinés ici (id, joueur, type, position, âge) |
+| `mapproj <x> <z>` | `MapScreen::worldToMapCoords` du jeu comparé à notre projection (`game=` / `ours=`, taille de l'image) |
+| `ping <x> <z> [type]` | ce joueur pinge ce point (0 aller ici, 1 danger, 2 butin, 3 à l'aide) ; `err` si trop tôt |
+| `pings` | pings vivants dans la session (`id=:owner=:kind=:x=:z=:age=`) |
 
 **Portes et serrures (lot A)** — `<qui>` : index dans l'escouade (autour de qui chercher) ; `<quoi>` :
 `door` (la porte la plus proche), `lock` (le meuble à serrure le plus proche) ou une partie du nom

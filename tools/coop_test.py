@@ -1085,6 +1085,128 @@ def exp_prison(host, cli):
     summary()
 
 
+def exp_map(host, clis):
+    """Map markers, minimap, markers above the heads, squad bar frames and pings (1 host + 2 clients
+    or more). Every player's map feed must match the host's (positions, owners, own characters,
+    hostile squads); what each machine draws is read back (mapscene); the game's map projection must
+    match ours; a client's ping must show on the host and on the other client, rate-limited."""
+    import re as _re
+    time.sleep(6)
+    for c in clis:
+        cmd(c, "editdone")
+    time.sleep(4)
+
+    def kv(text):
+        return dict(p.split("=", 1) for p in text.split(";")[0].split() if "=" in p)
+
+    def items(text, section=1):
+        parts = text.split(";")
+        if len(parts) <= section:
+            return []
+        out = []
+        for tok in parts[section].split():
+            f = tok.split(":")
+            d = {"name": f[0]}
+            for x in f[1:]:
+                if "=" in x:
+                    k, v = x.split("=", 1)
+                    d[k] = v
+            out.append(d)
+        return out
+
+    def feed(pid):
+        ok, t = cmd(pid, "mapfeed")
+        return ok, kv(t), items(t, 1), items(t, 2), t
+
+    def me(pid):
+        return kv(cmd(pid, "mapscene carte")[1]).get("me", "?")
+
+    # a hostile in a fight with the squad: an NPC copy next to squad member 0, engaged
+    log("spawn an NPC to fight:", cmd(host, "spawnnpc 60 0"), cmd(host, "fight 0"))
+    time.sleep(5)
+    hok, hk, hchars, hthreats, ht = feed(host)
+    log("host feed:", ht[:400])
+    check("carte : l'hote construit le flux", hok and int(hk.get("chars", 0)) > 0, ht[:200])
+    ids = {}
+    for i, c in enumerate(clis):
+        ok, k, chars, threats, t = feed(c)
+        ids[c] = me(c)
+        log(f"client {i + 1} (joueur {ids[c]}) feed:", t[:400])
+        check(f"carte : client {i + 1} recoit le flux de l'hote", ok and float(k.get("age", 999)) < 2.0, t[:120])
+        check(f"carte : client {i + 1} a les memes persos que l'hote", len(chars) == len(hchars), f"{len(chars)} / {len(hchars)}")
+        worst = 0.0
+        for a, b in zip(chars, hchars):
+            if a.get("owner") != b.get("owner"):
+                worst = 1e9
+                break
+            worst = max(worst, dist((float(a["x"]), 0, float(a["z"])), (float(b["x"]), 0, float(b["z"]))))
+        check(f"carte : client {i + 1} memes positions et proprietaires que l'hote", worst < 30.0, f"ecart max {worst:.1f}")
+        check(f"carte : client {i + 1} memes escouades hostiles que l'hote", len(threats) == len(hthreats), f"{len(threats)} / {len(hthreats)}")
+    owners = sorted({c.get("owner") for c in hchars})
+    av = {o: sum(1 for c in hchars if c.get("owner") == o and c.get("av") == "1") for o in owners}
+    check("carte : chaque joueur a un perso a lui (repere, barre d'escouade)", all(v >= 1 for v in av.values()) and len(owners) >= 1 + len(clis), av)
+    check("carte : ennemis visibles (le PNJ qui se bat contre l'escouade)", len(hthreats) >= 1,
+          "aucune escouade hostile (le PNJ copie n'est peut-etre pas hostile)" if not hthreats else hthreats[0])
+    # what each machine draws on its map, with its colours
+    for pid, label in [(host, "hote")] + [(c, f"client {i + 1}") for i, c in enumerate(clis)]:
+        t = cmd(pid, "mapscene carte")[1]
+        k = kv(t)
+        drawn = items(t, 1)
+        cols = {}
+        for d in drawn:
+            cols.setdefault(d.get("owner"), set()).add(d.get("col"))
+        distinct = len({next(iter(v)) for v in cols.values()}) == len(cols) and all(len(v) == 1 for v in cols.values())
+        check(f"carte : {label} dessine tous les persos", k.get("live") == "1" and len(drawn) == len(hchars), f"{len(drawn)} / {len(hchars)}")
+        check(f"carte : {label} une couleur par joueur", distinct, cols)
+    # the game's own projection (MapScreen::worldToMapCoords) against ours
+    if hchars:
+        x, z = float(hchars[0]["x"]), float(hchars[0]["z"])
+        ok, t = cmd(clis[0], f"mapproj {x} {z}")
+        m = _re.search(r"game=(-?\d+),(-?\d+) ours=(-?[\d.]+),(-?[\d.]+)", t)
+        good = bool(m) and abs(int(m.group(1)) - float(m.group(3))) <= 1.5 and abs(int(m.group(2)) - float(m.group(4))) <= 1.5
+        check("carte : projection du jeu = la notre", good, t)
+    # minimap and heads
+    for pid, label in [(host, "hote")] + [(c, f"client {i + 1}") for i, c in enumerate(clis)]:
+        t = cmd(pid, "mapscene minicarte")[1]
+        k = kv(t)
+        dots = items(t, 1)
+        mine = [d for d in dots if d.get("owner") == k.get("me")]
+        check(f"minicarte : {label} centree sur son perso, ses persos dedans", k.get("centre", "0").startswith("1") and len(mine) >= 1, t[:200])
+        t = cmd(pid, "mapscene tetes")[1]
+        heads = items(t, 1)
+        check(f"tetes : {label} repere au-dessus des persos des joueurs, a leur couleur", len(heads) >= 1 and all(h.get("col") for h in heads), t[:300])
+        t = cmd(pid, "mapscene barre")[1]
+        log(f"{label} squad bar frames:", t[:300])
+        frames = items(t, 1)
+        check(f"barre : {label} cadres aux couleurs des joueurs seulement", all(f.get("owner") in owners for f in frames), t[:200])
+    # pings: client 1 pings, the host and client 2 see it in its name
+    px, pz = (float(hchars[0]["x"]) + 50, float(hchars[0]["z"]) + 50) if hchars else (0.0, 0.0)
+    r1 = cmd(clis[0], f"ping {px} {pz} 1")
+    r2 = cmd(clis[0], f"ping {px + 5} {pz} 0")
+    check("ping : place par le client", r1[0], r1)
+    check("ping : un seul toutes les 0,5 s", not r2[0], r2)
+    time.sleep(2)
+    me1 = ids[clis[0]]
+    for pid, label in [(host, "hote")] + [(c, f"client {i + 1}") for i, c in enumerate(clis)]:
+        t = cmd(pid, "pings")[1]
+        got = [p for p in items(" ;" + t.replace(" id=", " ping:id="), 1) if p.get("owner") == me1 and p.get("kind") == "1"]
+        near = [p for p in got if abs(float(p["x"]) - px) < 1 and abs(float(p["z"]) - pz) < 1]
+        check(f"ping : visible chez {label}, au nom du client 1", len(near) == 1, t[:200])
+    t = cmd(clis[-1], "mapscene pings")[1]
+    check("ping : dessine chez l'autre client", f"owner={me1}" in t, t[:200])
+    for n in range(6):
+        time.sleep(0.6)
+        cmd(clis[0], f"ping {px + 10 * n} {pz} 0")
+    time.sleep(2)
+    t = cmd(host, "pings")[1]
+    mine = t.count(f":owner={me1}:")
+    check("ping : 5 au plus par joueur", mine == 5, t[:300])
+    time.sleep(11)
+    t = cmd(host, "pings")[1]
+    check("ping : disparait apres 10 s", "n=0" in t, t[:120])
+    summary()
+
+
 def exp_admin(host, cli):
     """Host console admin commands: money, xp, heal, god (checked on the host and the client)."""
     time.sleep(6)
@@ -3956,6 +4078,10 @@ def main():
     j4.add_argument("--save", default="kctest_base")
     j4.add_argument("--clients", type=int, default=3)
     j4.add_argument("--keep", action="store_true")
+    mp = sub.add_parser("map", help="map markers, minimap, head markers, squad bar frames, pings (1 host + 2 clients)")
+    mp.add_argument("--save", default="kctest_base")
+    mp.add_argument("--clients", type=int, default=2)
+    mp.add_argument("--keep", action="store_true")
     fo = sub.add_parser("four", help="1 host + 3 clients")
     fo.add_argument("--save", default="kctest_base")
     fo.add_argument("--clients", type=int, default=3)
@@ -4011,6 +4137,15 @@ def main():
                 exp_stress4(host, clis, ids, a.minutes, a.hop, a.seed)
             else:
                 exp_join4(host, clis, ids)
+        finally:
+            if not a.keep:
+                kill_launched()
+        return
+    if a.what == "map":
+        host, clis = setup_many(a.save, max(2, a.clients))
+        arrange_grid([host] + clis)
+        try:
+            exp_map(host, clis)
         finally:
             if not a.keep:
                 kill_launched()

@@ -44,14 +44,19 @@ struct OverlayModel {
     std::string dialogName, dialogText;
     std::vector<std::string> dialogReplies;
     bool dialogWaiting = false;
+    // "Affichage" settings (map markers, minimap, pings...), shown in the Multijoueur window
+    bool optMap = true, optHeads = true, optPortraits = true, optMinimap = true, optMinimapRotate = false, optPings = true;
+    int optMinimapCorner = 1;
 };
 
 // What the player did in our windows; carried out on the game thread.
 struct OverlayAction {
-    enum class Kind { Host, Join, Leave, Command, DialogAnswer, EditCharacter, QuitGame } kind = Kind::Command;
+    enum class Kind { Host, Join, Leave, Command, DialogAnswer, EditCharacter, QuitGame, Ping, SetOption } kind = Kind::Command;
     std::string name, address, text;
     uint16_t port = 0;
-    int index = 0;                      // DialogAnswer
+    int index = 0;                      // DialogAnswer; Ping: kc::PingKind
+    float x = 0, y = 0, z = 0;          // Ping: where
+    float value = 0;                    // SetOption: text = the option's key ([ui] in KenshiCoop.ini)
 };
 
 bool OverlayInstall(std::string* err);      // hooks IDXGISwapChain::Present / ResizeBuffers, DirectInput reads
@@ -61,6 +66,11 @@ void OverlayToggleMultiplayer();
 void OverlayToggleConsole();
 void OverlayOpenMultiplayer();
 bool OverlayTyping();                       // a text field of ours has the keyboard
+// The map layer (plugin/map_view.h): game thread -> render thread, every frame.
+struct MapScene;
+void OverlayPublishScene(MapScene scene);
+void OverlayScreenSize(float& w, float& h);  // the back buffer, as last drawn
+void OverlayPushAction(OverlayAction a);     // from the overlay's own layers
 void OverlayShutdown();
 
 } // namespace kcp

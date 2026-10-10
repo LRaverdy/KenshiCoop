@@ -168,6 +168,7 @@ void Session::Leave() {
     floorSent_.clear(); floors_.clear(); nextFloors_ = nextFloorsFull_ = 0; floorPlayers_ = 0;   // fix G6
     ResetJobs();   // fix G5
     captiveSent_.clear(); captives_.clear(); captivesDirty_.clear();   // lot D: prisons
+    ResetMap();   // map markers and pings
     haveMoneyBase_ = false;
     unsentSpend_ = 0;
     ResetRanged();   // lot C
@@ -242,6 +243,7 @@ void Session::HostTick(double now, bool live) {
     HostTrades(now);
     HostDoors(now);   // lot A
     HostCaptives(now);   // lot D: prisons
+    HostMapMarkers(now);   // map markers and pings
     HostRanged(now);   // lot C
     HostBuildings(now);
     HostFloors(now);   // fix G6
@@ -1533,6 +1535,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         break;
     }
     case Msg::DoorRequest: HostDoorPacket(pl->id, r); break;   // lot A
+    case Msg::MapPing: if (pl && pl->inGame) HostPingPacket(pl->id, r); break;   // map pings
     default: break;  // host ignores host-bound-only messages from clients
     }
 }
@@ -2238,6 +2241,7 @@ void Session::ClientTick(double now, bool live) {
     ClientFactionsTick(now);   // lot B
     ClientDoors(now);   // lot A
     ClientCaptives(now);   // lot D: prisons
+    PrunePings(now);   // map pings
     ClientRanged(now);   // lot C
     ClientBuildings(now);
     ClientJobs(now);   // fix G5
@@ -2507,6 +2511,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
         break;
     }
     case Msg::Captives: OnCaptives(r); break;   // lot D: prisons
+    case Msg::MapMarkers: case Msg::MapPing: ClientMapPacket(type, r); break;   // map markers and pings
     case Msg::BuildPlace:
     case Msg::BuildState:
     case Msg::BuildRemove:

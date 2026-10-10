@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 32;
+constexpr uint16_t kProtocolVersion = 33;   // 33: map markers and pings
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -93,6 +93,9 @@ enum class Msg : uint8_t {
     Floors = 71,          // S->C  the floor characters are on inside buildings (it drives the floor shown)
     // ---- fix G5
     JobList = 68,         // S->C  the job list (Tâches panel) of the players' characters, as the host has it
+    // ---- map: markers and pings (80-81)
+    MapMarkers = 80,      // S->C  every player character's position and the hostile squads near the players (a few times a second)
+    MapPing = 81,         // both  a marker on a spot (client: asks the host; host: shows it to everyone)
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -971,5 +974,64 @@ void Encode(Writer& w, const FactionsMsg& m);
 bool Decode(Reader& r, FactionsMsg& m);
 void Encode(Writer& w, const BountiesMsg& m);
 bool Decode(Reader& r, BountiesMsg& m);
+
+// ---- map: markers and pings (common/src/protocol_map.cpp)
+// What every player's world map, minimap and markers above the heads show, as the host sees it:
+// the players, every squad character (with its owner), and the hostile squads near them.
+struct MapPlayer {
+    uint8_t id = 0;
+    std::string name;
+    bool operator==(const MapPlayer&) const = default;
+};
+enum MapCharFlags : uint8_t {
+    kMapAvatar = 1,     // the player's own character (not a recruit): marker above its head, squad bar frame
+    kMapDown = 2,       // knocked out
+    kMapDead = 4,
+};
+struct MapChar {
+    uint32_t netId = 0;
+    uint8_t owner = 0;           // player id
+    uint8_t flags = 0;           // MapCharFlags
+    std::string name;
+    Vec3 pos;
+    bool operator==(const MapChar& o) const {
+        return netId == o.netId && owner == o.owner && flags == o.flags && name == o.name && pos.x == o.pos.x && pos.y == o.pos.y && pos.z == o.pos.z;
+    }
+};
+enum class ThreatKind : uint8_t { Near = 1, Attacking = 2, Raid = 3 };
+struct MapThreat {
+    Vec3 pos;                    // the squad's centre
+    uint8_t count = 0;           // its characters (capped at 255)
+    ThreatKind kind = ThreatKind::Near;
+    std::string label;           // its faction, as players read it
+    bool operator==(const MapThreat& o) const {
+        return pos.x == o.pos.x && pos.y == o.pos.y && pos.z == o.pos.z && count == o.count && kind == o.kind && label == o.label;
+    }
+};
+struct MapMarkersMsg {
+    std::vector<MapPlayer> players;
+    std::vector<MapChar> chars;
+    std::vector<MapThreat> threats;
+    bool operator==(const MapMarkersMsg&) const = default;
+};
+constexpr uint32_t kMaxMapPlayers = 16, kMaxMapChars = 128, kMaxMapThreats = 32;
+constexpr size_t kMaxMapLabelLen = 48;
+void Encode(Writer& w, const MapMarkersMsg& m);
+bool Decode(Reader& r, MapMarkersMsg& m);
+
+// A ping: a marker a player puts on a spot. It changes nothing in the game world.
+enum class PingKind : uint8_t { Go = 0, Danger = 1, Loot = 2, Help = 3 };
+constexpr uint8_t kPingKinds = 4;
+struct MapPingMsg {
+    uint32_t id = 0;             // host: unique per session (client request: 0)
+    uint8_t owner = 0;           // host: the player who pinged (client request: ignored)
+    PingKind kind = PingKind::Go;
+    Vec3 pos;
+    bool operator==(const MapPingMsg& o) const {
+        return id == o.id && owner == o.owner && kind == o.kind && pos.x == o.pos.x && pos.y == o.pos.y && pos.z == o.pos.z;
+    }
+};
+void Encode(Writer& w, const MapPingMsg& m);
+bool Decode(Reader& r, MapPingMsg& m);
 
 } // namespace kc

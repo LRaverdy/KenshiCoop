@@ -14,6 +14,7 @@
 
 #include "debug.h"
 #include "hooks.h"
+#include "map.h"
 #include "kc/session.h"
 #include "kenshi.h"
 #include "overlay.h"
@@ -79,7 +80,7 @@ struct Hotkey {
     bool down = false;
 };
 Hotkey g_hkHost{'H'}, g_hkJoin{'J'}, g_hkLeave{'L'}, g_hkGive{'G'}, g_hkOverlay{'O'}, g_hkDiag{'D'}, g_hkMultiplayer{'M'}, g_hkConsoleWindow{'W'},
-    g_hkConsole{'K'};
+    g_hkConsole{'K'}, g_hkMinimap{'N'};
 
 bool Pressed(Hotkey& k, bool modifiers) {
     const bool now = modifiers && KeyDown(k.vk);
@@ -162,6 +163,10 @@ void HandleHotkeys() {
     if (Pressed(g_hkGive, mods)) GiveSelectedToNextPlayer();
     if (Pressed(g_hkDiag, mods)) { DumpDiagnostics("hotkey"); Toast("Diagnostic écrit dans KenshiCoop.log"); }
     if (Pressed(g_hkConsoleWindow, mods)) HostConsoleShow(!HostConsoleVisible());
+    if (Pressed(g_hkMinimap, mods)) {
+        SetUiOption(g_cfg, g_iniPath, "minimap", g_cfg.minimap ? 0.0f : 1.0f);
+        Toast(g_cfg.minimap ? "Minicarte affichée." : "Minicarte masquée (Ctrl+Shift+N pour la revoir).", 2.0);
+    }
 }
 
 // ---- the Multijoueur window and the console (French: what the players read)
@@ -451,6 +456,14 @@ void HandleOverlayActions() {
         case OverlayAction::Kind::DialogAnswer:
             g_session->AnswerDialog(a.index);
             break;
+        case OverlayAction::Kind::Ping:
+            if (!g_cfg.pings) break;
+            if (!g_session->isHost() && !g_session->isClient()) { Toast("Les pings se partagent en partie multijoueur.", 2.0); break; }
+            g_session->PlaceMapPing({a.x, a.y, a.z}, kc::PingKind(std::clamp(a.index, 0, int(kc::kPingKinds) - 1)));
+            break;
+        case OverlayAction::Kind::SetOption:
+            if (SetUiOption(g_cfg, g_iniPath, a.text, a.value)) Log("setting [ui] %s = %g", a.text.c_str(), double(a.value));
+            break;
         }
     }
 }
@@ -527,6 +540,13 @@ void PublishOverlay() {
         m.dialogReplies = d.replies;
         m.dialogWaiting = d.waiting;
     }
+    m.optMap = g_cfg.mapMarkers;
+    m.optHeads = g_cfg.headMarkers;
+    m.optPortraits = g_cfg.portraitColours;
+    m.optMinimap = g_cfg.minimap;
+    m.optMinimapRotate = g_cfg.minimapRotate;
+    m.optMinimapCorner = g_cfg.minimapCorner;
+    m.optPings = g_cfg.pings;
     const double now = NowSeconds();
     while (!g_toasts.empty() && g_toasts.front().second < now) g_toasts.pop_front();
     for (auto& t : g_toasts) m.toasts.push_back(t.first);
@@ -675,6 +695,7 @@ void Tick(bool live) {
     if (live) g_session->CountFrame();
     LogAndConsoleUpkeep();
     g_session->Tick(live);
+    UpdateMapScene(*g_session, *g_world, g_cfg, live);   // map markers, minimap, heads, squad bar, pings
     ResyncUpkeep();
     AfterLeavingHostWorld();
     if (live) g_world->EndFrame();

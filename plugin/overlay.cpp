@@ -17,7 +17,12 @@
 #include <mutex>
 #include <unordered_map>
 
+#include "map_view.h"
+#include "overlay_map.h"
 #include "util.h"
+
+#define GET_X_LPARAM_(lp) ((int)(short)LOWORD(lp))
+#define GET_Y_LPARAM_(lp) ((int)(short)HIWORD(lp))
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -37,6 +42,9 @@ std::mutex g_modelMutex;
 OverlayModel g_model;
 std::mutex g_actionMutex;
 std::vector<OverlayAction> g_actions;
+std::mutex g_sceneMutex;
+MapScene g_scene;                               // the map layer (map_view.h), from the game thread
+std::atomic<float> g_screenW{0}, g_screenH{0};
 
 IDXGISwapChain* g_swap = nullptr;   // the swap chain we initialised on (Kenshi's)
 ID3D11Device* g_device = nullptr;
@@ -75,7 +83,24 @@ void ReleaseRTV() {
     if (g_rtv) { g_rtv->Release(); g_rtv = nullptr; }
 }
 
+// The cursor of a mouse message, in back buffer pixels.
+bool CursorOf(HWND hwnd, UINT msg, LPARAM lp, float& x, float& y) {
+    POINT pt{GET_X_LPARAM_(lp), GET_Y_LPARAM_(lp)};
+    if (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL) ScreenToClient(hwnd, &pt);
+    RECT rc;
+    if (!GetClientRect(hwnd, &rc) || rc.right <= 0 || rc.bottom <= 0) return false;
+    const float bw = g_screenW.load(), bh = g_screenH.load();
+    x = float(pt.x) * (bw > 0 ? bw / float(rc.right) : 1.0f);
+    y = float(pt.y) * (bh > 0 ? bh / float(rc.bottom) : 1.0f);
+    return true;
+}
+
 LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    // the map layer: pings, the minimap's wheel and buttons (not while one of our windows has the mouse)
+    if (g_ready && !(Interactive() && g_wantMouse.load()) && msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) {
+        float x = 0, y = 0;
+        if (CursorOf(hwnd, msg, lp, x, y) && MapOverlayMessage(msg, wp, x, y)) return 0;
+    }
     if (g_ready && Interactive()) {
         std::lock_guard<std::recursive_mutex> lk(g_imguiMutex);
         ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp);
@@ -168,6 +193,34 @@ void DrawDialog(const OverlayModel& m, float w, float h) {
     ImGui::EndDisabled();
     if (m.dialogReplies.empty()) ImGui::TextDisabled("(la conversation continue...)");
     ImGui::End();
+}
+
+// "Affichage": what the map layer shows. Each change is kept in KenshiCoop.ini ([ui]).
+void DrawDisplaySettings(const OverlayModel& m) {
+    ImGui::Separator();
+    if (!ImGui::CollapsingHeader("Affichage (carte, minicarte, repères)")) return;
+    auto option = [](const char* key, float v) {
+        OverlayAction a;
+        a.kind = OverlayAction::Kind::SetOption;
+        a.text = key;
+        a.value = v;
+        PushAction(std::move(a));
+    };
+    auto box = [&](const char* label, const char* key, bool cur, const char* tip) {
+        bool v = cur;
+        if (ImGui::Checkbox(label, &v)) option(key, v ? 1.0f : 0.0f);
+        if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+    };
+    box("Joueurs et ennemis sur la carte (M)", "map_markers", m.optMap, "Tous les persos des joueurs, à leur couleur, et en rouge les escouades hostiles qui nous visent.");
+    box("Repère au-dessus des joueurs", "head_markers", m.optHeads, "Un petit curseur à la couleur du joueur, avec son nom.");
+    box("Couleur des joueurs dans la barre d'escouade", "portrait_colours", m.optPortraits, "Le cadre du portrait des persos des joueurs ; les recrues gardent le cadre normal.");
+    box("Minicarte (Ctrl+Shift+N)", "minimap", m.optMinimap, nullptr);
+    box("Minicarte tournante (suit la caméra)", "minimap_rotate", m.optMinimapRotate, "Sinon le nord reste en haut.");
+    static const char* corners[] = {"en haut à gauche", "en haut à droite", "en bas à gauche", "en bas à droite"};
+    int corner = std::clamp(m.optMinimapCorner, 0, 3);
+    ImGui::SetNextItemWidth(180.0f);
+    if (ImGui::Combo("Coin de la minicarte", &corner, corners, 4)) option("minimap_corner", float(corner));
+    box("Pings", "pings", m.optPings, "Clic molette ou Alt+clic sur la carte, la minicarte ou le sol.\nMaj : danger, Ctrl : butin, Maj+Ctrl : à l'aide.");
 }
 
 void DrawMultiplayer(const OverlayModel& m, float w, float h) {
@@ -302,6 +355,7 @@ void DrawMultiplayer(const OverlayModel& m, float w, float h) {
             else { leaveArmedAt = -1e9; PushAction({OverlayAction::Kind::Leave, {}, {}, {}, 0}); }
         }
     }
+    DrawDisplaySettings(m);
     ImGui::End();
     if (!open) g_mpOpen = false;
 }
@@ -353,8 +407,13 @@ void Render(IDXGISwapChain* swap) {
         std::lock_guard<std::mutex> lk(g_modelMutex);
         m = g_model;
     }
+    MapScene scene;
+    {
+        std::lock_guard<std::mutex> lk(g_sceneMutex);
+        scene = g_scene;
+    }
     const bool interactive = Interactive();
-    if (!m.visible && m.toasts.empty() && !interactive) {
+    if (!m.visible && m.toasts.empty() && !interactive && !scene.live) {
         g_wantKeyboard = false;
         g_wantMouse = false;
         return;
@@ -378,7 +437,10 @@ void Render(IDXGISwapChain* swap) {
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
     io.DisplaySize = ImVec2(float(desc.BufferDesc.Width), float(desc.BufferDesc.Height));
+    g_screenW = io.DisplaySize.x;
+    g_screenH = io.DisplaySize.y;
     ImGui::NewFrame();
+    MapOverlayDraw(scene, io.DisplaySize.x, io.DisplaySize.y, g_device);
     DrawStatus(m, io.DisplaySize.x, io.DisplaySize.y);
     if (g_mpOpen) DrawMultiplayer(m, io.DisplaySize.x, io.DisplaySize.y);
     if (g_consoleOpen) DrawConsole(m, io.DisplaySize.x, io.DisplaySize.y);
@@ -457,7 +519,7 @@ void FilterState(void* dev, DWORD size, void* data) {
     const BYTE type = DeviceType(dev);
     if (type == DI8DEVTYPE_KEYBOARD && g_wantKeyboard) {
         std::memset(data, 0, size);
-    } else if (type == DI8DEVTYPE_MOUSE && g_wantMouse && size >= sizeof(DIMOUSESTATE)) {
+    } else if (type == DI8DEVTYPE_MOUSE && (g_wantMouse || MapOverlayHoldsMouse()) && size >= sizeof(DIMOUSESTATE)) {
         auto* s = static_cast<DIMOUSESTATE*>(data);
         s->lZ = 0;
         std::memset(static_cast<BYTE*>(data) + offsetof(DIMOUSESTATE, rgbButtons), 0, size - offsetof(DIMOUSESTATE, rgbButtons));
@@ -468,7 +530,7 @@ void FilterData(void* dev, DIDEVICEOBJECTDATA* data, DWORD* count) {
     if (!data || !count || *count == 0) return;
     const BYTE type = DeviceType(dev);
     const bool keys = type == DI8DEVTYPE_KEYBOARD && g_wantKeyboard;
-    const bool mouse = type == DI8DEVTYPE_MOUSE && g_wantMouse;
+    const bool mouse = type == DI8DEVTYPE_MOUSE && (g_wantMouse || MapOverlayHoldsMouse());
     if (!keys && !mouse) return;
     DWORD kept = 0;
     for (DWORD i = 0; i < *count; ++i) {
@@ -629,6 +691,18 @@ void OverlayOpenMultiplayer() {
 
 bool OverlayTyping() { return g_wantKeyboard.load(); }
 
+void OverlayPublishScene(MapScene scene) {
+    std::lock_guard<std::mutex> lk(g_sceneMutex);
+    g_scene = std::move(scene);
+}
+
+void OverlayScreenSize(float& w, float& h) {
+    w = g_screenW.load();
+    h = g_screenH.load();
+}
+
+void OverlayPushAction(OverlayAction a) { PushAction(std::move(a)); }
+
 void OverlayShutdown() {
     g_mpOpen = false;
     g_consoleOpen = false;
@@ -640,6 +714,7 @@ void OverlayShutdown() {
         if (d.stateTarget && d.o_state) MH_DisableHook(d.stateTarget);
         if (d.dataTarget && d.o_data) MH_DisableHook(d.dataTarget);
     }
+    MapOverlayRelease();
     if (g_hwnd && g_oldWndProc) SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(g_oldWndProc));
 }
 
