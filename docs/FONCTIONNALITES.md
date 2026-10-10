@@ -460,15 +460,31 @@ la fenêtre du client.
     représente aucun autre objet de l'hôte (sa copie de la sauvegarde) est adopté au lieu d'être créé
     en double. Si la zone du client charge après coup sa propre copie au même endroit, la copie créée
     est retirée (toutes les 2 s) ;
-  - un client qui lâche un objet (son perso, sa bête, un coffre qu'il a ouvert) le demande à l'hôte ;
-    pour un coffre, c'est son perso le plus proche du coffre qui le pose. L'hôte refuse depuis le
-    perso d'un autre joueur.
+  - un client qui lâche un objet (son perso, sa bête, le sac à dos qu'un de ses persos porte, un
+    coffre qu'il a ouvert, un corps) le demande à l'hôte ; pour un coffre ou un corps, c'est son
+    perso le plus proche qui le pose. L'hôte refuse depuis le perso d'un autre joueur ;
+  - **rien ne bouge chez le client pour un dépôt qui ne peut pas partir** : la session publie à
+    chaque instant les inventaires depuis lesquels un dépôt peut être demandé (`SetDropSources`) ;
+    la fenêtre d'inventaire refuse aussitôt les autres (l'objet reste ou revient à sa place, toast
+    « Objet non posé : … Rien n'a bougé. »). Le jeu du client ne pose jamais rien lui-même au sol, ni
+    ne ramasse un objet du monde. Un dépôt refusé plus tard (cas rare) fait revenir tout de suite
+    l'état de l'hôte, avec une note dans le chat ;
+  - un perso est nommé à l'hôte par le handle de l'hôte : une doublure (perso créé par l'hôte, perso
+    d'un joueur revenu après un plantage) ou un perso qui a changé d'escouade a un autre handle chez
+    le client. Le dépôt envoyait le handle local : « the host does not know that inventory » et
+    l'objet disparaissait (partie du 10/10, corrigé) ;
 - Vérifié par les expériences `ground` (objets posés puis ramassés par l'hôte) et `clientpickup`
   (ramassage demandé par un client) ; `grounddrop` (chemin du glisser-déposer : minerai, arme,
   armure, par l'hôte, par le client, les deux à la fois, K.-O. et mort) écrite, pas encore lancée.
   Test unitaire `TestGroundDrops`.
-- 🟡 Limites : un objet lâché depuis un sac à dos par un client passe par le perso qui le porte
-  (comme avant) ; les objets à plus de 30 m de tout joueur ne sont vus que par les crochets.
+- 🟡 Limites : les objets à plus de 30 m de tout joueur ne sont vus que par les crochets. Le
+  refus local (remettre l'objet tenu à la souris à sa place) n'est pas encore vérifié en jeu.
+- Ramassage par un client : l'hôte journalise où l'objet est arrivé (« in the inventory of the
+  character that was sent », ou un autre perso). Il n'annonce plus comme « ramassé » un objet que
+  son jeu vient de créer et donne à un inventaire (stock d'un marchand, équipement d'un PNJ qui
+  apparaît) : seul un objet actif dans le monde ou rangé dans un groupe d'objets compte
+  (`kenshi::ItemPlacedInWorld`). Chez le client, la reconstruction d'un inventaire ne laisse plus le
+  jeu détruire un objet qu'elle ne peut pas poser à la place de l'hôte : il va dans le sac.
 - 🟡 Un objet qui traînait déjà dans la sauvegarde a un autre handle chez chaque joueur : l'hôte le
   retrouve par type et endroit, le plus proche à moins de 40 unités, parmi **tous** les objets hors
   inventaire (marchandises de magasin, objets de décor de la ville, que le jeu range dans un groupe

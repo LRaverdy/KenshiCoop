@@ -56,6 +56,7 @@ bool SameStack(const kc::ItemState& a, const kc::ItemState& b) { return a.sameKi
 void KenshiWorld::ResetGround() {
     std::lock_guard<std::mutex> lk(groundMutex_);
     localDrops_.clear();
+    dropSources_.clear();
     groundAlias_.clear();
     groundMade_.clear();
     groundTrack_.clear();
@@ -229,6 +230,37 @@ void KenshiWorld::QueueLocalDrop(void* holder, void* item) {
     if (localDrops_.size() < 256) localDrops_.emplace_back(holder, s);
 }
 
+void KenshiWorld::SetDropSources(const std::vector<kc::Handle>& handles) { dropSources_ = handles; }
+
+bool KenshiWorld::DropSourceAllowed(const HookView& v, void* holder) {
+    if (!v.active || !v.client || !holder) return false;
+    kc::Handle h;
+    const bool named = kenshi::IsCharacter(holder) ? kenshi::GetHandle(static_cast<kenshi::Character*>(holder), h) : kenshi::ObjectHandle(holder, h);
+    return named && h.valid() && v.dropSources.count(h) != 0;
+}
+
+void KenshiWorld::ClientInventoryDrop(void* inv, void* holder, void* item) {
+    auto v = View();
+    kc::ItemState s;
+    kenshi::DescribeInventoryItem(item, s);
+    if (DropSourceAllowed(*v, holder)) {
+        QueueLocalDrop(holder, item);
+        kenshi::InventoryRemove(inv, item);   // as the game would have it; the host's inventory comes back anyway
+        return;
+    }
+    // The host would never get it: nothing moves here. The drag may already have taken the item out
+    // of its inventory (it is on the mouse): it goes back where it was.
+    const bool back = kenshi::KeepInInventory(inv, item);
+    Log("ground: drop of %s x%d refused here: the host cannot be asked for it (%s inventory, not one of ours or unknown to the host)%s",
+        s.templateSid.c_str(), s.quantity, kenshi::IsCharacter(holder) ? "a character's" : kenshi::IsItemObject(holder) ? "a backpack's" : "a building's",
+        back ? "; the item stays in it" : "; COULD NOT PUT THE ITEM BACK");
+    const double now = NowSeconds();
+    if (now - dropRefusedToastAt_ > 2.0) {
+        dropRefusedToastAt_ = now;
+        Toast("Objet non posé : cette action ne peut pas partir chez l'hôte (inventaire qu'il ne connaît pas, ou aucun de tes persos à côté). Rien n'a bougé.");
+    }
+}
+
 void KenshiWorld::TakeLocalDrops(std::vector<std::pair<kc::Handle, kc::ItemState>>& out) {
     out.clear();
     std::vector<std::pair<void*, kc::ItemState>> raw;
@@ -238,8 +270,12 @@ void KenshiWorld::TakeLocalDrops(std::vector<std::pair<kc::Handle, kc::ItemState
     }
     for (auto& [holder, s] : raw) {
         kc::Handle h;
-        const bool ok = kenshi::IsCharacter(holder) ? kenshi::GetHandle(static_cast<kenshi::Character*>(holder), h) : kenshi::ObjectHandle(holder, h);
-        if (ok && h.valid()) out.emplace_back(h, std::move(s));
+        const bool character = kenshi::IsCharacter(holder);
+        const bool ok = character ? kenshi::GetHandle(static_cast<kenshi::Character*>(holder), h) : kenshi::ObjectHandle(holder, h);
+        // a character is known to the session by the host's handle: a stand-in (a character the host
+        // made, a player's character after a rejoin) or a character that changed squad has another one
+        // here (v0.3.0 session: "the host does not know that inventory" for the player's own character)
+        if (ok && h.valid()) out.emplace_back(character ? HostHandleOf(h) : h, std::move(s));
         else Log("ground: a drop from an inventory we cannot name was not sent (%s)", s.templateSid.c_str());
     }
 }

@@ -546,7 +546,12 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
    (tenu à la souris) laisse 10 s avant le retour à l'état de l'hôte.
 5. L'hôte vérifie les droits, fait passer le test de vol si l'objet sort d'un contenant vers un
    personnage, déplace l'objet (`MoveInventoryItem`), puis renvoie les deux inventaires.
-6. Un objet jeté par le client devient `InvOp Drop`.
+6. Un objet jeté par le client devient `InvOp Drop`. Toutes les 0,2 s, la session du client
+   publie au monde les inventaires depuis lesquels un dépôt peut partir (`IWorld::SetDropSources` :
+   ses persos par le handle de l'hôte, les sacs qu'ils portent, un coffre ouvert ou un corps avec un
+   de ses persos à côté) ; le crochet d'`Inventory::dropItem` refuse aussitôt tout autre dépôt (rien
+   ne bouge, toast). `TakeLocalDrops` rend le handle de l'hôte d'une doublure (`HostHandleOf`),
+   comme les ordres. Un dépôt refusé plus tard remet l'état de l'hôte tout de suite (`RefusedDrop`).
 
 ### Factions et primes (`common/src/session_factions.cpp`, `plugin/factions.cpp`)
 1. Chaque seconde, l'hôte lit les relations de la faction du joueur (`IWorld::ReadFactions`) et les

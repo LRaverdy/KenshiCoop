@@ -27,6 +27,7 @@ struct HookView {
     std::unordered_set<kc::Handle, HandleHash> controllable;  // handles this machine may command
     std::unordered_set<kc::Handle, HandleHash> shared;        // nobody's characters: their AI settings are anyone's
     std::unordered_set<const void*> replicated;    // client: characters driven by the host's state
+    std::unordered_set<kc::Handle, HandleHash> dropSources;   // client: local handles of the inventories a drop can be asked from
     std::unordered_map<const void*, kc::Vec3> facing;   // client: CharMovement -> where the host's character faces
     struct AnimTarget {
         std::vector<kc::AnimEntry> anims;
@@ -323,7 +324,9 @@ public:
         return false;
     }
     void UpdatePendingPickups();   // host: characters walking to an item a client asked them to take
+    std::string PickedItemWhere(kenshi::Character* c, const kc::Handle& itemHandle);
     void TakeLocalDrops(std::vector<std::pair<kc::Handle, kc::ItemState>>& out) override;
+    void SetDropSources(const std::vector<kc::Handle>& handles) override;
     // Conversations (hooks, any thread for NoteSay; the game thread for the window ones). The window
     // ones return true when the conversation is another player's (the host's window stays shut).
     void NoteSay(void* dialogue, const std::string& text);
@@ -346,6 +349,13 @@ public:
     std::string lastSay;
     // Client: the player dropped it from that character or that building's inventory (any thread).
     void QueueLocalDrop(void* holder, void* item);
+    // Client: an item released over the world from an inventory window (Inventory::dropItem). Asked
+    // of the host when that inventory is one it can be asked from (HookView::dropSources), the item
+    // leaving our inventory as the game would have it; refused otherwise, with a toast: the item
+    // stays (or is put back) where it was, nothing is dropped here. Never the game's own drop.
+    void ClientInventoryDrop(void* inv, void* holder, void* item);
+    // Client: may a drop from this holder be asked of the host? (game thread, the published view)
+    static bool DropSourceAllowed(const HookView& v, void* holder);
     // Client: the local player wants `looter` (one of its characters) to loot `target`, a knocked-out
     // or dead character. It walks there through the host; the loot window opens once it is close.
     void RequestLoot(const kc::Handle& looter, kenshi::Character* target);
@@ -502,6 +512,8 @@ private:   // first few lifecycle events (tests)
     std::vector<kc::GroundEvent> groundOut_;                                // host: not sent yet
     std::unordered_map<kc::Handle, kc::Handle, kc::HandleHash> groundAlias_;   // client: host item -> our copy
     std::vector<std::pair<void*, kc::ItemState>> localDrops_;   // client, under groundMutex_
+    std::vector<kc::Handle> dropSources_;                       // client: from the session (its handles), published in the view
+    double dropRefusedToastAt_ = -1e9;
     // Host: every item lying near a player's character, as last seen (plugin/ground.cpp). An item
     // that turns up where a character already stood watching (not one carried into view by a walk or
     // a zone loading) was dropped by some path no hook saw: it is announced; one that leaves the

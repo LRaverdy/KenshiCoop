@@ -875,16 +875,21 @@ void hk_pickup(void* pi, void* item) {
     w->QueueLocalOrder(best, c);
 }
 // Items on the ground belong to the host's world: its pickups and drops are replayed on clients,
-// whose own (for host-driven characters) are refused.
+// whose own are refused (any character's: an item taken here only would sit in an inventory the
+// host does not have, and the next sync would delete it). An item the game just made, never out
+// there, is no pickup: given as usual.
 bool hk_giveItem(void* chr, void* item, bool dropOnFail, bool destroyOnFail) {
     if (!item || !kenshi::ItemLoose(item)) return o_giveItem(chr, item, dropOnFail, destroyOnFail);   // inventory to inventory
     if (KenshiWorld::ClientActive()) {
-        if (!g_hostCall && KenshiWorld::View()->replicated.count(chr)) return false;
+        if (!g_hostCall && (KenshiWorld::View()->replicated.count(chr) || kenshi::ItemPlacedInWorld(item))) return false;
         return o_giveItem(chr, item, dropOnFail, destroyOnFail);
     }
     kc::GroundEvent e;
     e.kind = kc::GroundKind::PickedUp;
-    const bool known = kenshi::DescribeGroundItem(item, e.item, e.state, e.pos);
+    // Only an item that was out there is a pickup: one the game just made (a merchant's restock, a new
+    // NPC's gear) is loose too until this give, and was announced to clients that never had it (v0.3.0
+    // session: 8624 "host picked up item ...: we do not have it", in bursts of a squad's gear).
+    const bool known = kenshi::ItemPlacedInWorld(item) && kenshi::DescribeGroundItem(item, e.item, e.state, e.pos);
     const bool ok = o_giveItem(chr, item, dropOnFail, destroyOnFail);
     if (ok && known && KenshiWorld::View()->active)
         if (KenshiWorld* w = TheWorld()) w->NoteGround(e);
@@ -893,9 +898,17 @@ bool hk_giveItem(void* chr, void* item, bool dropOnFail, bool destroyOnFail) {
 // A character's own drop (the game's: a full inventory, the AI; the inventory window's, through
 // Inventory::dropItem below). Humans and pack animals each have their own.
 void DropItemCommon(DropItemFn orig, void* chr, void* item) {
-    if (KenshiWorld::ClientActive() && !g_hostCall && KenshiWorld::View()->replicated.count(chr)) {
-        // the player dropped it from one of their characters: the host does it (and everyone sees it)
-        if (KenshiWorld* w = TheWorld(); w && item && kenshi::IsCharacter(chr)) w->QueueLocalDrop(chr, item);
+    if (KenshiWorld::ClientActive() && !g_hostCall) {
+        // Never dropped here: the host's world has the ground. From one of the player's characters the
+        // host does it (and everyone sees it); from any other, nothing happens (the item stays).
+        auto v = KenshiWorld::View();
+        KenshiWorld* w = TheWorld();
+        if (w && item && kenshi::IsCharacter(chr) && KenshiWorld::DropSourceAllowed(*v, chr)) w->QueueLocalDrop(chr, item);
+        else if (item) {
+            kc::ItemState st;
+            kenshi::DescribeInventoryItem(item, st);
+            Log("ground: a drop of %s by a character we cannot ask the host for was not done here", st.templateSid.c_str());
+        }
         return;
     }
     orig(chr, item);
@@ -911,14 +924,12 @@ void hk_dropItemAnimal(void* chr, void* item) { DropItemCommon(o_dropItemAnimal,
 // game would have it (the host's inventory comes back anyway).
 void hk_invDrop(void* inv, void* item) {
     if (KenshiWorld::ClientActive() && !g_hostCall && item) {
-        void* holder = kenshi::InventoryCallback(inv);
-        auto v = KenshiWorld::View();
-        const bool character = kenshi::IsCharacter(holder);
-        if (holder && v->active && ((character && v->replicated.count(holder)) || (!character && !kenshi::IsItemObject(holder)))) {
-            if (KenshiWorld* w = TheWorld()) w->QueueLocalDrop(holder, item);
-            kenshi::InventoryRemove(inv, item);
-            return;
-        }
+        // Asked of the host when it can be (one of our characters, the backpack one of them wears, a
+        // chest we have open, a body with one of ours by it), refused at once otherwise: never the
+        // game's own drop here, which put the item on our ground only, or lost it (v0.3.0 session).
+        // A backpack is named itself (its own inventory), not through its wearer's dropItem.
+        if (KenshiWorld* w = TheWorld()) w->ClientInventoryDrop(inv, kenshi::InventoryCallback(inv), item);
+        return;
     }
     o_invDrop(inv, item);
     if (!KenshiWorld::ClientActive() && item)

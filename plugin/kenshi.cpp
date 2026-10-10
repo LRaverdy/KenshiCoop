@@ -2341,7 +2341,14 @@ bool RebuildInventory(void* c, const std::vector<kc::ItemState>& items, std::str
         std::string why;
         void* item = CreateItemFromState(s, &why);
         if (!item) { ok = false; if (err) *err = why; continue; }
-        if (!PlaceItem(inv, item, s.section, s.x, s.y, s.quantity, true, true)) { ok = false; if (err) *err = "cannot place " + s.templateSid; }
+        // where the host has it; else anywhere in the bag; only then the game's own add, which destroys
+        // what it cannot store: an item the host has must not simply vanish here (v0.3.0 session:
+        // "cannot place 42243-rebirth.mod", the item then "missing" on two clients)
+        if (PlaceItem(inv, item, s.section, s.x, s.y, s.quantity, false, true)) continue;
+        ok = false;
+        if (err) *err = "cannot place " + s.templateSid + " at " + s.section;
+        if (s.section != "main" && PlaceItem(inv, item, "main", 0, 0, s.quantity, false)) continue;
+        if (!CallAddItem(VSlot(inv, INVV_addItem), inv, item, s.quantity) && err) *err += " (nowhere: lost here)";
     }
     return ok;
 }
@@ -2391,6 +2398,26 @@ void* ItemAt(void* inv, const std::string& section, int x, int y, void* except) 
     return nullptr;
 }
 } // namespace
+
+bool KeepInInventory(void* inventory, void* item) {
+    if (!inventory || !item) return false;
+    for (void* it : InventoryItems(inventory))
+        if (it == item) return true;   // never left it
+    std::string sec;
+    int x = 0, y = 0, q = 1;
+    ItemPlace(item, sec, x, y);
+    Rd(item, IT_quantity, q);
+    if (!sec.empty() && PlaceItem(inventory, item, sec, x, y, q, false)) return true;
+    return sec != "main" && PlaceItem(inventory, item, "main", 0, 0, q, false);
+}
+
+bool InventoryHolds(void* holder, void* item) {
+    void* inv = holder && item ? InventoryOf(holder) : nullptr;
+    if (!inv) return false;
+    for (void* it : InventoryItems(inv))
+        if (it == item) return true;
+    return false;
+}
 
 bool MoveInventoryItem(void* from, void* to, const kc::InvOp& op, std::string* err) {
     void* src = InventoryOf(from);
@@ -3532,6 +3559,13 @@ bool ItemOnGround(void* item) {
 bool ItemLoose(void* item) {
     uint8_t inInv = 1;
     return item && !IsCharacter(item) && Rd(item, IT_inInventoryFlag, inInv) && inInv == 0;
+}
+
+bool ItemPlacedInWorld(void* item) {
+    constexpr uintptr_t kActive = 0x190;   // IT_active below: set by activate, cleared by deactivate
+    uint8_t active = 0;
+    void* group = nullptr;
+    return ItemLoose(item) && ((Rd(item, kActive, active) && active != 0) || (Rd(item, IT_itemGroup, group) && group));
 }
 
 bool DescribeGroundItem(void* item, kc::Handle& h, kc::ItemState& s, kc::Vec3& pos) {
