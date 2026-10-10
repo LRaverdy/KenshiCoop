@@ -239,9 +239,34 @@ struct FakeWorld : IWorld {
     }
     int halts = 0;                                     // host: characters halted (their player gone)
     void HaltCharacter(const Handle& h) override { (void)h; ++halts; }
+    // actor safety: what each order subject is (serial -> kc::TargetFlags), orders run, refusal
+    std::map<uint32_t, uint32_t> subjectFlags;
+    int tasksRun = 0;
+    std::vector<uint32_t> orderedSerials;   // every character an order ran on
+    std::string refusal;
+    ResultReason refusalReason = ResultReason::None;
+    std::string TakeOrderRefusal(ResultReason& r) override {
+        r = refusal.empty() ? ResultReason::None : refusalReason;
+        return std::exchange(refusal, std::string{});
+    }
     bool Order(const Handle& h, const Command& c) override {
         auto it = chars.find(h.serial);
         if (it == chars.end()) return false;
+        if (c.kind == CommandKind::Task) {   // as the plugin does: the subject checked against the task
+            uint32_t f = 0;
+            if (c.subject.valid()) {
+                f = kTgtNamed;
+                if (auto sf = subjectFlags.find(c.subject.serial); sf != subjectFlags.end()) f = sf->second | kTgtNamed | kTgtFound;
+                if (c.subject.serial == h.serial) f |= kTgtSelf;
+            }
+            if (!TaskTargetAllowed(c.via, c.task, f, nullptr)) {
+                refusal = "Action refusée : cet ordre ne s'applique pas à cette cible.";
+                refusalReason = ResultReason::WrongTarget;
+                return false;
+            }
+            ++tasksRun;
+        }
+        orderedSerials.push_back(h.serial);
         if (c.kind == CommandKind::MoveTo) it->second.dest = c.pos;
         else it->second.dest = it->second.pos;
         return true;
@@ -2124,6 +2149,237 @@ static void TestRanged() {   // lot C
     CHECK(cw.turretsApplied.size() <= n + 1);   // at most the 2 s refresh, not one every 0.2 s
 }
 
+// ---------------------------------------------------------------- actor safety
+// What every task accepts as its subject: the table the host checks before the game's order
+// functions get an order (a BUILD order aimed at an NPC crashed the host in Character::addJob).
+static void TestTaskTargets() {
+    std::printf("actor safety: every task id is checked against what its subject is\n");
+    struct Kind { const char* name; uint32_t f; };
+    const uint32_t F = kTgtNamed | kTgtFound;
+    const Kind kinds[] = {
+        {"none", 0},
+        {"self", F | kTgtCharacter | kTgtSelf | kTgtConscious | kTgtSquad},
+        {"npc standing", F | kTgtCharacter | kTgtConscious},
+        {"npc down", F | kTgtCharacter | kTgtDown},
+        {"npc dead", F | kTgtCharacter | kTgtDead | kTgtDown},
+        {"squad mate standing", F | kTgtCharacter | kTgtConscious | kTgtSquad},
+        {"item", F | kTgtItem},
+        {"container", F | kTgtContainer | kTgtBuilding},
+        {"site of ours", F | kTgtBuilding | kTgtUnfinished | kTgtOurs},
+        {"finished building of ours", F | kTgtBuilding | kTgtOurs},
+        {"site of an NPC faction", F | kTgtBuilding | kTgtUnfinished},
+        {"bed", F | kTgtBuilding | kTgtBed},
+        {"cage", F | kTgtBuilding | kTgtCage},
+        {"machine", F | kTgtBuilding | kTgtMachine},
+        {"door", F | kTgtBuilding | kTgtDoor},
+        {"stale handle", kTgtNamed},
+    };
+    // the kinds each task accepts, for the orders the UI gives
+    const std::map<int, std::set<std::string>> expect = {
+        {2, {"site of ours"}},
+        {12, {"npc standing"}},
+        {98, {"bed"}}, {258, {"bed"}},
+        {87, {"machine"}},
+        {3, {"item"}},
+        {4, {"npc standing", "npc down", "squad mate standing"}},
+        {26, {"npc standing", "npc down", "npc dead", "squad mate standing", "container"}},
+        {25, {"self", "npc standing", "npc down", "squad mate standing"}},
+        {44, {"npc standing", "npc down", "squad mate standing"}},
+        {225, {"npc down", "npc dead"}},
+        {72, {"door"}},
+        {107, {"cage"}},
+        {6, {"none", "self"}},
+        {96, {"site of ours", "finished building of ours"}},
+    };
+    for (const auto& [task, ok] : expect)
+        for (const auto& k : kinds) {
+            const bool want = ok.count(k.name) > 0;
+            for (TaskVia via : {TaskVia::AddOrder, TaskVia::NewTask, TaskVia::TaskNearest, TaskVia::AddJob}) {
+                std::string why;
+                const bool got = TaskTargetAllowed(via, task, k.f, &why);
+                if (got != want) std::printf("    task %d on %s: %s (%s)\n", task, k.name, got ? "allowed" : "refused", why.c_str());
+                CHECK(got == want);
+                CHECK(got || !why.empty());
+            }
+        }
+    // every task id: a stale or unknown subject never reaches the game; unknown ids are refused
+    std::set<int> known;
+    for (int task = -5; task < 600; ++task) {
+        CHECK(!TaskTargetAllowed(TaskVia::AddJob, task, kTgtNamed, nullptr));
+        CHECK(!TaskTargetAllowed(TaskVia::TaskNearest, task, kTgtNamed, nullptr));
+        bool any = false;
+        for (const auto& k : kinds) any |= TaskTargetAllowed(TaskVia::AddOrder, task, k.f, nullptr);
+        if (any) known.insert(task);
+    }
+    CHECK(!known.count(0) && !known.count(1) && !known.count(55) && !known.count(118) && !known.count(124) && !known.count(599));
+    CHECK(known.count(2) && known.count(12) && known.count(258) && known.count(87));
+    // the squad bar and the Tâches panel act on the actor itself
+    CHECK(TaskTargetAllowed(TaskVia::SetOrder, 13, 0, nullptr) && !TaskTargetAllowed(TaskVia::SetOrder, 18, 0, nullptr) &&
+          !TaskTargetAllowed(TaskVia::SetOrder, -1, 0, nullptr));
+    CHECK(TaskTargetAllowed(TaskVia::RemovePermajob, 87, 0, nullptr) && !TaskTargetAllowed(TaskVia::RemoveJob, -3, 0, nullptr));
+    CHECK(!TaskTargetAllowed(TaskVia(99), 2, kTgtNamed | kTgtFound | kTgtBuilding | kTgtUnfinished | kTgtOurs, nullptr));
+    // the rules table: the requests naming an actor check it; host->client messages have no rule
+    size_t n = 0;
+    const MessageRule* rules = MessageRules(n);
+    CHECK(n >= 10);
+    for (Msg m : {Msg::Command, Msg::ContainerOpen, Msg::Appearance}) CHECK(MessageRuleFor(m) && MessageRuleFor(m)->subject == AuthSubject::OwnCharacter);
+    CHECK(MessageRuleFor(Msg::DialogReply)->subject == AuthSubject::OwnConversation);
+    CHECK(MessageRuleFor(Msg::InvOp)->subject == AuthSubject::Inventory);
+    for (Msg m : {Msg::Snapshot, Msg::Bind, Msg::Welcome, Msg::Result, Msg::Resync}) CHECK(MessageRuleFor(m) == nullptr);
+    for (size_t i = 0; i < n; ++i) CHECK(rules[i].name && *rules[i].name);
+    // Result round trip
+    Result r;
+    r.request = Msg::Command; r.seq = 77; r.netId = 5; r.state = ResultState::Rejected; r.reason = ResultReason::WrongTarget; r.text = "Action refusée";
+    Writer w;
+    Encode(w, r);
+    Reader rd(w.data(), w.size());
+    Result back;
+    CHECK(PeekType(rd) == Msg::Result && Decode(rd, back) && back.seq == 77 && back.netId == 5 && back.state == ResultState::Rejected &&
+          back.reason == ResultReason::WrongTarget && back.text == r.text);
+}
+
+// Forged requests naming a character the sender does not own (the host's, another player's, an NPC,
+// none, unknown) are refused on the host for every request type; the client's own pass; the client
+// refuses to send them in the first place; orders aimed at the wrong kind of target are refused.
+static void TestActorSafety() {
+    std::printf("actor safety: a client never makes a character it does not own act\n");
+    FakeWorld hw, cw, cw2;
+    SetupHost(hw);
+    FakeChar npc; npc.squad = false; npc.pos = {120, 0, 10}; npc.dest = npc.pos;
+    hw.chars[10] = npc;
+    AtMenu(cw);
+    AtMenu(cw2);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port;
+    SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    SessionConfig cc2; cc2.port = hc.port; cc2.name = "D";
+    std::vector<std::string> hostLog;
+    Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
+    Session cli(cw, cc, Now, Quiet("cli"));
+    Session cli2(cw2, cc2, Now, Quiet("cli2"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 4));
+    CHECK(cli2.Join("127.0.0.1", hc.port, &err));
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}, {&cli2, &cw2}};
+    Run(all, 10.0, [&] { return cli2.state() == SessionState::Connected && cli2.entityCount() == 4; });
+    host.Assign(FakeWorld::H(2), cli.localId());    // the client's character
+    host.Assign(FakeWorld::H(3), cli2.localId());   // another player's
+    Run(all, 1.5);
+    std::map<uint32_t, uint32_t> net;   // serial -> netId
+    host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { net[h.serial] = id; });
+    CHECK(net.size() == 4 && net.count(1) && net.count(2) && net.count(3) && net.count(10));
+    const uint8_t me = cli.localId();
+    CHECK(host.CheckActor(me, net[2]) == Session::ActorVerdict::Ok);
+    CHECK(host.CheckActor(me, net[1]) == Session::ActorVerdict::NotOwned);    // the host's
+    CHECK(host.CheckActor(me, net[3]) == Session::ActorVerdict::NotOwned);    // another player's
+    CHECK(host.CheckActor(me, net[10]) == Session::ActorVerdict::NotSquad);   // an NPC
+    CHECK(host.CheckActor(me, 0) == Session::ActorVerdict::Missing);
+    CHECK(host.CheckActor(me, 9999) == Session::ActorVerdict::Unknown);
+    CHECK(host.CheckActor(1, net[1]) == Session::ActorVerdict::NotOwned);     // nobody acts "as the host" from the network
+    auto rejectedFor = [&](uint32_t seq, ResultReason why) {
+        for (const auto& r : cli.results()) if (r.seq == seq && r.state == ResultState::Rejected && r.reason == why) return true;
+        return false;
+    };
+    // 1. forged orders, one per order kind and way of giving it, naming every actor that is not ours
+    const Vec3 far{5000, 0, 5000};
+    uint32_t seq = 1000;
+    uint32_t forged = 0;
+    for (uint32_t actor : {net[1], net[3], net[10], 0u, 9999u}) {
+        for (int kind = 0; kind < 7; ++kind) {
+            Command c;
+            c.seq = ++seq;
+            c.netId = actor;
+            c.pos = far;
+            if (kind == 0) c.kind = CommandKind::MoveTo;
+            else if (kind == 1) c.kind = CommandKind::Stop;
+            else if (kind == 2) { c.kind = CommandKind::PickUp; c.itemSid = "x"; }
+            else if (kind == 3) { c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = 258; }   // sleep in a bed
+            else if (kind == 4) { c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = 12; c.subject = FakeWorld::H(10); }   // talk
+            else if (kind == 5) { c.kind = CommandKind::Task; c.via = TaskVia::SetOrder; c.task = 13; }
+            else { c.kind = CommandKind::SquadMove; }
+            Writer w;
+            Encode(w, c);
+            CHECK(host.InjectForTest(me, w));
+            ++forged;
+        }
+    }
+    hw.orderedSerials.clear();
+    Run(all, 1.5);
+    CHECK(hw.orderedSerials.empty());   // nothing ran, on anyone
+    CHECK(Dist(hw.chars[1].dest, far) > 1 && Dist(hw.chars[3].dest, far) > 1 && Dist(hw.chars[10].dest, far) > 1);
+    CHECK(host.actorRefusals() >= forged);
+    CHECK(rejectedFor(1001, ResultReason::NotYourCharacter));   // the host's character, answered by seq
+    bool anyNoActor = false;
+    for (const auto& r : cli.results()) anyNoActor |= r.reason == ResultReason::NoActor;
+    CHECK(anyNoActor);
+    bool logged = false;
+    for (const auto& l : hostLog) logged |= l.find("refused: actor " + std::to_string(net[1]) + " not owned by player " + std::to_string(me)) != std::string::npos;
+    CHECK(logged);
+    bool noticed = false;
+    for (const auto& l : cli.chatLog()) noticed |= l.find("Action refusée") != std::string::npos;
+    CHECK(noticed);
+    // 2. the other request types naming a character that is not ours: looking into a container, new
+    //    looks, dropping an item, answering someone else's conversation
+    const uint32_t r0 = host.actorRefusals();
+    { ContainerOpen m; m.looterNetId = net[1]; m.sid = "chest"; Writer w; Encode(w, m); CHECK(host.InjectForTest(me, w)); }
+    { AppearanceMsg m; m.netId = net[1]; m.name = "Hacked"; Writer w; Encode(w, m); CHECK(host.InjectForTest(me, w)); }
+    { InvOp op; op.kind = InvOpKind::Drop; op.fromNetId = net[1]; op.item.templateSid = "sword"; op.item.quantity = 1; Writer w; Encode(w, op); CHECK(host.InjectForTest(me, w)); }
+    { DialogReply a; a.dialogId = 4242; a.index = 0; Writer w; Encode(w, a); CHECK(host.InjectForTest(me, w)); }
+    { ContainerOpen m; m.looterNetId = net[3]; m.sid = "chest"; Writer w; Encode(w, m); CHECK(host.InjectForTest(me, w)); }
+    Run(all, 1.0);
+    CHECK(host.actorRefusals() >= r0 + 5);
+    CHECK(host.recentRefusals(me) > 5.0);
+    // 3. the client's own character: obeyed, answered Done
+    hw.orderedSerials.clear();
+    { Command c; c.seq = 5000; c.netId = net[2]; c.kind = CommandKind::MoveTo; c.pos = {222, 0, 0}; Writer w; Encode(w, c); CHECK(host.InjectForTest(me, w)); }
+    Run(all, 1.5, [&] { return Dist(hw.chars[2].dest, {222, 0, 0}) < 1e-3f; });
+    CHECK(Dist(hw.chars[2].dest, {222, 0, 0}) < 1e-3f);
+    CHECK((hw.orderedSerials == std::vector<uint32_t>{2}));
+    Run(all, 0.5);
+    bool done = false;
+    for (const auto& r : cli.results()) done |= r.seq == 5000 && r.state == ResultState::Done;
+    CHECK(done);
+    // 4. the client refuses to send an order for a character it does not own (French notice)
+    const uint32_t r1 = host.actorRefusals();
+    const size_t chat0 = cli.chatLog().size();
+    Command mv; mv.kind = CommandKind::MoveTo; mv.pos = far;
+    cw.localOrders.push_back({FakeWorld::H(1), mv});
+    cw.localOrders.push_back({FakeWorld::H(3), mv});
+    Run(all, 3.0);   // past the notice's rate limit
+    CHECK(host.actorRefusals() == r1);   // never sent
+    CHECK(cli.chatLog().size() > chat0);
+    CHECK(Dist(hw.chars[1].dest, far) > 1 && Dist(hw.chars[3].dest, far) > 1);
+    // ... and one sent as is anyway (forged) is refused by the host
+    Command forgedRaw = mv;
+    forgedRaw.netId = net[1];
+    CHECK(cli.SendRawCommandForTest(forgedRaw));
+    Run(all, 1.0);
+    CHECK(host.actorRefusals() == r1 + 1 && Dist(hw.chars[1].dest, far) > 1);
+    // 5. orders of our own character aimed at the wrong kind of target: refused, nothing runs
+    hw.subjectFlags[10] = kTgtCharacter | kTgtConscious;   // the NPC
+    hw.subjectFlags[1] = kTgtCharacter | kTgtConscious | kTgtSquad;
+    const int run0 = hw.tasksRun;
+    uint32_t s2 = 6000;
+    for (int task : {2, 87, 98, 258, 72, 107, 3, 284}) {   // build, operate, sleep, door, cage, pick up, loot a container: on an NPC
+        Command c; c.seq = ++s2; c.netId = net[2]; c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = task; c.subject = FakeWorld::H(10);
+        Writer w; Encode(w, c); CHECK(host.InjectForTest(me, w));
+    }
+    { Command c; c.seq = ++s2; c.netId = net[2]; c.kind = CommandKind::Task; c.via = TaskVia::AddJob; c.task = 2; c.subject = FakeWorld::H(77); Writer w; Encode(w, c); CHECK(host.InjectForTest(me, w)); }   // stale
+    { Command c; c.seq = ++s2; c.netId = net[2]; c.kind = CommandKind::Task; c.via = TaskVia::AddJob; c.task = 2; Writer w; Encode(w, c); CHECK(host.InjectForTest(me, w)); }   // no subject at all
+    { Command c; c.seq = ++s2; c.netId = net[2]; c.kind = CommandKind::Task; c.via = TaskVia::AddOrder; c.task = 12; c.subject = FakeWorld::H(1); Writer w; Encode(w, c); CHECK(host.InjectForTest(me, w)); }   // talk to a squad mate
+    Run(all, 1.5);
+    CHECK(hw.tasksRun == run0);
+    for (uint32_t q = 6001; q <= s2; ++q) CHECK(rejectedFor(q, ResultReason::WrongTarget));
+    // ... while the right target is obeyed
+    hw.subjectFlags[50] = kTgtBuilding | kTgtUnfinished | kTgtOurs;
+    { Command c; c.seq = 7000; c.netId = net[2]; c.kind = CommandKind::Task; c.via = TaskVia::NewTask; c.task = 2; c.subject = FakeWorld::B(50); Writer w; Encode(w, c); CHECK(host.InjectForTest(me, w)); }
+    { Command c; c.seq = 7001; c.netId = net[2]; c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = 25; c.subject = FakeWorld::H(1); Writer w; Encode(w, c); CHECK(host.InjectForTest(me, w)); }   // first aid on the host's character: the actor is ours
+    Run(all, 1.5);
+    CHECK(hw.tasksRun == run0 + 2);
+    CHECK(cli.rejectedCount() > 0);
+    CHECK(host.state() == SessionState::Hosting && cli.state() == SessionState::Connected);   // everyone alive
+}
+
 static void TestManyPlayers() {
     std::printf("session: 1 host + 4 clients joining at once, 120 characters\n");
     FakeWorld hw;
@@ -2194,6 +2450,8 @@ int main() {
     TestDoors();   // lot A
     TestFloorsAndStall();   // fix G6
     TestJobs();   // fix G5
+    TestTaskTargets();   // actor safety
+    TestActorSafety();
     TestManyPlayers();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

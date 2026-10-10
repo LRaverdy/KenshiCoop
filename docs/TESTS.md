@@ -9,7 +9,7 @@ Deux niveaux de tests :
 
 ```powershell
 .\build.ps1                            # compile aussi kc_tests
-.\build\bin\Release\kc_tests.exe       # dernière ligne : "775 checks, 0 failed" (10 octobre 2026)
+.\build\bin\Release\kc_tests.exe       # dernière ligne : "4033 checks, 0 failed" (10 octobre 2026)
 .\build.ps1 -Asan                      # variante AddressSanitizer, dans build-asan\
 ```
 
@@ -29,6 +29,8 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `TestSpawnReplication` | personnages créés chez l'hôte puis recréés chez le client |
 | `TestInventories` | inventaires identiques, fouille rejouée par l'hôte |
 | `TestCrashRejoin` | client figé 7 s (gardé), puis relancé avec le même compte avant la coupure : remplacé, même nom, même perso, pas de doublon, fenêtre de commerce fermée, perso arrêté |
+| `TestTaskTargets` | sécurité des acteurs : chaque numéro de tâche confronté à chaque sorte de cible (rien, soi, PNJ debout / à terre / mort, autre membre, objet, contenant, chantier à nous ou non, bâtiment fini, lit, cage, machine, porte, handle périmé), par les 4 façons de donner un ordre ; numéros inconnus refusés ; barre d'escouade et panneau Tâches ; table des règles des messages ; aller-retour de `Result` |
+| `TestActorSafety` | sécurité des acteurs : 1 hôte + 2 clients ; ordres forgés (aller, arrêter, ramasser, lit, parler, mode, escouade) au nom du perso de l'hôte, d'un autre joueur, d'un PNJ, d'aucun, d'un inconnu : rien n'est exécuté, refus journalisé, `Result` rejeté (par `seq`) et message français ; idem pour regarder dans un contenant, apparence, dépôt d'objet, réponse à la conversation d'un autre ; l'ordre de son propre perso est exécuté (`Done`) ; le client refuse d'envoyer pour un perso qui n'est pas le sien ; un ordre envoyé quand même (`SendRawCommandForTest`) est refusé ; ordres de son perso visant une mauvaise cible (construire, machine, lit, porte, cage, ramasser, coffre sur un PNJ ; handle périmé ; sans cible ; parler à un membre de l'escouade) refusés, la bonne cible acceptée (premiers soins sur le perso de l'hôte compris) |
 | `TestManyPlayers` | 1 hôte + 4 clients arrivant ensemble, 120 personnages |
 
 ## 2. Tests en jeu (`tools/coop_test.py`)
@@ -108,6 +110,7 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `menu` | un hôte qui héberge et un second jeu laissé **au menu principal**, pour rejoindre à la main |
 | `up` | un hôte et un client connectés, laissés ouverts pour un test manuel |
 | `prison` (lot D) | l'hôte met le personnage du client dans la cage la plus proche, l'enchaîne, le réduit en esclavage puis le libère : même état chez le client, gardé dans la cage, tout effacé à la fin. Il faut une cage à moins de 300 m de l'escouade (`--save` d'une sauvegarde près d'une prison ou d'un camp d'esclavagistes) |
+| `actorsafety` (`kctest_town`) | **sécurité des acteurs** : l'hôte sélectionne ses propres persos (comme un joueur) ; le client donne avec son perso chaque sorte d'ordre (lit, parler, piller, ramasser, commerce, tâche, construire, porte, premiers soins sur un perso de l'hôte, suivre, porter un perso de l'hôte K.-O., attaquer) : après chacun, la sélection de l'hôte est inchangée et ses persos n'ont rien reçu (pas de nouvelle tâche, pas de déplacement, pas de lit, pas de conversation ; `actorstats` leaks=0). Puis ordres forgés (`forgeorder`) au nom d'un perso de l'hôte : refusés ; et ordres de son perso visant une cible du mauvais type (dont le chemin du plantage de `stress4` : `npcreq <perso> 2 a`, construire sur un PNJ) : refusés, l'hôte et le client vivants. Contrôles « securite controle : ... ». Pas encore lancée en jeu |
 | `crashrejoin` (`--only abcdefg`) | client **tué** (`taskkill /F`) puis relancé avec le même faux id Steam et revenu : (a) au repos, (b) en combat à la vitesse 3, (c) en portant un corps, (d) fenêtre de commerce ouverte, (e) en fouillant un corps, (f) dans l'éditeur de personnage, (g) relancé avant que l'hôte ait vu la coupure. À chaque fois : l'hôte vit, voit la coupure (< 20 s) et nettoie (journal « disconnected (… » / « cleaned up: »), le joueur retrouve les mêmes persos (clés, inventaires ; sauf combat), pas de doublon, comparaison hôte / client propre, l'hôte n'est pas resté en pause |
 | `cmd <pid> <commande…>` | envoie une commande de debug à une instance |
 
@@ -218,6 +221,12 @@ l'escouade triée par handle.
 | `probe <index> <dx> <dz> <simple\|teleport>` | essaie une méthode de positionnement et dit ce qui tient |
 | `pos <index>` / `where <clé\|npc\|index>` | position d'un personnage, et `carried=1` s'il a l'animation « porté » (la position d'un corps porté est celle du porteur) |
 | `camto <index>` | caméra sur ce membre |
+| `selectset <i> [<j>…]` | la sélection devient **exactement** ces membres (le perso principal que `unselectAll` garde en est retiré) ; `err` sinon |
+| `selected` | indices des membres sélectionnés (triés ; `+n` : n autres objets) |
+| `charstate <index>` | `tasks=` (système de tâches) `jobs=` (panneau Tâches) `in=` (0 rien, 1 lit, 2 cage) `dialog=` (0/1) `pos=x,z` |
+| `actorstats` | (hôte) demandes de clients refusées (`refused=`), ordres refusés pour leur cible (`target=`), tâches arrivées sur un perso de la sélection de l'hôte pendant un ordre de client (`leaks=`, doit rester 0), sélection mal remise (`restorefail=`) |
+| `results` | (client) réponses `Result` de l'hôte : nombre de refus, puis les dernières en `seq:état:raison` |
+| `forgeorder <acteur> <via> <tâche> <sujet>` | (client) ordre **forgé** envoyé tel quel, sans nos contrôles : `via` 0 = aller, 1-4 = `TaskVia` ; sujet `none`, `self`, `squad<i>`, `npc`, `item`, `building` |
 | `taskreq <sélection> <tâche> <sujet>` | sélectionne ce membre seul et donne l'ordre, comme l'interface |
 | `talkreq <sélection>` | ordre de parler au PNJ le plus proche |
 | `orderreq <sélection> <ordre permanent>` | bouton de la barre d'escouade pour ce membre seul |

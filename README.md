@@ -109,6 +109,9 @@ sauvegarde pas (tes propres parties ne sont jamais écrasées par le monde de l'
   retirés.
 - **Escouades** (noms, membres, ordre), **ordres permanents** (furtif, tenir la position, passif…),
   **compétences et expérience**, **argent**.
+- **Chacun commande ses persos** : un ordre d'un joueur (dormir, parler, piller, construire…) n'est
+  exécuté que par **ses** personnages, jamais par ceux de l'hôte ou d'un autre joueur ; un ordre
+  impossible (mauvaise cible) est refusé avec un message, sans rien faire.
 - **Dialogues** : les bulles chez tout le monde ; une conversation avec un PNJ s'ouvre chez le
   joueur concerné (fenêtre du mod), qui choisit ses réponses.
 - **Heure, vitesse et pause** : celles de l'hôte, imposées en permanence. Les clients ne peuvent

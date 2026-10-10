@@ -654,7 +654,20 @@ Tâches par défaut d'un clic droit sur un meuble, selon la recherche :
   `OrdersReceiver::addJob` (`0x5086D0`) : `shift` vrai = tâche permanente (liste +0x88/+0x90, panneau
   Tâches), faux = ordre passager (liste +0x70). `add` faux vide d'abord les tâches.
 - `PlayerInterface::objectSelected` (`0x7F7F20`) écrit aussi un `hand` global (`0x21345D0`) et
-  `PlayerInterface`+0xF0 ; `unselectAll` les vide.
+  `PlayerInterface`+0xF0 ; `unselectAll` les remet à zéro.
+- **La sélection n'est jamais vide par le jeu** (désassemblage 1.0.68) : `unselectAll` (`0x7F8DA0`)
+  vide la sélection puis **resélectionne** un perso : l'objet du `hand` global `0x21345D0` si le
+  `hand` du panneau de détails (+0xF0) est dans la sélection, sinon le premier de la sélection (rien
+  si elle était vide ; et rien du tout si `PlayerInterface`+0x2A0 est nul : il sort sans rien faire).
+  `objectSelected(obj, false)` refuse de retirer le dernier sélectionné (`taille <= 1`).
+  `objectSelected(obj, true)` n'ajoute un perso que s'il est de la faction du joueur
+  (`owner->+0x250` non nul) et sans le drapeau perso +0x5BC. « unselectAll puis sélectionner X »
+  laisse donc aussi le perso principal sélectionné : un ordre « des sélectionnés » part aux deux
+  (`addOrderSelectedCharacters`, `newPlayerTaskSelectedCharacters`, qui renvoie vers `addOrder` ou
+  `addJob`), `addTaskNearestSelectedCharacter` au plus proche des deux. Pour une sélection exacte :
+  unselectAll, sélectionner les acteurs, puis retirer le reste (possible tant qu'un acteur est
+  sélectionné). Pour la vider : `hand` global mis à nul (type 0xB, reste 0), le `hand` +0xF0 sur un
+  sélectionné, puis unselectAll.
 
 - `UseableStuff` : ensemble des occupants (`std::set<hand>`) à +0x3D0, taille à +0x3E0 (lit libre :
   0). `BuildingFunction` (ordre de l'énumération) : 1 mine, 6 lit, 8 cage, 9 boutique, 12 tourelle,

@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 32;
+constexpr uint16_t kProtocolVersion = 33;   // 33: Result (actor safety)
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -93,6 +93,8 @@ enum class Msg : uint8_t {
     Floors = 71,          // S->C  the floor characters are on inside buildings (it drives the floor shown)
     // ---- fix G5
     JobList = 68,         // S->C  the job list (Tâches panel) of the players' characters, as the host has it
+    // ---- actor safety
+    Result = 90,          // S->C  the host's answer to a request: rejected (with the reason) or done
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -623,6 +625,75 @@ void Encode(Writer& w, const EditCharacter& m);
 void Encode(Writer& w, const EditState& m);
 const char* TaskLabel(int task);   // a player order's name, for logs ("?" when unknown)
 const char* StandingOrderLabel(int order);   // a squad bar toggle's name, for logs
+
+// ---- actor safety: what the subject of a client's order is, as the host's world sees it. Every
+// task id a client can send is checked against what that task expects before the game's order
+// functions get it (a BUILD order aimed at an NPC once crashed the host inside Character::addJob).
+enum TargetFlags : uint32_t {
+    kTgtNamed = 1u << 0,        // the client named a subject
+    kTgtFound = 1u << 1,        // ... and it was found here, of the kind and at the place the client saw
+    kTgtCharacter = 1u << 2,
+    kTgtConscious = 1u << 3,    // a character standing (not knocked out, not dead)
+    kTgtDown = 1u << 4,         // a character knocked out or lying on the ground
+    kTgtDead = 1u << 5,
+    kTgtSquad = 1u << 6,        // a member of the player faction (any player's)
+    kTgtSelf = 1u << 7,         // the actor itself
+    kTgtItem = 1u << 8,         // an item lying loose
+    kTgtContainer = 1u << 9,    // an object with an inventory (not a character)
+    kTgtBuilding = 1u << 10,    // a building or a piece of furniture
+    kTgtUnfinished = 1u << 11,  // ... still to be built (a construction site)
+    kTgtOurs = 1u << 12,        // ... of the player faction
+    kTgtBed = 1u << 13,
+    kTgtCage = 1u << 14,
+    kTgtMachine = 1u << 15,     // a building one operates (mine, machine, turret, workbench...)
+    kTgtDoor = 1u << 16,        // a door, a gate or a lock
+    kTgtShop = 1u << 17,
+};
+// True when task `task`, asked through `via`, may be given with that subject (flags above); else
+// false and `why` (English, for the log) says what it needed. Unknown task ids are refused.
+bool TaskTargetAllowed(TaskVia via, int task, uint32_t subject, std::string* why);
+
+// The host's answer to a client's request (a Command: its seq; other requests: seq 0). Rejected
+// carries the reason and a French text for the player; the client undoes what it predicted.
+enum class ResultState : uint8_t { Accepted = 1, Rejected = 2, Done = 3 };
+enum class ResultReason : uint8_t {
+    None = 0,
+    NotYourCharacter = 1,   // the actor is not a character of that player (the host's, another player's, an NPC)
+    NoActor = 2,            // no actor named, or unknown to the host
+    WrongTarget = 3,        // the task does not apply to that subject (or the subject is stale / unknown)
+    NotAllowed = 4,         // not available to client players, or not in the game yet
+    SelectionBusy = 5,      // the host could not give the order to that character alone
+    Failed = 6,             // run, but the game did not do it
+};
+const char* ToString(ResultReason r);
+struct Result {
+    Msg request = Msg::Command;
+    uint32_t seq = 0;
+    uint32_t netId = 0;     // the actor, when there is one
+    ResultState state = ResultState::Done;
+    ResultReason reason = ResultReason::None;
+    std::string text;       // French, for the player (empty when nothing to say)
+};
+void Encode(Writer& w, const Result& m);
+bool Decode(Reader& r, Result& m);
+
+// ---- authority: what each client->host message requires, checked by the host before its handler
+// runs (Session::Authorize) and by the client before it sends (the same table).
+enum class AuthRole : uint8_t { Connected, Joining, InGame };   // after Hello / still loading / in the game
+enum class AuthSubject : uint8_t {
+    None,              // nothing to check beyond the role
+    OwnCharacter,      // the netId it names is a squad member assigned to the sender
+    OwnConversation,   // the conversation it answers is the sender's
+    Inventory,         // drop: from its own character; moves: the inventory rules (own, opened, bodies)
+};
+struct MessageRule {
+    Msg type;
+    AuthRole role;
+    AuthSubject subject;
+    const char* name;
+};
+const MessageRule* MessageRuleFor(Msg type);   // null: never accepted from a client
+const MessageRule* MessageRules(size_t& count);
 // Containers (chests, shelves, safes...) are furniture: other handles on every machine, so they
 // are named by kind and place. The host gives an open one a netId; its items then travel like a
 // character's (Inventory messages, InvOp moves).

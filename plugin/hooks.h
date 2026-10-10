@@ -41,7 +41,11 @@ struct AnimReplayScope {
 
 // Host: a client's player order (Command kind Task), given to `c` alone exactly as the game's UI
 // gives it to a selection.
-bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, void* building);
+// Host: a client's order run by the game's "selected characters" function on exactly that character
+// (the host's selection is set to it alone and put back within the call). Refused (false, with a
+// French reason in `refused`) when the selection cannot be made exactly that character.
+bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, void* building, std::string* refused = nullptr);
+int ActorLeaks();   // host: host characters seen getting a task from a client's order (should stay 0)
 
 // Client: `c` says this line (a speech bubble, as the host's game showed it).
 bool ReplaySay(kenshi::Character* c, const std::string& text, bool shout);

@@ -169,6 +169,14 @@ public:
     void ApplySquads(const std::vector<WorldSquad>& squads) override;
     void ApplyMoney(int32_t money) override { kenshi::WritePlayerMoney(money); }
     bool Order(const kc::Handle& h, const kc::Command& c) override;
+    std::string TakeOrderRefusal(kc::ResultReason& reason) override {
+        reason = orderRefusal_.empty() ? kc::ResultReason::None : orderRefusalReason_;
+        return std::exchange(orderRefusal_, std::string{});
+    }
+    void OrderRejected(const kc::Handle& h, const kc::Command& c) override;
+    // host: what a client order's subject is (kc::TargetFlags); orders refused for their target
+    uint32_t TargetFlagsOf(kenshi::Character* actor, void* subject, bool named);
+    int targetRefusals() const { return targetRefusals_; }
     void HaltCharacter(const kc::Handle& h) override;
     void TakeLocalOrders(std::vector<std::pair<kc::Handle, kc::Command>>& out) override;
     bool ReadInventory(const kc::Handle& h, std::vector<kc::ItemState>& out) override;
@@ -303,6 +311,9 @@ private:
     std::unordered_map<const void*, double> replicatedAt_;           // client: when Apply last drove each one
     bool ReadyToFall(const kc::Handle& h, kenshi::Character* c, const kc::EntityState& at, double now);
     std::mutex ordersMutex_;
+    std::string orderRefusal_;
+    kc::ResultReason orderRefusalReason_ = kc::ResultReason::None;
+    int targetRefusals_ = 0;   // host: why the last client order was refused for safety (French)
     std::vector<std::pair<kc::Handle, kc::Command>> orders_;
     struct PendingLoot { kc::Handle looter, target; double until; };
     std::vector<PendingLoot> pendingLoot_;   // client, game thread only

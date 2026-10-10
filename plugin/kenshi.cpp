@@ -768,8 +768,7 @@ bool OrderPickupItem(Character* c, void* item) {
 bool FocusCamera(Character* c) {
     PlayerInterface* pi = Player();
     if (!pi || !IsCharacter(c)) return false;
-    WithSelection(c, [&] { reinterpret_cast<void (*)(void*)>(FnAddr(FnFocusCamera))(pi); });
-    return true;
+    return WithSelection(c, [&] { reinterpret_cast<void (*)(void*)>(FnAddr(FnFocusCamera))(pi); });
 }
 
 namespace {
@@ -1148,53 +1147,151 @@ bool IsStatOfCharacter(const void* statField) {
 }
 
 namespace {
+int g_selectionRestoreFailures = 0;   // the player's selection could not be put back exactly
 void ShowPlatoonSeh(void* pi, void* platoon) {
     using FnShow = bool (*)(void*, void*);
     __try { reinterpret_cast<FnShow>(FnAddr(FnSetCurrentPlatoon))(pi, platoon); } __except (EXCEPTION_EXECUTE_HANDLER) {}
 }
 } // namespace
 
-void WithSelection(Character* only, const std::function<void()>& fn) {
-    PlayerInterface* pi = Player();
-    if (!pi || !IsCharacter(only)) return;
-    // everything selecting a character changes: the selection, the squad the squad bar shows, the
-    // character whose details panel is open; all of it comes back exactly as it was
-    std::vector<kc::Handle> before;
-    SelectedHandles(before);
-    constexpr uintptr_t PI_selectedCharacter = 0xF0, PI_currentPlatoon = 0x2A8;
-    uint8_t savedHand[off::HandSize] = {};
-    void* savedPlatoon = nullptr;
-    SafeCopy(savedHand, reinterpret_cast<uint8_t*>(pi) + PI_selectedCharacter, sizeof(savedHand));
-    Rd(pi, PI_currentPlatoon, savedPlatoon);
-    using FnSel = void (*)(void*, void*, bool);
-    using FnClear = void (*)(void*);
-    auto sel = reinterpret_cast<FnSel>(FnAddr(FnObjectSelected));
-    auto clear = reinterpret_cast<FnClear>(FnAddr(FnUnselectAll));
-    clear(pi);
-    sel(pi, only, true);
-    fn();
-    clear(pi);
-    for (const auto& h : before) {
-        void* o = Resolve(h);
-        if (!o) o = ResolveItem(h);
-        if (o) sel(pi, o, true);
-    }
-    void* nowPlatoon = nullptr;
-    if (Rd(pi, PI_currentPlatoon, nowPlatoon) && nowPlatoon != savedPlatoon && savedPlatoon) {
-        ShowPlatoonSeh(pi, savedPlatoon);
-    }
-    for (size_t k = 0; k < sizeof(savedHand); ++k) Wr(reinterpret_cast<uint8_t*>(pi) + PI_selectedCharacter, k, savedHand[k]);
-    // the character the order was for stays selected only if it already was
-    kc::Handle oh;
-    std::vector<kc::Handle> after;
-    SelectedHandles(after);
-    if (GetHandle(only, oh) && std::find(before.begin(), before.end(), oh) == before.end() &&
-        std::find(after.begin(), after.end(), oh) != after.end()) {
-        clear(pi);
-        for (const auto& h : before)
-            if (void* o = Resolve(h)) sel(pi, o, true);
-    }
+// ---- the selection the game's "order the selected characters" functions act on
+// Evidence (1.0.68 disassembly): PlayerInterface::unselectAll (0x7F8DA0) does NOT leave the
+// selection empty: it reselects the "main" selected character (the global hand 0x21345D0, or the
+// first one of the selection when the details panel's hand is not in it), and
+// objectSelected(obj, false) (0x7F7F20) refuses to take out the last selected character. The game
+// never empties the selection itself. "unselectAll + select the client's character" therefore left
+// the host's main character selected too, and the order went to both (addOrder / newPlayerTask /
+// addJob) or to the nearest of them (addTaskNearest: a bed, a conversation): the host's character
+// went to sleep or talked instead of the client's. Only an empty host selection (right after
+// loading, as in the test harness) was safe.
+namespace {
+constexpr uintptr_t PI_detailsHand = 0xF0, PI_currentPlatoon = 0x2A8;
+constexpr uintptr_t kRvaMainSelectedHand = 0x21345D0;   // hand objectSelected writes, unselectAll resets
+using FnSelSig = void (*)(void*, void*, bool);
+using FnClearSig = void (*)(void*);
+bool SelectSeh(void* pi, void* o, bool on) {
+    __try { reinterpret_cast<FnSelSig>(FnAddr(FnObjectSelected))(pi, o, on); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+bool UnselectAllSeh(void* pi) {
+    __try { reinterpret_cast<FnClearSig>(FnAddr(FnUnselectAll))(pi); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* SelectableObject(const kc::Handle& h) {
+    void* o = Resolve(h);
+    return o ? o : ResolveItem(h);
+}
+bool Contains(const std::vector<kc::Handle>& v, const kc::Handle& h) { return std::find(v.begin(), v.end(), h) != v.end(); }
+bool SameSelection(const std::vector<kc::Handle>& a, const std::vector<kc::Handle>& b) {
+    if (a.size() != b.size()) return false;
+    for (const auto& h : a) if (!Contains(b, h)) return false;
+    return true;
+}
+uint8_t* MainSelectedHand() { return reinterpret_cast<uint8_t*>(Addr(kRvaMainSelectedHand)); }
+
+struct SavedSelection {
+    std::vector<kc::Handle> sel;
+    uint8_t details[off::HandSize] = {};
+    uint8_t mainHand[off::HandSize] = {};
+    void* platoon = nullptr;
+};
+void SaveSelection(PlayerInterface* pi, SavedSelection& s) {
+    SelectedHandles(s.sel);
+    SafeCopy(s.details, reinterpret_cast<uint8_t*>(pi) + PI_detailsHand, sizeof(s.details));
+    SafeCopy(s.mainHand, MainSelectedHand(), sizeof(s.mainHand));
+    Rd(pi, PI_currentPlatoon, s.platoon);
+}
+void WriteBytes(uint8_t* dst, const uint8_t* src, size_t n) {
+    for (size_t k = 0; k < n; ++k) Wr(dst, k, src[k]);
+}
+// Takes every character out of the selection, the last one included: unselectAll reselects the
+// object of the main hand when the details hand is in the selection, so the main hand is made null
+// (what unselectAll itself writes: type 0xB, the rest 0) and the details hand names a selected one.
+bool EmptySelection(PlayerInterface* pi) {
+    UnselectAllSeh(pi);
+    std::vector<kc::Handle> now;
+    SelectedHandles(now);
+    if (now.empty()) return true;
+    alignas(8) uint8_t hand[off::HandSize];
+    MakeHand(now.front(), hand);
+    WriteBytes(reinterpret_cast<uint8_t*>(pi) + PI_detailsHand + 8, hand + 8, off::HandSize - 8);
+    alignas(8) uint8_t nullHand[off::HandSize] = {};
+    const uint32_t noType = 0xB;
+    std::memcpy(nullHand + off::H_type, &noType, 4);
+    WriteBytes(MainSelectedHand() + 8, nullHand + 8, off::HandSize - 8);
+    UnselectAllSeh(pi);
+    SelectedHandles(now);
+    return now.empty();
+}
+// Puts the selection, the squad bar, the details panel and the main hand back as they were.
+bool RestoreSelection(PlayerInterface* pi, const SavedSelection& s) {
+    UnselectAllSeh(pi);   // keeps at most one: the main one, maybe a character the call selected
+    for (const auto& h : s.sel)
+        if (void* o = SelectableObject(h)) SelectSeh(pi, o, true);
+    std::vector<kc::Handle> now;
+    SelectedHandles(now);
+    for (const auto& h : now)
+        if (!Contains(s.sel, h))
+            if (void* o = SelectableObject(h)) SelectSeh(pi, o, false);   // refused for the last one: see below
+    if (s.sel.empty()) EmptySelection(pi);
+    void* nowPlatoon = nullptr;
+    if (s.platoon && Rd(pi, PI_currentPlatoon, nowPlatoon) && nowPlatoon != s.platoon) ShowPlatoonSeh(pi, s.platoon);
+    WriteBytes(reinterpret_cast<uint8_t*>(pi) + PI_detailsHand, s.details, sizeof(s.details));
+    WriteBytes(MainSelectedHand(), s.mainHand, sizeof(s.mainHand));
+    SelectedHandles(now);
+    return SameSelection(now, s.sel);
+}
+} // namespace
+
+bool SelectExactly(const std::vector<Character*>& actors, std::string* why) {
+    PlayerInterface* pi = Player();
+    if (!pi || actors.empty()) { if (why) *why = !pi ? "no player interface" : "no actor"; return false; }
+    std::vector<kc::Handle> want;
+    for (Character* c : actors) {
+        kc::Handle h;
+        if (!IsCharacter(c) || !GetHandle(c, h)) { if (why) *why = "an actor is not a character"; return false; }
+        if (!Contains(want, h)) want.push_back(h);
+    }
+    UnselectAllSeh(pi);   // leaves the main one selected (see above)
+    for (Character* c : actors) SelectSeh(pi, c, true);
+    std::vector<kc::Handle> now;
+    SelectedHandles(now);
+    for (const auto& h : now)
+        if (!Contains(want, h))
+            if (void* o = SelectableObject(h)) SelectSeh(pi, o, false);   // possible once an actor is selected
+    SelectedHandles(now);
+    if (SameSelection(now, want)) return true;
+    if (why) {
+        size_t actorsIn = 0;
+        for (const auto& h : want) actorsIn += Contains(now, h) ? 1 : 0;
+        char b[160];
+        snprintf(b, sizeof(b), "the selection is %zu character(s), %zu of the %zu actor(s): an actor cannot be selected here", now.size(), actorsIn,
+                 want.size());
+        *why = b;
+    }
+    return false;
+}
+
+bool WithSelection(const std::vector<Character*>& actors, const std::function<void()>& fn, std::string* why) {
+    PlayerInterface* pi = Player();
+    if (!pi || actors.empty()) { if (why) *why = !pi ? "no player interface" : "no actor"; return false; }
+    // everything selecting a character changes: the selection, the squad the squad bar shows, the
+    // character whose details panel is open, the main hand; all of it comes back exactly as it was
+    SavedSelection saved;
+    SaveSelection(pi, saved);
+    const bool exact = SelectExactly(actors, why);
+    if (exact) fn();   // never with anything else selected: the order would go to it too
+    const bool restored = RestoreSelection(pi, saved);
+    if (!restored) {
+        ++g_selectionRestoreFailures;
+        if (why && exact) *why = "the order ran, but the player's selection could not be put back exactly";
+    }
+    return exact;
+}
+
+bool WithSelection(Character* only, const std::function<void()>& fn) {
+    return WithSelection(std::vector<Character*>{only}, fn, nullptr);
+}
+
+int SelectionRestoreFailures() { return g_selectionRestoreFailures; }
 
 namespace {
 constexpr uintptr_t CH_dialogue = 0x280;    // Dialogue*
@@ -3671,29 +3768,15 @@ bool HasOrdersReceiver(Character* c) {
 void KeepSelection(const std::function<void()>& fn) {
     PlayerInterface* pi = Player();
     if (!pi) { fn(); return; }
-    std::vector<kc::Handle> before;
-    SelectedHandles(before);
-    constexpr uintptr_t PI_selectedCharacter = 0xF0, PI_currentPlatoon = 0x2A8;
-    uint8_t savedHand[off::HandSize] = {};
-    void* savedPlatoon = nullptr;
-    SafeCopy(savedHand, reinterpret_cast<uint8_t*>(pi) + PI_selectedCharacter, sizeof(savedHand));
-    Rd(pi, PI_currentPlatoon, savedPlatoon);
+    SavedSelection saved;
+    SaveSelection(pi, saved);
     fn();
     std::vector<kc::Handle> after;
     SelectedHandles(after);
     void* nowPlatoon = nullptr;
     Rd(pi, PI_currentPlatoon, nowPlatoon);
-    if (after == before && nowPlatoon == savedPlatoon) return;
-    using FnSel = void (*)(void*, void*, bool);
-    using FnClear = void (*)(void*);
-    reinterpret_cast<FnClear>(FnAddr(FnUnselectAll))(pi);
-    for (const auto& h : before) {
-        void* o = Resolve(h);
-        if (!o) o = ResolveItem(h);
-        if (o) reinterpret_cast<FnSel>(FnAddr(FnObjectSelected))(pi, o, true);
-    }
-    if (savedPlatoon && Rd(pi, PI_currentPlatoon, nowPlatoon) && nowPlatoon != savedPlatoon) ShowPlatoonSeh(pi, savedPlatoon);
-    for (size_t k = 0; k < sizeof(savedHand); ++k) Wr(reinterpret_cast<uint8_t*>(pi) + PI_selectedCharacter, k, savedHand[k]);
+    if (SameSelection(after, saved.sel) && nowPlatoon == saved.platoon) return;
+    if (!RestoreSelection(pi, saved)) ++g_selectionRestoreFailures;
 }
 
 void UnselectObject(void* obj) {

@@ -695,18 +695,125 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         const bool on = kenshi::ReadCombat(w.FindSquad(squad[idx]), t);
         return std::string("ok ") + (on ? "1 " + Key(t) : "0");
     }
-    if (cmd == "selectset") {   // selectset <i> [<j>...]: the player's selection becomes those squad members (as clicks would)
+    if (cmd == "selectset") {   // selectset <i> [<j>...]: the player's selection becomes exactly those squad members (as clicks would)
         auto squad = SortedSquad(w);
-        void* pi = kenshi::Player();
-        if (!pi) return "err";
-        reinterpret_cast<void (*)(void*)>(kenshi::FnAddr(kenshi::FnUnselectAll))(pi);
-        size_t i = 0, n = 0;
+        if (!kenshi::Player()) return "err";
+        std::vector<kenshi::Character*> want;
+        size_t i = 0;
         while (in >> i)
-            if (i < squad.size()) {
-                reinterpret_cast<void (*)(void*, void*, bool)>(kenshi::FnAddr(kenshi::FnObjectSelected))(pi, w.FindSquad(squad[i]), true);
-                ++n;
+            if (i < squad.size())
+                if (kenshi::Character* c = w.FindSquad(squad[i])) want.push_back(c);
+        std::string why;
+        // unselectAll keeps the main selected character: SelectExactly takes it out when it is not wanted
+        if (!kenshi::SelectExactly(want, &why)) return "err " + why;
+        return "ok " + std::to_string(want.size());
+    }
+    // ---- actor safety
+    if (cmd == "selected") {   // selected: squad indices (this machine's order) of the player's selection, sorted
+        auto squad = SortedSquad(w);
+        std::vector<kc::Handle> sel;
+        kenshi::SelectedHandles(sel);
+        std::vector<size_t> idx;
+        size_t other = 0;
+        for (const auto& h : sel) {
+            auto it = std::find(squad.begin(), squad.end(), h);
+            if (it != squad.end()) idx.push_back(size_t(it - squad.begin()));
+            else ++other;
+        }
+        std::sort(idx.begin(), idx.end());
+        std::string out = "ok";
+        for (size_t k : idx) out += " " + std::to_string(k);
+        if (other) out += " +" + std::to_string(other);
+        return out;
+    }
+    if (cmd == "charstate") {   // charstate <squadIndex>: tasks=<task system> jobs=<Tâches> in=<0 nothing,1 bed,2 cage> dialog=<0/1> pos=x,z
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        kenshi::Character* c = w.FindSquad(squad[idx]);
+        kc::Vec3 p;
+        if (!c || !kenshi::GetPosition(c, p)) return "err";
+        int inside = -1;
+        kenshi::ReadInSomething(c, inside);
+        void* d = kenshi::CharacterDialogue(c);
+        const bool talking = d && kenshi::DialogueTarget(d) != nullptr;
+        char b[200];
+        snprintf(b, sizeof(b), "ok tasks=%zu jobs=%d in=%d dialog=%d pos=%.1f,%.1f", kenshi::LocalTaskCount(c), kenshi::PermajobCount(c), inside,
+                 talking ? 1 : 0, p.x, p.z);
+        return b;
+    }
+    if (cmd == "actorstats") {   // actorstats: (host) refusals of client requests, refusals for their target, leaks, selection restore failures
+        char b[200];
+        snprintf(b, sizeof(b), "ok refused=%u target=%d leaks=%d restorefail=%d", unsigned(s.actorRefusals()), w.targetRefusals(), ActorLeaks(),
+                 kenshi::SelectionRestoreFailures());
+        return b;
+    }
+    if (cmd == "results") {   // results: (client) answers of the host: rejected count, then the last ones as seq:state:reason
+        std::string out = "ok " + std::to_string(s.rejectedCount());
+        const auto& r = s.results();
+        for (size_t k = r.size() > 12 ? r.size() - 12 : 0; k < r.size(); ++k)
+            out += " " + std::to_string(r[k].seq) + ":" + std::to_string(int(r[k].state)) + ":" + std::to_string(int(r[k].reason));
+        return out;
+    }
+    if (cmd == "forgeorder") {
+        // forgeorder <actorIndex> <via> <task> <subject>: (client) an order sent to the host as is, without
+        // our own checks: a forged request. actorIndex: squad index (any owner). subject: none, self,
+        // squad<i>, npc (nearest living NPC), item (nearest loose item), building (nearest building)
+        size_t idx = 0;
+        int via = 0, task = 0;
+        std::string subj = "none";
+        in >> idx >> via >> task >> subj;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[idx]);
+        kc::Vec3 mp, p;
+        if (!me || !kenshi::GetPosition(me, mp)) return "err";
+        const kc::Handle hostHandle = w.HostHandleOf(squad[idx]);
+        uint32_t netId = 0;
+        s.ForEachEntity([&](uint32_t id, const kc::Handle& h, uint8_t, bool, bool) { if (h == hostHandle) netId = id; });
+        if (!netId) return "err that character is not followed";
+        kc::Command c;
+        c.netId = netId;
+        c.kind = via == 0 ? kc::CommandKind::MoveTo : kc::CommandKind::Task;
+        c.via = kc::TaskVia(via ? via : 1);
+        c.task = task;
+        c.pos = mp;
+        void* o = nullptr;
+        if (subj == "self") o = me;
+        else if (subj.rfind("squad", 0) == 0) {
+            const size_t k = size_t(std::atoi(subj.c_str() + 5));
+            if (k < squad.size()) o = w.FindSquad(squad[k]);
+        } else if (subj == "npc") {
+            std::vector<kenshi::Character*> all;
+            kenshi::ActiveCharacters(all);
+            float best = 1e30f;
+            for (kenshi::Character* ch : all) {
+                kc::Handle h;
+                if (!kenshi::GetHandle(ch, h) || w.FindSquad(h) || kenshi::IsDead(ch) || kenshi::IsDown(ch) || !kenshi::GetPosition(ch, p)) continue;
+                const float d = (p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z);
+                if (d < best) { best = d; o = ch; }
             }
-        return "ok " + std::to_string(n);
+        } else if (subj == "item" || subj == "building") {
+            std::vector<void*> objs;
+            if (subj == "item") kenshi::LooseItemsNear(mp, 400.0f, objs);
+            else kenshi::ObjectsNear(mp, 600.0f, objs);
+            float best = 1e30f;
+            for (void* ob : objs) {
+                if (!kenshi::ObjectPosition(ob, p)) continue;
+                const float d = (p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z);
+                if (d < best) { best = d; o = ob; }
+            }
+        } else if (subj != "none") {
+            return "err unknown subject kind";
+        }
+        if (subj != "none" && !o) return "err no such subject around";
+        if (o) {
+            kc::Handle sh;
+            if (kenshi::ObjectHandle(o, sh)) c.subject = kenshi::IsCharacter(o) ? w.HostHandleOf(sh) : sh;
+            if (!kenshi::IsCharacter(o)) { kenshi::ObjectTemplate(o, c.itemSid); kenshi::ObjectPosition(o, c.subjectPos); }
+        }
+        return s.SendRawCommandForTest(c) ? "ok netId=" + std::to_string(netId) : "err not connected";
     }
     if (cmd == "selorder") {   // selorder <standingOrder>: the squad bar's toggle on the current selection, as a click does
         int order = 0;

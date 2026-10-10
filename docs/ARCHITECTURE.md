@@ -265,12 +265,23 @@ Ordre dans `Tick()` (`main.cpp`) :
     ouvert, et va vers ses personnages ou ce contenant ;
   - qu'une réponse vise une conversation de ce joueur ;
   - qu'une apparence est celle de son personnage.
+- **Contrôle central** (`common/src/session_authority.cpp`) : chaque message client → hôte a sa règle
+  dans la table `kMessageRules` (`protocol.cpp` : rôle requis, sujet à contrôler). `Session::Authorize`
+  l'applique **avant** le gestionnaire (`HostPacket`) ; le client filtre ce qu'il envoie avec la même
+  table (`ClientMaySend`). Sujet `OwnCharacter` (Command, ContainerOpen, Appearance, dépôt d'objet) :
+  l'acteur nommé doit être un membre d'escouade attribué à ce joueur (`CheckActor`) ; revérifié au
+  moment de l'exécution (`AdmitActor`). Un refus : une ligne `auth: [nom] <message> refused: <règle>
+  (...)` (et `refused: actor N not owned by player P`), un compteur par joueur et par règle qui
+  décroît (demi-vie 60 s, `recentRefusals`), et un `Result` rejeté avec un texte français.
+- **Cible des ordres** : `KenshiWorld::TargetFlagsOf` décrit le sujet (perso debout / à terre / mort,
+  membre de l'escouade, objet, contenant, bâtiment, chantier, à nous, lit, cage, machine, porte) et
+  `kc::TaskTargetAllowed` (table par numéro de tâche, `protocol.cpp`) décide ; numéro inconnu refusé.
 - **Divergence** : tout état répliqué est réécrit par le message suivant. Le client ne peut pas
   diverger durablement. Une prédiction refusée est annulée, parce que l'hôte renvoie l'état réel.
 
 ## Messages (`common/include/kc/protocol.h`)
 
-Version du protocole : **27** au moment de la rédaction. Elle augmente à chaque changement de
+Version du protocole : **33** (sécurité des acteurs : message `Result`) au moment de la rédaction. Elle augmente à chaque changement de
 format, et une version différente est refusée à la connexion.
 
 | # | Message | Sens | Rôle |
@@ -325,6 +336,7 @@ format, et une version différente est refusée à la connexion.
 | 55 | BuildAction | ⇄ | lot E : acheter / démonter (client : demande ; hôte : rejeu d'un achat chez tous) |
 | 70 | Stall | H→C | fix G6 : ton jeu va se figer (TP lointaine, zone à charger), la connexion attend jusqu'à 2 min |
 | 71 | Floors | H→C | fix G6 : groupe d'étage (`CharMovement::floorGroup`) des persos, à chaque changement et toutes les 5 s |
+| 90 | Result | H→C | sécurité des acteurs (protocole 33) : réponse à une demande (type, `seq` du `Command`, acteur) : rejetée (raison, texte français) ou faite ; le client annule ce qu'il avait prédit (tâche ajoutée au panneau) |
 
 ## Les flux, système par système
 
@@ -388,11 +400,16 @@ format, et une version différente est refusée à la connexion.
 1. Le client note par quelle fonction de l'interface l'ordre est passé (`TaskVia`), le numéro de
    tâche, le sujet (handle, plus type et position si ce n'est pas un personnage) et le bâtiment de
    destination (handle, type, position).
-2. L'hôte retrouve le sujet et le bâtiment, par type et endroit s'il le faut.
-3. Il sélectionne **ce seul personnage**, appelle la même fonction d'interface, puis restaure
-   exactement la sélection, l'escouade affichée et le personnage du panneau de détails
-   (`WithSelection`).
-4. Chaque ordre est journalisé : `[nom] order "..." (n) on X -> ok/FAILED`.
+2. L'hôte vérifie l'acteur (`Authorize` puis `AdmitActor` : un perso de ce joueur), retrouve le
+   sujet et le bâtiment (par type et endroit s'il le faut), puis vérifie que la tâche accepte ce
+   sujet (`TaskTargetAllowed`) : sinon refus, rien n'est appelé.
+3. Il sélectionne **exactement ce personnage** (`kenshi::SelectExactly` : `unselectAll` garde le
+   perso principal sélectionné, il en est retiré ; sélection vérifiée, sinon refus), appelle la même
+   fonction d'interface, puis restaure exactement la sélection, l'escouade affichée, le personnage du
+   panneau de détails et le `hand` principal global `0x21345D0` (`WithSelection`). Témoin : si un perso
+   de la sélection de l'hôte reçoit une tâche pendant l'appel, ligne `SAFETY:` et compteur `leaks`.
+4. Chaque ordre est journalisé : `[nom] order "..." (n) on X -> ok/FAILED`, et le client reçoit un
+   `Result` (fait, ou rejeté avec la raison).
 
 ### Dialogues (`SendDialogs`, `KenshiWorld::Note*`)
 - Les bulles de l'hôte partent à tout le monde.

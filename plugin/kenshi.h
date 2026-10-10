@@ -458,8 +458,16 @@ void SetDialogueShouting(void* dialogue, bool shout);
 bool ReadDialogueWindowText(const void* dialogue, std::string& text, std::vector<std::string>& replies);
 // A std::string the game can read (const&) for as long as `s` lives; 0x28 bytes.
 void GameStringView(const std::string& s, void* out);
-// Orders: make `only` the whole selection, run `fn`, then restore the player's selection.
-void WithSelection(Character* only, const std::function<void()>& fn);
+// Orders: make `actors` the whole selection (exactly them: nothing else), run `fn`, then restore the
+// player's selection, squad bar, details panel and main hand, all within the call. False (and `fn`
+// not run) when the selection could not be made exactly that: the game's unselectAll keeps the
+// main selected character, and an order given then would go to it too.
+bool WithSelection(const std::vector<Character*>& actors, const std::function<void()>& fn, std::string* why);
+bool WithSelection(Character* only, const std::function<void()>& fn);
+// Make `actors` the whole selection (no restore): false, with the reason, when something else stays
+// selected or an actor cannot be selected.
+bool SelectExactly(const std::vector<Character*>& actors, std::string* why);
+int SelectionRestoreFailures();   // times the player's selection could not be put back exactly
 // Run `fn`, then put the player's selection, squad bar and details panel back as they were (fn may
 // select characters: a squad created or joined).
 void KeepSelection(const std::function<void()>& fn);
