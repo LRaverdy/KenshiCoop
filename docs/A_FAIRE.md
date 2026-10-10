@@ -119,6 +119,10 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   ne plus réessayer sans fin un perso que la fabrique refuse (liste noire par modèle) ; couper les
   journaux par image ; étaler les créations de persos sur plusieurs images (les gels = beaucoup de
   persos créés d'un coup à l'arrivée dans une zone).
+- **PNJ assommés vus debout chez nass4** : il les a mis K.-O., peut les piller (l'hôte les sait à
+  terre), mais chez lui ils restent debout. La posture « à terre » n'est pas appliquée chez lui
+  (ou relevée aussitôt : voir la boucle « stood up to fall where the host's lies » des prisonniers,
+  même mécanisme). À vérifier avec la correction de cette boucle.
 - **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
