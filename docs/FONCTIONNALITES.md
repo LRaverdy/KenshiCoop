@@ -771,6 +771,55 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
 - **Test en jeu** : `python tools/coop_test.py diplomacy` (voir [TESTS.md](TESTS.md)). Test
   unitaire `TestDiplomacy`.
 
+### Carte, minicarte, repères des joueurs, pings 🟡 (implémenté, à vérifier en jeu)
+- **Une couleur par joueur**, la même partout et chez tout le monde (`kc::PlayerColor`,
+  `common/include/kc/colors.h`) : or (l'hôte), bleu, vert, magenta, orange, cyan, blanc, violet.
+  Le rouge est réservé aux ennemis.
+- **Carte du monde (touche M)** : par-dessus la carte du jeu, chaque joueur voit **tous les persos
+  de tous les joueurs** (gros point : le perso du joueur, petit : une recrue), à la couleur de leur
+  joueur, même ceux qui sont très loin de lui (hors de la zone que son jeu a chargée). En rouge,
+  les **escouades hostiles qui nous visent** : un raid ou une vague d'attaque du jeu dont la cible
+  est notre faction (cercle qui pulse), une escouade qui se bat contre un de nos persos, ou une
+  escouade que le jeu marque « ennemie » à moins de ~250 m d'un de nos persos ; le nombre de
+  persos au-dessus. Une **légende** dans le coin de la carte ; au survol d'un point, une
+  **infobulle** : nom, joueur (ou « recrue »), état, **distance** depuis le perso sélectionné. Les
+  points suivent la carte quand on la fait glisser ou qu'on zoome (projection du jeu, relue à
+  chaque image).
+- **Minicarte** ronde dans un coin (au choix), centrée sur le perso sélectionné (sinon le sien),
+  nord en haut ou tournant avec la caméra ; fond : la carte du jeu (`GUI_Map.dds`) découpée dans le
+  cercle, sinon une grille. Persos des joueurs, ennemis, pings (flèche sur le bord quand ils sont
+  hors du cercle), repère « N », échelle en mètres, boutons + / − et molette au survol, infobulles.
+  Cachée au menu, pendant les chargements, dans l'éditeur de personnage et quand l'écran de
+  gestion (carte, escouades…) est ouvert. Ctrl+Shift+N l'affiche ou la cache ; zoom, coin,
+  rotation retenus dans `KenshiCoop.ini` (`[ui]`).
+- **Repère au-dessus de la tête** de chaque perso de joueur (pas des recrues) : un petit curseur à
+  la couleur du joueur, avec son nom, projeté avec la caméra du jeu ; rien quand le perso est hors
+  de l'écran ou derrière la caméra.
+- **Barre d'escouade** : le portrait des persos des joueurs reçoit un cadre à la couleur du joueur
+  (dessiné par l'overlay sur le rectangle du portrait lu dans le jeu) ; les recrues gardent le
+  cadre normal.
+- **Pings** : clic molette ou Alt+clic sur la carte, sur la minicarte ou sur le sol (un clic
+  molette court : le clic molette tenu tourne toujours la caméra). Sans touche : « Aller ici » ;
+  Maj : « Danger / ennemis » ; Ctrl : « Butin » ; Maj+Ctrl : « À l'aide ». Le ping apparaît chez
+  tout le monde à la couleur et au nom de son joueur : sur la carte, la minicarte et en 3D au-dessus
+  du point avec la distance ; il s'efface en 10 s. Au plus un ping toutes les 0,5 s et 5 en même
+  temps par joueur (le plus ancien part). Un ping ne change rien au monde. Pas de son (aucun son
+  d'interface simple trouvé dans le jeu).
+- **Réglages** : fenêtre Multijoueur, section « Affichage » (carte, repères, barre d'escouade,
+  minicarte, rotation, coin, pings) ; tout est retenu dans `KenshiCoop.ini`.
+- **Fonctionnement** : l'hôte envoie trois fois par seconde à tout le monde (`MapMarkers`) la
+  liste des joueurs, la position de chaque perso de l'escouade avec son joueur et s'il est « son »
+  perso (celui créé pour lui ou qui porte son nom ; sinon son premier perso), et les escouades
+  hostiles (au plus 128 persos, 32 escouades). La carte, la minicarte, les repères et la barre de
+  chaque joueur, l'hôte compris, en sont tirés ; un perso présent dans le monde local est placé à
+  sa position locale (fluide). Un ping de client part à l'hôte (`MapPing`), qui vérifie le rythme
+  et le renvoie à tous. **Protocole 33.**
+- **Limites / à vérifier en jeu** : tout (aucun essai en jeu encore) ; un raid lointain encore
+  « abstrait » (escouade pas chargée chez l'hôte) n'est pas montré ; le sol d'un ping 3D est pris
+  plat à la hauteur du perso centré ; la vue de la caméra et l'échelle des coordonnées MyGUI sont
+  supposées (docs/MOTEUR.md § 11) ; un Alt+clic gauche ne va plus au jeu tant que les pings sont
+  actifs ; hors session (partie solo) la minicarte montre l'escouade locale, sans ennemis ni pings.
+
 ### Précision des PNJ lointains 🟡 implémenté, à vérifier en jeu
 - Loin de l'escouade du client (plus de 300 unités), le jeu ne déplace un personnage que quelques
   fois par seconde et garde sa propre idée de sa position : le rappel progressif n'y tient pas. Le

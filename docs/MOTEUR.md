@@ -188,6 +188,11 @@ Les signatures sont celles du commentaire du code.
 | diplomatie | `FnUniqueMapIndex` | `operator[]` de la table de `UniqueNPCManager` | `0x349950` | — | paire `<GameData* const, UniqueCharacterState>` créée si absente (comme au chargement `0x9AA270`) |
 | diplomatie | `FnTownSetOverride` | `TownBase::setOverride(GameData*)` | `0x9FE7A0` | — | applique une variante de ville (voir « Diplomatie ») |
 | diplomatie | `FnTownSetFaction` | `TownBase::setFaction(Faction*, bool)` | `0x9287D0` | — | vt 0xA0 de `Town` / `TownBase` : change la faction d'une ville |
+| carte | `FnMapWorldToCoords` | `MapScreen::worldToMapCoords(const Vector3&)` | `0x48C3E0` | — | projection de la carte (voir § Carte) ; appelée seulement par la commande de test `mapproj` |
+| carte | `FnMapMarkerColor` | `MapScreen::getMarkerColor(RootObjectBase*)` (statique) | `0x48F320` | — | couleur du point du jeu : allié / neutre / ennemi / joueur ; l'hôte s'en sert pour « hostile » |
+| carte | `FnWarCurrentCampaign` | `FactionWarMgr::getCurrentCampaign(Platoon*)` | `0x283500` | — | la campagne (raid, vague d'attaque, visite) d'une escouade, ou nul ; recherche dans `forces` (+0x28), sans insertion |
+| carte | `FnPortraitCellUpdate` | `PortraitMainCellView::update(const IBDrawItemInfo&, PortraitData*)` | `0x415150` | oui | un portrait de la barre d'escouade est (re)dessiné : le mod retient la cellule |
+| carte | `FnPortraitCellDtor` | `PortraitMainCellView::~PortraitMainCellView()` | `0x426450` | oui | destructeur complet (le destructeur virtuel `0x4264E0` l'appelle) : le mod oublie la cellule |
 
 | validité | `FnTerrainHeight` | `UtilityT::getTerrainHeight(float x, float z)` | `0x9B3710` | — | le sol sous l'eau éventuelle ; -99 où aucun terrain n'est connu (saut vers `getTerrainHeightFast(x, z, nullptr)` `0x9B32F0`) |
 | validité | `FnTerrainWithWaterHeight` | `UtilityT::getTerrainWithWaterHeight(float x, float z)` | `0x9B3720` | — | max(sol, 100) : la hauteur que `createBuildings` retire à la position (appel vérifié à `0x4D7512`) |
@@ -1289,3 +1294,75 @@ Lu dans le 1.0.68 (désassemblage), pour que l'hôte refuse ce que le mode const
   pente (normale du terrain à ±2 sous 0,2). Pas refait : collision des empreintes, personnages
   dans le passage, nœuds d'usage, étage, prospection, aimantation. Terrain inconnu chez l'hôte
   (-99) : refusé (« réessaie »).
+
+## 11. Carte du monde, caméra, barre d'escouade (marqueurs de carte, minicarte, pings) [D]
+
+Adresses 1.0.68 traduites depuis KenshiLib 1.0.65 (`translate.py` : décalage +0x780 dans la zone
+`MapScreen`, +0x30D0 pour ses données statiques) puis lues au désassembleur.
+
+**Où est la carte** : `ManagementScreen::singleton` à `0x212F4F8` (lu dans `getSingleton`
+`0x296CA0`, qui la crée si elle manque : le mod lit le pointeur, n'appelle pas la fonction ;
+vtable `0x16DCDF0`). `ManagementScreen` : +0x8 sa fenêtre MyGUI (visible = l'écran de gestion est
+ouvert, `refreshMap` `0x49B550` la teste ainsi), +0xA8 `MapScreen*` (`refreshMap` y appelle
+`centerCamera`).
+
+**`MapScreen`** (pas de vtable) : +0x10 widget principal (`getVisible` `0x48BE60` = `mainWidget->getVisible()`),
++0x18 `ScrollView` (partie visible), +0x20 `ImageBox` de la carte (texture `GUI_Map.dds` d'après
+`data/gui/layout/Kenshi_OverviewWindow.layout` ; sa taille suit le zoom, sa position le
+défilement), +0x194 `worldBounds` (x min, z min, …), +0x1A4 `worldSize` (x, z). Les bornes sont
+écrites dans le constructeur (`0x490210`) : valables dès le chargement, carte jamais ouverte.
+
+**Projection** (`worldToMapCoords` `0x48C3E0`, `TPoint<int>` rendu par pointeur caché, rcx =
+`MapScreen`, rdx = sortie, r8 = position) :
+`x_image = (x - worldBounds.x) / worldSize.x * largeur(image)`,
+`y_image = (z - worldBounds.y) / worldSize.y * hauteur(image)`, arrondis ; la largeur et la
+hauteur lues dans le widget (+0x28 / +0x2C de `MyGUI::Widget`, c.-à-d. `mCoord.width/height` de
+l'`ICroppedRectangle` placé à +0x8). Le z croissant descend sur la carte : le nord (z
+décroissant) est en haut. Le mod refait ce calcul à partir du rectangle absolu de l'image ; la
+commande `mapproj` compare au résultat de la fonction du jeu.
+
+**MyGUI** (exports de `MyGUIEngine_x64.dll`, appelés par `GetProcAddress`) :
+`Widget::getInheritedVisible` (le widget et tous ses parents visibles : faux quand l'onglet carte
+n'est pas choisi ou l'écran fermé), `ICroppedRectangle::getAbsoluteCoord` (this = widget + 0x8,
+`TCoord<int>` rendu par pointeur caché). Les coordonnées MyGUI sont prises comme des pixels du
+tampon d'affichage [U : vrai pour la fenêtre de jeu, non vérifié avec une mise à l'échelle de
+l'interface].
+
+**Couleurs des points du jeu** (`MapScreen::getMarkerColor` `0x48F320`, statique) :
+`MarkerColourAlly` `0x212F538`, `Neutral` `0x212F548` (aussi pour un objet nul), `Enemy`
+`0x212F558`, `Player` `0x212F568`, `PlayerSelected` `0x212F578`. Lecture seule : faction de
+l'objet (vt 0x58), `Faction::isPlayer` (+0x250), relations avec le joueur (`0x2134690` =
+`GameWorld`+0x580 `PlayerInterface*`).
+
+**Raids et vagues d'attaque** : `Faction`+0x88 `FactionWarMgr*` (vérifié dans
+`Blackboard::getMissionTarget` `0x269B60` : `platoon->getFaction()` (vt 0x58) puis +0x88, puis
+`getCurrentCampaign`). `getCurrentCampaign(Platoon*)` `0x283500` → `CampaignInstance*` ou nul.
+`CampaignInstance` : +0x10 `CampaignData*`, +0x70 sa faction, +0x78 `enemy` (la faction attaquée ;
+vérifié dans le constructeur `0x9D4770`, 4e argument). `CampaignData`+0x12 `_isHostile`
+(`isHostile` `0x2856B0`). Un perso → son escouade : `Character`+0x658 `ActivePlatoon*`, +0x78
+`Platoon*`. Limite : seules les escouades chargées (personnages actifs chez l'hôte) sont vues ; un
+raid encore « abstrait » loin de tout joueur n'a pas de position.
+
+**Caméra 3D** : `PlayerInterface`+0x30 `CameraClass*` (`getCamera` `0x3E7060`), `CameraClass`+0x20
+`initialised` (`isInitialised` `0xA1B030`), +0x68 `Ogre::Camera*` (`getCameraPos` `0x1008F0`).
+Matrices par les exports d'`OgreMain_x64.dll` : `Camera::getViewMatrix` (virtuelle, version sans
+argument) et `Frustum::getProjectionMatrix` ; projection = proj × vue (lignes, Ogre). Une ligne de
+la vue = l'axe z de la caméra : la direction regardée est −(m[2][0], m[2][2]) en (x, z).
+[U : la vue rendue par `getViewMatrix` est la vue complète, même si Ogre rend « relatif à la
+caméra » ; à confirmer en jeu, la commande `mapscene tetes` donne les points projetés.]
+
+**Barre d'escouade** : `PortraitMainCellView` (vtable `0x16D26F8`), une par portrait : +0x8
+widget principal (`BaseCellView::mMainWidget` ; `update` lit sa largeur à +0x28), +0xA8
+`characterHandle` (hand), +0xF0 bouton cadre (`Button::setStateSelected`), +0x100 image du
+portrait. `update` `0x415150` ne touche à aucune couleur (seulement taille, alpha, état
+« sélectionné », images) : un cadre de couleur ajouté par-dessus n'est pas effacé par le jeu,
+mais le mod dessine le sien dans l'overlay plutôt que de teinter les widgets du jeu (les cellules
+sont réutilisées pour d'autres persos et la couleur d'origine du skin n'est pas lisible).
+
+**Texture de la carte** : `data/gui/gfx/GUI_Map.dds`, 8192 × 8192 DXT1, 14 niveaux. La minicarte
+lit le niveau de 2048 px (offset = somme des niveaux plus grands) et en fait une texture D3D11.
+Un mod qui remplace la carte du jeu n'est pas suivi (le fichier de base est lu).
+
+**Pas de son d'interface trouvé** : aucune fonction « jouer un son d'interface » simple dans
+KenshiLib (`InventoryGUI::playSound(eventId, Item*)` dépend d'un objet) : les pings sont muets.
+

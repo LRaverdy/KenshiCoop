@@ -740,6 +740,7 @@ const MessageRule kMessageRules[] = {
     {Msg::ClientReport, AuthRole::Connected, AuthSubject::None, "sync report"},
     {Msg::Chat, AuthRole::Connected, AuthSubject::None, "chat"},
     {Msg::Ping, AuthRole::Connected, AuthSubject::None, "ping"},
+    {Msg::MapPing, AuthRole::InGame, AuthSubject::None, "map ping"},   // rate-limited by HostPingPacket (kPingInterval)
 };
 } // namespace
 const MessageRule* MessageRuleFor(Msg type) {
@@ -921,7 +922,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || (t > uint8_t(Msg::BuildAction) && t != uint8_t(Msg::JobList) && t != uint8_t(Msg::Stall) && t != uint8_t(Msg::Floors) && t != uint8_t(Msg::BagBind) && t != uint8_t(Msg::JoinQueue) && t != uint8_t(Msg::Diplomacy) && t != uint8_t(Msg::Result))) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || (t > uint8_t(Msg::BuildAction) && t != uint8_t(Msg::JobList) && t != uint8_t(Msg::Stall) && t != uint8_t(Msg::Floors) && t != uint8_t(Msg::BagBind) && t != uint8_t(Msg::MapMarkers) && t != uint8_t(Msg::MapPing) && t != uint8_t(Msg::JoinQueue) && t != uint8_t(Msg::Diplomacy) && t != uint8_t(Msg::Result))) return std::nullopt;
     return Msg(t);
 }
 

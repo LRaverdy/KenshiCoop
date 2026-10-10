@@ -251,6 +251,10 @@ public:
     // keep a caged character where the cage holds it.
     virtual bool ReadCaptive(const Handle& h, CaptiveState& out) { (void)h; (void)out; return false; }
     virtual void ApplyCaptive(const Handle& h, const CaptiveState& s) { (void)h; (void)s; }
+    // ---- map: hostile squads for the players' maps (host). Raid parties whose campaign targets the
+    // player faction (anywhere they are loaded), squads fighting a player character, and squads the
+    // game marks as enemies within `radius` of one of `centers`. At most kMaxMapThreats.
+    virtual void ReadMapThreats(const std::vector<Vec3>& centers, float radius, std::vector<MapThreat>& out) { (void)centers; (void)radius; out.clear(); }
     // ---- lot C: ranged combat. Host: the shots its game fired since the last call (fired on any
     // thread; the world queues them); where a character in ranged combat aims (false: not in it);
     // turrets near these points and where they aim. Client: fire the host's shot here (visual only:
@@ -498,6 +502,21 @@ public:
     bool InjectForTest(uint8_t playerId, const Writer& w);
     // tests (client): send this order as is, without our own checks (a forged request)
     bool SendRawCommandForTest(Command c);
+    // ---- map (session_map.cpp). Markers: built here (host) or received (client) a few times a
+    // second; age in seconds (a large value: none yet). Pings: the live ones, oldest first; PlaceMapPing()
+    // puts one for the local player (false: too soon after the last one, or not in a session).
+    const MapMarkersMsg& mapMarkers() const { return mapMarkers_; }
+    double mapMarkersAge() const;
+    struct LivePing {
+        MapPingMsg ping;
+        double at = 0;      // when it appeared here (session clock)
+    };
+    const std::vector<LivePing>& pings() const { return pings_; }
+    double pingAge(const LivePing& p) const;
+    bool PlaceMapPing(const Vec3& pos, PingKind kind);
+    bool netIdHandle(uint32_t netId, Handle& out) const;   // the character a map marker names
+    static constexpr double kPingLife = 10.0, kPingInterval = 0.5;
+    static constexpr size_t kPingsPerPlayer = 5;
 
 private:
     struct Sample { double t; EntityState s; };
@@ -827,6 +846,19 @@ private:
     void HostCaptives(double now);
     void ClientCaptives(double now);
     void OnCaptives(Reader& r);
+    // ---- map (session_map.cpp)
+    MapMarkersMsg mapMarkers_;
+    double mapMarkersAt_ = -1e9, nextMapMarkers_ = 0;
+    std::vector<LivePing> pings_;
+    std::map<uint8_t, double> lastPingAt_;   // per player (host); [0]: ours (client)
+    uint32_t nextPingId_ = 1;
+    std::vector<Vec3> scratchCenters_;
+    void HostMapMarkers(double now);
+    void HostPingPacket(uint8_t from, Reader& r);
+    void ClientMapPacket(Msg type, Reader& r);
+    void AddPing(const MapPingMsg& m);   // host: also shown to every player
+    void PrunePings(double now);
+    void ResetMap();
     // ---- lot C: ranged combat (session_ranged.cpp). Host: shots go out as they are fired, aims a few
     // times a second when they change. Client: fired / imposed on the next live tick.
     void HostRanged(double now);

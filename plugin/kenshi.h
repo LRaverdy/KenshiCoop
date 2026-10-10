@@ -48,6 +48,11 @@ inline constexpr uintptr_t VtEffectGroupPoint = 0x168be10;        // point effec
 inline constexpr uintptr_t VtEffectGroupWandering = 0x168be58;    // wandering storms and gas clouds
 inline constexpr uintptr_t VtEffectHandlerPoint = 0x168c0a8;
 inline constexpr uintptr_t VtEffectHandlerWandering = 0x168c128;
+// ---- map markers
+inline constexpr uintptr_t ManagementScreenSingleton = 0x212F4F8;   // ManagementScreen* (the map, squads, research... window)
+inline constexpr uintptr_t VtManagementScreen = 0x16dcdf0;
+inline constexpr uintptr_t MarkerColourEnemy = 0x212F558;           // MapScreen::MarkerColourEnemy (what getMarkerColor returns for an enemy)
+inline constexpr uintptr_t VtPortraitCell = 0x16d26f8;              // PortraitMainCellView
 } // namespace rva
 
 struct FunctionSig {
@@ -217,6 +222,12 @@ enum Fn : int {
     FnUniqueMapIndex,           // pair<GameData* const, UniqueCharacterState>* UniqueNPCManager's unordered_map<GameData*, UniqueCharacterState>::operator[](GameData* const&)   (creates)
     FnTownSetOverride,          // void TownBase::setOverride(GameData* override)   (+0x338, type, public, no-foliage range, and the override's faction)
     FnTownSetFaction,           // void TownBase::setFaction(Faction*, bool)   (vt 0xA0: moves the town to that faction's town list)
+    // ---- map markers (plugin/map.cpp)
+    FnMapWorldToCoords,         // TPoint<int> MapScreen::worldToMapCoords(const Vector3&)   (ret via hidden ptr; the map screen's projection)
+    FnMapMarkerColor,           // static const MyGUI::Colour& MapScreen::getMarkerColor(RootObjectBase*)   (ally / neutral / enemy / player dot)
+    FnWarCurrentCampaign,       // CampaignInstance* FactionWarMgr::getCurrentCampaign(Platoon*)   (the raid or attack wave a squad belongs to, or null)
+    FnPortraitCellUpdate,       // void PortraitMainCellView::update(const IBDrawItemInfo&, PortraitData*)   (a squad bar portrait is (re)drawn)
+    FnPortraitCellDtor,         // PortraitMainCellView::~PortraitMainCellView()
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];

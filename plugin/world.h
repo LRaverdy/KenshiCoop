@@ -126,6 +126,8 @@ public:
     // ---- end lot A
     // ---- lot D: prisons (plugin/prisons.cpp)
     bool ReadCaptive(const kc::Handle& h, kc::CaptiveState& out) override;
+    // ---- map markers (plugin/map.cpp): hostile squads near the players (host)
+    void ReadMapThreats(const std::vector<kc::Vec3>& centers, float radius, std::vector<kc::MapThreat>& out) override;
     void ApplyCaptive(const kc::Handle& h, const kc::CaptiveState& s) override;
     bool CaptiveHold(const kc::Handle& h, kenshi::Character* c);   // client: the host keeps it in a cage here
     // Hooks (host): the game asked for a trade window for another player's character (any thread);
