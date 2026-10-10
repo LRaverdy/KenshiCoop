@@ -1153,6 +1153,18 @@ bool hk_worldDestroy(void* world, void* obj, bool justUnloaded, const char* info
     return o_worldDestroy(world, obj, justUnloaded, info);
 }
 
+// A client in a session never saves: its world is the host's, and a save (quick save, the save
+// menu, an autosave) would write it over one of the player's own save slots. Refused.
+using SaveFn = void (*)(void* sm, void* name, bool autosave);
+SaveFn o_saveManagerSave = nullptr;
+void hk_saveManagerSave(void* sm, void* name, bool autosave) {
+    if (KenshiWorld::ClientActive()) {
+        Log("client: the game's %s refused (the world is the host's: it must not overwrite a save of this player)", autosave ? "autosave" : "save");
+        return;
+    }
+    o_saveManagerSave(sm, name, autosave);
+}
+
 struct HookDef {
     kenshi::Fn fn;
     void* detour;
@@ -1413,6 +1425,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnAddConstructionProgress, reinterpret_cast<void*>(&hk_addConstruction), reinterpret_cast<void**>(&o_addConstruction)},
         {kenshi::FnAddDismantleProgress, reinterpret_cast<void*>(&hk_addDismantle), reinterpret_cast<void**>(&o_addDismantle)},
         {kenshi::FnWorldDestroy, reinterpret_cast<void*>(&hk_worldDestroy), reinterpret_cast<void**>(&o_worldDestroy)},
+        {kenshi::FnSaveManagerSave, reinterpret_cast<void*>(&hk_saveManagerSave), reinterpret_cast<void**>(&o_saveManagerSave)},
     };
     const MH_STATUS init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {

@@ -3065,6 +3065,152 @@ def exp_carry(host, cli):
     check("poser PNJ : plus porte chez le client", cmd(cli, "carrying 0")[1] == "ok none")
 
 
+
+CLIENT_FAKE_ID = 76561190000000002
+
+
+def exp_crashrejoin(host, cli, only=None):
+    """A client killed hard (taskkill /F) in various situations, then relaunched with the same fake
+    Steam id and joined again: the host notices, cleans up after it (characters halted and back to
+    the host, windows and holds released) and stays alive and unpaused; the player gets the same
+    characters back (count, inventory), nothing duplicated, the worlds match. (g): the relaunch
+    beats the host's timeout (the new connection replaces the old one)."""
+    state = {"cli": cli}
+
+    def owned(d):
+        """The client's characters in a host dump: squad key -> inventory."""
+        keys = {e["key"] for e in d["entity"].values() if e.get("owner") not in (None, "0", "1")}
+        return {k: d["squad"][k].get("inv", "") for k in keys if k in d["squad"]}
+
+    def kill_client():
+        pid = state["cli"]
+        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+        deadline = time.time() + 20
+        while alive(pid) and time.time() < deadline:
+            time.sleep(0.2)
+        log(f"client {pid} killed hard")
+        return time.time()
+
+    def relaunch():
+        c = launch(fake_steam_id=CLIENT_FAKE_ID)
+        state["cli"] = c
+        log("client relaunched, pid", c)
+        wait_for(c, lambda s: s.get("state") == "idle", 120, "client menu")
+        time.sleep(3)
+        ok, t = cmd(c, "join " + os.environ["KC_JOIN"]) if os.environ.get("KC_JOIN") else cmd(c, "join")
+        log("join", ok, t)
+        wait_for(c, lambda s: s.get("state") == "connected" and s.get("ready") == "1", 240, "client back in host world")
+        arrange(host, c)
+        time.sleep(4)
+        return c
+
+    def host_speed():
+        t = cmd(host, "paused")[1].split()   # ok <paused> <speed>
+        return (t[1] == "1", float(t[2])) if len(t) >= 3 else (None, -1.0)
+
+    def run(label, prepare, quick=False):
+        if only and label[0] not in only:
+            return
+        log("=" * 20, "crash", label)
+        cmd(host, "speed 1")
+        time.sleep(2)
+        before = owned(dump(host, f"h_crash_{label[0]}_before"))
+        log("client's characters before:", sorted(before))
+        prepare()
+        logged = len(host_log())
+        t_kill = kill_client()
+        detected = None
+        if not quick:
+            while time.time() - t_kill < 40:
+                if " disconnected (" in host_log()[logged:]:
+                    detected = round(time.time() - t_kill, 1)
+                    break
+                time.sleep(0.25)
+            check(f"crash client {label} : l'hote voit la deconnexion en quelques secondes", detected is not None and detected < 20, detected)
+            new = host_log()[logged:]
+            check(f"crash client {label} : l'hote nettoie (persos rendus et arretes)", "cleaned up:" in new, new[-300:])
+            check(f"crash client {label} : l'hote reste vivant", alive(host))
+            time.sleep(3)
+        c = relaunch()
+        new = host_log()[logged:]
+        if quick:
+            check(f"crash client {label} : la nouvelle connexion remplace l'ancienne", "reconnected: the old connection" in new, new[-300:])
+        check(f"crash client {label} : l'hote reste vivant", alive(host))
+        check(f"crash client {label} : le joueur retrouve ses persos", "is back" in new, new[-300:])
+        time.sleep(3)
+        cmd(host, "pause 1")
+        time.sleep(3)
+        hd, cd = dump(host, f"h_crash_{label[0]}"), dump(c, f"c_crash_{label[0]}")
+        after = owned(hd)
+        check(f"crash client {label} : memes persos (nombre, noms)", sorted(after) == sorted(before), (sorted(before), sorted(after)))
+        same_inv = all(after.get(k) == v for k, v in before.items())
+        check(f"crash client {label} : memes inventaires", same_inv or label.startswith("b"),   # a fight can change them
+              [k for k, v in before.items() if after.get(k) != v][:3])
+        check(f"crash client {label} : pas de doublon", len(cd["squad"]) == len(hd["squad"]), (len(hd["squad"]), len(cd["squad"])))
+        rep = compare(hd, cd, f"crash {label}", pos_tol=0.5)
+        print_report(rep)
+        check(f"crash client {label} : mondes identiques ensuite",
+              rep["missing_on_client"] == 0 and rep["extra_on_client"] == 0 and rep["inventory_mismatch"] == 0 and rep["vital_flag_mismatch"] == 0,
+              (rep["missing_on_client"], rep["extra_on_client"], rep["inventory_mismatch"], rep["vital_flag_mismatch"]))
+        cmd(host, "pause 0")
+        time.sleep(3)
+        paused, speed = host_speed()
+        check(f"crash client {label} : l'hote n'est pas reste en pause", paused is False, (paused, speed))
+
+    time.sleep(6)
+    cmd(state["cli"], "editdone")   # a new character's editor, at the first join
+    time.sleep(3)
+    own = own_index(host)
+    npc = {"key": None}
+
+    def idle():
+        pass
+
+    def fight():
+        ok, t = cmd(host, f"spawnnpc 40 20 {own}")
+        npc["key"] = t.split()[1] if ok else None
+        log("spawn npc:", t, "| fight:", cmd(host, f"fight {own}"), "| speed 3:", cmd(host, "speed 3"))
+        time.sleep(5)
+
+    def carry():
+        ok, t = cmd(host, f"spawnnpc 12 4 {own}")
+        time.sleep(4)
+        log("ko", cmd(host, "ko"))
+        time.sleep(6)
+        log("carrynpc", cmd(host, f"carrynpc {own}"))
+        time.sleep(3)
+        log("carrying (client's character):", cmd(host, f"carrying {own}"))
+
+    def trade():
+        log("trade window:", cmd(host, f"tradeopen {own} any"))
+        time.sleep(4)
+        log("client trade state:", cmd(state["cli"], "tradestate")[1][:120])
+
+    def loot():
+        ok, t = cmd(host, f"spawnnpc 10 4 {own}")
+        key = t.split()[1] if ok else "?"
+        time.sleep(4)
+        log("ko", cmd(host, "ko"))
+        time.sleep(5)
+        log("client loots:", cmd(state["cli"], f"loot {key} {own_index(state['cli'])}"))
+        time.sleep(4)
+
+    def editor():
+        log("client opens the character editor:", cmd(state["cli"], "editchar"))
+        time.sleep(5)
+        log("host paused while editing:", host_speed())
+
+    run("a idle", idle)
+    run("b fight speed 3", fight)
+    run("c carry", carry)
+    run("d trade", trade)
+    run("e loot", loot)
+    run("f editor", editor)
+    run("g quick relaunch", idle, quick=True)
+    summary()
+    return state["cli"]
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="what", required=True)
@@ -3098,6 +3244,11 @@ def main():
     t.add_argument("--save", default="kctest_base")
     e = sub.add_parser("bodies")
     e.add_argument("--save", default="kctest_base")
+    cr = sub.add_parser("crashrejoin", help="client killed hard (idle, fight at speed 3, carrying, trading, looting, "
+                        "editor, quick relaunch), relaunched with the same fake Steam id and joined again")
+    cr.add_argument("--save", default="kctest_base")
+    cr.add_argument("--only", default=None, help="letters of the scenarios to run, e.g. 'ag'")
+    cr.add_argument("--keep", action="store_true")
     cp = sub.add_parser("clientpickup")
     cp.add_argument("--save", default="kctest_base")
     cp.add_argument("--keep", action="store_true")
@@ -3333,6 +3484,8 @@ def main():
             exp_lootui(host, cli)
         elif a.what == "items":
             exp_items(host, cli)
+        elif a.what == "crashrejoin":
+            exp_crashrejoin(host, cli, a.only)
         elif a.what == "carry":
             exp_carry(host, cli)
         elif a.what == "dead":

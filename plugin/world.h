@@ -169,6 +169,7 @@ public:
     void ApplySquads(const std::vector<WorldSquad>& squads) override;
     void ApplyMoney(int32_t money) override { kenshi::WritePlayerMoney(money); }
     bool Order(const kc::Handle& h, const kc::Command& c) override;
+    void HaltCharacter(const kc::Handle& h) override;
     void TakeLocalOrders(std::vector<std::pair<kc::Handle, kc::Command>>& out) override;
     bool ReadInventory(const kc::Handle& h, std::vector<kc::ItemState>& out) override;
     bool ExecuteInvOp(const kc::Handle& from, const kc::Handle& to, const kc::InvOp& op) override;
