@@ -6,6 +6,8 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+- **Tests carry / lootswap / groundpick (essais du 10/10, 02:37–02:45)** : `lootswap` et `groundpick` donnaient leurs ordres au `squad0` du client, qui est le perso de l'hôte : le client les refusait (« inventory change refused: that character belongs to Coucoudz ») ou les jetait sans rien dire (aucune ligne « pick up » chez l'hôte). Ils utilisent maintenant le perso du client (`own_index`), et le client journalise un ordre local jeté (« local order dropped: … »). `carry` : la position du jeu d'un corps porté est celle du porteur ; le test vérifie l'animation « porté » (`where` affiche `carried=0/1`) et compare à l'hôte. Pose d'un corps chez le client : lâché sans ragdoll, placé là où est celui de l'hôte, puis il tombe (`ReadyToFall`) ; il tombait de l'épaule du porteur local, à 12 unités de celui de l'hôte.
+
 - **Tests en jeu carry / lootswap / groundpick** : `carry` lit la position du corps chez le client par sa clé (`where npc` n'existe que chez l'hôte) ; `lootswap` habille d'abord le PNJ ou le perso du client pour avoir un emplacement commun (`invsecs`, `invswap ... any`) ; les vérifications du journal de l'hôte lisaient des caractères au lieu de lignes. Ramassage par un client : l'hôte journalise la raison de chaque échec et, si l'ordre de ramassage du jeu ne fait pas bouger le perso en 4 s, l'y envoie lui-même.
 
 - **Fix G5, suite des tests en jeu** : un mode de la barre (passif...) basculé par l'hôte avec un perso

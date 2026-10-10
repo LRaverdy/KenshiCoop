@@ -147,6 +147,7 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 | `[X] vitals: … faints as on the host (now down=… unconscious=… dead=…)` | K.-O. rejoué chez le client. Répétée toutes les 0,5 s : il ne prend pas (correctif en cours) |
 | `[X] posture: … falls as on the host (…)` | chute rejouée chez le client |
 | `[X] carry: …` | corps porté ou posé comme chez l'hôte |
+| `local order dropped: …` | (client) un ordre visait un perso qui n'est pas à ce joueur : il n'est pas envoyé |
 | `[X] effect N ended by the host after …` / `gone by itself …` | cycle de vie des effets météo |
 | `[X] a local Y stands in for the host's` | un PNJ local remplace un PNJ de l'hôte de même type |
 | `[X] removed N local character(s) the host does not have` | PNJ créés par le jeu du client, retirés |

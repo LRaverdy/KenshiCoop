@@ -520,8 +520,12 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         kenshi::Character* c = w.Find(h);
         kc::Vec3 p;
         if (!c || !kenshi::GetPosition(c, p)) return "err not here";
-        char b[120];
-        snprintf(b, sizeof(b), "ok %.3f,%.3f,%.3f %s", p.x, p.y, p.z, Key(h).c_str());
+        // carried=1: its animation is the "being carried" one (on a shoulder). The game's position of a
+        // carried body is its carrier's (the body is drawn on the shoulder bone), so x,y,z alone cannot tell.
+        kenshi::AnimModes am;
+        const int carried = kenshi::ReadAnimModes(c, am) ? int(am.carried) : -1;
+        char b[140];
+        snprintf(b, sizeof(b), "ok %.3f,%.3f,%.3f %s carried=%d", p.x, p.y, p.z, Key(h).c_str(), carried);
         return b;
     }
     if (cmd == "look") {   // look <name>: appearance summary of that squad member ('_' for spaces)

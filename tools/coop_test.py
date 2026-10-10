@@ -1474,7 +1474,7 @@ def exp_far(host, cli):
     def measure(label, idx):
         log("spawn", cmd(host, f"spawnnpc 15 10 {idx}"))
         time.sleep(3)
-        npc = cmd(host, "where npc")[1].split()[-1]
+        npc = cmd(host, "where npc")[1].split()[2]
         log("fight", cmd(host, f"fight {idx}"))
         time.sleep(3)
         # how often does the host's game really move them? (distinct positions per second)
@@ -2051,8 +2051,10 @@ def exp_lootswap(host, cli):
     time.sleep(5)
     log("ko", cmd(host, "ko"))
     time.sleep(5)
-    # the client's own character, as the host knows it (the host's squad0 is the host's)
-    ok, t = cmd(cli, "where 0")
+    # the client's own character, as the host knows it (squad0 is the host's own on both machines: a
+    # client refuses to move items on it, "inventory change refused: that character belongs to ...")
+    own = own_index(host)
+    ok, t = cmd(cli, f"where {own}")
     me = t.split()[2] if ok and t.startswith("ok") and len(t.split()) > 2 else None
 
     def secs(pid, who):
@@ -2087,7 +2089,7 @@ def exp_lootswap(host, cli):
                     j, idx = donors[target][1]
                     log("dress client's character", target, cmd(host, f"invmove squad{j} {me} {idx} 0 -1 -1 {target}"))
         time.sleep(4)
-    ok, text = cmd(cli, f"invswap {key} squad0 any")
+    ok, text = cmd(cli, f"invswap {key} squad{own} any")
     log("client swap", ok, text)
     if not ok:
         check("echange de vetements avec un corps", False, f"aucun emplacement commun occupe des deux cotes ({text})")
@@ -2104,6 +2106,8 @@ def exp_groundpick(host, cli):
     """fix G2: the client picks up items lying in town (save items, shop goods, clutter): the host finds
     the same one and its character takes it."""
     time.sleep(8)
+    # the client's own character: an order for squad0 (the host's character) is dropped by the client
+    own = own_index(host)
     ok, text = cmd(cli, "groundnear 600 loose")
     items = text.split()[2:] if ok else []
     log("loose items near the client's squad:", text.split()[1] if ok else text)
@@ -2113,7 +2117,7 @@ def exp_groundpick(host, cli):
     picked = 0
     for it in items[:3]:
         key, tpl, pos = it.split("|")
-        log("client asks squad0 to pick up", tpl, pos, cmd(cli, f"pickupreq 0 {tpl} {pos}"))
+        log(f"client asks squad{own} to pick up", tpl, pos, cmd(cli, f"pickupreq {own} {tpl} {pos}"))
         gone = False
         for i in range(15):
             time.sleep(2)
@@ -2355,16 +2359,28 @@ def exp_carry(host, cli):
     check("porter PNJ : le client le voit porte par le meme perso", cc == hc, f"hote {hc} / client {cc}")
     cmd(host, "moverel 0 30 0")
     time.sleep(5)
+    # The game's position of a carried body is its carrier's (the body is drawn on the shoulder bone):
+    # same x,y,z as the carrier on the host too. What tells "on the shoulder" is the body's
+    # "being carried" animation (carried=1), and the same reading as on the host.
+    def carried_flag(pid, k):
+        ok, t = cmd(pid, f"where {k}")
+        return t.split()[3] if ok and t.startswith("ok") and len(t.split()) > 3 else "?"
     me, body = pos(cli, "0"), pos(cli, key)   # "npc" (lastSpawned_) only exists on the host
-    up = body[1] - me[1] if me and body else None
-    check("porter PNJ : chez le client le corps est a l'epaule (pas sur la tete)",
-          up is not None and 5 < up < 25 and dist((me[0], 0, me[2]), (body[0], 0, body[2])) < 10, f"porteur {me} corps {body}")
+    hme, hbody = pos(host, "0"), pos(host, key)
+    rel = lambda a, b: tuple(y - x for x, y in zip(a, b)) if a and b else None
+    log("carried body vs carrier: host", rel(hme, hbody), "| client", rel(me, body))
+    cf, hf = carried_flag(cli, key), carried_flag(host, key)
+    check("porter PNJ : chez le client le corps est a l'epaule (animation portee, comme chez l'hote)",
+          cf == "carried=1" and hf == "carried=1" and dist(rel(hme, hbody), rel(me, body)) < 2,
+          f"client {cf} {rel(me, body)} / hote {hf} {rel(hme, hbody)}")
     log("carrydrop", cmd(host, "carrydrop 0"))
     time.sleep(4)
     h1, c1 = pos(host, key), pos(cli, key)
     time.sleep(3)
     c2 = pos(cli, key)
-    check("poser PNJ : le corps est la ou celui de l'hote est tombe", dist(h1, c1) < 5, f"hote {h1} / client {c1}")
+    flat = lambda p: (p[0], 0, p[2]) if p else None
+    check("poser PNJ : le corps est la ou celui de l'hote est tombe", dist(flat(h1), flat(c1)) < 5,
+          f"hote {h1} / client {c1} (ecart en hauteur {abs(h1[1] - c1[1]):.1f})" if h1 and c1 else f"hote {h1} / client {c1}")
     check("poser PNJ : pas projete (immobile apres la chute)", dist(c1, c2) < 2, f"{c1} -> {c2}")
     check("poser PNJ : plus porte chez le client", cmd(cli, "carrying 0")[1] == "ok none")
 

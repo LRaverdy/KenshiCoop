@@ -2057,7 +2057,11 @@ void Session::ClientTick(double now, bool live) {
     world_.TakeLocalOrders(scratchOrders_);
     for (auto& [h, cmd] : scratchOrders_) {
         Entity* e = entityByHandle(h);
-        if (!e || !e->squad || e->owner != localId_) continue;
+        if (!e || !e->squad || e->owner != localId_) {
+            // not one of ours (the host's character, or one the host does not know): never sent
+            log_(std::string("local order dropped: ") + (!e ? "unknown character" : !e->squad ? "not a squad member" : "that character belongs to another player"));
+            continue;
+        }
         Command c = cmd;
         c.seq = ++cmdSeq_;
         c.netId = e->netId;

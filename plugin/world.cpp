@@ -980,19 +980,21 @@ void KenshiWorld::ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& 
     const bool carrying = kenshi::ReadCarried(c, local);
     kenshi::Character* who = carry ? Find(carried) : nullptr;
     HostCallScope scope;
-    const double now = NowSeconds();
     if (carrying && (!carry || !who || kenshi::Resolve(local) != who)) {
-        // The game drops it as a ragdoll from the shoulder, where the host's fell. It must not be
-        // pulled or teleported while that ragdoll sets up (that is what threw it away).
+        // Put down without its ragdoll: our carrier is not exactly where the host's is, so a body
+        // falling from our shoulder landed a dozen units from the host's. The posture code then
+        // moves it where the host's body is, lets the pose settle and only then starts the ragdoll
+        // (ReadyToFall): a teleport while a ragdoll sets up is what threw bodies away.
         const kc::Handle dropped = HostHandleOf(local);
         kenshi::Character* body = kenshi::Resolve(local);
-        kenshi::DropCarried(c);
-        if (body && !kenshi::IsRagdoll(body) && !kenshi::IsDead(body)) kenshi::SetRagdoll(body, true);
+        kenshi::DropCarried(c, false);
+        if (body && kenshi::IsRagdoll(body)) kenshi::SetRagdoll(body, false);   // the attach step left its flag on
         carriedHere_.erase(dropped);
-        fellAt_[dropped] = now;
+        fellAt_.erase(dropped);
         fallPrep_.erase(dropped);
         lastDest_.erase(dropped);
-        Log("carry: %s puts a body down as on the host (ragdoll %d)", carry ? "swaps and" : "", body ? int(kenshi::IsRagdoll(body)) : -1);
+        postureFixed_.erase(dropped);
+        Log("carry: %sputs a body down as on the host; it falls where the host's lies (ragdoll %d)", carry ? "swaps and " : "", body ? int(kenshi::IsRagdoll(body)) : -1);
     }
     if (carry && who && (!carrying || kenshi::Resolve(local) != who)) {
         // only once it really is on the shoulder is it left alone by posture and position code

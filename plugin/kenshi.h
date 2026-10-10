@@ -418,7 +418,9 @@ bool FocusCamera(Character* c);   // tests: the camera goes to that character
 // Carrying a body on the shoulder.
 bool ReadCarried(Character* c, kc::Handle& carried);   // false: carries nothing
 bool CarryCharacter(Character* carrier, Character* who);
-bool DropCarried(Character* carrier);
+// ragdoll=false: the body is let go without starting its ragdoll (a client moves it where the host's
+// fell first, then makes it fall: see KenshiWorld::ReadyToFall).
+bool DropCarried(Character* carrier, bool ragdoll = true);
 // Standing orders (the squad bar's toggles) and fight style of one character.
 uint16_t ReadModes(Character* c, uint8_t& style);
 void SetStandingOrder(Character* c, int order, bool on);   // through the game's own function

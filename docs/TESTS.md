@@ -205,7 +205,7 @@ l'escouade triée par handle.
 | `move <index> <x> <z>` / `moverel <index> <dx> <dz>` | ordre de déplacement |
 | `teleport <index> <x> <y> <z>` | (hôte) déplacement instantané |
 | `probe <index> <dx> <dz> <simple\|teleport>` | essaie une méthode de positionnement et dit ce qui tient |
-| `pos <index>` / `where <clé\|npc\|index>` | position d'un personnage |
+| `pos <index>` / `where <clé\|npc\|index>` | position d'un personnage, et `carried=1` s'il a l'animation « porté » (la position d'un corps porté est celle du porteur) |
 | `camto <index>` | caméra sur ce membre |
 | `taskreq <sélection> <tâche> <sujet>` | sélectionne ce membre seul et donne l'ordre, comme l'interface |
 | `talkreq <sélection>` | ordre de parler au PNJ le plus proche |

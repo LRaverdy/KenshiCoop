@@ -1042,8 +1042,8 @@ using FnDrop = void (*)(void*, bool, bool);
 bool PickSeh(void* c, void* who) {
     __try { reinterpret_cast<FnPick>(FnAddr(FnPickupCharacter))(c, who); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
-bool DropSeh(void* c) {
-    __try { reinterpret_cast<FnDrop>(FnAddr(FnDropCarried))(c, true, false); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+bool DropSeh(void* c, bool ragdoll) {
+    __try { reinterpret_cast<FnDrop>(FnAddr(FnDropCarried))(c, ragdoll, false); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 } // namespace
 
@@ -1062,8 +1062,8 @@ bool CarryCharacter(Character* carrier, Character* who) {
     return PickSeh(carrier, who) && ReadCarried(carrier, got) && Resolve(got) == who;
 }
 
-bool DropCarried(Character* carrier) {
-    return IsCharacter(carrier) && DropSeh(carrier);
+bool DropCarried(Character* carrier, bool ragdoll) {
+    return IsCharacter(carrier) && DropSeh(carrier, ragdoll);
 }
 
 uint16_t ReadModes(Character* c, uint8_t& style) {
