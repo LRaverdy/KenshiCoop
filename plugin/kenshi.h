@@ -30,6 +30,9 @@ inline constexpr uintptr_t MouseInventory = 0x2132B58;      // pointer to the it
 inline constexpr uintptr_t GameNew = 0xED6504;              // the game's operator new (its CRT's)
 inline constexpr uintptr_t GameDelete = 0xED64FE;           // the game's operator delete
 inline constexpr uintptr_t VtLektor = 0x168BAF0;            // lektor<RootObject*> (the game's small vector)
+// ---- diplomacy
+inline constexpr uintptr_t UniqueNPCManager = 0x212EB00;    // pointer to UniqueNPCManager (made by its getter 0x354560): boost::unordered_map<GameData*, UniqueCharacterState>
+inline constexpr uintptr_t TownList = 0x2134100;            // pointer to TownList (+0x50 lektor<TownBase*>)
 
 inline constexpr uintptr_t VtCharacter = 0x16f9eb8;
 inline constexpr uintptr_t VtCharacterHuman = 0x16f2848;
@@ -210,6 +213,10 @@ enum Fn : int {
     FnGetNearestTown,           // Town* TownList::getNearestTown(const Vector3&, Faction* owner, Town* except, Faction* mine, TownType)
     FnWithinBordersRange,       // bool TownBase::withinBordersRange(const Vector3&, float mult) const
     FnGetNearestWithinItsRadius,// TownBase* TownList::getNearestWithinItsRadius(const Vector3&, bool skipPlayerTowns) const
+    // ---- diplomacy
+    FnUniqueMapIndex,           // pair<GameData* const, UniqueCharacterState>* UniqueNPCManager's unordered_map<GameData*, UniqueCharacterState>::operator[](GameData* const&)   (creates)
+    FnTownSetOverride,          // void TownBase::setOverride(GameData* override)   (+0x338, type, public, no-foliage range, and the override's faction)
+    FnTownSetFaction,           // void TownBase::setFaction(Faction*, bool)   (vt 0xA0: moves the town to that faction's town list)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];

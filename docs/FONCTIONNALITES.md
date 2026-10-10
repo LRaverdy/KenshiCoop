@@ -680,13 +680,34 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
     à confirmer en jeu.
 
 ### Factions, relations, primes, crimes 🟡 (implémenté, à vérifier en jeu)
-> **Primes désactivées chez le client** depuis le 10/10 (`ApplyBounties` retourne tout de suite) :
-> tous les clients plantaient à l'apparition d'une prime. Seules les relations sont appliquées.
+> **Primes jamais écrites dans le jeu du client** depuis le 10/10 : tous les clients plantaient à
+> l'apparition d'une prime. Le client garde la copie de l'hôte et l'affiche dans la fenêtre
+> **Diplomatie** (Ctrl+Shift+F). Les relations, elles, sont écrites dans son jeu.
 - **Le joueur** voit partout les mêmes relations de sa faction avec chaque faction (écran des
-  factions : valeur, alliance, guerre, paix), dans les deux sens (ce que chaque faction pense de la
+  factions du jeu : valeur, alliance, guerre, paix), dans les deux sens (ce que chaque faction pense de la
   faction du joueur compte pour les PNJ et l'interface). Il voit aussi le même rang et la même
-  réputation, et, pour chaque personnage de l'escouade, les mêmes primes (montant par faction,
-  crimes), le crime en cours, la peine de prison restante et le laissez-passer.
+  réputation, et, pour chaque personnage de l'escouade (ceux des clients compris), les mêmes primes
+  (montant par faction, crimes), le crime en cours, la peine de prison restante et le laissez-passer.
+- **Fenêtre Diplomatie** (Ctrl+Shift+F, hôte et clients, en français) : les relations de la
+  faction du joueur avec chaque faction telles que l'hôte les a (valeur, état « allié / neutre /
+  ennemi / en guerre » calculé comme le jeu : allié = alliance ou relation ≥ 50, ennemi = relation
+  ≤ −30), le rang et la réputation, les primes et peines de chaque perso de l'escouade, et le monde
+  (guerres entre factions, chefs morts ou emprisonnés, villes changées).
+- **Nouvelles dans le panneau** (hôte et clients, en français, à chaque changement venu de l'hôte) :
+  « Diplomatie : X vous considère maintenant comme ennemi (relation −60) », « Diplomatie : X est en
+  guerre contre vous », « Prime : Bob est recherché par X (3000 cats) », « Prime : Bob n'est plus
+  recherché par X ».
+- **Ce qui change les relations et les primes** quand c'est un perso d'un client qui agit : tout se
+  passe dans le monde de l'hôte, qui fait jouer le perso du client. Attaquer ou tuer des membres
+  d'une faction, libérer des esclaves ou des prisonniers, aider dans un combat, les répliques et
+  issues de quête d'une conversation (`Dialogue::_doActions`), payer sa prime, commercer, assassiner
+  un chef, livrer une cible à un poste de police (la récompense est une action de dialogue : l'argent
+  arrive par la synchro de l'argent) : le jeu de l'hôte applique l'effet **une fois**, chez lui, et
+  il part à tous par les messages ci-dessous. Chez un client, les points de décision sont refusés
+  (`affectRelations`, `setRelation`, `setCrime`, `assignBountyForCrimes`, `_doActions`, événements de
+  dialogue, IA) : rien n'est appliqué deux fois.
+- **Gardes** : ce sont les gardes de l'hôte qui reconnaissent un perso recherché (prime de l'hôte) ;
+  ils agissent dans son monde et cela se voit chez tout le monde. Ceux du client n'agissent pas.
 - **Fonctionnement** :
   - l'hôte relit chaque seconde les relations de la faction du joueur et les primes de l'escouade ;
     il envoie `Factions` / `Bounties` dès qu'une valeur change, à tout le monde, plus un envoi
@@ -695,23 +716,60 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
     avec la fonction du jeu), à l'arrivée du message puis toutes les 2 s : si le jeu local les a
     changées au-delà du bruit (0,5 point de relation ou de confiance, 1 % de force), elles reviennent
     à celles de l'hôte. L'hôte n'envoie lui aussi qu'un vrai changement (au-delà de ce même bruit) ;
-  - les **primes et crimes ne sont pas écrits dans le jeu du client** (depuis le 10/10) : le client
-    garde la copie de l'hôte (commande `bounty`, rapports), et vide toute prime ou tout crime que son
-    propre jeu crée. Une prime dans le jeu du client réveille sa police (gardes, chasseurs de primes)
-    contre un perso que l'hôte pilote : tous les clients plantaient quelques secondes après une
-    nouvelle prime. Les gardes de l'hôte, eux, agissent et cela se voit chez tout le monde ;
-  - les hooks existants empêchent toujours le jeu du client de décider seul d'un crime, d'une prime
-    ou d'un changement de relation ; ce qui vient de l'hôte (dialogue « payer sa prime », guerre
-    déclarée, prime fixée par un garde) arrive par ces messages ;
+  - les **primes et crimes ne sont pas écrits dans le jeu du client** : il garde la copie de l'hôte
+    (fenêtre Diplomatie, commande `bounty`) et vide toute prime ou tout crime que son propre jeu crée.
+    Une prime dans le jeu du client réveille sa police (gardes, chasseurs de primes) contre un perso
+    que l'hôte pilote : tous les clients plantaient quelques secondes après une nouvelle prime ;
   - le journal de l'hôte note chaque changement (« relations: … now -80 at war », « bounty: … wanted
     by … for 1500 cats », « crime: … », « prison: … »).
 - **Limites** :
-  - l'écran de personnage du client n'affiche pas les primes (son jeu n'en a pas) ; la copie de
-    l'hôte est dans le mod (commande `bounty`) ;
-  - les relations entre deux factions qui ne sont pas celle du joueur ne sont pas envoyées (elles
-    ne changent que l'IA, qui tourne chez l'hôte) ;
+  - l'écran de personnage du jeu du client n'affiche pas les primes (son jeu n'en a pas) : elles
+    sont dans la fenêtre Diplomatie ;
   - la victime d'un crime en cours (un PNJ précis) n'est pas envoyée, seulement la faction.
 - **Test en jeu** : `python tools/coop_test.py factions` (voir [TESTS.md](TESTS.md)).
+
+### Diplomatie : factions entre elles, chefs, villes 🟡 (implémenté, tests unitaires ; à vérifier en jeu)
+- **Le joueur** voit partout le même monde que l'hôte : les guerres et alliances entre factions
+  (déclarées par le jeu après la mort d'un chef, un dialogue, une campagne), l'état des personnages
+  uniques (chefs de faction, PNJ nommés : vivant, mort, emprisonné, et si ce sont les joueurs), et les
+  villes (faction propriétaire, ville prise, détruite ou remplacée par les états du monde).
+- **Pourquoi c'est important** : les « états du monde » du jeu (`WorldEventStateQuery`) ne dépendent
+  que de l'état des personnages uniques et des relations de la faction du joueur. Les variantes de
+  villes, les conditions de dialogue et les campagnes les testent. Avec les mêmes états que l'hôte,
+  le jeu du client prend les mêmes décisions quand il les évalue (en chargeant une zone, par exemple).
+- **Fonctionnement** (message `Diplomacy`, en trois parties, chacune envoyée quand elle change et
+  en entier à un joueur qui arrive ; relue toutes les 3 s chez l'hôte) :
+  - **relations entre deux factions** (aucune n'étant celle du joueur) : l'hôte note toutes les paires
+    quand il commence à héberger (la sauvegarde que chaque client charge les contient) et n'envoie que
+    celles qui ont changé depuis (drapeaux, ou relation d'au moins 1 point). Une paire envoyée reste
+    suivie (retour à la paix compris) ;
+  - **personnages uniques** : la table du jeu (`UniqueNPCManager`) entière : mort / vivant /
+    emprisonné et « par les joueurs ». Le client écrit l'état de l'hôte dans sa table (une entrée
+    absente est créée comme le fait le chargement d'une sauvegarde) et remet « vivant » une entrée
+    que l'hôte n'a pas ;
+  - **villes** : faction propriétaire et variante appliquée. Le client applique la variante de l'hôte
+    avec la fonction du jeu (`TownBase::setOverride`) puis le propriétaire (`TownBase::setFaction`).
+    Une ville qui a une variante chez le client et aucune chez l'hôte est laissée (le jeu n'a pas de
+    retour en arrière) et notée au journal ;
+  - le client réimpose toutes les 3 s (son jeu ne doit pas dériver) ; le journal note les corrections
+    (« diplomacy: N … values set to the host's »).
+- **Nouvelles** (hôte et clients, en français) : « Diplomatie : guerre entre X et Y », « fin de la
+  guerre », « X et Y sont alliés », « Monde : Tinfist est mort (de la main des joueurs) », « Monde :
+  … est emprisonné par les joueurs », « Monde : Squin appartient maintenant à … », « Monde : Squin a
+  changé (…) ». Le journal a la même chose en anglais (« diplomacy: », « world: »).
+- **Limites, à vérifier en jeu** :
+  - une paire de factions que l'hôte n'a jamais changée n'est pas réimposée chez le client (elle
+    n'est pas envoyée). Le jeu du client ne peut pas la changer lui-même (ses points de décision sont
+    refusés), sauf `FactionRelations::declareWar` (`0x6B3000`), appelée par la vtable, non détournée ;
+  - une ville que l'hôte n'a pas encore « décidée » (zone jamais chargée chez lui) reste telle que le
+    jeu du client la décide, avec les mêmes états du monde ;
+  - le choix de la variante d'une ville au chargement d'une zone est déterministe (la plus lourde des
+    variantes dont les états du monde sont vrais) : il devrait être le même partout, l'envoi de
+    l'hôte corrige sinon ;
+  - les bâtiments d'une ville détruite ou prise viennent de la décision du jeu au chargement de la
+    zone, pas de la synchro (seuls ceux des joueurs sont synchronisés par le lot E).
+- **Test en jeu** : `python tools/coop_test.py diplomacy` (voir [TESTS.md](TESTS.md)). Test
+  unitaire `TestDiplomacy`.
 
 ### Précision des PNJ lointains 🟡 implémenté, à vérifier en jeu
 - Loin de l'escouade du client (plus de 300 unités), le jeu ne déplace un personnage que quelques

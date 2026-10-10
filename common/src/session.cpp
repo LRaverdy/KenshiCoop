@@ -174,6 +174,7 @@ void Session::Leave() {
     ResetBuildings();
     trade_ = ClientTrade{};
     ResetFactions();
+    ResetDiplomacy();
     ResetDoors();   // lot A
     floorSent_.clear(); floors_.clear(); nextFloors_ = nextFloorsFull_ = 0; floorPlayers_ = 0;   // fix G6
     ResetJobs();   // fix G5
@@ -301,6 +302,7 @@ void Session::HostTick(double now, bool live) {
         SendProgress(now);
     }
     if (anyInGame) SendFactions(now);   // lot B
+    if (anyInGame) SendDiplomacy(now);
     if (anyInGame && now >= nextWeather_) {
         nextWeather_ = now;
         std::vector<RegionWeather> w;
@@ -2587,6 +2589,7 @@ void Session::ClientTick(double now, bool live) {
     SendEditedAppearances();
     ClientContainers(now);
     ClientFactionsTick(now);   // lot B
+    ClientDiplomacyTick(now);
     ClientDoors(now);   // lot A
     ClientCaptives(now);   // lot D: prisons
     ClientRanged(now);   // lot C
@@ -2633,6 +2636,7 @@ EntityState Session::Interpolate(const Entity& e, double rt) const {
 
 void Session::ClientPacket(Msg type, Reader& r) {
     if (ClientFactionsPacket(type, r)) return;   // lot B
+    if (ClientDiplomacyPacket(type, r)) return;
     switch (type) {
     case Msg::Welcome: {
         Welcome m;
@@ -3165,6 +3169,7 @@ void Session::ForgetPlayer(uint8_t id) {
     for (auto it = dialogOwner_.begin(); it != dialogOwner_.end();) it = it->second == id ? dialogOwner_.erase(it) : std::next(it);
     buildSyncedPlayers_.erase(id);
     factionsServed_.erase(peer);
+    diploServed_.erase(peer);
     log_("player " + std::to_string(id) + " cleaned up: " + std::to_string(owned.size()) + " character(s) back to the host and halted, " +
          std::to_string(closed) + " container window(s) and " + (traded ? "a" : "no") + " trade window closed" +
          (wasEditing ? ", character editor hold released" : ""));

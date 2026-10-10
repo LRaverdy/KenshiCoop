@@ -581,6 +581,30 @@ struct FakeWorld : IWorld {
         bounties[h.serial] = want;
         return 1;
     }
+    // ---- diplomacy: relations between factions, unique characters, towns (as a game holds them)
+    DiplomacyState diplo;
+    bool ReadDiplomacy(DiplomacyState& out) override { out = diplo; return true; }
+    size_t ApplyFactionPairs(const std::vector<FactionPairRelation>& pairs) override {
+        size_t n = 0;
+        for (const auto& p : pairs) {
+            auto it = std::find_if(diplo.pairs.begin(), diplo.pairs.end(), [&](const FactionPairRelation& o) { return o.from == p.from && o.to == p.to; });
+            if (it == diplo.pairs.end()) { diplo.pairs.push_back(p); ++n; }
+            else if (!SamePairRelation(it->rel, p.rel)) { it->rel = p.rel; ++n; }
+        }
+        return n;
+    }
+    size_t ApplyUniques(const std::vector<UniqueState>& uniques) override {
+        if (diplo.uniques == uniques) return 0;
+        diplo.uniques = uniques;
+        return 1;
+    }
+    size_t ApplyTowns(const std::vector<TownState>& towns) override {
+        size_t n = 0;
+        for (const auto& t : towns)
+            for (auto& o : diplo.towns)
+                if (o.sid == t.sid && !(o == t)) { o = t; ++n; }
+        return n;
+    }
     // ---- lot A: doors and locks (key: sid; the fake world has one door per kind)
     std::map<std::string, DoorState> doors;
     std::vector<DoorRequest> doorReqs;      // client: buttons the player clicked
@@ -986,6 +1010,35 @@ static void TestWire() {
         Reader xr(bad.data(), bad.size()); PeekType(xr);
         BountiesMsg bm3; CHECK(!Decode(xr, bm3));
     }
+    {   // diplomacy: the three parts, and what a decoder refuses
+        DiplomacyMsg pm; pm.part = DiploPart::Pairs;
+        FactionPairRelation fp; fp.from = "5-gamedata.base"; fp.to = "6-gamedata.base"; fp.rel.war = true; fp.rel.relation = -100; fp.rel.strength = 3;
+        pm.pairs = {fp, {"6-gamedata.base", "5-gamedata.base", fp.rel}};
+        DiplomacyMsg um; um.part = DiploPart::Uniques; um.uniques = {{"tinfist", kUniqueDead, true}, {"phoenix", kUniqueImprisoned, false}, {"ruka", kUniqueAlive, false}};
+        DiplomacyMsg tm; tm.part = DiploPart::Towns; tm.towns = {{"town-1", "holy", "town-1-destroyed"}, {"town-2", "", ""}};
+        for (const DiplomacyMsg* m : {&pm, &um, &tm}) {
+            Writer dw; Encode(dw, *m);
+            Reader dr(dw.data(), dw.size()); CHECK(PeekType(dr) == Msg::Diplomacy);
+            DiplomacyMsg back; CHECK(Decode(dr, back) && back == *m);
+        }
+        auto refused = [](DiplomacyMsg m) { Writer w2; Encode(w2, m); Reader r2(w2.data(), w2.size()); PeekType(r2); DiplomacyMsg o; return !Decode(r2, o); };
+        DiplomacyMsg self = pm; self.pairs[0].to = self.pairs[0].from; CHECK(refused(self));        // a faction toward itself
+        DiplomacyMsg nosid = um; nosid.uniques[0].sid.clear(); CHECK(refused(nosid));
+        DiplomacyMsg badstate = um; badstate.uniques[0].state = 3; CHECK(refused(badstate));
+        DiplomacyMsg notown = tm; notown.towns[0].sid.clear(); CHECK(refused(notown));
+        Writer bp; bp.u8(uint8_t(Msg::Diplomacy)); bp.u8(9); bp.varint(0);
+        Reader bpr(bp.data(), bp.size()); PeekType(bpr); DiplomacyMsg o; CHECK(!Decode(bpr, o));   // unknown part
+        // the game's own tests for ally / enemy (FactionRelations::isAlly, isEnemy)
+        RelationState rs; rs.relation = 49; CHECK(StandingOf(rs) == Standing::Neutral);
+        rs.relation = 50; CHECK(StandingOf(rs) == Standing::Ally);
+        rs.relation = -30; CHECK(StandingOf(rs) == Standing::Enemy);
+        rs.relation = -29; CHECK(StandingOf(rs) == Standing::Neutral);
+        rs.alliance = true; CHECK(StandingOf(rs) == Standing::Ally);
+        RelationState a, b2; a.relation = 10; b2.relation = 10.6f; b2.trustPositives = 40;
+        CHECK(SamePairRelation(a, b2));            // trust and strength are the AI's: noise between NPC factions
+        b2.relation = 11.2f; CHECK(!SamePairRelation(a, b2));
+        b2.relation = 10; b2.war = true; CHECK(!SamePairRelation(a, b2));
+    }
     {   // lot D: captive characters (a caged one with shackles and a sentence, a freed one)
         CaptivesMsg cm;
         CaptiveState a; a.netId = 7; a.caged = true; a.cageSid = "cage-1"; a.cagePos = {1, 2, 3}; a.chained = true;
@@ -1162,6 +1215,9 @@ static void TestFuzz() {
     add([](Writer& w) {
         BountiesMsg m; CharBounties c; c.netId = 3; c.bounties = {{"f", 10, 1u, false, 2}}; m.chars = {c}; Encode(w, m);
     });
+    add([](Writer& w) { DiplomacyMsg m; m.part = DiploPart::Pairs; m.pairs = {{"a", "b", {}}}; Encode(w, m); });   // diplomacy
+    add([](Writer& w) { DiplomacyMsg m; m.part = DiploPart::Uniques; m.uniques = {{"u", 0, true}}; Encode(w, m); });
+    add([](Writer& w) { DiplomacyMsg m; m.part = DiploPart::Towns; m.towns = {{"t", "f", "o"}}; Encode(w, m); });
     { Snapshot s; s.entities.resize(3); for (auto& e : s.entities) e.netId = 7; seeds.push_back(EncodeSnapshot(s)[0]); }
 
     auto decodeAll = [](const std::vector<uint8_t>& p) {
@@ -1218,6 +1274,7 @@ static void TestFuzz() {
         case Msg::Captives: { CaptivesMsg m; Decode(r, m); break; }
         case Msg::Factions: { FactionsMsg m; Decode(r, m); break; }
         case Msg::Bounties: { BountiesMsg m; Decode(r, m); break; }
+        case Msg::Diplomacy: { DiplomacyMsg m; Decode(r, m); break; }
         case Msg::Doors: { DoorsMsg m; Decode(r, m); break; }          // lot A
         case Msg::DoorRequest: { DoorRequest m; Decode(r, m); break; } // lot A
         default: break;
@@ -2209,6 +2266,89 @@ static void TestFactions() {
     CHECK(cw.factions == hw.factions && cli.factionsView().corrected > before);
 }
 
+// diplomacy: relations between factions, leaders, towns; French news for players
+static bool ChatHas(const Session& s, const std::string& part) {
+    for (const auto& l : s.chatLog()) if (l.find(part) != std::string::npos) return true;
+    return false;
+}
+static const FactionPairRelation* PairOf(const FakeWorld& w, const std::string& a, const std::string& b) {
+    for (const auto& p : w.diplo.pairs) if (p.from == a && p.to == b) return &p;
+    return nullptr;
+}
+static void TestDiplomacy() {
+    std::printf("session: diplomacy (wars between factions, leaders, towns) is the host's, everywhere, with news in French\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    // the save both games start from
+    DiplomacyState start;
+    RelationState calm; calm.relation = 10;
+    for (const char* a : {"holy", "shek", "bandits"})
+        for (const char* b : {"holy", "shek", "bandits"})
+            if (std::string(a) != b) start.pairs.push_back({a, b, calm});
+    start.uniques = {{"phoenix", kUniqueAlive, false}, {"tinfist", kUniqueAlive, false}};   // in id order, as games list them
+    start.towns = {{"squin", "shek", ""}, {"stoat", "holy", ""}};
+    hw.diplo = start;
+    FactionRelationEntry holy; holy.factionSid = "holy"; holy.hasOurs = holy.hasTheirs = true; holy.ours.relation = 0; holy.theirs.relation = 0;
+    hw.factions.factions = {holy};
+    hw.bounties[1].bounties = {};
+    AtMenu(cw);
+    cw.diplo = start;   // the host's save, loaded
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port;
+    SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    Run({{&host, &hw}, {&cli, &cw}}, 8.0, [&] { return cli.diplomacyView().received >= 3; });
+    CHECK(cli.diplomacyView().received >= 3);   // the three parts, once (nothing changed yet)
+    CHECK(cli.hostDiplomacy().pairs.empty() && cli.hostDiplomacy().uniques.size() == 2 && cli.hostDiplomacy().towns.size() == 2);
+    CHECK(cw.diplo == start);
+    CHECK(!ChatHas(cli, "Monde") && !ChatHas(cli, "Diplomatie"));   // the state as it was is not news
+    // the Shek chief dies by the players' hand: the Shek go to war with the Holy Nation, Squin is
+    // taken over; the Holy Nation turns on the players; a bounty is put on one of them
+    hw.diplo.uniques[1] = {"tinfist", kUniqueDead, true};
+    for (auto& p : hw.diplo.pairs)
+        if ((p.from == "shek" && p.to == "holy") || (p.from == "holy" && p.to == "shek")) { p.rel.war = true; p.rel.relation = -100; }
+    hw.diplo.towns[0] = {"squin", "holy", "squin-occupied"};
+    hw.factions.factions[0].theirs.relation = -60;
+    hw.bounties[1].bounties = {{"holy", 3000, 8u, false, 5}};
+    Run({{&host, &hw}, {&cli, &cw}}, 8.0, [&] {
+        const auto* p = PairOf(cw, "shek", "holy");
+        return p && p->rel.war && cw.diplo.uniques == hw.diplo.uniques && cw.diplo.towns == hw.diplo.towns && cw.bounties[1] == hw.bounties[1];
+    });
+    CHECK(PairOf(cw, "shek", "holy") && PairOf(cw, "shek", "holy")->rel.war && PairOf(cw, "holy", "shek")->rel.war);
+    CHECK(PairOf(cw, "bandits", "holy") && !PairOf(cw, "bandits", "holy")->rel.war);
+    CHECK(cw.diplo.uniques == hw.diplo.uniques && cw.diplo.towns == hw.diplo.towns);
+    CHECK(cli.hostDiplomacy().pairs.size() == 2);   // only the pairs that changed travel
+    for (const Session* s : {&host, &cli}) {         // the same news on both sides, in French
+        CHECK(ChatHas(*s, "Diplomatie : guerre entre"));
+        CHECK(ChatHas(*s, "Monde : tinfist est mort (de la main des joueurs)"));
+        CHECK(ChatHas(*s, "Monde : squin appartient maintenant à holy"));
+        CHECK(ChatHas(*s, "Monde : squin a changé"));
+        CHECK(ChatHas(*s, "Diplomatie : holy vous considère maintenant comme ennemi"));
+        CHECK(ChatHas(*s, "Prime : "));
+    }
+    // peace comes back: the pair is sent again (it moved since the host started), clients follow
+    for (auto& p : hw.diplo.pairs)
+        if (p.from == "shek" && p.to == "holy") { p.rel.war = false; p.rel.relation = 5; }
+    hw.bounties[1].bounties.clear();
+    Run({{&host, &hw}, {&cli, &cw}}, 8.0, [&] { const auto* p = PairOf(cw, "shek", "holy"); return p && !p->rel.war && cw.bounties[1].bounties.empty(); });
+    CHECK(!PairOf(cw, "shek", "holy")->rel.war && PairOf(cw, "holy", "shek")->rel.war);
+    CHECK(ChatHas(cli, "n'est plus recherché par holy"));
+    // the client's game changes them by itself: put back to the host's within a few seconds
+    for (auto& p : cw.diplo.pairs) if (p.from == "holy" && p.to == "shek") p.rel.war = false;
+    cw.diplo.uniques[1].state = kUniqueAlive;
+    const size_t before = cli.diplomacyView().corrected;
+    Run({{&host, &hw}, {&cli, &cw}}, 8.0, [&] { return PairOf(cw, "holy", "shek")->rel.war && cw.diplo.uniques == hw.diplo.uniques; });
+    CHECK(PairOf(cw, "holy", "shek")->rel.war && cw.diplo.uniques == hw.diplo.uniques && cli.diplomacyView().corrected > before);
+    // float noise in the host's relations between NPC factions is not news, nor sent again
+    const size_t sent = host.diplomacyView().sent;
+    for (auto& p : hw.diplo.pairs) p.rel.relation += 0.3f;
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0);
+    CHECK(host.diplomacyView().sent == sent);
+}
+
 // lot D: prisons
 static void TestCaptives() {
     std::printf("session: captive characters (cage, shackles, slavery, sentence) follow the host, and their release\n");
@@ -2932,6 +3072,7 @@ int main() {
     TestRanged();   // lot C
     TestCaptives();
     TestFactions();
+    TestDiplomacy();
     TestDoors();   // lot A
     TestFloorsAndStall();   // fix G6
     TestJobs();   // fix G5

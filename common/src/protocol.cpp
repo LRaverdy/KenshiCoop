@@ -921,7 +921,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || (t > uint8_t(Msg::BuildAction) && t != uint8_t(Msg::JobList) && t != uint8_t(Msg::Stall) && t != uint8_t(Msg::Floors) && t != uint8_t(Msg::BagBind) && t != uint8_t(Msg::JoinQueue) && t != uint8_t(Msg::Result))) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || (t > uint8_t(Msg::BuildAction) && t != uint8_t(Msg::JobList) && t != uint8_t(Msg::Stall) && t != uint8_t(Msg::Floors) && t != uint8_t(Msg::BagBind) && t != uint8_t(Msg::JoinQueue) && t != uint8_t(Msg::Diplomacy) && t != uint8_t(Msg::Result))) return std::nullopt;
     return Msg(t);
 }
 

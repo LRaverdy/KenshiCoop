@@ -6,8 +6,10 @@
 #include <atomic>
 #include <cctype>
 #include <cstdio>
+#include <cmath>
 #include <ctime>
 #include <deque>
+#include <map>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -81,7 +83,7 @@ struct Hotkey {
     bool down = false;
 };
 Hotkey g_hkHost{'H'}, g_hkJoin{'J'}, g_hkLeave{'L'}, g_hkGive{'G'}, g_hkOverlay{'O'}, g_hkDiag{'D'}, g_hkMultiplayer{'M'}, g_hkConsoleWindow{'W'},
-    g_hkConsole{'K'};
+    g_hkConsole{'K'}, g_hkDiplomacy{'F'};
 
 bool Pressed(Hotkey& k, bool modifiers) {
     const bool now = modifiers && KeyDown(k.vk);
@@ -146,6 +148,7 @@ void HandleHotkeys() {
     std::string err;
     if (Pressed(g_hkMultiplayer, mods)) OverlayToggleMultiplayer();
     if (Pressed(g_hkConsole, mods)) OverlayToggleConsole();
+    if (Pressed(g_hkDiplomacy, mods)) OverlayToggleDiplomacy();
     if (Pressed(g_hkOverlay, mods)) g_overlayVisible = !g_overlayVisible;
     if (Pressed(g_hkHost, mods)) {
         if (g_session->isHost()) Toast("Tu héberges déjà la partie.");
@@ -468,6 +471,66 @@ void HandleOverlayActions() {
     }
 }
 
+// The "Diplomatie" window: the host's values (a client's game does not hold the bounties), in French.
+// Rebuilt once a second while the window is open.
+void FillDiplomacy(OverlayModel& m) {
+    static double next = 0;
+    static OverlayModel cache;
+    const double now = NowSeconds();
+    if (now < next) {
+        m.diploHave = cache.diploHave;
+        m.diploHeader = cache.diploHeader;
+        m.diploRelations = cache.diploRelations;
+        m.diploBounties = cache.diploBounties;
+        m.diploWorld = cache.diploWorld;
+        return;
+    }
+    next = now + 1.0;
+    cache = OverlayModel{};
+    const auto& f = g_session->hostFactions();
+    cache.diploHave = !f.factions.empty();
+    char head[160];
+    snprintf(head, sizeof(head), "Rang %d   réputation : confiance %.0f, renommée %.0f", f.playerRank, double(f.reputationTrust), double(f.reputationBadassery));
+    cache.diploHeader = head;
+    for (const auto& e : f.factions) {
+        if (!e.hasOurs && !e.hasTheirs) continue;
+        const kc::RelationState& r = e.hasTheirs ? e.theirs : e.ours;   // how they treat us
+        OverlayModel::DiploRelation d;
+        d.name = g_world->TemplateName(e.factionSid);
+        d.relation = int(std::lround(r.relation));
+        d.standing = int(kc::StandingOf(r));
+        d.war = e.ours.war || e.theirs.war;
+        cache.diploRelations.push_back(std::move(d));
+    }
+    std::sort(cache.diploRelations.begin(), cache.diploRelations.end(), [](const auto& a, const auto& b) {
+        if (a.war != b.war) return a.war;
+        return a.relation != b.relation ? a.relation < b.relation : a.name < b.name;
+    });
+    std::map<uint32_t, kc::Handle> handles;
+    g_session->ForEachEntity([&](uint32_t id, const kc::Handle& h, uint8_t, bool squad, bool) { if (squad) handles[id] = h; });
+    for (const auto& c : g_session->hostBounties().chars) {
+        auto it = handles.find(c.netId);
+        std::string who = it != handles.end() ? g_world->CharacterNameOf(it->second) : std::string();
+        if (who.empty()) who = "#" + std::to_string(c.netId);
+        for (const auto& b : c.bounties)
+            if (b.amount > 0) cache.diploBounties.push_back(who + " : " + std::to_string(b.amount) + " cats (" + g_world->TemplateName(b.factionSid) + ")");
+        if (c.prisonSentence > 0) cache.diploBounties.push_back(who + " : en prison, encore " + std::to_string(int(c.prisonSentence)) + " h");
+    }
+    const auto& d = g_session->hostDiplomacy();
+    for (const auto& p : d.pairs)
+        if (p.rel.war && p.from < p.to) cache.diploWorld.push_back("Guerre : " + g_world->TemplateName(p.from) + " et " + g_world->TemplateName(p.to));
+    for (const auto& u : d.uniques) {
+        if (u.state == kc::kUniqueAlive) continue;
+        cache.diploWorld.push_back(g_world->TemplateName(u.sid) + (u.state == kc::kUniqueDead ? " : mort" : " : emprisonné") + (u.byPlayer ? " (joueurs)" : ""));
+        if (cache.diploWorld.size() > 400) break;
+    }
+    for (const auto& t : d.towns)
+        if (!t.overrideSid.empty())
+            cache.diploWorld.push_back(g_world->TemplateName(t.sid) + " : " + g_world->TemplateName(t.overrideSid) +
+                                       (t.ownerSid.empty() ? std::string() : " (" + g_world->TemplateName(t.ownerSid) + ")"));
+    FillDiplomacy(m);   // from the cache just made
+}
+
 void PublishOverlay() {
     OverlayModel m;
     m.visible = g_overlayVisible;
@@ -504,6 +567,7 @@ void PublishOverlay() {
             m.lines.push_back(std::to_string(g_session->joiningPlayers()) + " joueur(s) en train d'arriver : partie en pause");
         if (g_session->isHost()) m.lines.insert(m.lines.end(), m.queueLines.begin(), m.queueLines.end());
         if (g_session->isHost()) m.lines.push_back("Ctrl+Shift+G  confier la sélection au joueur suivant");
+        m.lines.push_back("Ctrl+Shift+F  diplomatie (relations, primes, monde)");
         m.lines.push_back("Ctrl+Shift+L  quitter la session");
     }
     const auto& chat = g_session->chatLog();
@@ -512,6 +576,7 @@ void PublishOverlay() {
     m.worldLoaded = g_world->Ready();
     m.hosting = g_session->isHost();
     m.active = m.hosting || g_session->isClient();
+    if (m.active && OverlayDiplomacyOpen()) FillDiplomacy(m);
     m.stateText = FrenchState(st);
     if (st == kc::SessionState::Failed && !g_session->lastError().empty()) m.errorText = FrenchError(g_session->lastError());
     m.leftHostWorld = g_leftHostWorld && g_world->Ready();

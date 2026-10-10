@@ -226,6 +226,12 @@ public:
     virtual size_t ApplyFactions(const FactionsMsg& m) { (void)m; return 0; }
     virtual bool ReadBounties(const Handle& h, CharBounties& out) { (void)h; out = CharBounties{}; return false; }
     virtual size_t ApplyBounties(const Handle& h, const CharBounties& b) { (void)h; (void)b; return 0; }
+    // ---- diplomacy. Host: relations between every two factions that are not the player's, the
+    // unique characters' states, the towns. Client: impose the host's (returns values changed here).
+    virtual bool ReadDiplomacy(DiplomacyState& out) { out = DiplomacyState{}; return false; }
+    virtual size_t ApplyFactionPairs(const std::vector<FactionPairRelation>& pairs) { (void)pairs; return 0; }
+    virtual size_t ApplyUniques(const std::vector<UniqueState>& uniques) { (void)uniques; return 0; }
+    virtual size_t ApplyTowns(const std::vector<TownState>& towns) { (void)towns; return 0; }
     // ---- fix G5: the job list (Tâches panel) of a character, by kind in order. Host: read it.
     // Client: remove from ours the jobs the host's no longer has.
     virtual bool ReadJobs(const Handle& h, std::vector<int32_t>& jobs) { (void)h; jobs.clear(); return false; }
@@ -452,6 +458,14 @@ public:
     // ---- lot B: factions (tests): messages received / values corrected here (client), sent (host)
     struct FactionsView { size_t received = 0, bountiesReceived = 0, corrected = 0, sent = 0; };
     FactionsView factionsView() const { return factionsView_; }
+    // ---- diplomacy (tests): parts received / values corrected (client), sent (host), pairs that
+    // changed since the host started (host: tracked; client: received)
+    struct DiplomacyView { size_t received = 0, corrected = 0, sent = 0, pairs = 0, uniques = 0, towns = 0; };
+    DiplomacyView diplomacyView() const;
+    // the host's diplomacy as this side knows it (host: its last read; client: what it received)
+    const DiplomacyState& hostDiplomacy() const { return hostDiplo_; }
+    const FactionsMsg& hostFactions() const { return hostFactions_; }      // client: the host's relations (host: last sent)
+    const BountiesMsg& hostBounties() const { return hostBounties_; }      // client: the host's bounties (host: last sent)
     // ---- lot A: doors (tests): doors sent (host) / known and applied here (client)
     size_t doorsKnown() const { return isHost() ? doorsSent_.size() : clientDoors_.size(); }
     size_t doorsApplied() const { return doorsApplied_; }
@@ -757,6 +771,25 @@ private:
     BountiesMsg hostBounties_;
     bool haveFactions_ = false, haveBounties_ = false, factionsDirty_ = false;
     FactionsView factionsView_;
+    // French lines for the event list when relations or bounties change (both sides, from two
+    // successive versions of the host's; nothing on the first one)
+    void NoteFactionChanges(const FactionsMsg& before, const FactionsMsg& after);
+    void NoteBountyChanges(const BountiesMsg& before, const BountiesMsg& after);
+    // ---- diplomacy (session_diplomacy.cpp)
+    void SendDiplomacy(double now);                    // host: every few seconds, the parts that changed
+    void ClientDiplomacyTick(double now);              // client: impose the host's, now and then
+    bool ClientDiplomacyPacket(Msg type, Reader& r);   // client: Diplomacy (true: handled)
+    void ResetDiplomacy();
+    void NoteDiplomacyChanges(const DiplomacyState& before, const DiplomacyState& after);
+    double nextDiplo_ = 0, nextDiploApply_ = 0;
+    bool diploBaseline_ = false;                       // host: the pairs as they were when it started
+    std::map<std::pair<std::string, std::string>, RelationState> diploBase_;
+    std::map<std::pair<std::string, std::string>, RelationState> diploChanged_;   // host: pairs that changed since
+    uint64_t diploHash_[3] = {0, 0, 0};
+    std::set<PeerId> diploServed_;                     // host: players who got every part
+    DiplomacyState hostDiplo_;                         // host: last read; client: the host's (pairs: the changed ones)
+    bool haveDiplo_[3] = {false, false, false}, diploDirty_ = false;
+    DiplomacyView diploView_;
     // ---- lot A: doors and locks. Host: what each door near the players looked like when last sent
     // (key: kind and place); door buttons clients clicked. Client: the host's doors, applied (and
     // re-applied now and then: a door of a zone that was not loaded yet, a local change).

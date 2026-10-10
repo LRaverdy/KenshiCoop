@@ -60,6 +60,7 @@ Raccourcis (Kenshi au premier plan) :
 | Ctrl+Shift+L | quitter la session |
 | Ctrl+Shift+G | (hôte) donner les personnages sélectionnés au joueur suivant |
 | Ctrl+Shift+K | console dans le jeu (journal récent et commandes) |
+| Ctrl+Shift+F | fenêtre Diplomatie : relations de ta faction, primes de l'escouade, guerres, chefs et villes (valeurs de l'hôte) |
 | Ctrl+Shift+W | (hôte) montrer ou cacher la console hors du jeu |
 | Ctrl+Shift+O | afficher ou masquer le panneau |
 | Ctrl+Shift+D | écrire un diagnostic dans `KenshiCoop.log` |
@@ -157,7 +158,8 @@ Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui
   - état des portes et crochetage ;
   - prisons et esclavage ;
   - combat à distance (projectiles, tourelles) ;
-  - relations de factions et primes.
+  - relations de factions, primes et diplomatie (guerres entre factions, chefs, villes) :
+    implémentés, à vérifier en jeu ; leur état chez l'hôte est dans la fenêtre Diplomatie (Ctrl+Shift+F).
 - Côté client, ne pas poser de bâtiment pour l'instant : il n'existerait probablement que chez
   toi. (Une pose qu'un client fait quand même est vérifiée par l'hôte comme le mode construction
   vérifie un endroit : dans l'eau ou l'acide, trop près d'une ville… elle est refusée et le
