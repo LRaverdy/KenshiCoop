@@ -92,6 +92,12 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   avec l'état « porté » local (ApplyCarry, ragdoll, posture : « falls as on the host » / « stood
   up to fall where the host's lies » à chaque image) ; un perso porté ne doit recevoir ni position
   ni posture tant qu'il est porté, et un prisonnier assis / attaché doit garder la pose de l'hôte.
+  **Cause confirmée** : 1811 lignes `[nass4] posture:` dans la session, en boucle toutes les 2 à
+  3 s sur le même corps (« lies 8 units from the host's body: stood up to fall where the host's
+  lies » puis « falls as on the host »). C'est la correction des corps à terre ajoutée le 10/10
+  (relever un corps à plus de 5 unités et le refaire tomber, censée se limiter à 3 fois) : elle
+  boucle, et elle s'applique aux persos portés ou prisonniers. À corriger : ne jamais l'appliquer
+  à un perso porté, attaché, en cage ou assis ; limite réelle par corps ; seuil plus large.
 - **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
