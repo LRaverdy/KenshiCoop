@@ -2563,6 +2563,8 @@ def exp_groundpick(host, cli):
     """fix G2: the client picks up items lying in town (save items, shop goods, clutter): the host finds
     the same one and its character takes it."""
     time.sleep(8)
+    cmd(cli, "editdone")   # the joiner's character editor holds the whole game paused: nobody would walk
+    time.sleep(3)
     # the client's own character: an order for squad0 (the host's character) is dropped by the client
     own = own_index(host)
     ok, text = cmd(cli, f"groundnear 600 loose {own}")   # around the character that will walk there

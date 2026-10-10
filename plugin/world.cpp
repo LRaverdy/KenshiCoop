@@ -1518,6 +1518,22 @@ void KenshiWorld::TakeLocalDrops(std::vector<std::pair<kc::Handle, kc::ItemState
 void KenshiWorld::UpdatePendingPickups() {
     constexpr float kReach = 15.0f;
     const double now = NowSeconds();
+    // Paused (the host's pause, or the whole game held while a player makes their character), nobody
+    // walks: the clock of every pending pick up stops with the game, it is not a failure.
+    if (kenshi::GetPaused()) {
+        const double dt = lastPickupTick_ > 0 ? std::min(now - lastPickupTick_, 1.0) : 0.0;   // capped: the tick stops while no pick up is pending
+        for (auto& [h, p] : pickups_) {
+            p.until += dt;
+            if (p.checkAt > 0) p.checkAt += dt;
+            if (!p.pauseLogged) {
+                p.pauseLogged = true;
+                Log("client pick up: the game is paused, the character will walk there once it resumes");
+            }
+        }
+        lastPickupTick_ = now;
+        return;
+    }
+    lastPickupTick_ = now;
     for (auto it = pickups_.begin(); it != pickups_.end();) {
         kenshi::Character* c = FindSquad(it->first);
         void* item = kenshi::ResolveItem(it->second.item);
@@ -1525,10 +1541,13 @@ void KenshiWorld::UpdatePendingPickups() {
         kc::Handle ih;
         kc::ItemState st;
         PendingPickup& p = it->second;
-        if (!c || !item || !kenshi::ItemLoose(item) || now > p.until || !kenshi::DescribeGroundItem(item, ih, st, ip)) {
+        const bool loose = c && item && kenshi::ItemLoose(item);
+        const bool described = loose && kenshi::DescribeGroundItem(item, ih, st, ip);
+        if (!loose || !described || now > p.until) {
             if (!c) Log("client pick up: the character is gone, pick up abandoned");
-            else if (!item || !kenshi::ItemLoose(item)) Log("client pick up: the item left the ground (taken)");
-            else if (now > p.until) {
+            else if (!loose) Log("client pick up: the item left the ground (taken)");
+            else if (!described) Log("client pick up: the item can no longer be read, pick up abandoned");
+            else {
                 const float d = kenshi::GetPosition(c, cp) ? Dist(cp, ip) : -1.0f;
                 Log("client pick up FAILED: still %.0f units from the item after 30 s (game order=%d), given up", d, int(p.gameOrder));
             }
