@@ -1084,6 +1084,17 @@ void KenshiWorld::ApplyJobs(const kc::Handle& h, const std::vector<int32_t>& job
     if (!c) return;
     std::unordered_map<int32_t, int> left;
     for (int32_t j : jobs) ++left[j];
+    // a job given here a moment ago: the host's list may not have it yet
+    auto lj = localJobs_.find(KeyOf(h));
+    if (lj != localJobs_.end()) {
+        const unsigned long long now = GetTickCount64();
+        auto& v = lj->second;
+        v.erase(std::remove_if(v.begin(), v.end(), [&](const std::pair<int, unsigned long long>& p) {
+                    return p.second < now || std::count(jobs.begin(), jobs.end(), p.first) > 0;
+                }), v.end());
+        for (const auto& p : v) ++left[p.first];
+        if (v.empty()) localJobs_.erase(lj);
+    }
     std::vector<int> drop;
     const int n = kenshi::PermajobCount(c);
     for (int i = 0; i < n; ++i) {
@@ -1095,6 +1106,10 @@ void KenshiWorld::ApplyJobs(const kc::Handle& h, const std::vector<int32_t>& job
     HostCallScope scope;
     for (auto it = drop.rbegin(); it != drop.rend(); ++it) kenshi::RemovePermajob(c, *it);
     Log("jobs: %s had %zu job(s) the host's character no longer has: removed", KeyOf(h).c_str(), drop.size());
+}
+
+void KenshiWorld::NoteLocalJob(const kc::Handle& h, int task) {
+    localJobs_[KeyOf(h)].push_back({task, GetTickCount64() + 5000});
 }
 
 int KenshiWorld::TeleportCharacters(const std::vector<kc::Handle>& who, const kc::Vec3& to) {
@@ -1123,7 +1138,7 @@ int KenshiWorld::TeleportCharacters(const std::vector<kc::Handle>& who, const kc
         if (kenshi::Teleport(c, p, rot)) {
             ++n;
             // checked a moment later: a body (or a character the game was still moving) may stay put
-            reRagdoll_.push_back({h, NowSeconds() + 0.3, p, rot, body, 0});
+            reRagdoll_.push_back({h, NowSeconds() + 0.3, p, rot, body, 0, c});
             Log("tp: %s moved%s", KeyOf(h).c_str(), body ? " (it was lying on the ground)" : "");
         }
     }
@@ -1141,12 +1156,20 @@ void KenshiWorld::UpdateReRagdolls() {
         // the suite's admin TP left one 470 units away) is done again, a few times, before lying down
         kc::Vec3 at;
         const bool arrived = kenshi::GetPosition(c, at) && Dist(at, it->to) < 15.0f;
-        if (!arrived && it->tries < 5) {
-            if (kenshi::IsRagdoll(c)) kenshi::SetRagdoll(c, false);
-            kenshi::Teleport(c, it->to, it->rot);
+        if (!arrived && it->tries < 6) {
+            // a teleport does not move an active ragdoll, even one switched off in the same frame: the
+            // body is stood up first and teleported on a later frame (hk_ragdollMode keeps the game from
+            // laying it down again meanwhile, see HoldsUpright)
             ++it->tries;
-            it->at = now + 0.4;
-            Log("tp: %s still %.0f away from where it was sent: teleported again (%d)", KeyOf(it->h).c_str(), Dist(at, it->to), it->tries);
+            if (kenshi::IsRagdoll(c)) {
+                kenshi::SetRagdoll(c, false);
+                it->at = now + 0.15;
+                Log("tp: %s still %.0f away and still a ragdoll: stood up, teleported next (%d)", KeyOf(it->h).c_str(), Dist(at, it->to), it->tries);
+            } else {
+                kenshi::Teleport(c, it->to, it->rot);
+                it->at = now + 0.4;
+                Log("tp: %s still %.0f away from where it was sent: teleported again (%d)", KeyOf(it->h).c_str(), Dist(at, it->to), it->tries);
+            }
             ++it;
             continue;
         }

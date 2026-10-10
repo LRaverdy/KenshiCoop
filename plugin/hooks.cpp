@@ -286,6 +286,20 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
     }
     Log("client order task %d (via %d) for %zu character(s) asked of the host", task, int(via), who.size());
     for (const auto& h : who) w->QueueLocalOrder(h, c);
+    if (via == kc::TaskVia::AddJob && shift && loc && o_addJob) {
+        // a permanent job (Tâches panel): our copy takes it too, so the panel shows it at once; the
+        // host's job lists (Session::ClientJobs) then keep it or take it away like any other
+        for (const auto& h : who) {
+            kenshi::Character* ch = w->FindSquad(h);
+            if (!ch) continue;
+            const int before = kenshi::PermajobCount(ch);
+            kenshi::WithSelection(ch, [&] {
+                HostCallScope scope;
+                o_addJob(kenshi::Player(), task, subject ? subject : subj, shift, add, loc);
+            });
+            if (kenshi::PermajobCount(ch) > before) w->NoteLocalJob(h, kenshi::PermajobType(ch, kenshi::PermajobCount(ch) - 1));
+        }
+    }
     if (s.foreign) ToastForeign();
     return false;
 }
@@ -823,6 +837,9 @@ void* hk_createRandomCharacter(void* factory, void* faction, const float* pos, v
 
 void hk_ragdollMode(void* chr, bool on, int part) {
     if (on && KenshiWorld::ClientActive() && !g_hostCall && KenshiWorld::View()->replicated.count(chr)) return;
+    // host: a body the admin TP is moving gets up until it got there (fix G7)
+    if (on && !g_hostCall)
+        if (KenshiWorld* w = TheWorld(); w && w->HoldsUpright(chr)) return;
     o_ragdollMode(chr, on, part);
 }
 

@@ -223,6 +223,15 @@ public:
 
     // Called from hooks (game thread).
     void QueueLocalOrder(const kc::Handle& h, const kc::Command& c);
+    // client: a permanent job our copy took at once (the host's game gives it too): kept by
+    // ApplyJobs for a few seconds, until the host's job list has it
+    void NoteLocalJob(const kc::Handle& h, int task);
+    // host: a body being teleported (admin TP): the game must not lay it down again before it got there
+    bool HoldsUpright(const void* chr) const {
+        for (const auto& r : reRagdoll_)
+            if (r.body && r.chr == chr) return true;
+        return false;
+    }
     void UpdatePendingPickups();   // host: characters walking to an item a client asked them to take
     void TakeLocalDrops(std::vector<std::pair<kc::Handle, kc::ItemState>>& out) override;
     // Conversations (hooks, any thread for NoteSay; the game thread for the window ones). The window
@@ -257,6 +266,7 @@ public:
 private:
     std::mutex shotsMutex_;
     std::vector<WorldShot> shotsOut_;                                  // host, under shotsMutex_
+    std::unordered_map<std::string, std::vector<std::pair<int, unsigned long long>>> localJobs_;   // client: key -> (task, kept until GetTickCount64)
     std::unordered_map<std::string, kc::Handle> turretCache_;          // client: "sid@x,z" -> local turret
 public:
     static std::shared_ptr<const HookView> View() { return view_.load(std::memory_order_acquire); }
@@ -405,7 +415,7 @@ private:
     std::unordered_map<kc::Handle, Stuck, kc::HandleHash> stuck_;          // client: no progress toward the host's position since
     std::unordered_map<kc::Handle, double, kc::HandleHash> farSnapAt_;     // client: last time a far walker was put back
     float NearestSquadDistance(const kc::Vec3& p);                         // client: how far from our squad (far: the game moves it rarely)
-    struct ReRagdoll { kc::Handle h; double at; kc::Vec3 to; kc::Quat rot; bool body; int tries; };   // fix G7: checked, retried
+    struct ReRagdoll { kc::Handle h; double at; kc::Vec3 to; kc::Quat rot; bool body; int tries; const void* chr; };   // fix G7: checked, retried
     std::vector<ReRagdoll> reRagdoll_;                                     // host: teleported bodies to lay down again
     void UpdateReRagdolls();
     std::unordered_map<kc::Handle, float, kc::HandleHash> syncErr_;   // client: last error per standing character

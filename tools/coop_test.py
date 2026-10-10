@@ -220,7 +220,7 @@ def dump(pid, name, radius=3000):
     return parse_state(path)
 
 
-def compare(h, c, label, pos_tol=3.0):
+def compare(h, c, label, pos_tol=3.0, radius=3000):
     """Desync report between host and client dumps. Returns a dict of metrics."""
     report = {"label": label}
     # squad
@@ -241,7 +241,14 @@ def compare(h, c, label, pos_tol=3.0):
     bound = {e["key"] for e in h["entity"].values()}
     far_corpses = {k for k in hk - ck if k not in bound and int(h["char"][k].get("flags", "0")) & 8}
     report["far_corpses_unreplicated"] = len(far_corpses)
-    missing = sorted(hk - ck - far_corpses)
+    # at the edge of the dump radius (around the squad): the client's copy of a running character can
+    # be a few units further and fall just outside its dump; it is there (a present entity), not missing
+    centers = [v["pos"] for v in h["squad"].values() if "pos" in v]
+    c_present = {e["key"] for e in c["entity"].values() if e.get("present") == "1"}
+    edge = {k for k in hk - ck if k in c_present and "pos" in h["char"][k] and centers
+            and min(dist(h["char"][k]["pos"], p) for p in centers) > radius - 60}
+    report["edge_unlisted"] = len(edge)
+    missing = sorted(hk - ck - far_corpses - edge)
     extra = sorted(ck - hk)
     common = hk & ck
     pos_err = sorted((dist(h["char"][k]["pos"], c["char"][k]["pos"]), k) for k in common if "pos" in h["char"][k] and "pos" in c["char"][k])
@@ -1371,7 +1378,7 @@ def exp_jobs(host, cli):
     time.sleep(3)
     own = own_index(host)
     other = 0 if own != 0 else 1
-    log("client: follow job", cmd(cli, f"jobreq {own} 44 {other}"))
+    log("client: follow job", cmd(cli, f"jobreq {own} 31 {other}"))
     jobs = "?"
     for _ in range(10):
         time.sleep(0.5)

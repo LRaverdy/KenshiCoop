@@ -55,6 +55,16 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
 - **TP admin d'un perso K.-O.** (fix G7, à vérifier en jeu) : la téléportation est vérifiée et refaite
   si le perso n'est pas arrivé. Les écarts de 2-4 unités en fin de `suite` venaient des corps à terre
   (ragdoll simulée par chaque jeu) : tolérance de 8 pour les persos K.-O./morts.
+  Test du 10/10 (03:00) : 1304 unités, le perso n'a **pas bougé du tout** pendant les 5 reprises
+  (toujours 1310 de la cible). Une téléportation ne bouge pas une ragdoll active, même désactivée dans la
+  même image, et le jeu recouche le perso K.-O. aussitôt. Maintenant : une reprise relève d'abord le
+  corps s'il est encore en ragdoll et ne téléporte qu'à l'image suivante (0,15 s), et
+  `hk_ragdollMode` empêche le jeu de le recoucher tant que le TP n'est pas fini (`HoldsUpright`).
+  Le journal dit à chaque reprise s'il était encore en ragdoll. À revérifier : `suite`.
+- **`suite`, resync « (0, 0, 2) »** : les 2 « manquants » étaient deux PNJ qui couraient à 2996 unités
+  du perso de l'hôte, au bord du rayon de 3000 du relevé : présents chez le client (entités
+  `present=1`), sa copie juste au-delà du rayon. Pas une désynchro : `compare` ne compte plus les persos
+  au bord du rayon (60 unités) présents chez le client (`edge_unlisted`).
 - **Test `buildstate`** (fix G7) : `buildlist` ne trouvait aucun bâtiment (rayon 300, aller-retour par
   handle) ; lit maintenant l'état sur l'objet, rayon 1500, et donne un diagnostic si vide.
 - ✅ **Tâches qu'un client ne peut pas supprimer** (corrigé, fix G5, à vérifier en jeu). Trouvé : la croix
@@ -71,6 +81,13 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   (liste du panneau Tâches) : sans lui, `OrdersReceiver::addJob` (`0x5086D0`) le range dans les ordres
   passagers. Le chemin réel (clic avec Maj, panneau) transmet déjà ce booléen à l'hôte. `jobreq` le met
   maintenant, et le test échoue franchement s'il n'y a pas de tâche à retirer. À revérifier : `jobs`.
+  2e essai (10/10, 02:57) : l'hôte a bien exécuté l'ordre (`client task 44 (via 4) ... ok`) mais la
+  tâche 44 (`FOLLOW_PLAYER_ORDER`) n'est jamais permanente : `OrdersReceiver::addJob` ne la range dans
+  la liste du panneau que si sa `TaskData` est une tâche permanente (`+0x70 -> +4`). Le « suivre » du
+  panneau est la tâche 31 (`STAY_CLOSE_TO_TARGET`, cas particulier de `Character::addJob` 0x5C8DA0,
+  comme 45 `BODYGUARD`). Le test passe 31. Et la limite ci-dessus est levée : une tâche permanente
+  donnée par un client est aussi ajoutée tout de suite à la copie locale (gardée 5 s par `ApplyJobs`,
+  le temps que la liste de l'hôte l'ait) ; si l'hôte ne l'a pas, elle est retirée ensuite.
   Ancienne description : toujours là après la 0.2.0. Le bouton stop
   arrête maintenant la tâche en cours chez l'hôte, mais retirer une tâche de la liste des tâches du perso
   (panneau Tâches, clic sur la croix) ne passe que par le jeu du client : l'hôte la garde, et elle revient.

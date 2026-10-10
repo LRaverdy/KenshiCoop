@@ -763,7 +763,9 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         using FnAddJob = void (*)(void*, int, void*, bool, bool, const float*);
         kenshi::WithSelection(w.FindSquad(squad[sel]), [&] {
             // the first bool (KenshiLib's "shift") makes it a permanent job, in the Tâches panel
-            // (OrdersReceiver +0x88 list); false only gives a passing order (+0x70 list)
+            // (OrdersReceiver +0x88 list); false only gives a passing order (+0x70 list). Only a task
+            // whose TaskData is a permajob lands there: 31 STAY_CLOSE_TO_TARGET is the panel's "follow"
+            // job, 44 FOLLOW_PLAYER_ORDER is the passing follow order and never becomes a job.
             reinterpret_cast<FnAddJob>(kenshi::FnAddr(kenshi::FnAddJobSelected))(kenshi::Player(), task, s2, true, true, loc);
         });
         return "ok";
