@@ -19,6 +19,10 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
 - **Objet glissé au sol par le client 2 disparu** : il n'est pas apparu au sol, il a disparu (pas
   à chaque fois). Perte d'objet : prioritaire.
 - **Joueur 3 dans une ville voisine : parler aux PNJ ne fait rien** (aucune fenêtre de dialogue).
+- **Ramassage par le client 2 : objets perdus** (prioritaire, lié au point « objet glissé au sol
+  disparu ») : un objet ramassé disparaît du sol mais n'arrive pas dans son inventaire ; une autre
+  fois il est bien arrivé puis a disparu de l'inventaire au bout d'un moment (inventaire réécrit
+  par celui de l'hôte, où l'objet n'est jamais arrivé ?).
 - **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
