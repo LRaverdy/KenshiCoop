@@ -3160,6 +3160,7 @@ def setup_multi(save, n_clients=3, simultaneous=False):
     kill_all()
     host = launch(name="Hote")
     log("host pid", host)
+    tile([host])
     wait_for(host, lambda s: s.get("state") == "idle", 180, "host menu")
     time.sleep(3)
     log("load", cmd(host, f"load {save}"))
@@ -3175,6 +3176,7 @@ def setup_multi(save, n_clients=3, simultaneous=False):
     for n in range(n_clients):
         c = launch(fake_steam_id=FAKE_STEAM_BASE + n, name=f"Joueur{n + 2}")
         log(f"client {n + 1} pid {c} (fake steam id {FAKE_STEAM_BASE + n}, name Joueur{n + 2})")
+        tile([host] + clis + [c])   # the user watches: every window visible after each launch
         wait_for(c, lambda s: s.get("state") == "idle", 240, f"client {n + 1} menu")
         time.sleep(3)
         if not simultaneous:
@@ -3563,6 +3565,7 @@ def exp_stress4(host, clis, ids, minutes=15, hop_seconds=180, seed=4242):
             log(f"client {i} back: player id {ids[c]}, characters {before} -> {after}")
             cmd(host, "console god all")
             send_to_zone(c)
+            tile(pids)
         except RuntimeError as e:
             rejoin.update(ok=False, err=str(e))
             log(f"client {i} rejoin failed: {e}")
