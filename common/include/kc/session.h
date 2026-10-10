@@ -501,11 +501,11 @@ public:
     // client (diagnostics): newest state received from the host and the state being rendered now
     bool TargetOf(const Handle& h, EntityState& latest, EntityState& rendered) const;
     size_t joiningPlayers() const;                            // host: players still loading the world
-    // Host: the join queue, the player whose turn it is first (phase: what they are doing;
-    // waiting: still in the queue).
+    // Host: everyone on their way in: the player in the character editor first, then those saving /
+    // loading (phase), then those in the world waiting for their editor turn (waiting).
     struct QueueEntry { uint8_t id = 0; std::string name; bool waiting = true; JoinPhase phase = JoinPhase::Saving; };
     std::vector<QueueEntry> joinQueue() const;
-    // Client: our place in the host's join queue (nullptr: not waiting in it).
+    // Client: our place in the host's character editor queue (nullptr: not waiting in it).
     const JoinQueueMsg* queueStatus() const { return queued_ ? &queue_ : nullptr; }
     // Client: the conversation window of one of our characters (open = false: none).
     struct DialogView {
@@ -677,8 +677,14 @@ private:
         bool worldSent = false;              // the world save was streamed to this player
         double joinedAt = 0;
         double worldSentAt = 0;              // when it was streamed (the loading deadline runs from there)
-        double turnStartedAt = -1;           // their turn in the join queue began (-1: still queued)
+        double saveStartedAt = -1;           // the save made for them began (-1: waiting for the next save)
+        double saveSeconds = 0;              // how long that save took
+        uint64_t sentHash = 0;               // fingerprint of the world that save holds
+        uint64_t sentBytes = 0;              // what was streamed (packed)
+        double deliveredAt = -1;             // ENet acknowledged all of it (-1: not yet)
         double inGameAt = 0;                 // FinishJoin
+        bool editorWanted = false;           // must make their character (in the editor queue or turn)
+        double editorSentAt = -1;            // their turn in the editor began (EditCharacter sent)
         bool editorExpected = false;         // asked to make their character (EditCharacter sent)
         bool editorSeen = false;             // ... and their editor opened
         uint64_t readyHash = 0;              // pending Ready to verify on the next live tick
@@ -697,7 +703,7 @@ private:
     void OnDisconnect(PeerId peer);
 
     void HostJoinFlow(double now, bool live);
-    void StreamWorld(const RemotePlayer& p);
+    void StreamWorld(const RemotePlayer& p, const std::vector<WorldFile>& files, const std::vector<uint64_t>& rawSizes);
     void FinishJoin(RemotePlayer& p);
     void UpdateInterest();                   // host: (un)bind squad members and nearby NPCs
     void SendSnapshots(double now);
@@ -1123,25 +1129,34 @@ private:
     void ForgetPlayer(uint8_t id);
     static std::string PlayerKey(const RemotePlayer& p);   // the same person across connections
     std::vector<Handle> haltQueue_;                             // host: characters to halt on the next live tick
-    std::map<std::string, std::vector<Handle>> leftOwned_;     // host: what each gone player commanded
+    std::map<std::string, std::vector<uint32_t>> leftOwned_;   // host: what each gone player commanded (netIds)
     std::vector<Handle> despawnQueue_;               // client: stand-ins to remove on the next live tick
 
-    // host world export (shared by everyone joining at the same time)
+    // host world export: one save at a time, made for every player waiting for one (with all
+    // their characters in it), streamed to each of them as soon as it is done
     bool holding_ = false;
     bool exporting_ = false;
     double exportStarted_ = 0;
     std::vector<WorldFile> exportFiles_;
-    bool exportReady_ = false;
     uint64_t exportHash_ = 0;
+    std::vector<uint8_t> exportFor_;  // the players the save being made is for
 
-    // host join queue: one player at a time joins (save, download, load, character editor)
-    std::deque<uint8_t> joinQueue_;   // waiting their turn, first come first served
-    uint8_t joinTurn_ = 0;            // the player whose turn it is (0: none)
-    std::string queueSig_;            // what the queued players were last told
+    // host joins: every newcomer downloads and loads the world at once (the save made for them
+    // has everyone who came before them); only the character editor goes one player at a time
+    std::deque<uint8_t> joinQueue_;   // waiting for the next save (it starts as soon as none is being made)
+    std::set<uint64_t> joinFps_;      // the fingerprints the host's world went through for joins during this hold
+    uint8_t editorTurn_ = 0;          // the player making their character now (0: none)
+    std::deque<uint8_t> editorQueue_; // in the world, waiting for their turn in the editor, first come first served
+    std::set<std::string> editorOwed_;          // players (PlayerKey) whose character was made for them and never through the editor
+    std::unordered_map<uint32_t, double> looksAt_;   // host: when a squad character's looks last changed (netId)
+    std::unordered_map<uint32_t, AppearanceMsg> looksWaiting_;   // client: looks for a character not here yet (netId)
+    std::string queueSig_;            // what the waiting players were last told
     double queueSentAt_ = -1e9;
-    void AdvanceJoinQueue(double now);
+    void AdvanceEditorQueue(double now);
+    void HostSaves(double now, bool live);
     void SendJoinQueue(double now);
-    JoinPhase TurnPhase() const;
+    JoinPhase PhaseOf(uint8_t id) const;
+    bool Joining() const;             // anyone still on their way in (save, load, editor queue or turn)
     // client: our place in the host's join queue
     JoinQueueMsg queue_;
     bool queued_ = false;
@@ -1149,6 +1164,9 @@ private:
     // client world download
     WorldBegin dlInfo_;
     std::vector<WorldFile> dlFiles_;
+    std::vector<std::pair<uint64_t, uint64_t>> dlSizes_;   // each file: size unpacked, bytes streamed
+    double dlStartedAt_ = 0;          // WorldBegin
+    double readyAt_ = 0;              // client: the world matched the host's (timings)
     uint64_t dlBytes_ = 0;
     uint64_t dlHash_ = 0;
     bool dlComplete_ = false;

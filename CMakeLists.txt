@@ -39,9 +39,10 @@ add_library(kc_common STATIC common/src/protocol.cpp common/src/net.cpp common/s
     common/src/session_prisons.cpp common/src/protocol_ranged.cpp common/src/session_ranged.cpp
     common/src/session_buildings.cpp common/src/session_jobs.cpp common/src/admin.cpp common/src/session_authority.cpp common/src/session_diplomacy.cpp common/src/protocol_map.cpp common/src/session_map.cpp
     common/src/protocol_workshop.cpp common/src/session_workshop.cpp
-    common/src/protocol_squads.cpp common/src/session_squads.cpp)
+    common/src/protocol_squads.cpp common/src/session_squads.cpp common/src/pack.cpp)
 target_include_directories(kc_common PUBLIC common/include)
-target_link_libraries(kc_common PUBLIC enet)
+# cabinet: Windows' compression API (the world sent to a joining player is packed)
+target_link_libraries(kc_common PUBLIC enet cabinet)
 target_compile_options(kc_common PRIVATE /W4 /WX /permissive-)
 
 # ---- tests ----

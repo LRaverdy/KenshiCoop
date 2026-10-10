@@ -7,11 +7,30 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
 Journal de l'hôte gardé dans `kc_crashdumps/session_2215/host_live.log` (à compléter par les
 journaux des clients `KenshiCoop-<pid>.log` de chacun).
 
-- **Rejoindre est long** : nass4 a mis ~1 min 55 entre « world sent » (22:15:01) et son arrivée
-  (22:16:55) ; rob, arrivé pendant ce temps, attendait dans la file et n'a reçu le monde qu'à
-  22:17:04 (+1 min 45). Pistes : télécharger et charger le monde pendant l'attente (seule la
-  création du perso chacun son tour) ; mesurer transfert Steam vs chargement Kenshi ; compresser
-  le monde envoyé.
+- ✅ **Rejoindre est long** (corrigé en 0.3.1, à vérifier en jeu) : nass4 a mis ~1 min 55 entre
+  « world sent » (22:15:01) et son arrivée (22:16:55) ; rob, arrivé pendant ce temps, attendait
+  dans la file et n'a reçu le monde qu'à 22:17:04 (+1 min 45). Pistes : télécharger et charger le
+  monde pendant l'attente (seule la création du perso chacun son tour) ; mesurer transfert Steam
+  vs chargement Kenshi ; compresser le monde envoyé.
+  **Ce que disent les journaux** : le transfert n'était pas l'essentiel. rob a reçu 3,3 Mo et
+  chargé en 18 s en tout ; au resync de 23:16, nass4 a reçu 7,6 Mo et chargé en 36 s : ses 3,3 Mo
+  de 22:15 ne pouvaient pas prendre plus d'une quinzaine de secondes. Ses 1 min 55 sont surtout le
+  premier chargement de Kenshi depuis le menu (rien en cache), sur son PC. Ce qui coûtait vraiment,
+  c'était la file : rob attendait le chargement **et** l'éditeur de nass4 avant que sa sauvegarde
+  soit même commencée. Les journaux ne donnaient aucune durée par étape (les lignes du client
+  arrivent toutes à l'heure de son arrivée).
+  **Corrigé** : (1) tous les joueurs qui arrivent téléchargent et chargent le monde aussitôt ; une
+  sauvegarde sert tous ceux qui en attendent une (avec leurs persos et ceux des précédents), la
+  suivante part dès qu'elle est finie ; seul l'éditeur de personnage passe un joueur à la fois,
+  les autres attendent dans le monde en voyant leur place. Les arrivants plus anciens reçoivent
+  une doublure des persos des suivants, comme les joueurs déjà là ; l'apparence faite dans
+  l'éditeur pendant qu'un autre charge lui est envoyée à son arrivée. (2) Chaque jeu d'un même PC
+  a son propre emplacement d'import (`KenshiCoopJoin`, `KenshiCoopJoin2`…). (3) Durées au
+  journal de l'hôte : sauvegarde, compression, transfert avec débit et ping (« world delivered
+  to … »), chargement, attente de l'éditeur, éditeur, et un bilan « join timings for … » ; côté
+  client, débit du téléchargement et durée du chargement. (4) Le monde est compressé (XPRESS
+  Huffman de Windows) : **protocole 35**. Au prochain essai réel, lire « world delivered » : si le
+  relais Steam reste lent (débit bas), voir la fenêtre ENet (64 Ko en vol par aller-retour).
 - **Recrutement par un client** : c'est l'hôte qui a eu la fenêtre pour accepter ; le perso
   recruté est bien arrivé dans l'escouade (chez l'hôte) mais le client ne le voit pas.
 - **Fenêtre de sortie des mines invisible chez les clients** (l'inventaire de production). Vérifier
@@ -71,6 +90,21 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   le client ne retrouve pas l'inventaire de son propre perso côté hôte pour un dépôt au sol, alors
   que le test `grounddrop` (39/39, en local) passe : chercher pourquoi (identifiant du perso après
   une reconnexion, perso créé par l'éditeur, handle différent par Steam).
+  **Propriété après le retour de rob, vérifiée (0.3.1)** : à son retour (22:32:45) l'hôte lui rend
+  son perso (même handle 1:1:3852294912:3:1700561536, trouvé par le fichier des joueurs) ; l'entité
+  garde son netId (rien n'est recréé côté hôte) et le `Bind` de `FinishJoin` le donne comme sien.
+  Test `TestJoinReturns` : retour après plantage, ses persos (le sien et un donné par l'hôte,
+  rehandlé entre-temps) sous les mêmes netIds, à lui chez lui, et son dépôt au sol part chez
+  l'hôte. Corrigé au passage : les persos à rendre étaient retenus par handle (perdus si Kenshi
+  change le handle pendant l'absence) : maintenant par netId. **La propriété n'explique donc pas
+  les 9 échecs de 23:14-23:15**, 42 min après le retour. Indice pour celui qui reprend le dépôt :
+  à 23:14:46.210, 0,5 s avant le premier échec, le client de rob note « our copy
+  1:105:1015136704:1:644287104 of the host's 1:61:50659180:1:462158208 changed squads here (now
+  1:1:3852294912:1:644287104): followed » : une doublure de PNJ de rob prend un handle de
+  l'escouade du joueur (celui du perso de l'hôte, idx 1 ser 644287104) ; le message « does not
+  know that inventory » veut dire qu'aucune entité du client n'a le handle que le jeu donne pour
+  l'inventaire source : à chercher du côté des handles locaux qui changent (escouade), pas de la
+  propriété.
 - **Parler aux PNJ : lent, et parfois impossible** (rob, Ruche, 23:14). (1) Lent : l'ordre
   « parler » part chez l'hôte, le perso marche jusqu'au PNJ, puis la conversation s'ouvre ; aucun
   retour visible pendant ce temps. (2) Impossible : « [rob] order "talk" (12) -> refused: Marchand
@@ -98,13 +132,27 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   (relever un corps à plus de 5 unités et le refaire tomber, censée se limiter à 3 fois) : elle
   boucle, et elle s'applique aux persos portés ou prisonniers. À corriger : ne jamais l'appliquer
   à un perso porté, attaché, en cage ou assis ; limite réelle par corps ; seuil plus large.
-- **Geoffrey bloqué avant la création de son perso** (23:36-23:37). 1er essai : son jeu a quitté
-  ou planté pendant le chargement (« left while joining (connection lost …) »). 2e essai : l'hôte
-  dit « Geoffrey is back with their character » puis « 0 character(s) they had are theirs again » :
-  il se souvient d'un perso de Geoffrey (fichier des joueurs, partie précédente ?) qui n'existe pas
-  ou plus dans ce monde, donc il ne lui ouvre pas l'éditeur ; Geoffrey entre sans aucun perso.
-  À corriger : si le perso mémorisé n'est pas dans le monde (ou n'est plus un perso du joueur),
-  le traiter comme un nouveau joueur (éditeur de perso). Contournement : l'hôte lui donne un perso.
+- ✅ **Geoffrey bloqué avant la création de son perso** (23:36-23:37 ; corrigé en 0.3.1, à vérifier
+  en jeu). 1er essai : son jeu a quitté ou planté pendant le chargement (« left while joining
+  (connection lost …) »). 2e essai : l'hôte dit « Geoffrey is back with their character » puis
+  « 0 character(s) they had are theirs again » : il se souvient d'un perso de Geoffrey (fichier des
+  joueurs, partie précédente ?) qui n'existe pas ou plus dans ce monde, donc il ne lui ouvre pas
+  l'éditeur ; Geoffrey entre sans aucun perso. À corriger : si le perso mémorisé n'est pas dans le
+  monde (ou n'est plus un perso du joueur), le traiter comme un nouveau joueur (éditeur de perso).
+  Contournement : l'hôte lui donne un perso.
+  **Cause réelle** (journal) : le perso existait bien. À 23:34:23 l'hôte crée le perso de Geoffrey
+  (1:1:3852294912:5:981811520) et l'éditeur s'ouvre chez lui à 23:35:06 ; à 23:36:29 l'hôte lance
+  « resync 4 » **pendant que Geoffrey est dans l'éditeur** : son jeu recharge, il part avant de le
+  fermer. À son retour, le fichier des joueurs le retrouve (« is back with their character ») :
+  perso pas nouveau, donc pas d'éditeur, alors qu'il ne l'avait jamais fait. Le « 0 character(s) »
+  était trompeur : son perso lui avait déjà été rendu juste avant, il n'était pas compté (rob à
+  22:32, même ligne). Au 3e essai il avait bien ce perso (diagnostic : sélection idx=5 ser=981811520,
+  mode dieu et TP de l'admin sur « 1 character(s) »), mais un perso jamais personnalisé.
+  **Corrigé** : un joueur dont le perso a été créé et qui part avant de fermer l'éditeur le retrouve
+  à son retour (par compte Steam, en mémoire tant que l'hôte tourne) ; un perso mémorisé qui n'est
+  pas un membre **vivant** de l'escouade de ce monde n'est plus rendu (nouveau perso, éditeur) ; le
+  journal compte aussi le perso déjà rendu (« (1 of them their own character) »). Reste : un resync
+  lancé pendant qu'un joueur est dans l'éditeur le fait toujours recharger (il retrouve l'éditeur).
 - **rob ne voyait plus les dégâts** (sang, chiffres, barres de vie / blessures qui ne bougeaient
   plus) ; l'hôte l'a « spec » (regardé avec la caméra sur lui) et il les a revus. Comme les autres
   désyncs de rob : quelque chose dans le flux vers ce client s'arrête (vitals / effets de

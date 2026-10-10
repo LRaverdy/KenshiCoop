@@ -20,6 +20,25 @@ float Dist(const kc::Vec3& a, const kc::Vec3& b) {
 constexpr const char* kExportSlot = "KenshiCoopHost";
 constexpr const char* kImportSlot = "KenshiCoopJoin";
 
+// The save folder this game writes the host's world into. Two games on one PC (tests) may load a
+// host's world at the same moment: each takes a slot of its own ("KenshiCoopJoin", then
+// "KenshiCoopJoin2".."KenshiCoopJoin8"), claimed with a named mutex held for the life of the
+// process, so one never deletes or overwrites the files the other is loading.
+std::string ImportSlot() {
+    static std::string slot;
+    if (!slot.empty()) return slot;
+    for (int n = 1; n <= 8; ++n) {
+        const std::string name = n == 1 ? std::string(kImportSlot) : std::string(kImportSlot) + std::to_string(n);
+        HANDLE m = CreateMutexA(nullptr, FALSE, ("Local\\KenshiCoopImportSlot_" + name).c_str());
+        if (!m) continue;
+        if (GetLastError() == ERROR_ALREADY_EXISTS) { CloseHandle(m); continue; }
+        slot = name;   // the handle stays open: the slot is ours until the game exits
+        return slot;
+    }
+    slot = std::string(kImportSlot) + "_" + std::to_string(GetCurrentProcessId());
+    return slot;
+}
+
 namespace fs = std::filesystem;
 
 // Kenshi stores paths as narrow strings in the system code page.
@@ -2883,9 +2902,10 @@ bool KenshiWorld::BeginWorldImport(const std::vector<kc::WorldFile>& files, std:
     std::string folder;
     if (!kenshi::SaveFolder(folder)) { if (err) *err = "cannot find the save folder"; return false; }
     if (kenshi::SaveManagerBusy()) { if (err) *err = "the game is busy saving or loading"; return false; }
-    const fs::path dir = FromGamePath(folder) / kImportSlot;
+    const std::string slot = ImportSlot();
+    const fs::path dir = FromGamePath(folder) / slot;
     std::error_code ec;
-    if (dir.filename() != kImportSlot) { if (err) *err = "bad save folder"; return false; }
+    if (dir.filename() != slot) { if (err) *err = "bad save folder"; return false; }
     fs::remove_all(dir, ec);   // only ever our own slot
     for (const auto& f : files) {
         if (!kc::ValidWorldPath(f.path)) { if (err) *err = "refused file path " + f.path; return false; }
@@ -2895,7 +2915,8 @@ bool KenshiWorld::BeginWorldImport(const std::vector<kc::WorldFile>& files, std:
         out.write(reinterpret_cast<const char*>(f.data.data()), std::streamsize(f.data.size()));
         if (!out) { if (err) *err = "cannot write " + ToUtf8(target); return false; }
     }
-    if (!kenshi::RequestLoad(kImportSlot)) { if (err) *err = "the game refused to load the save"; return false; }
+    if (!kenshi::RequestLoad(slot)) { if (err) *err = "the game refused to load the save"; return false; }
+    Log("host world written to save slot %s, loading it", slot.c_str());
     return true;
 }
 
@@ -2937,18 +2958,24 @@ bool KenshiWorld::EnsurePlayerCharacter(const std::string& playerName, uint64_t 
     kenshi::PlayerCharacters(squad);
     if (squad.empty()) return false;
     auto ledger = ReadLedger();
+    // a living member of the squad (a remembered character that died, or is not in this world,
+    // is not theirs to come back to: they get a new one, made in the character editor)
     auto inSquad = [&](const kc::Handle& h) {
-        for (kenshi::Character* c : squad) { kc::Handle sh; if (kenshi::GetHandle(c, sh) && sh == h) return c; }
+        for (kenshi::Character* c : squad) { kc::Handle sh; if (kenshi::GetHandle(c, sh) && sh == h && !kenshi::IsDead(c)) return c; }
         return static_cast<kenshi::Character*>(nullptr);
     };
     // 1. the character this Steam account played last time (whatever name the player uses now)
+    bool remembered = false;
     if (steamId)
-        for (const auto& e : ledger)
-            if (e.steamId == steamId && inSquad(e.handle)) {
-                out = e.handle;
-                Log("%s is back with their character", name.c_str());
-                return true;
-            }
+        for (const auto& e : ledger) {
+            if (e.steamId != steamId) continue;
+            remembered = true;
+            if (!inSquad(e.handle)) continue;
+            out = e.handle;
+            Log("%s is back with their character", name.c_str());
+            return true;
+        }
+    if (remembered) Log("%s's remembered character is not a living member of the squad in this world: a new one for them", name.c_str());
     // 2. a squad member with the player's name that no other account owns
     auto ownedByOther = [&](const kc::Handle& h) {
         for (const auto& e : ledger) if (e.handle == h && e.steamId != steamId) return true;
@@ -2957,7 +2984,7 @@ bool KenshiWorld::EnsurePlayerCharacter(const std::string& playerName, uint64_t 
     for (kenshi::Character* c : squad) {
         std::string n;
         kc::Handle h;
-        if (kenshi::CharacterName(c, n) && n == name && kenshi::GetHandle(c, h) && !(steamId && ownedByOther(h))) {
+        if (kenshi::CharacterName(c, n) && n == name && !kenshi::IsDead(c) && kenshi::GetHandle(c, h) && !(steamId && ownedByOther(h))) {
             out = h;
             if (steamId) { ledger.push_back({steamId, h, name}); WriteLedger(ledger); }
             return true;

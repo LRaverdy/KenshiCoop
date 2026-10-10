@@ -31,9 +31,11 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   Multijoueur, Ctrl+Shift+M). L'hôte se met en pause le temps de l'arrivée. Le client télécharge
   le monde de l'hôte (barre de progression) et le charge tout seul.
 - **Fonctionnement** : l'hôte gèle son monde, le sauvegarde dans l'emplacement `KenshiCoopHost`,
-  puis envoie les fichiers par morceaux de 16 Ko. Le client les écrit dans `KenshiCoopJoin`, les
-  charge, puis vérifie l'empreinte du monde (les handles de l'escouade). Il annonce ensuite
-  `Ready` et reçoit tous les personnages.
+  le compresse (XPRESS Huffman de Windows, depuis 0.3.1) puis envoie les fichiers par morceaux de
+  16 Ko. Le client les décompresse, les écrit dans `KenshiCoopJoin` (un deuxième jeu sur le même
+  PC : `KenshiCoopJoin2`…), les charge, puis vérifie l'empreinte du monde (les handles de
+  l'escouade). Il annonce ensuite `Ready` et reçoit tous les personnages. Le journal de l'hôte
+  donne la durée de chaque étape (sauvegarde, transfert avec débit, chargement, éditeur).
 - **Contrôles** à la connexion :
   - version du protocole ;
   - même `kenshi_x64.exe` (SHA-256) ;
@@ -42,14 +44,18 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   - place libre (8 joueurs au plus, hôte compris).
 - **Garde-fous** :
   - l'hôte reste en pause même si quelqu'un appuie sur lecture pendant une arrivée ;
-  - **file d'attente** : les joueurs arrivent un par un (sauvegarde, téléchargement, chargement,
-    éditeur de personnage). Les autres attendent, connectés, et voient leur place, le joueur en
-    cours et son étape (« File d'attente : position 2/3 — en attente de Joueur2 (création du
-    personnage)… »), mise à jour en direct. L'hôte voit la file dans son panneau. Au tour suivant,
-    une sauvegarde neuve contient tous ceux arrivés avant. Un joueur qui part ou plante pendant
-    son tour passe la main ; un joueur qui quitte la file la fait avancer ;
-  - délais : 120 s pour la sauvegarde de l'hôte, 300 s pour le téléchargement et le chargement
-    côté client, comptés à partir du tour du joueur (l'attente dans la file ne compte pas).
+  - **arrivées simultanées** (0.3.1) : tous les joueurs qui arrivent ensemble téléchargent et
+    chargent le monde **en même temps** (une sauvegarde pour tous ceux qui attendent, avec leurs
+    persos et ceux des précédents) ; seul l'**éditeur de personnage** passe un joueur à la fois.
+    Les autres attendent dans le monde (en pause) et voient leur place (« Création de ton
+    personnage : position 2/3 — Joueur2 crée le sien, chacun son tour… »). L'hôte voit les
+    arrivées dans son panneau. Un joueur qui part ou plante pendant son tour d'éditeur passe la
+    main ;
+  - un joueur parti **avant d'avoir fermé l'éditeur** (jeu planté pendant le chargement, resync)
+    retrouve l'éditeur à son retour ; un perso mémorisé qui n'est plus un membre vivant de
+    l'escouade de ce monde est remplacé par un nouveau, créé dans l'éditeur ;
+  - délais : 120 s pour la sauvegarde de l'hôte, 300 s pour recevoir le monde depuis l'arrivée,
+    puis 300 s pour le charger.
 - **Limites** : tous les joueurs doivent avoir la même version de Kenshi (1.0.68 Steam) et les
   mêmes mods.
 
@@ -107,8 +113,8 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   bâtiments, portes, conteneurs en route). Les fenêtres de conteneur et de commerce qu'il avait
   ouvertes sont libérées ; la pause « X crée son personnage » est levée.
 - **Il revient** (même compte Steam ; sans Steam : même nom, ancienne connexion muette depuis 2 s) :
-  il garde son nom, retrouve son personnage et ceux qu'il commandait, dans leur état actuel chez
-  l'hôte. S'il revient avant que l'hôte ait vu la coupure, la nouvelle connexion remplace
+  il garde son nom, retrouve son personnage et ceux qu'il commandait (sous les mêmes netIds, même
+  si Kenshi leur a donné un nouveau handle entre-temps), dans leur état actuel chez l'hôte. S'il revient avant que l'hôte ait vu la coupure, la nouvelle connexion remplace
   l'ancienne aussitôt.
 - **Côté client**, rien de persistant n'est abîmé : le monde de l'hôte n'est chargé que dans
   l'emplacement `KenshiCoopJoin` (vidé à chaque arrivée), et le jeu du client **ne sauvegarde pas**

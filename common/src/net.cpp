@@ -278,3 +278,13 @@ uint32_t Net::silentMs(PeerId peer) const {
     return now - p->lastReceiveTime < 86400000u ? now - p->lastReceiveTime : 0u;   // wraps like ENet time
 }
 } // namespace kc
+
+namespace kc {
+bool Net::reliableIdle(PeerId peer) const {
+    std::lock_guard<std::recursive_mutex> lk(mu_);
+    ENetPeer* p = find(peer);
+    if (!p) return false;
+    return enet_list_empty(&p->outgoingCommands) && enet_list_empty(&p->outgoingSendReliableCommands) &&
+           enet_list_empty(&p->sentReliableCommands);
+}
+} // namespace kc

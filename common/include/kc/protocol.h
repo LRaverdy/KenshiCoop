@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 34;   // 34: Research, ResearchRequest, Machines, MachineRequest (workshop), SquadState, SquadRequest, JobState (squad window); 33: BagBind (travelling merchants), Result (actor safety), JoinQueue, Diplomacy, MapMarkers and MapPing (map)
+constexpr uint16_t kProtocolVersion = 35;   // 35: the world sent to a joiner is packed (WorldBegin rawBytes, WorldChunk packedSize), JoinQueue also tells players in the world waiting for the character editor; 34: Research, ResearchRequest, Machines, MachineRequest (workshop), SquadState, SquadRequest, JobState (squad window); 33: BagBind (travelling merchants), Result (actor safety), JoinQueue, Diplomacy, MapMarkers and MapPing (map)
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -617,13 +617,17 @@ struct WorldFile {
     std::vector<uint8_t> data;
 };
 struct WorldBegin {
-    uint64_t totalBytes = 0;
+    uint64_t totalBytes = 0;     // what is streamed (the files as packed)
     uint32_t fileCount = 0;
+    uint64_t rawBytes = 0;       // the files once unpacked
 };
+// A file is streamed as packed (kc/pack.h) when that makes it smaller, else as it is
+// (packedSize == fileSize); offsets and chunk data are in the streamed bytes.
 struct WorldChunk {
     uint32_t file = 0;           // index in [0, fileCount)
     std::string path;            // only in the first chunk of a file (offset == 0)
-    uint64_t fileSize = 0;       // only in the first chunk of a file
+    uint64_t fileSize = 0;       // only in the first chunk of a file: its size unpacked
+    uint64_t packedSize = 0;     // only in the first chunk of a file: the bytes streamed for it
     uint64_t offset = 0;
     std::vector<uint8_t> data;
 };
