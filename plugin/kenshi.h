@@ -203,6 +203,13 @@ enum Fn : int {
     FnCharGetPermajob,          // TaskType Character::getPermajob(int slot) const
     FnCharPermajobCount,        // int Character::getPermajobCount() const
     FnCMSetPositionAndTeleport, // void CharMovement::_setPositionAndTeleport(const Vector3&, int floor)   (floor >= 0: floorGroup = floor + 9)
+    // ---- placement validity: what build mode checks before it accepts a placement (plugin/buildings.cpp)
+    FnTerrainHeight,            // float UtilityT::getTerrainHeight(float x, float z)   (the ground, water ignored; -99 where no terrain is known)
+    FnTerrainWithWaterHeight,   // float UtilityT::getTerrainWithWaterHeight(float x, float z)   (max(ground, 100): build mode's heights are relative to it)
+    FnIsIndoors,                // Building* UtilityT::isIndoors(const Vector3&)   (the building whose interior holds that point)
+    FnGetNearestTown,           // Town* TownList::getNearestTown(const Vector3&, Faction* owner, Town* except, Faction* mine, TownType)
+    FnWithinBordersRange,       // bool TownBase::withinBordersRange(const Vector3&, float mult) const
+    FnGetNearestWithinItsRadius,// TownBase* TownList::getNearestWithinItsRadius(const Vector3&, bool skipPlayerTowns) const
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -700,6 +707,9 @@ bool ReadRaw(const void* obj, uintptr_t offset, void* out, size_t n);   // SEH-g
 bool WriteRaw(void* obj, uintptr_t offset, const void* in, size_t n);
 void* GameDataBySid(const std::string& sid);
 bool GameDataSidOf(const void* gd, std::string& out);
+// A GameData's own value (read only: a missing key stays missing). False when it has none.
+bool GameDataBoolField(const void* gd, const std::string& key, bool& out);
+bool GameDataIntField(const void* gd, const std::string& key, int& out);
 // building templates (itemType BUILDING) whose players' name contains `part` ("sid name" each)
 void BuildingTemplates(const std::string& part, std::vector<std::pair<std::string, std::string>>& out, size_t max);
 void ItemTemplates(const std::string& part, std::vector<std::pair<std::string, std::string>>& out, size_t max);   // every non-building template by sid/name part

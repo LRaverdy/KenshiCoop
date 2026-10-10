@@ -1267,7 +1267,7 @@ def exp_build(host, cli, kinds=("Feu", "Lit", "Coffre", "Tente", "Mur")):
         return [e for e in t.split()[2:] if e.startswith(sid + "@")]
     before_h, before_c = len(built(host)), len(built(cli))
     # 1. placed by the client: built by the host, then by the client, at the same place
-    log("client places", sid, cmd(cli, f"buildplace {sid} 40 0 0"))
+    log("client places", sid, place_valid(cli, sid, 0, 40, 0))
     for _ in range(20):
         time.sleep(0.5)
         if len(built(host)) > before_h and len(built(cli)) > before_c:
@@ -1292,7 +1292,7 @@ def exp_build(host, cli, kinds=("Feu", "Lit", "Coffre", "Tente", "Mur")):
     check("batiments : chantier termine partout", prog(ph) == prog(pc), f"{ph} / {pc}")
     # 3. placed by the host: the client builds it too
     n_c = len(built(cli))
-    log("host places", sid, cmd(host, f"buildplace {sid} -40 0 90"))
+    log("host places", sid, place_valid(host, sid, 0, -40, 0, 90))
     time.sleep(4)
     check("batiments : placement de l'hote construit chez le client", len(built(cli)) > n_c, built(cli))
     # 4. the client dismantles one: the host's game starts dismantling it, the client sees it
@@ -1405,6 +1405,73 @@ def find_material(pid, name=None):
     return None
 
 
+ACID_LAKE = (54612.0, 100.0, 40576.0)   # an acid lake: a client's tent was once built there (farlong)
+
+
+def ground_at(pid, x, z):
+    """(ground, surface, 'land' | 'water' | 'unknown') at that world spot as this game knows it: the
+    terrain under any water (UtilityT::getTerrainHeight, -99 when not loaded), build mode's reference
+    height (getTerrainWithWaterHeight, the water and acid surface is 100) and what build mode makes
+    of it (ground under 98: in the water). None when the command failed."""
+    ok, t = cmd(pid, f"groundat {x:.1f} {z:.1f}")
+    if not ok:
+        return None
+    parts = t.split()
+    return float(parts[1]), float(parts[2]), parts[3]
+
+
+def spot_offsets(dx, dz):
+    """(dx, dz) first, then rings around it: where a placement is tried until build mode's check accepts one."""
+    out = [(dx, dz)]
+    for r in (25, 50, 80, 120, 180, 260):
+        for k in range(8):
+            a = k * math.pi / 4
+            out.append((round(dx + r * math.cos(a)), round(dz + r * math.sin(a))))
+    return out
+
+
+def place_valid(pid, sid, idx, dx, dz, yaw=0):
+    """Places `sid` next to squad member idx, at the first spot around (dx, dz) that this game's own
+    build-mode check accepts: buildplace checks first and answers 'err invalid spot: ...' (water or
+    acid, slope, town, inside or on another building) without placing anything. Returns
+    (ok, answer, (dx, dz) used)."""
+    last = (False, "no spot tried", (dx, dz))
+    for ox, oz in spot_offsets(dx, dz):
+        ok, t = cmd(pid, f"buildplace {sid} {ox} {oz} {yaw} {idx}")
+        last = (ok, t, (ox, oz))
+        if ok or "invalid spot" not in t:
+            break
+        log(f"   spot {ox},{oz} refused: {t}")
+    return last
+
+
+def teleport_dry(host, idx, base, offsets, settle=12):
+    """Admin TP of squad member idx to the first of base + offsets that is dry land, not a lake of water
+    or acid. The ground is read on the host: before the TP when its terrain is known there, else after
+    the TP once the zone has streamed in around the character (then the next spot is tried). Returns
+    the position used, or None."""
+    x, y, z = base
+    for dx, dz in offsets:
+        tx, tz = x + dx, z + dz
+        g = ground_at(host, tx, tz)
+        if g and g[2] == "water":
+            log(f"   {tx:.0f},{tz:.0f}: water or acid there, next spot", g)
+            continue
+        log(f"teleport {idx} to {tx:.0f},{tz:.0f}:", cmd(host, f"teleport {idx} {tx:.0f} {y + 300:.0f} {tz:.0f}"))
+        for _ in range(settle):
+            time.sleep(1)
+            g = ground_at(host, tx, tz)
+            if g and g[2] != "unknown":
+                break
+        if g and g[2] == "land":
+            return (tx, y, tz)
+        log(f"   {tx:.0f},{tz:.0f} is not dry land ({g}), next spot")
+    return None
+
+
+FAR_OFFSETS = [(30000, 30000), (30000, 34000), (34000, 30000), (30000, 26000), (26000, 30000), (36000, 36000), (24000, 34000)]
+
+
 def find_building(pid, kinds):
     for k in kinds:
         t = cmd(pid, f"buildtypes {k}")[1]
@@ -1465,7 +1532,7 @@ def construct_one(host, cli, builder, idx, sid, mat, tasks, dx, label, wait=240)
     orders that character to build it, then host and client are compared until it is finished."""
     who = "client" if builder == cli else "hote"
     before_h = {s[0] for s in site_list(host, sid, idx)}
-    log(f"[{label}] {who} places", sid, cmd(builder, f"buildplace {sid} {dx} 25 0 {idx}"))
+    log(f"[{label}] {who} places", sid, place_valid(builder, sid, idx, dx, 25))
     site = None
     for _ in range(20):
         time.sleep(0.5)
@@ -1549,7 +1616,7 @@ def exp_construct(host, cli, kinds=("Tente", "Feu", "Coffre", "Lit", "Mur"), mat
         summary()
         return
     before = {s[0] for s in site_list(host, sid, own, 2500)}
-    log("both place:", cmd(cli, f"buildplace {sid} 60 -60 0 {own}"), cmd(host, f"buildplace {sid} -60 -60 0 {hidx}"))
+    log("both place:", place_valid(cli, sid, own, 60, -60), place_valid(host, sid, hidx, -60, -60))
     time.sleep(4)
     new = [s for s in site_list(host, sid, own, 2500) if s[0] not in before]
     check("construction [ensemble] : deux chantiers chez l'hote", len(new) >= 2, new)
@@ -1733,7 +1800,9 @@ def exp_farlong(host, cli, seconds=300, kinds=("Tente", "Feu", "Coffre", "Lit", 
 
     x, y, z = vec(cmd(host, f"where {own}")[1])
     home = (x, y, z)
-    log("teleport the client's character far away (as fartp):", cmd(host, f"teleport {own} {x + 30000} {y + 300} {z + 30000}"))
+    # far away on dry land: not in a lake of water or acid (a building placed there would be refused)
+    dry = teleport_dry(host, own, home, FAR_OFFSETS)
+    check("loin longtemps : destination sur la terre ferme", dry is not None, dry)
     time.sleep(5)
     cmd(cli, f"camto {own}")
     time.sleep(30)   # zone streaming on both
@@ -1750,7 +1819,9 @@ def exp_farlong(host, cli, seconds=300, kinds=("Tente", "Feu", "Coffre", "Lit", 
     # a building next to the client's character, placed by the client
     sid = find_building(host, kinds)
     if sid:
-        log("client places", sid, "far away:", cmd(cli, f"buildplace {sid} -40 30 0 {own}"))
+        placed = place_valid(cli, sid, own, -40, 30)
+        log("client places", sid, "far away:", placed)
+        check("loin longtemps : un emplacement valide trouve pres du perso du client", placed[0], placed)
     t0 = time.time()
     worst = []
     NEAR_SEEN, NEAR_POS = 1000.0, 300.0   # what the client's player sees; the range the plugin pulls characters in
@@ -1822,6 +1893,85 @@ def exp_farlong(host, cli, seconds=300, kinds=("Tente", "Feu", "Coffre", "Lit", 
     check("loin longtemps : au retour, personne ne manque", rep["missing_on_client"] <= 2, rep["missing_sample"])
     check("loin longtemps : au retour, positions identiques", rep["pos_err_over_tol"] <= 2, rep["worst"])
     check("loin longtemps : au retour, inventaires identiques", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    summary()
+
+
+def exp_placevalid(host, cli, kinds=("Tente", "Feu", "Coffre", "Lit", "Mur")):
+    """Placements are checked as build mode checks a spot. The client's character goes next to an
+    acid lake (on dry land, so that both games have the zone): the lake spot is refused by the
+    client's own check, and when the client sends it anyway (debug 'force': its check skipped) the
+    host refuses it, says why to the client, and nothing is built anywhere. A dry spot next to the
+    character is accepted and built everywhere (the check does not refuse everything)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    own_c = own_index(cli)
+    sid = find_building(host, kinds)
+    check("pose valide : un modele de batiment trouve", sid is not None, sid)
+    if not sid:
+        summary()
+        return
+    lx, ly, lz = ACID_LAKE
+    near = teleport_dry(host, own, ACID_LAKE, [(600, 0), (0, 600), (-600, 0), (0, -600), (1000, 0), (0, 1000), (-1000, 0), (0, -1000),
+                                                (1600, 0), (0, 1600), (-1600, 0), (0, -1600)])
+    check("pose valide : le perso du client sur la terre ferme pres du lac d'acide", near is not None, near)
+    time.sleep(3)
+    cmd(cli, f"camto {own_c}")
+    time.sleep(25)   # zone streaming on both
+    gh, gc = ground_at(host, lx, lz), ground_at(cli, lx, lz)
+    log("acid lake spot: host", gh, "client", gc)
+    check("pose valide : le lac est de l'eau ou de l'acide chez l'hote", gh is not None and gh[2] == "water", gh)
+    check("pose valide : et chez le client", gc is not None and gc[2] == "water", gc)
+
+    def lake_sites(pid):
+        return [s_ for s_ in site_list(pid, sid, own_c if pid == cli else own, 3000) if dist(s_[0][::2], (lx, lz)) < 60]
+
+    before_h, before_c = lake_sites(host), lake_sites(cli)
+    # 1. the client's own check (as its build mode: the ghost would be red)
+    chk = cmd(cli, f"buildcheckat {sid} {lx} {lz}")
+    log("client check of the lake spot:", chk)
+    check("pose valide : le client refuse le lac lui-meme", not chk[0] and "invalid spot" in chk[1], chk)
+    plain = cmd(cli, f"buildplaceat {sid} {lx} {lz}")
+    check("pose valide : buildplaceat dans le lac refuse sans rien envoyer", not plain[0] and "invalid spot" in plain[1], plain)
+    hchk = cmd(host, f"buildcheckat {sid} {lx} {lz}")
+    check("pose valide : l'hote refuse aussi le lac (meme verification)", not hchk[0] and "water" in hchk[1], hchk)
+    # 2. sent anyway: the host's check refuses it, tells the client why, builds nothing
+    log_mark = len(host_log())
+    forced = cmd(cli, f"buildplaceat {sid} {lx} {lz} 0 force")
+    log("client sends the lake spot anyway:", forced)
+    check("pose valide : la demande forcee part vers l'hote", forced[0] and "asked" in forced[1], forced)
+    notice = ""
+    for _ in range(20):
+        time.sleep(0.5)
+        notice = cmd(cli, "chatlast 3")[1]
+        if "eau" in notice:
+            break
+    log("client chat:", notice)
+    check("pose valide : le client recoit le refus de l'hote (en francais)", "dans l'eau ou l'acide" in notice, notice)
+    hl = host_log()[log_mark:]
+    check("pose valide : l'hote note le refus et sa raison", "refused: invalid spot (in water or acid" in hl, hl[-400:])
+    time.sleep(3)
+    after_h, after_c = lake_sites(host), lake_sites(cli)
+    check("pose valide : rien de bati dans le lac chez l'hote", len(after_h) == len(before_h), after_h)
+    check("pose valide : rien de bati dans le lac chez le client", len(after_c) == len(before_c), after_c)
+    # the host builds a client's placement, then announces it to everyone ("<who> places ..."): no announce, nothing anywhere
+    placed_lines = [ln for ln in host_log()[log_mark:].splitlines() if " places " in ln]
+    check("pose valide : aucun batiment pose nulle part (pas d'annonce de l'hote)", not placed_lines, placed_lines[:3])
+    # 3. a dry spot next to the character: accepted, built on the host then on the client
+    ok_place = place_valid(cli, sid, own_c, 40, 30)
+    log("client places on dry land:", ok_place)
+    check("pose valide : un emplacement sec est accepte", ok_place[0], ok_place)
+    built_h = built_c = []
+    for _ in range(20):
+        time.sleep(0.5)
+        built_h, built_c = site_list(host, sid, own, 400), site_list(cli, sid, own_c, 400)
+        if built_h and built_c:
+            break
+    check("pose valide : bati chez l'hote et chez le client, au meme endroit",
+          bool(built_h) and bool(built_c) and min(dist(a[0], b[0]) for a in built_h for b in built_c) < 0.5, f"{built_h[:2]} / {built_c[:2]}")
+    log("bring the client back:", cmd(host, "tpplayer 2"))
+    time.sleep(10)
     summary()
 
 
@@ -1974,7 +2124,8 @@ def exp_far(host, cli):
     log("client camera on its character", cmd(cli, f"camto {own}"))
     measure("next to the host's squad", own)
     x, y, z = vec(cmd(host, f"where {own}")[1])
-    log("teleport the client's character far away", cmd(host, f"teleport {own} {x + 40000} {y + 300} {z + 30000}"))
+    log("teleport the client's character far away (dry land):",
+        teleport_dry(host, own, (x, y, z), [(40000, 30000), (40000, 34000), (44000, 30000), (36000, 30000), (40000, 26000)]))
     time.sleep(5)
     log("client camera on its character", cmd(cli, f"camto {own}"))
     time.sleep(35)
@@ -2186,7 +2337,8 @@ def exp_fartp(host, cli):
     cmd(cli, "editdone")
     time.sleep(2)
     own = own_index(host)
-    cmd(host, f"teleport {own} 30000 0 30000")   # far: another zone entirely
+    # far: another zone entirely, on dry land
+    log("far TP:", teleport_dry(host, own, (0, -300, 0), [(30000, 30000), (34000, 30000), (30000, 34000), (26000, 30000), (30000, 26000)], settle=4))
     time.sleep(20)
     log("tp", cmd(host, "tpplayer 2"))
     t0 = time.time()
@@ -2803,15 +2955,15 @@ def exp_soak(host, cli, minutes=20, phase_seconds=90, kinds=("Feu", "Tente", "Co
     def act_build():
         if not sid:
             return
-        log("client places", sid, cmd(cli, f"buildplace {sid} {rnd.randint(-80, 80)} {rnd.randint(40, 90)} 0 {own_c}"))
-        log("host places", sid, cmd(host, f"buildplace {sid} {rnd.randint(-80, 80)} {rnd.randint(-90, -40)} 0 {hidx}"))
+        log("client places", sid, place_valid(cli, sid, own_c, rnd.randint(-80, 80), rnd.randint(40, 90)))
+        log("host places", sid, place_valid(host, sid, hidx, rnd.randint(-80, 80), rnd.randint(-90, -40)))
 
     def act_teleport():
         now = time.time()
         if not tp_state["done"] and now - t0 > minutes * 60 * 0.4:
             x, y, z = vec(cmd(host, f"where {own}")[1])
             tp_state.update(done=True, home=(x, y, z), back_at=now + 60)
-            log("client's character teleported far away:", cmd(host, f"teleport {own} {x + 30000} {y + 300} {z + 30000}"))
+            log("client's character teleported far away (dry land):", teleport_dry(host, own, (x, y, z), FAR_OFFSETS))
             time.sleep(3)
             cmd(cli, f"camto {own_c}")
         elif tp_state["back_at"] and now >= tp_state["back_at"]:
@@ -3110,6 +3262,9 @@ def main():
     bd = sub.add_parser("build", help="lot E: buildings placed, built, dismantled and bought by everyone")
     bd.add_argument("--save", default="kctest_base")
     bd.add_argument("--keep", action="store_true")
+    pv = sub.add_parser("placevalid", help="placements checked as build mode checks a spot: the acid lake refused by client and host, nothing built; a dry spot accepted")
+    pv.add_argument("--save", default="kctest_base")
+    pv.add_argument("--keep", action="store_true")
     bs = sub.add_parser("buildstate", help="construction state of save/town buildings is the host's")
     bs.add_argument("--save", default="kctest_mine")
     bs.add_argument("--keep", action="store_true")
@@ -3289,6 +3444,8 @@ def main():
             exp_farlong(host, cli, seconds=a.seconds)
         elif a.what == "buildstate":
             exp_buildstate(host, cli)
+        elif a.what == "placevalid":
+            exp_placevalid(host, cli)
         elif a.what == "mine":
             exp_mine(host, cli)
         elif a.what == "admin":

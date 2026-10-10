@@ -259,6 +259,10 @@ public:
     struct LocalPlacement { BuildPlace place; Handle created; };
     virtual void TakeLocalPlacements(std::vector<LocalPlacement>& out) { out.clear(); }
     virtual bool ExecutePlacement(const BuildPlace& p, Handle& created, Vec3& worldPos) { (void)p; (void)created; (void)worldPos; return false; }
+    // Host: build mode's own checks on a placement before it is built (water or acid, slope, town,
+    // inside or on top of another building). False: refused; why (English, for the log) and whyFr
+    // (for the player who asked).
+    virtual bool CheckPlacement(const BuildPlace& p, std::string& why, std::string& whyFr) { (void)p; why.clear(); whyFr.clear(); return true; }
     virtual bool FindBuilding(const std::string& sid, const Vec3& pos, Handle& out) { (void)sid; (void)pos; (void)out; return false; }
     virtual bool BuildingIdentity(const Handle& h, std::string& sid, Vec3& pos) { (void)h; (void)sid; (void)pos; return false; }
     virtual bool ReadBuildState(const Handle& h, float& progress, uint8_t& flags) { (void)h; (void)progress; (void)flags; return false; }

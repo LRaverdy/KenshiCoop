@@ -395,6 +395,13 @@ struct FakeWorld : IWorld {
         ++placementsBuilt;
         return true;
     }
+    bool CheckPlacement(const BuildPlace& p, std::string& why, std::string& whyFr) override {
+        ++placementsChecked;
+        why = whyFr = p.sid == "inwater" ? "in water" : "";
+        if (p.sid == "inwater") whyFr = "dans l'eau ou l'acide.";
+        return p.sid != "inwater";
+    }
+    int placementsChecked = 0;
     bool FindBuilding(const std::string& sid, const Vec3& pos, Handle& out) override {
         for (auto& [s, b] : bldgs)
             if (b.sid == sid && Dist(b.pos, pos) < 5) { out = Bh(s); return true; }
@@ -1902,6 +1909,15 @@ static void TestBuildings() {
     cw.placements.push_back({bad, Handle{}});
     Run({{&host, &hw}, {&cli, &cw}}, 2.0);
     CHECK(!findSid(hw, "refused") && !findSid(cw, "refused") && hw.placementsBuilt == 2);
+    // a placement build mode would have refused (in the acid): the host checks it, builds nothing,
+    // tells the player why
+    const int checked = hw.placementsChecked;
+    BuildPlace acid; acid.sid = "inwater"; acid.pos = {54612.5f, 0, 40575.9f};
+    cw.placements.push_back({acid, Handle{}});
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return !cli.chatLog().empty() && cli.chatLog().back().find("eau") != std::string::npos; });
+    CHECK(hw.placementsChecked > checked);
+    CHECK(!findSid(hw, "inwater") && !findSid(cw, "inwater") && hw.placementsBuilt == 2 && cw.placementsBuilt == 2);
+    CHECK(!cli.chatLog().empty() && cli.chatLog().back().find("dans l'eau ou l'acide") != std::string::npos);
     // the client dismantles the hut: the host's game does it, the client sees it being dismantled
     {
         auto* c = findSid(cw, "hut");
