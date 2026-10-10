@@ -3267,6 +3267,10 @@ static void TestDialogue() {
     hw.dialogEvents.push_back(ev(DialogKind::Text, 1, 10, 2, "Bon, circule.", {"Merci"}));
     Run(all, 2.0, [&] { return cli.dialog().turn == 2; });
     CHECK(cli.dialog().turn == 2 && !cli.dialog().waiting && cli.dialog().replies.size() == 1);
+    // the game fills the window twice per line: the same line again is not a new turn
+    hw.dialogEvents.push_back(ev(DialogKind::Text, 1, 10, 2, "Bon, circule.", {"Merci"}));
+    Run(all, 1.0);
+    CHECK(cli.dialog().turn == 2);
     { DialogReply a; a.dialogId = 1; a.actor = net[2]; a.turn = 1; a.index = 0; Writer w; Encode(w, a); CHECK(host.InjectForTest(me, w)); }
     { DialogReply a; a.dialogId = 1; a.actor = net[2]; a.turn = 2; a.index = 5; Writer w; Encode(w, a); CHECK(host.InjectForTest(me, w)); }   // not offered
     Run(all, 1.0);

@@ -309,7 +309,12 @@ client s'ouvre chez **ce** client. Les bulles au-dessus des têtes sont montrée
   sur personne), son perso revient à l'hôte comme avant.
 - **Combat, téléportation, K.-O., mort** : toutes les 0,5 s, l'hôte termine et ferme une
   conversation dont un personnage est à terre, mort ou disparu, que le jeu a finie sans fermer la
-  fenêtre, dont le perso n'est plus à ce joueur, ou dont les deux sont à plus de 40 m (TP).
+  fenêtre, dont le perso n'est plus à ce joueur, dont un des deux a sauté de plus de 20 m en 0,5 s
+  (TP), ou qui se sont éloignés de 100 m de plus qu'au début. Pas de distance absolue : une
+  conversation peut commencer de loin (essai du 10/10 : le Chef Voleur aborde le perso du client à
+  plus de 40 m, et l'ancienne règle « plus de 40 m » la fermait aussitôt).
+- **Réplique en double** : le jeu remplit la fenêtre deux fois par réplique (texte, puis réponses) ;
+  la même réplique n'est envoyée et numérotée qu'une fois.
 - **Vitesse 3** : chaque réplique porte un numéro ; une réponse à une réplique déjà dépassée est
   ignorée (journal « answer to an older line ignored »), le joueur voit la nouvelle.
 

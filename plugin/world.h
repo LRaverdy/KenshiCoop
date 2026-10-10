@@ -530,6 +530,11 @@ private:
         uint32_t id = 0;
         kenshi::Character* pc = nullptr;
         kenshi::Character* other = nullptr;
+        // where both stood at the last sweep, and how far apart when it was first seen (a conversation
+        // can start from afar: a shout, a forced event); a teleport is a jump, not a distance
+        bool placed = false;
+        kc::Vec3 pcAt, otherAt;
+        float startDist = 0;
         kc::Handle pcH, otherH;
     };
     std::unordered_map<void*, RemoteDialog> remoteDialogs_;

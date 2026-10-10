@@ -1001,10 +1001,16 @@ def exp_dialogue(host, cli):
     time.sleep(3)
     before = host_states()
 
-    # 1. the client's character talks to it
-    r = cmd(cli, f"talkto {own} 0")
-    log("client: talk to the nearest NPC", r)
-    d = wait_open(True, 20)
+    # 1. the client's character talks to it (the copy may have nothing to say: then the next nearest NPCs)
+    d = dialog()
+    for k in range(4):
+        r = cmd(cli, f"talkto {own} {k}")
+        log(f"client: talk to the NPC nearest #{k}", r)
+        if not r[0]:
+            continue
+        d = wait_open(True, 15)
+        if d.get("open") == "1":
+            break
     how = "le client parle"
     if d.get("open") != "1":
         log("   (no conversation from the client's order: the NPC starts it instead)")
