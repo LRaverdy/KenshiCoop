@@ -78,6 +78,14 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   précédente pas encore fermée côté hôte). Le refus « occupé » ne doit jamais viser le même
   joueur : il doit reprendre ou remplacer sa propre conversation. Voir aussi les ordres « parler »
   acceptés (« -> ok ») qui n'ont rien ouvert (23:14:02, 23:14:04).
+- **rob se désynchronise peu à peu** ; un « Resynchroniser tout le monde » de l'hôte l'a remis
+  d'aplomb. Bilans périodiques de son client (`[rob] sync:`) : jusqu'à 41 puis 69 « NPCs not there
+  yet » (PNJ de l'hôte jamais apparus chez lui, 23:13-23:18, ville bondée), 288-315 persos suivis.
+  À faire : (1) ces PNJ manquants doivent être demandés / recréés sans attendre (cf. la boucle de
+  recréation d'escouade avant son plantage) ; (2) détection automatique : quand un client reste
+  trop longtemps avec des PNJ manquants ou des écarts, resynchroniser sa zone seulement, sans
+  attendre l'hôte (idée « empreinte par zone » de docs/INSPIRATION_PZ.md) ; (3) mesurer le débit
+  envoyé à un client dans une zone dense.
 - **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
