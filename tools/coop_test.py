@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 
 KENSHI = r"C:\Program Files (x86)\Steam\steamapps\common\Kenshi"
@@ -92,19 +93,54 @@ def clean_command_files():
                 pass
 
 
-def launch(fake_steam_id=None):
+MIN_FREE_RAM_MB = 2048
+_launched = []   # every Kenshi this harness started (killed on any failure, see main())
+
+
+def free_ram_mb():
+    """Free physical memory in MB (GlobalMemoryStatusEx; None if it cannot be read)."""
+    class MEMORYSTATUSEX(ctypes.Structure):
+        _fields_ = [("dwLength", wt.DWORD), ("dwMemoryLoad", wt.DWORD), ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong), ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong), ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong), ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+    m = MEMORYSTATUSEX()
+    m.dwLength = ctypes.sizeof(m)
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+        return None
+    return round(m.ullAvailPhys / 1048576)
+
+
+class LowMemory(RuntimeError):
+    pass
+
+
+def ensure_ram(what):
+    free = free_ram_mb()
+    if free is not None and free < MIN_FREE_RAM_MB:
+        raise LowMemory(f"not enough free RAM to start {what}: {free} MB free, {MIN_FREE_RAM_MB} MB needed "
+                        f"(a host uses ~2.2 GB, a client ~0.7 GB); close something or use fewer clients")
+    log(f"free RAM before starting {what}: {free} MB")
+
+
+def launch(fake_steam_id=None, name=None):
     clean_command_files()
+    ensure_ram("a client" if fake_steam_id else "a Kenshi instance")
     before = set(running_pids())
     env = dict(os.environ)
     env.pop("KC_FAKE_STEAM_ID", None)
+    env.pop("KC_PLAYER_NAME", None)
     if fake_steam_id:
         env["KC_FAKE_STEAM_ID"] = str(fake_steam_id)
+    if name:
+        env["KC_PLAYER_NAME"] = name   # debug builds only (commands=1): that game's player name
     subprocess.Popen([EXE], cwd=KENSHI, env=env)
     deadline = time.time() + 30
     while time.time() < deadline:
         new = set(running_pids()) - before
         if new:
             pid = new.pop()
+            _launched.append(pid)
             dismiss_launcher(pid)
             return pid
         time.sleep(0.3)
@@ -115,8 +151,20 @@ def alive(pid):
     return pid in running_pids()
 
 
+_cmd_locks = {}
+_cmd_locks_guard = threading.Lock()
+
+
 def cmd(pid, command, timeout=20.0):
-    """Send one command, wait for its answer line. Returns (ok, text)."""
+    """Send one command, wait for its answer line. Returns (ok, text). Thread safe: one command at a
+    time per instance (the stress tests drive several games from several threads)."""
+    with _cmd_locks_guard:
+        lock = _cmd_locks.setdefault(pid, threading.Lock())
+    with lock:
+        return _cmd_one(pid, command, timeout)
+
+
+def _cmd_one(pid, command, timeout):
     n = _ids.get(pid, 0) + 1
     _ids[pid] = n
     cid = f"c{n}_{int(time.time() * 1000) % 100000}"
@@ -3065,6 +3113,568 @@ def exp_carry(host, cli):
     check("poser PNJ : plus porte chez le client", cmd(cli, "carrying 0")[1] == "ok none")
 
 
+# ---------------------------------------------------------------------------------------------
+# Several players on one PC: host + N clients (setup_multi), the stress4 and join4 experiments
+# ---------------------------------------------------------------------------------------------
+
+FAKE_STEAM_BASE = 76561190000000002
+
+
+def kill_launched():
+    """Kill every Kenshi this harness started (and only those)."""
+    for pid in list(_launched):
+        if alive(pid):
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+    deadline = time.time() + 20
+    while any(alive(p) for p in _launched) and time.time() < deadline:
+        time.sleep(0.5)
+
+
+def player_id(pid):
+    """The session's player id of that game (1 = host, 2.. = clients)."""
+    try:
+        return int(status(pid).get("id", "0"))
+    except ValueError:
+        return 0
+
+
+def own_indices(pid, owner=None):
+    """Squad indices, in that game's own order, of a player's characters (default: its own)."""
+    ok, t = cmd(pid, "ownidx" + (f" {owner}" if owner is not None else ""))
+    return [int(x) for x in t.split()[1:]] if ok else []
+
+
+def join_one(c, label):
+    return cmd(c, "join " + os.environ["KC_JOIN"]) if os.environ.get("KC_JOIN") else cmd(c, "join")
+
+
+def setup_multi(save, n_clients=3, simultaneous=False):
+    """A host and n_clients clients on this PC, each with its own fake Steam id and player name.
+    Sequential: each client joins once the previous one is in. Simultaneous: every client sends its
+    join at once. Each client then closes the character editor and must own a character of its own.
+    Returns (host, [client pids], {pid: player id})."""
+    kill_all()
+    host = launch(name="Hote")
+    log("host pid", host)
+    wait_for(host, lambda s: s.get("state") == "idle", 180, "host menu")
+    time.sleep(3)
+    log("load", cmd(host, f"load {save}"))
+    wait_for(host, lambda s: s.get("ready") == "1", 240, "host world")
+    for _ in range(20):   # as setup(): the loaded world can still be settling
+        ok, t = cmd(host, "host")
+        if ok:
+            break
+        log("host not accepted yet:", t)
+        time.sleep(1)
+    log("host", ok, t)
+    clis = []
+    for n in range(n_clients):
+        c = launch(fake_steam_id=FAKE_STEAM_BASE + n, name=f"Joueur{n + 2}")
+        log(f"client {n + 1} pid {c} (fake steam id {FAKE_STEAM_BASE + n}, name Joueur{n + 2})")
+        wait_for(c, lambda s: s.get("state") == "idle", 240, f"client {n + 1} menu")
+        time.sleep(3)
+        if not simultaneous:
+            log(f"client {n + 1} join:", join_one(c, n))
+            wait_for(c, lambda s: s.get("state") == "connected" and s.get("ready") == "1", 420, f"client {n + 1} in host world")
+            log(f"client {n + 1} connected")
+        clis.append(c)
+    if simultaneous:
+        log("every client joins at the same time")
+        th = [threading.Thread(target=lambda c=c, i=i: log(f"client {i + 1} join:", join_one(c, i))) for i, c in enumerate(clis)]
+        for t in th:
+            t.start()
+        for t in th:
+            t.join()
+        for i, c in enumerate(clis):
+            wait_for(c, lambda s: s.get("state") == "connected" and s.get("ready") == "1", 600, f"client {i + 1} in host world")
+            log(f"client {i + 1} connected")
+    time.sleep(6)
+    ids = {host: player_id(host)}
+    for i, c in enumerate(clis):
+        log(f"client {i + 1} editdone:", cmd(c, "editdone"))
+        ids[c] = player_id(c)
+    time.sleep(3)
+    for i, c in enumerate(clis):
+        mine = own_indices(c)
+        on_host = own_indices(host, ids[c])
+        log(f"client {i + 1}: player id {ids[c]}, own characters: client indices {mine}, host indices {on_host}")
+    arrange_grid([host] + clis)
+    return host, clis, ids
+
+
+def tag_total(state, sid, keys=None):
+    """How many items of template sid the characters of a dump carry (squad + others; only keys if given)."""
+    n = 0
+    for tag in ("squad", "char"):
+        for k, v in state[tag].items():
+            if keys is not None and k not in keys:
+                continue
+            for it in (v.get("inv") or "").split(";"):
+                m = re.match(r"(.+)x(\d+)@", it)
+                if m and m.group(1) == sid:
+                    n += int(m.group(2))
+    return n
+
+
+def all_keys(state):
+    return set(state["squad"]) | set(state["char"])
+
+
+def char_pos(state, key):
+    v = state["squad"].get(key) or state["char"].get(key) or {}
+    return v.get("pos")
+
+
+def keys_of_owner(state, owner):
+    return [k for k, e in ((e["key"], e) for e in state["entity"].values()) if e.get("squad") == "1" and e.get("owner") == str(owner)]
+
+
+def exp_join4(host, clis, ids):
+    """3 clients joined at the same time: everyone sees every player's characters (names, positions),
+    then every client leaves and the host carries on."""
+    n = len(clis)
+    who = f"{n + 1} joueurs"
+    check(f"{who} : chaque client est connecte", all(status(c).get("state") == "connected" for c in clis),
+          [(c, status(c).get("state")) for c in clis])
+    check(f"{who} : ids de joueur distincts", len(set(ids.values())) == len(ids), ids)
+    cmd(host, "pause 1")
+    time.sleep(3)
+    h = dump(host, "h_join4")
+    cs = [dump(c, f"c{i + 1}_join4") for i, c in enumerate(clis)]
+    cmd(host, "pause 0")
+    for i, c in enumerate(clis):
+        keys = keys_of_owner(h, ids[c])
+        names = [h["squad"].get(k, {}).get("name") for k in keys]
+        check(f"{who} : le client {i + 1} a son propre perso (Joueur{i + 2})", keys and any(nm and nm.startswith(f"Joueur{i + 2}") for nm in names),
+              f"cles {keys} noms {names}")
+    for i, cst in enumerate(cs):
+        bad = []
+        for pc in clis:
+            for k in keys_of_owner(h, ids[pc]):
+                hv, cv = h["squad"].get(k, {}), cst["squad"].get(k)
+                if not cv:
+                    bad.append((k, "absent"))
+                    continue
+                if hv.get("name") != cv.get("name"):
+                    bad.append((k, "nom", hv.get("name"), cv.get("name")))
+                if "pos" in hv and "pos" in cv and dist(hv["pos"], cv["pos"]) > 0.1:
+                    bad.append((k, "pos", round(dist(hv["pos"], cv["pos"]), 2)))
+        check(f"{who} : le client {i + 1} voit les persos de tous les joueurs (noms, positions)", not bad, bad[:5])
+    for i, c in enumerate(clis):
+        log(f"client {i + 1} leaves:", cmd(c, "leave"))
+    time.sleep(10)
+    states = [status(c).get("state") for c in clis]
+    check(f"{who} : tous les clients sont partis proprement", all(st in ("idle", "failed") for st in states) and all(alive(c) for c in clis), states)
+    check(f"{who} : l'hote continue apres les departs", alive(host) and status(host).get("state") == "hosting", status(host))
+    after = dump(host, "h_join4_after")
+    log("host entities by owner after the leaves:",
+        {o: sum(1 for e in after["entity"].values() if e.get("owner") == o) for o in {e.get("owner") for e in after["entity"].values()}})
+    summary()
+
+
+def exp_stress4(host, clis, ids, minutes=15, hop_seconds=180, seed=4242):
+    """Every player at once, spread over the map: each client's characters live in their own far
+    region (>= 30000 from the host and from each other) and hop to another one every hop_seconds;
+    fights, knock-outs and loots, building, ground pick-ups and trades in every zone; every client
+    also clicks everywhere (seeded chaos of real player orders, every action logged with its seed);
+    two clients loot the same body at the same instant (tagged items: never duplicated); the host
+    cycles the speed and pauses; one client leaves and rejoins. Everyone is in god mode (admin
+    'god all', and 'heal all' every few seconds) so the chaos keeps running. Every 30 s: every game
+    alive, frozen comparison host / each client (soak tolerances), per-zone persistence near each
+    client, round trip, memory, host frame time, tagged item count host vs each client."""
+    import random
+    n = len(clis)
+    who = f"{n + 1} joueurs"
+    t0 = time.time()
+    deadline = t0 + minutes * 60
+    pids = [host] + clis
+    master = random.Random(seed)
+    seeds = {c: master.randrange(1 << 30) for c in clis}
+    log(f"stress4: {n} clients, {minutes} min, zone hop every {hop_seconds} s, master seed {seed}, client seeds "
+        + ", ".join(f"client {i + 1} (pid {c}) seed {seeds[c]}" for i, c in enumerate(clis)))
+
+    # god mode for everyone (host admin console, debug channel)
+    log("god mode for every player:", cmd(host, "console god all"))
+    # the tagged item: something no one carries yet, given to every player's characters
+    tag = None
+    for part in ("Bandage", "Rice", "Bread", "Dried_Meat", "Cactus", "Hash", "Ration"):
+        t = cmd(host, f"itemtypes {part}")[1].split()
+        if len(t) > 2 and "=" in t[2]:
+            cand = t[2].split("=")[0]
+            if cmd(host, f"invcount all {cand}")[1].split()[-1] == "0":
+                tag = cand
+                break
+    given = 0
+    if tag:
+        for c in pids:
+            for k in own_indices(host, ids[c])[:1]:
+                if cmd(host, f"giveitem {tag} 5 {k}")[0]:
+                    given += 5
+    log(f"tagged item {tag}: {given} given")
+
+    # zones: one far region per client, regions at +-40000 around the host's home
+    home = tuple(map(float, cmd(host, "where 0")[1].split()[1].split(",")))
+    regions = [(40000, 0), (0, 40000), (-40000, 0), (0, -40000), (40000, 40000), (-40000, -40000), (40000, -40000), (-40000, 40000)]
+    zone = {c: i for i, c in enumerate(clis)}
+    hop = {"next": time.time() + hop_seconds, "count": 0}
+
+    def send_to_zone(c):
+        dx, dz = regions[zone[c] % len(regions)]
+        hidx = own_indices(host, ids[c])
+        for j, k in enumerate(hidx):
+            log(f"zone: client {clis.index(c) + 1} member {k} -> region {zone[c] % len(regions)} ({dx}, {dz}):",
+                cmd(host, f"teleport {k} {home[0] + dx + 6 * j} {home[1] + 300} {home[2] + dz}"))
+        time.sleep(2)
+        mine = own_indices(c)
+        if mine:
+            cmd(c, f"camto {mine[0]}")
+
+    quiet = threading.Event()      # set: the chaos threads hold still (samples, leave / rejoin)
+    stop = threading.Event()
+    away = set()                   # clients that are leaving / rejoining (no chaos, no comparison)
+    chaos_log = {c: 0 for c in clis}
+    chaos_err = []
+
+    def chaos(c, i):
+        rnd = random.Random(seeds[c])
+        sid = find_building(host, ("Feu", "Tente", "Coffre"))
+        k = 0
+        while not stop.is_set():
+            if quiet.is_set() or c in away:
+                time.sleep(0.2)
+                continue
+            try:
+                mine = own_indices(c) or [0]
+                me = rnd.choice(mine)
+                sq = int(rnd.random() * 6)
+                r = rnd.random()
+                if r < 0.15:
+                    line = f"moverel {me} {rnd.randint(-120, 120)} {rnd.randint(-120, 120)}"
+                elif r < 0.2:
+                    line = f"moverel {sq} {rnd.randint(-80, 80)} {rnd.randint(-80, 80)}"   # someone else's: must not obey
+                elif r < 0.27:
+                    line = f"talkreq {me}"
+                elif r < 0.34:
+                    line = f"containerreq {me} any"
+                elif r < 0.39:
+                    line = f"contake {me} any"
+                elif r < 0.47:
+                    line = f"invmove squad{me} squad{sq} {rnd.randint(0, 8)} 0"
+                elif r < 0.52:
+                    line = "selectset " + " ".join(str(x) for x in rnd.sample(range(6), rnd.randint(1, 3)))
+                elif r < 0.56:
+                    line = f"selorder {rnd.randint(0, 6)}"
+                elif r < 0.61:
+                    line = f"jobreq {me} {rnd.randint(0, 40)} {sq}"
+                elif r < 0.64:
+                    line = f"jobremove {me} 0"
+                elif r < 0.68:
+                    line = f"carryreq {me} {sq}"
+                elif r < 0.73:
+                    g = cmd(c, f"groundnear 400 ground {me}")[1].split()[2:]
+                    if g:
+                        _, isid, at = rnd.choice(g).split("|")
+                        line = f"pickupreq {me} {isid} {at}"
+                    else:
+                        line = f"groundnear 400 loose {me}"
+                elif r < 0.78:
+                    line = f"tradeopen {me} any"
+                elif r < 0.84:
+                    line = "closewindows"
+                elif r < 0.88:
+                    line = f"speed {rnd.choice((1, 2, 3))}"
+                elif r < 0.91:
+                    line = f"pause {rnd.randint(0, 1)}"
+                elif r < 0.94 and sid:
+                    line = f"buildplace {sid} {rnd.randint(-80, 80)} {rnd.randint(30, 90)} 0 {me}"
+                elif r < 0.97:
+                    line = f"buildreq {me} 2"
+                else:
+                    line = f"npcreq {me} {rnd.randint(0, 40)} a"
+                k += 1
+                ans = cmd(c, line)
+                chaos_log[c] = k
+                log(f"chaos client {i + 1} seed {seeds[c]} #{k}: {line} -> {ans[1][:80]}")
+            except RuntimeError as e:
+                chaos_err.append((i + 1, str(e)))
+                log(f"chaos client {i + 1} stopped: {e}")
+                return
+            time.sleep(rnd.uniform(0.3, 1.2))
+
+    samples = []
+    bad_streak = {c: {} for c in clis}   # per-zone persistence: key -> consecutive bad samples
+    persistent = []
+    conservation = []
+    speed = {"v": 1}
+
+    def health(label):
+        for p in pids:
+            if not alive(p):
+                raise RuntimeError(f"instance {p} died (crash?) before sample {label}")
+        quiet.set()
+        time.sleep(1.5)
+        try:
+            s = {"label": label, "t": round(time.time() - t0),
+                 "rtt": {p: frame_latency(p, 3)[1] for p in pids},
+                 "frame": frame_latency(host, 5),
+                 "mem": {p: proc_memory_mb(p) for p in pids},
+                 "states": {c: status(c).get("state") for c in clis if c not in away}}
+            cmd(host, "pause 1")
+            time.sleep(2.5)
+            h = dump(host, f"h_s4_{label}")
+            s["host_tag"] = tag_total(h, tag) if tag else 0
+            s["cmp"] = {}
+            for i, c in enumerate(clis):
+                if c in away:
+                    continue
+                cs = dump(c, f"c{i + 1}_s4_{label}")
+                rep = compare(h, cs, f"stress4 {label} client {i + 1}", pos_tol=3.0)
+                down = {k for k, v in h["squad"].items() if int(v.get("vflags", 0) or 0) & 3}
+                squad_bad = [t for t in rep["squad"] if not isinstance(t[1], (int, float)) or t[1] > (8.0 if t[0] in down else 0.1)]
+                s["cmp"][c] = {"squad_bad": squad_bad, "vital": rep["vital_flag_mismatch"], "inv": rep["inventory_mismatch"],
+                               "inv_sample": rep["inventory_mismatch_sample"], "hours": rep.get("hours_diff", 0)}
+                # per zone: what the host has around this client's characters, as the client has it
+                centers = [char_pos(h, k) for k in keys_of_owner(h, ids[c]) if char_pos(h, k)]
+                near = [k for k, v in h["char"].items() if "pos" in v and centers and min(dist(v["pos"], p) for p in centers) < 1500]
+                bad_now = set()
+                for k in near:
+                    cv = cs["char"].get(k)
+                    if not cv or "pos" not in cv or dist(cv["pos"], h["char"][k]["pos"]) > 3.0:
+                        bad_now.add(k)
+                streak = bad_streak[c]
+                for k in list(streak):
+                    if k not in bad_now:
+                        del streak[k]
+                for k in bad_now:
+                    streak[k] = streak.get(k, 0) + 1
+                    if streak[k] == 2:
+                        persistent.append((label, i + 1, k))
+                s["cmp"][c]["zone"] = (len(near), len(bad_now))
+                if tag:
+                    common = all_keys(h) & all_keys(cs)
+                    ht, ct = tag_total(h, tag, common), tag_total(cs, tag, common)
+                    s["cmp"][c]["tag"] = (ht, ct)
+                    if ht != ct:
+                        conservation.append((label, i + 1, ht, ct))
+            cmd(host, "pause 0")
+            cmd(host, f"speed {speed['v']}")
+        finally:
+            quiet.clear()
+        log(f"[{s['t']}s] sample {label}: frame ms host {s['frame']} rtt {s['rtt']} mem MB {s['mem']} states {s['states']} "
+            f"host tag {s['host_tag']}/{given} | " + " | ".join(
+                f"c{clis.index(c) + 1} squad_bad {v['squad_bad'][:2]} vit {v['vital']} inv {v['inv']} zone {v['zone']} tag {v.get('tag')}"
+                for c, v in s["cmp"].items()))
+        samples.append(s)
+
+    zone_npc = {}
+
+    def zone_fight(c):
+        hidx = own_indices(host, ids[c])
+        if not hidx:
+            return
+        ok, t = cmd(host, f"spawnnpc 40 20 {hidx[0]}")
+        log(f"zone client {clis.index(c) + 1}: spawn npc", t)
+        if ok:
+            zone_npc[c] = t.split()[1]
+            log("  fight:", cmd(host, f"fight {hidx[0]}"))
+
+    def zone_ko_loot(c):
+        key = zone_npc.pop(c, None)
+        if not key:
+            return
+        # 'ko' acts on the host's last spawned NPC: only if it is still this one
+        if cmd(host, "npcstate")[0]:
+            log(f"zone client {clis.index(c) + 1}: ko", cmd(host, "ko"))
+            time.sleep(2)
+            mine = own_indices(c)
+            if mine:
+                log("  client loots:", cmd(c, f"loot {key} {mine[0]}"))
+
+    def zone_build(c):
+        sid = find_building(host, ("Feu", "Tente"))
+        mine = own_indices(c)
+        if sid and mine:
+            log(f"zone client {clis.index(c) + 1}: build", cmd(c, f"buildplace {sid} {random.randint(-60, 60)} 60 0 {mine[0]}"))
+
+    def contention():
+        """Two clients take the same items from the same body at the same instant."""
+        a, b = clis[0], clis[1 % n]
+        if a == b:
+            return
+        ha, hb = own_indices(host, ids[a]), own_indices(host, ids[b])
+        if not ha or not hb:
+            return
+        pa = tuple(map(float, cmd(host, f"where {ha[0]}")[1].split()[1].split(",")))
+        for k in hb:   # b's characters join a's zone
+            cmd(host, f"teleport {k} {pa[0] + 15} {pa[1] + 50} {pa[2] + 10}")
+        time.sleep(3)
+        ok, t = cmd(host, f"spawnnpc 20 0 {ha[0]}")
+        if not ok:
+            log("contention: no npc", t)
+            return
+        key = t.split()[1]
+        if tag:
+            log("contention: tagged items into the body:", cmd(host, f"giveitem {tag} 3 {ha[0]}"))
+            for _ in range(3):
+                log("  ", cmd(host, f"invmove squad{ha[0]} spawned main 0"))
+        log("contention: ko", cmd(host, "ko"))
+        time.sleep(3)
+        quiet.set()
+        try:
+            ma, mb = own_indices(a), own_indices(b)
+            cmd(a, f"loot {key} {ma[0]}")
+            cmd(b, f"loot {key} {mb[0]}")
+            time.sleep(2)
+            res = {}
+
+            def grab(c, m, i):
+                res[c] = [cmd(c, f"invmove {key} squad{m} {j} 0") for j in (0, 0, 0, 1, 1)]
+            th = [threading.Thread(target=grab, args=(a, ma[0], 1)), threading.Thread(target=grab, args=(b, mb[0], 2))]
+            for x in th:
+                x.start()
+            for x in th:
+                x.join()
+            log("contention results:", {clis.index(c) + 1: [r[1][:40] for r in v] for c, v in res.items()})
+            time.sleep(4)
+            cmd(a, "closewindows")
+            cmd(b, "closewindows")
+        finally:
+            quiet.clear()
+
+    def leave_rejoin(c):
+        i = clis.index(c) + 1
+        before = len(own_indices(host, ids[c]))
+        away.add(c)
+        try:
+            log(f"client {i} leaves:", cmd(c, "leave"))
+            time.sleep(8)
+            log(f"client {i} after leaving:", status(c))
+            log(f"client {i} rejoins:", join_one(c, i))
+            wait_for(c, lambda st: st.get("state") == "connected" and st.get("ready") == "1", 600, f"client {i} back in host world")
+            time.sleep(6)
+            cmd(c, "editdone")
+            ids[c] = player_id(c)
+            after = len(own_indices(host, ids[c]))
+            rejoin.update(ok=True, before=before, after=after, id=ids[c])
+            log(f"client {i} back: player id {ids[c]}, characters {before} -> {after}")
+            cmd(host, "console god all")
+            send_to_zone(c)
+        except RuntimeError as e:
+            rejoin.update(ok=False, err=str(e))
+            log(f"client {i} rejoin failed: {e}")
+        finally:
+            away.discard(c)
+
+    rejoin = {}
+    crash = None
+    threads = []
+    try:
+        for c in clis:
+            send_to_zone(c)
+        threads = [threading.Thread(target=chaos, args=(c, i), daemon=True) for i, c in enumerate(clis)]
+        for t in threads:
+            t.start()
+        speeds = (1, 2, 3, 2)
+        step = 0
+        last_sample = time.time()
+        last_heal = 0
+        contention_done = rejoin_done = False
+        while time.time() < deadline:
+            now = time.time()
+            if now - last_heal > 8:
+                cmd(host, "console heal all")
+                last_heal = now
+            if now - last_sample >= 30:
+                health(f"s{len(samples) + 1}")
+                last_sample = time.time()
+                continue
+            if now >= hop["next"]:
+                hop["count"] += 1
+                hop["next"] = now + hop_seconds
+                for c in clis:
+                    zone[c] += n
+                    if c not in away:
+                        send_to_zone(c)
+            c = clis[step % n]
+            if c not in away:
+                [zone_fight, zone_ko_loot, zone_build][(step // n) % 3](c)
+            if step % 5 == 4:
+                speed["v"] = speeds[(step // 5) % len(speeds)]
+                log("host speed", speed["v"], cmd(host, f"speed {speed['v']}"))
+            if step % 9 == 8:
+                log("host pause:", cmd(host, "pause 1"))
+                time.sleep(2)
+                log("host unpause:", cmd(host, "pause 0"), cmd(host, f"speed {speed['v']}"))
+            if not contention_done and now - t0 > minutes * 60 * 0.25 and n >= 2:
+                contention_done = True
+                contention()
+                for c2 in clis[1:2]:
+                    send_to_zone(c2)
+            if not rejoin_done and now - t0 > minutes * 60 * 0.5:
+                rejoin_done = True
+                leave_rejoin(clis[-1])
+            step += 1
+            time.sleep(3)
+        stop.set()
+        for c in clis:   # everyone home safely
+            log(f"client {clis.index(c) + 1} home:", cmd(host, f"tpplayer {ids[c]}"))
+        time.sleep(6)
+        cmd(host, "speed 1")
+        health("end")
+    except RuntimeError as e:
+        crash = str(e)
+        log("STRESS4 STOPPED:", crash)
+    finally:
+        stop.set()
+        quiet.clear()
+        for t in threads:
+            t.join(timeout=30)
+
+    check(f"{who} : aucun plantage (hote et clients)", crash is None and all(alive(p) for p in pids) and not chaos_err,
+          crash or chaos_err[:3] or f"{len(samples)} releves")
+    check(f"{who} : chaque client reste connecte", samples and all(st == "connected" for s in samples for st in s["states"].values()),
+          [(s["label"], s["states"]) for s in samples if any(st != "connected" for st in s["states"].values())][:3])
+    check(f"{who} : clics en rafale des clients executes", all(chaos_log[c] > 0 for c in clis),
+          {f"client {i + 1} seed {seeds[c]}": chaos_log[c] for i, c in enumerate(clis)})
+
+    def per_client(key, pred):
+        return [(s["label"], clis.index(c) + 1, v[key]) for s in samples for c, v in s["cmp"].items() if pred(v[key])]
+    check(f"{who} : escouade identique en pause chez chaque client (<= 0.1, 8 pour un corps au sol)",
+          not per_client("squad_bad", bool), per_client("squad_bad", bool)[:5])
+    check(f"{who} : aucun etat vital different", not per_client("vital", bool), per_client("vital", bool)[:5])
+    check(f"{who} : aucun inventaire different", not per_client("inv", bool),
+          [(s["label"], clis.index(c) + 1, v["inv_sample"]) for s in samples for c, v in s["cmp"].items() if v["inv"]][:5])
+    check(f"{who} : meme heure de jeu partout (< 0.01 h)", not per_client("hours", lambda x: (x or 0) >= 0.01),
+          per_client("hours", lambda x: (x or 0) >= 0.01)[:5])
+    check(f"{who} : chaque zone fidele chez son client (rien d'absent ou decale deux releves de suite)", not persistent, persistent[:6])
+    if tag:
+        check(f"{who} : objet marque identique hote / chaque client (pas de duplication)", not conservation, conservation[:5])
+        over = [(s["label"], s["host_tag"]) for s in samples if s["host_tag"] > given + 3]
+        check(f"{who} : objet marque jamais en trop chez l'hote (<= donnes)", not over, f"donnes {given} + 3 du corps, depassements {over[:4]}")
+    else:
+        check(f"{who} : objet marque trouve", False, "aucun type d'objet libre pour le marquage")
+    worst = max([max(s["rtt"].values()) for s in samples] or [0])
+    check(f"{who} : aller-retour d'une commande < 1 s", worst < 1000, f"pire {worst} ms")
+    frames = [s["frame"][0] for s in samples]
+    check(f"{who} : temps de frame de l'hote (meilleur aller-retour < 250 ms)", frames and max(frames) < 250, f"releves {frames}")
+    base = next((s for s in samples if s["t"] >= 120 and None not in s["mem"].values()), None)
+    if base:
+        over = [(s["label"], p, round(s["mem"][p] / base["mem"][p], 2)) for s in samples if s["t"] > base["t"]
+                for p in pids if s["mem"].get(p) and base["mem"].get(p) and s["mem"][p] / base["mem"][p] > 1.4]
+        check(f"{who} : memoire stable par processus (< +40 % apres 2 min)", not over, f"base {base['mem']} {over[:4]}")
+    else:
+        check(f"{who} : memoire stable par processus (< +40 % apres 2 min)", False, "pas de releve apres 2 min")
+    check(f"{who} : un client part puis revient avec ses persos", rejoin.get("ok") and rejoin.get("after", 0) >= max(1, rejoin.get("before", 1)), rejoin)
+    check(f"{who} : zones visitees (sauts de region)", hop["count"] >= 1 or minutes * 60 < hop_seconds, f"{hop['count']} sauts")
+    if not crash:
+        h = dump(host, "h_s4_home")
+        far = [(clis.index(c) + 1, round(min(dist(char_pos(h, k)[::2], home[::2]) for k in keys_of_owner(h, ids[c]) if char_pos(h, k)), 1))
+               for c in clis if any(char_pos(h, k) for k in keys_of_owner(h, ids[c]))]
+        check(f"{who} : chaque client ramene a la maison a la fin", far and all(d < 2000 for _, d in far), far)
+    log("memory (MB) per sample:", [(s["label"], s["mem"]) for s in samples])
+    summary()
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="what", required=True)
@@ -3177,6 +3787,17 @@ def main():
     fa.add_argument("--keep", action="store_true")
     mn = sub.add_parser("menu", help="host + a second game on the main menu (join by hand)")
     mn.add_argument("--save", default="kctest_base")
+    s4 = sub.add_parser("stress4", help="host + N clients spread over the map, all acting at once (chaos clicks, god mode)")
+    s4.add_argument("--save", default="kctest_base")
+    s4.add_argument("--clients", type=int, default=3)
+    s4.add_argument("--minutes", type=int, default=15)
+    s4.add_argument("--hop", type=int, default=180, help="seconds between two zone hops")
+    s4.add_argument("--seed", type=int, default=4242, help="master seed of the chaos clicks (one seed per client derived)")
+    s4.add_argument("--keep", action="store_true")
+    j4 = sub.add_parser("join4", help="N clients join at the same time, see each other, leave")
+    j4.add_argument("--save", default="kctest_base")
+    j4.add_argument("--clients", type=int, default=3)
+    j4.add_argument("--keep", action="store_true")
     fo = sub.add_parser("four", help="1 host + 3 clients")
     fo.add_argument("--save", default="kctest_base")
     fo.add_argument("--clients", type=int, default=3)
@@ -3224,6 +3845,17 @@ def main():
         wait_for(cli, lambda s: s.get("state") == "idle", 240, "client menu")
         arrange(host, cli)
         log("ready: host", host, "client on the main menu", cli)
+        return
+    if a.what in ("stress4", "join4"):
+        host, clis, ids = setup_multi(a.save, a.clients, simultaneous=a.what == "join4")
+        try:
+            if a.what == "stress4":
+                exp_stress4(host, clis, ids, a.minutes, a.hop, a.seed)
+            else:
+                exp_join4(host, clis, ids)
+        finally:
+            if not a.keep:
+                kill_launched()
         return
     if a.what == "four":
         host, clis = setup_many(a.save, a.clients)
@@ -3344,5 +3976,20 @@ def main():
             kill_all()
 
 
+
+def main_guarded():
+    """main(), and on any failure every Kenshi this run started is killed (none left behind)."""
+    try:
+        main()
+    except BaseException as e:
+        if _launched:
+            log(f"failure ({type(e).__name__}: {e}): killing the {len(_launched)} Kenshi instance(s) started by this run")
+            kill_launched()
+        if isinstance(e, LowMemory):
+            log("ABORTED:", e)
+            sys.exit(2)
+        raise
+
+
 if __name__ == "__main__":
-    main()
+    main_guarded()
