@@ -171,6 +171,18 @@ bool Decode(Reader& r, Bind& m) {
 
 void Encode(Writer& w, const Unbind& m) { w.u8(uint8_t(Msg::Unbind)); w.varint(m.netId); }
 bool Decode(Reader& r, Unbind& m) { m.netId = GetU32Var(r); return Done(r) && m.netId != 0; }
+void Encode(Writer& w, const BagBind& m) {
+    w.u8(uint8_t(Msg::BagBind));
+    w.varint(m.netId);
+    w.varint(m.ownerNetId);
+    w.str(m.sid);
+}
+bool Decode(Reader& r, BagBind& m) {
+    m.netId = GetU32Var(r);
+    m.ownerNetId = GetU32Var(r);
+    m.sid = r.str(kMaxSidLen);
+    return Done(r) && m.netId != 0 && m.ownerNetId != 0 && !m.sid.empty();
+}
 
 std::vector<std::vector<uint8_t>> EncodeSnapshot(const Snapshot& s, size_t budget) {
     std::vector<std::vector<uint8_t>> out;
@@ -646,6 +658,7 @@ void Encode(Writer& w, const TradeOpen& m) {
         w.varint(m.counters[i].netId);
         w.str(m.counters[i].sid);
         PutVec(w, m.counters[i].pos);
+        w.varint(m.counters[i].ownerNetId);
     }
     w.str(m.note.size() > 200 ? m.note.substr(0, 200) : m.note);
 }
@@ -659,6 +672,7 @@ bool Decode(Reader& r, TradeOpen& m) {
         c.netId = GetU32Var(r);
         c.sid = r.str(kMaxSidLen);
         c.pos = GetVec(r);
+        c.ownerNetId = GetU32Var(r);
         if (!c.netId || c.sid.empty()) return false;
     }
     m.note = r.str(200);
@@ -751,7 +765,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || (t > uint8_t(Msg::BuildAction) && t != uint8_t(Msg::JobList) && t != uint8_t(Msg::Stall) && t != uint8_t(Msg::Floors))) return std::nullopt;
+    if (!r.ok() || t < uint8_t(Msg::Hello) || (t > uint8_t(Msg::BuildAction) && t != uint8_t(Msg::JobList) && t != uint8_t(Msg::Stall) && t != uint8_t(Msg::Floors) && t != uint8_t(Msg::BagBind))) return std::nullopt;
     return Msg(t);
 }
 

@@ -354,7 +354,11 @@ constexpr int kTaskLootTarget = 26;   // TaskType::LOOT_TARGET
 bool ClientLoot(int task, kenshi::Character* target) {
     auto v = KenshiWorld::View();
     if (g_hostCall || !v->active || !v->client || task != kTaskLootTarget || !target) return false;
-    if (!kenshi::IsDown(target) && !kenshi::IsDead(target) && !kenshi::IsRagdoll(target)) return false;
+    // a body, or an NPC's pack animal standing there (the game lets one steal from its pack: the host
+    // decides the crime, see Session::HostInvOp)
+    kc::Handle th;
+    const bool beast = kenshi::IsAnimal(target) && kenshi::GetHandle(target, th) && TheWorld() && !TheWorld()->FindSquad(th);
+    if (!beast && !kenshi::IsDown(target) && !kenshi::IsDead(target) && !kenshi::IsRagdoll(target)) return false;
     KenshiWorld* w = TheWorld();
     if (!w) return false;
     const SelectionInfo s = ClassifySelection(*v);
@@ -629,7 +633,9 @@ void hk_showTrade(void* gui, const void* a, const void* b, int type) {
             const kc::Handle& trader = fa ? hb : ha;
             kenshi::Character* other = fa ? cb : ca;
             const bool haveOther = fa ? haveB : haveA;
-            const bool merchant = other && !kenshi::IsDead(other) && !kenshi::IsDown(other) && !kenshi::IsUnconscious(other);
+            // (a pack animal is not a merchant: a right click on it is a loot window, opened by the
+            // player's own game, items replayed here)
+            const bool merchant = other && !kenshi::IsDead(other) && !kenshi::IsDown(other) && !kenshi::IsUnconscious(other) && !kenshi::IsAnimal(other);
             if (haveOther && (type == 1 || (type == 3 && merchant))) {
                 w->QueueTradeRequest(player, trader);
                 Log("trade window type %d for another player's character (%s side%s): sent to that player", type, fa ? "first" : "second",

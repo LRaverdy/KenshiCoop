@@ -2016,6 +2016,22 @@ void* CreateItemFromState(const kc::ItemState& s, std::string* why = nullptr) {
 }
 } // namespace
 
+// The name of an inventory's first section (a backpack's own section: tests put things there).
+std::string FirstSectionName(void* holder) {
+    void* inv = InventoryOf(holder);
+    if (!inv) return {};
+    const auto* map = reinterpret_cast<const uint8_t*>(inv) + INV_sections;
+    uint64_t size = 0, bucketCount = 0;
+    void** buckets = nullptr;
+    if (!Rd(map, off::US_size, size) || size == 0 || size > 256) return {};
+    if (!Rd(map, off::US_bucketCount, bucketCount) || !Rd(map, off::US_buckets, buckets) || !buckets) return {};
+    void* node = nullptr;
+    std::string key;
+    if (!Rd(buckets, bucketCount * sizeof(void*), node) || !node || !ReadGameString(reinterpret_cast<uint8_t*>(node) + off::MapNode_key, key)) return {};
+    return key;
+}
+
+
 bool RebuildInventory(void* c, const std::vector<kc::ItemState>& items, std::string* err) {
     void* inv = InventoryOf(c);
     if (!inv) { if (err) *err = "no inventory"; return false; }
@@ -2327,9 +2343,59 @@ bool ShopCounters(Character* trader, std::vector<void*>& out) {
 }
 
 bool HasHomeBuilding(Character* trader) {
+    // as ShopTrader's constructor (0x953850) decides: a home hand that is not "none" (0xB) and
+    // resolves to an object; otherwise it sells from its squad's worn backpacks
     void* own = IsCharacter(trader) ? OwnershipsSeh(trader) : nullptr;
     kc::Handle home;
-    return own && ReadHandle(reinterpret_cast<uint8_t*>(own) + OW_home, home) && home.type == 0 && home.valid();
+    return own && ReadHandle(reinterpret_cast<uint8_t*>(own) + OW_home, home) && home.type != 0xB && home.valid() && ResolveObject(home);
+}
+
+namespace {
+constexpr uintptr_t SEC_type = 0xB8;      // InventorySection: its kind (Inventory::getSection(type) 0x745EF0 compares it)
+constexpr int kSectionBackpack = 12;      // the worn backpack's attach section
+constexpr uintptr_t AP_members = 0x50;    // ActivePlatoon: lektor<Character*> of its members (0x953850 reads +0x58/+0x60)
+constexpr size_t kMaxWornInSection = 16;
+} // namespace
+
+// The backpack a character wears, as ShopTrader's constructor finds it: the first item of its
+// inventory section of kind 12, when that item has an inventory of its own (RootObject::getInventory,
+// vt 0x160: 0 for a plain Item (0xD2280), ContainerItem::getInventory (0x76BE60) returns +0x290).
+void* WornBackpack(Character* c) {
+    if (!IsCharacter(c)) return nullptr;
+    void* inv = InventoryOf(c);
+    if (!inv) return nullptr;
+    std::vector<void*> sections;
+    ReadPointerLektor(reinterpret_cast<const uint8_t*>(inv) + INV_sectionList, sections, 64);
+    for (void* sec : sections) {
+        int32_t type = -1;
+        if (!Rd(sec, SEC_type, type) || type != kSectionBackpack) continue;
+        uintptr_t first = 0, last = 0;
+        if (!Rd(sec, SEC_items, first) || !Rd(sec, SEC_items + 8, last) || last <= first || (last - first) % kSectionItemSize ||
+            (last - first) / kSectionItemSize > kMaxWornInSection)
+            continue;
+        void* item = nullptr;
+        if (!Rd(reinterpret_cast<const void*>(first), 0, item) || !item || IsCharacter(item)) continue;
+        void* bagInv = InventoryOf(item);
+        if (!bagInv) continue;
+        std::vector<void*> inner;
+        ReadPointerLektor(reinterpret_cast<const uint8_t*>(bagInv) + INV_sectionList, inner, 64);
+        if (!inner.empty()) return item;
+    }
+    return nullptr;
+}
+
+bool HasInventory(const void* obj) { return InventoryOf(obj) != nullptr; }
+
+bool TravellingWearers(Character* trader, std::vector<Character*>& out) {
+    out.clear();
+    if (!IsCharacter(trader) || HasHomeBuilding(trader)) return false;
+    void* squad = SquadOf(trader);
+    if (!squad) return false;
+    std::vector<void*> members;
+    ReadPointerLektor(reinterpret_cast<const uint8_t*>(squad) + AP_members, members, 256);
+    for (void* m : members)
+        if (IsCharacter(m) && WornBackpack(static_cast<Character*>(m))) out.push_back(static_cast<Character*>(m));
+    return !out.empty();
 }
 
 bool IsAnimal(const void* obj) { return obj && Vtable(obj) == Addr(rva::VtCharacterAnimal); }

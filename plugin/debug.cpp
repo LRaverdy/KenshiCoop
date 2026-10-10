@@ -1296,7 +1296,8 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
     if (cmd == "caravan" || cmd == "caravanbeast" || cmd == "caravanopen") {
         // caravan: the nearest living stranger without a home building whose squad has pack animals
         // (a travelling trader): "trader=<name> key=<key> home=0 members=N animals=M stock=<stacks of
-        // each member> back=<items in a backpack section>". caravanbeast: its first pack animal becomes
+        // each member> back=<stacks in the worn backpacks its window sells from> packs=<members wearing
+        // one>". caravanbeast: its first pack animal becomes
         // the target of kill/npcstate. caravanopen <squadIndex>: that squad member goes next to the
         // trader and opens the trade window (the game's own call).
         size_t idx = 0;
@@ -1323,7 +1324,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         if (!best) return "err no caravan around";
         void* sq = kenshi::SquadOf(best);
-        int members = 0, animals = 0, back = 0;
+        int members = 0, animals = 0, back = 0, packs = 0;
         std::string stock;
         kenshi::Character* firstBeast = nullptr;
         for (kenshi::Character* o : all) {
@@ -1333,8 +1334,12 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             std::vector<kc::ItemState> items;
             kenshi::ReadInventory(o, items);
             stock += (stock.empty() ? "" : ",") + std::to_string(items.size());
-            for (const auto& it : items)
-                if (it.section.find("back") != std::string::npos || it.section.find("Back") != std::string::npos) ++back;
+            if (void* pack = kenshi::WornBackpack(o)) {
+                std::vector<kc::ItemState> inside;
+                kenshi::ReadInventory(pack, inside);
+                back += int(inside.size());
+                ++packs;
+            }
         }
         std::string name;
         kenshi::CharacterName(best, name);
@@ -1359,7 +1364,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         std::replace(name.begin(), name.end(), ' ', '_');
         return "ok trader=" + name + " key=" + Key(th) + " home=0 members=" + std::to_string(members) + " animals=" + std::to_string(animals) +
-               " stock=" + stock + " back=" + std::to_string(back) + " at=" + std::to_string(int(std::sqrt(bestD)));
+               " stock=" + stock + " back=" + std::to_string(back) + " packs=" + std::to_string(packs) + " at=" + std::to_string(int(std::sqrt(bestD)));
     }
     if (cmd == "shopcounters") {   // shopcounters <name part>: what that merchant sells from: "name/function/stacks" each
         std::string part;
@@ -1792,8 +1797,13 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             sscanf(s.c_str(), "%u:%u:%u:%u:%u", &h.type, &h.container, &h.containerSerial, &h.index, &h.serial);
             return h;
         };
-        kenshi::Character* a = w.Find(pick(fromS));
-        kenshi::Character* b = w.Find(pick(toS));
+        // bag:<who> is the backpack that character wears
+        auto holder = [&](const std::string& s) -> void* {
+            if (s.rfind("bag:", 0) == 0) return kenshi::WornBackpack(w.Find(pick(s.substr(4))));
+            return w.Find(pick(s));
+        };
+        void* a = holder(fromS);
+        void* b = holder(toS);
         std::vector<kc::ItemState> items;
         if (!a || !b || !kenshi::ReadInventory(a, items)) return "err bad characters";
         if (which == "main" || which == "worn") {   // first loose item / first equipped item
@@ -1808,11 +1818,30 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         op.item = items[idx];
         if (qty > 0) op.item.quantity = std::min(qty, op.item.quantity);
         op.toSection = toSec;
+        if (toS.rfind("bag:", 0) == 0 && toSec == "main") op.toSection = kenshi::FirstSectionName(b);   // a backpack's own section
         op.toX = int16_t(toX);   // -1: anywhere it fits
         op.toY = int16_t(toY);
         std::string e;
         HostCallScope scope;
         return kenshi::MoveInventoryItem(a, b, op, &e) ? "ok " + op.item.templateSid : "err " + e;
+    }
+    if (cmd == "bag") {   // bag <who>: the backpack it wears: "ok <template> <stacks> sid:qty ..." (spawned|squadN|key)
+        std::string who;
+        in >> who;
+        auto squad = SortedSquad(w);
+        kc::Handle h;
+        if (who == "spawned") h = lastSpawned_;
+        else if (who.rfind("squad", 0) == 0) { size_t i = std::stoul(who.substr(5)); if (i < squad.size()) h = squad[i]; }
+        else sscanf(who.c_str(), "%u:%u:%u:%u:%u", &h.type, &h.container, &h.containerSerial, &h.index, &h.serial);
+        void* pack = kenshi::WornBackpack(w.Find(h));
+        if (!pack) return "err no worn backpack";
+        std::string sid;
+        kenshi::ObjectTemplate(pack, sid);
+        std::vector<kc::ItemState> items;
+        kenshi::ReadInventory(pack, items);
+        std::string out = "ok " + sid + " " + std::to_string(items.size());
+        for (const auto& it : items) out += " " + it.templateSid + ":" + std::to_string(it.quantity);
+        return out;
     }
     if (cmd == "invsecs") {   // invsecs <who>: that character's items as "index:section" (spawned|squadN|key)
         std::string who;

@@ -431,24 +431,50 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   puis elle se rouvre. Un personnage montré par une fenêtre n'est jamais supprimé sous elle. Ces
   deux cas faisaient planter le client.
 - **Limites** :
-  - les marchands ambulants (caravanes, nomades : sans bâtiment) ne sont pas encore gérés : l'hôte
-    refuse le commerce et le joueur en est prévenu. Le jeu construit leur fenêtre à partir des sacs à
-    dos (objets de fonction 12) des membres de leur escouade, pas de comptoirs ; le contenu d'un sac à
-    dos porté n'est pas synchronisé par le mod, donc aucune fenêtre n'est ouverte avec un faux stock
-    (pas de comptoirs de remplacement, cause du plantage dans `ShopTraderInventory`). La caravane
-    elle-même (marchand, gardes, bêtes de somme) est un groupe de PNJ de l'hôte comme les autres :
-    positions et inventaires des personnages suivis, pas de caravane créée par le jeu du client.
-    Une bête de somme tuée garde son inventaire et se pille comme un corps ;
   - la détection des objets volés à la revente n'est tirée que par le jeu du client.
+
+### Marchands ambulants et sacs à dos 🟡 (implémenté, protocole 33, à vérifier en jeu)
+- **Le joueur** commerce avec une caravane ou un nomade (un marchand sans bâtiment) comme avec un
+  marchand de ville : la fenêtre du jeu s'ouvre chez lui avec le vrai stock, même pendant que la
+  caravane marche. Achats et ventes sont payés chez l'hôte ; stock et argent sont les mêmes partout.
+- **D'où vient le stock** : le jeu construit la fenêtre d'un marchand sans bâtiment à partir des sacs
+  à dos portés par les membres de son escouade (bêtes de somme, gardes, lui-même) : le premier
+  objet de la section de type 12 de chaque inventaire, et la première section de l'inventaire de ce
+  sac (constructeur de `ShopTrader`, voir MOTEUR.md).
+- **Sacs à dos portés** : le contenu du sac porté par chaque personnage suivi (joueurs compris) est
+  synchronisé comme un inventaire, sous un identifiant à lui (message `BagBind`). Chez le client il
+  est rattaché au même sac (même modèle) porté par sa copie du personnage ; un sac changé est
+  rattaché à nouveau et rempli comme chez l'hôte. Un joueur range et sort ses objets de son propre
+  sac : l'hôte rejoue le déplacement.
+- **La fenêtre se ferme** (avec un message) quand le marchand ou une bête qui porte le stock est à
+  terre, meurt, se bat, s'éloigne à plus de 150 m du joueur, ou n'est plus suivi.
+- **Vol** : un clic droit sur la bête de somme d'un PNJ ouvre chez le client la fenêtre de pillage
+  du jeu. Ce qu'il y prend passe par l'hôte comme un vol : le jeu de l'hôte enregistre le crime, tire
+  s'il est vu (fenêtre fermée, « Pris en train de voler ! ») et la prime est celle de l'hôte partout.
+- **Bête morte** : elle garde son sac, identique partout ; on la pille comme un corps (ce que le
+  client prend vient de l'hôte, rien n'est créé ni perdu).
+- **Sécurité** : jamais de comptoir de remplacement (l'ancien plantage dans `ShopTraderInventory`).
+  Le sac est un objet du jeu (`ContainerItem`) : son inventaire est lu par
+  `RootObject::getInventory` (vt 0x160), qui renvoie null pour un objet ordinaire.
+- **Limites** : quand plusieurs joueurs commercent en même temps avec la même caravane, chaque
+  achat rafraîchit les fenêtres ouvertes (comme en ville). Aucun modèle de caravane n'est créé par
+  le harnais : l'expérience `caravan` a besoin d'une sauvegarde avec une caravane près de
+  l'escouade.
 
 ### Animaux de l'escouade 🟡 (à vérifier en jeu)
 - Bêtes de somme, chiens, chèvres... achetés ou apprivoisés sont des membres de l'escouade comme les
-  autres : à l'hôte tant qu'ils ne sont pas donnés à un joueur (commande `give`), leurs ordres,
-  position, santé et inventaire sont ceux de l'hôte partout.
-- Un joueur qui part rend ses personnages à l'hôte ; **quand il revient (même compte Steam, ou même nom sans Steam), l'hôte lui rend
-  ceux qu'il avait** (animaux et recrues compris), s'ils sont encore à l'hôte.
-- **Limites** : un animal acheté par un client n'est pas donné automatiquement à ce client (il
-  reste à l'hôte jusqu'à un `give`) ; le contenu d'un sac à dos porté n'est pas synchronisé.
+  autres : position, santé, faim (dans les signes vitaux) et inventaire sont ceux de l'hôte partout ;
+  les ordres d'un client sur ses animaux passent par l'hôte.
+- **À qui** : à l'hôte, sauf :
+  - un personnage qui rejoint l'escouade juste après qu'un seul joueur a répondu dans une
+    conversation (un animal acheté à un marchand d'animaux, une recrue) est à ce joueur ;
+  - l'hôte peut en donner un à un joueur.
+- **Suivre son maître** : un animal donné à un joueur passe dans l'escouade du personnage de ce
+  joueur, chez l'hôte : il le suit comme le jeu fait suivre une escouade.
+- Un joueur qui part rend ses personnages à l'hôte (ils s'arrêtent) ; **quand il revient (même
+  compte Steam, ou même nom sans Steam), l'hôte lui rend ceux qu'il avait** (animaux et recrues
+  compris), s'ils sont encore à l'hôte.
+- **Limites** : si plusieurs joueurs parlaient en même temps, le nouveau venu reste à l'hôte.
 
 ### Construction, meubles, achat et démontage de bâtiments 🟡 (implémenté, à vérifier en jeu)
 - **Le joueur** (hôte comme client) construit comme d'habitude : mode construction, il pose un

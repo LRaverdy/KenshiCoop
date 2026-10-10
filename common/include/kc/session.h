@@ -202,6 +202,15 @@ public:
     virtual bool TradeWindowBusy() { return false; }   // client: an item is on the mouse (do not reopen the window now)
     virtual int TradeWindowStock() { return -1; }      // client: stacks the open trade window's merchant side shows (-1: no window)
     virtual void SetMoneyOf(const Handle& who, int32_t money) { (void)who; (void)money; }
+    // Travelling merchants and worn backpacks. WornBackpack: the backpack a character wears (its
+    // handle on this machine, its template), when it holds an inventory. TravellingCounters: for a
+    // merchant without a home building, the members of its squad whose worn backpack the game's trade
+    // window sells from (the merchant's own included).
+    virtual bool WornBackpack(const Handle& wearer, Handle& bag, std::string& sid) { (void)wearer; (void)bag; sid.clear(); return false; }
+    virtual bool TravellingCounters(const Handle& trader, std::vector<Handle>& wearers) { (void)trader; wearers.clear(); return false; }
+    virtual bool IsAnimal(const Handle& h) { (void)h; return false; }
+    // Put a character into the squad of another (the host's way to make an animal follow its owner).
+    virtual bool JoinSquadOf(const Handle& who, const Handle& leader) { (void)who; (void)leader; return false; }
     virtual std::string CharacterNameOf(const Handle& h) { (void)h; return {}; }
     // ---- lot B: factions. Host: the player faction's relations with every faction (both ways) and
     // a character's bounties and crime state. Client: impose the host's (the local game may not
@@ -479,6 +488,9 @@ private:
         // host
         bool keep = false;                   // scratch flag for interest updates
         bool container = false;              // a container a player has open (no character)
+        bool bag = false;                    // a worn backpack (also `container`): its wearer is bagOwner
+        uint32_t bagOwner = 0;
+        std::string bagSid;
         std::set<uint8_t> openBy;            // host: players who have it open
         Vec3 containerPos;                   // where it is
         uint32_t looter = 0;                 // client: our character looking into it
@@ -634,10 +646,24 @@ private:
         std::vector<uint32_t> counters;
         int32_t traderMoney = 0;
         double since = 0;
+        bool travelling = false;   // its counters are the worn backpacks of the merchant's squad
     };
     std::map<uint8_t, HostTrade> trades_;
     std::vector<IWorld::TradeRequest> scratchTradeReqs_;
     void HostTrades(double now);
+    // Worn backpacks (travelling merchants sell from their squad's): host: each followed character's
+    // worn backpack is an entity of its own (bag), bound on every client to the same backpack of its
+    // copy of that character; its items are synced like a character's.
+    std::unordered_map<uint32_t, uint32_t> bagOf_;   // host: wearer netId -> bag netId
+    double nextBagScan_ = 0;
+    void HostBags(double now);
+    uint32_t EnsureBag(uint32_t wearer, const Handle& bag, const std::string& sid);   // host: its bag netId
+    void DropBag(uint32_t bagNetId);                                                    // host: forget it (Unbind)
+    void ClientBags(double now);
+    double nextClientBags_ = 0;
+    const Entity* Wearer(const Entity& e) const;   // a bag's wearer, else the entity itself (null: unknown wearer)
+    std::map<uint8_t, double> lastDialogAnswer_;   // host: when each player last answered a conversation
+    bool squadKnown_ = false;                      // host: the squad was listed once (later arrivals are newcomers)
     void EndTrade(uint8_t player, const std::string& reason);   // host: close it (reason shown to the player)
     bool InTrade(uint8_t player, uint32_t container) const;
     // Client: the trade window the host opened for us. Our game counts the price of each purchase or

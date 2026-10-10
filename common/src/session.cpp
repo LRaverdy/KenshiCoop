@@ -10,6 +10,7 @@ namespace {
 constexpr size_t kMaxChatLines = 50;
 constexpr double kBufferSeconds = 1.0;       // client keeps this much interpolation history
 constexpr double kInterestInterval = 0.5;
+constexpr size_t kMaxBags = 1024;   // worn backpacks followed at once (host)
 constexpr double kPingInterval = 1.0;
 constexpr double kConnectTimeout = 10.0;
 constexpr double kPresenceInterval = 1.0;
@@ -135,6 +136,9 @@ void Session::Leave() {
     pendingCommands_.clear();
     haltQueue_.clear();
     leftOwned_.clear();
+    bagOf_.clear();
+    lastDialogAnswer_.clear();
+    squadKnown_ = false;
     despawnQueue_.clear();
     owners_.clear();
     byIdentity_.clear();
@@ -239,6 +243,7 @@ void Session::HostTick(double now, bool live) {
     for (const auto& a : pendingAnswers_) world_.DialogAnswer(a.dialogId, a.index);
     pendingAnswers_.clear();
     HostContainers(now);
+    HostBags(now);
     HostTrades(now);
     HostDoors(now);   // lot A
     HostCaptives(now);   // lot D: prisons
@@ -537,7 +542,15 @@ void Session::StreamWorld(const RemotePlayer& p) {
 void Session::FinishJoin(RemotePlayer& p) {
     p.inGame = true;
     sync_[p.id].sent.clear();
-    for (auto& [nid, e] : entities_) SendBind(e, p.peer);
+    for (auto& [nid, e] : entities_) {
+        if (e.bag) {   // a worn backpack: after its wearer (map order is not netId order: see the client)
+            Writer bw;
+            Encode(bw, BagBind{nid, e.bagOwner, e.bagSid});
+            SendReliable(p.peer, bw);
+        } else if (!e.container) {
+            SendBind(e, p.peer);
+        }
+    }
     Writer t;
     Encode(t, world_.GetTime());
     SendReliable(p.peer, t);
@@ -626,7 +639,8 @@ void Session::Kick(RemotePlayer& p, RejectReason why) {
 void Session::UpdateInterest() {
     for (auto& [id, e] : entities_) e.keep = false;
 
-    auto ensure = [this](const Handle& h, bool squad) -> Entity& {
+    std::vector<Handle> newcomers;   // squad characters that just appeared (bought, recruited, tamed)
+    auto ensure = [this, &newcomers](const Handle& h, bool squad) -> Entity& {
         auto it = byHandle_.find(h);
         if (it != byHandle_.end()) {
             Entity& e = entities_[it->second];
@@ -660,9 +674,11 @@ void Session::UpdateInterest() {
             for (const auto& [oh, pid] : owners_) if (oh == h) e.owner = pid;
         e.keep = true;
         byHandle_[h] = e.netId;
+        const bool assigned = e.owner != hostId_;
         Entity& ref = entities_[e.netId] = std::move(e);
         for (auto& [pid, p] : players_) if (p.inGame) SendBind(ref, p.peer);
         if (squad) controllableDirty_ = true;
+        if (squad && !assigned && squadKnown_) newcomers.push_back(h);
         return ref;
     };
 
@@ -675,6 +691,26 @@ void Session::UpdateInterest() {
         ensure(h, true);
         EntityState st;
         if (world_.Read(h, st)) centers.push_back(st.pos);
+    }
+
+    squadKnown_ = true;
+    // A newcomer to the player faction right after a player answered a conversation (an animal
+    // bought from an animal trader, a recruit): it is that player's. Only when one player alone
+    // could have done it; otherwise it stays the host's (the host gives it with the squad UI).
+    if (!newcomers.empty()) {
+        const double t = clock_();
+        uint8_t buyer = 0;
+        int candidates = 0;
+        for (const auto& [pid, at] : lastDialogAnswer_)
+            if (t - at < 20.0 && players_.count(pid)) { buyer = pid; ++candidates; }
+        for (const Handle& h : newcomers) {
+            if (candidates != 1) {
+                if (candidates > 1) log_("a new squad character appeared while several players were in a conversation: it stays the host's");
+                break;
+            }
+            log_("a new squad character (" + world_.CharacterNameOf(h) + ") goes to " + players_[buyer].name + ", who just bought or recruited it");
+            Assign(h, buyer);
+        }
     }
 
     if (!centers.empty()) {
@@ -691,6 +727,15 @@ void Session::UpdateInterest() {
         }
     }
 
+    // a worn backpack is followed while its wearer is
+    std::vector<uint32_t> bagsGone;
+    for (auto& [id, e] : entities_) {
+        if (!e.bag) continue;
+        auto w = entities_.find(e.bagOwner);
+        e.keep = w != entities_.end() && w->second.keep;
+        if (!e.keep) bagsGone.push_back(id);
+    }
+    for (uint32_t b : bagsGone) DropBag(b);
     for (auto it = entities_.begin(); it != entities_.end();) {
         if (it->second.keep) { ++it; continue; }
         if (it->second.container) {   // only the players who have it open know it
@@ -966,7 +1011,7 @@ void Session::HostContainers(double now) {
     }
     // a looter that walked away: the window closes
     for (auto& [id, e] : entities_) {
-        if (!e.container) continue;
+        if (!e.container || e.bag) continue;
         for (auto o = e.openBy.begin(); o != e.openBy.end();) {
             if (InTrade(*o, id)) { ++o; continue; }   // a shop counter: see HostTrades
             bool near = false;
@@ -1004,6 +1049,74 @@ void Session::EndTrade(uint8_t player, const std::string& reason) {
     trades_.erase(t);
 }
 
+// ---- worn backpacks (travelling merchants sell from them, pack beasts carry them)
+
+const Session::Entity* Session::Wearer(const Entity& e) const {
+    if (!e.bag) return &e;
+    auto it = entities_.find(e.bagOwner);
+    return it == entities_.end() ? nullptr : &it->second;
+}
+
+uint32_t Session::EnsureBag(uint32_t wearer, const Handle& bag, const std::string& sid) {
+    if (auto b = bagOf_.find(wearer); b != bagOf_.end()) {
+        auto it = entities_.find(b->second);
+        if (it != entities_.end() && it->second.handle == bag && it->second.bagSid == sid) return b->second;
+        DropBag(b->second);   // another backpack now: a new bag (its items go out with it)
+    }
+    if (bagOf_.size() >= kMaxBags) return 0;
+    Entity e;
+    e.netId = nextNetId_++;
+    e.handle = bag;
+    e.container = true;   // never a character: every character loop leaves it alone
+    e.bag = true;
+    e.bagOwner = wearer;
+    e.bagSid = sid;
+    e.keep = true;
+    const uint32_t id = e.netId;
+    byHandle_[bag] = id;
+    entities_[id] = std::move(e);
+    bagOf_[wearer] = id;
+    BagBind m{id, wearer, sid};
+    Writer w;
+    Encode(w, m);
+    BroadcastReliable(w, true);
+    return id;
+}
+
+void Session::DropBag(uint32_t bagNetId) {
+    auto it = entities_.find(bagNetId);
+    if (it == entities_.end() || !it->second.bag) return;
+    if (auto b = bagOf_.find(it->second.bagOwner); b != bagOf_.end() && b->second == bagNetId) bagOf_.erase(b);
+    for (auto& [pid, t] : trades_)
+        if (std::find(t.counters.begin(), t.counters.end(), bagNetId) != t.counters.end()) it->second.openBy.erase(pid);   // HostTrades closes it
+    Writer w;
+    Encode(w, Unbind{bagNetId});
+    BroadcastReliable(w, true);
+    if (auto h = byHandle_.find(it->second.handle); h != byHandle_.end() && h->second == bagNetId) byHandle_.erase(h);
+    for (auto& [pid, s] : sync_) s.sent.erase(bagNetId);
+    entities_.erase(it);
+}
+
+// Every followed character's worn backpack, checked now and then: put on, taken off, another one.
+void Session::HostBags(double now) {
+    if (now < nextBagScan_) return;
+    nextBagScan_ = now + 1.0;
+    std::vector<std::pair<uint32_t, Handle>> wearers;
+    for (auto& [id, e] : entities_)
+        if (!e.container) wearers.emplace_back(id, e.handle);
+    for (const auto& [id, h] : wearers) {
+        Handle bag;
+        std::string sid;
+        if (world_.WornBackpack(h, bag, sid)) EnsureBag(id, bag, sid);
+        else if (auto b = bagOf_.find(id); b != bagOf_.end()) DropBag(b->second);
+    }
+    // the wearer is no longer followed: its backpack neither
+    std::vector<uint32_t> gone;
+    for (const auto& [wearer, bag] : bagOf_)
+        if (!entities_.count(wearer)) gone.push_back(bag);
+    for (uint32_t b : gone) DropBag(b);
+}
+
 // A merchant's trade window asked for by the host's game for another player's character (its "let's
 // trade" in their conversation): it opens on that player's screen, with the shop's counters (the
 // containers it sells from) sent like open containers. The trade lasts while the player keeps the
@@ -1028,10 +1141,23 @@ void Session::HostTrades(double now) {
         m.looterNetId = looter->netId;
         m.traderNetId = trader ? trader->netId : 0;
         std::vector<IWorld::ShopCounter> counters;
-        if (!trader || !world_.ShopCounters(req.trader, counters) || counters.empty()) {
-            log_("[" + who + "] cannot trade with " + merchant + ": " + (trader ? "no shop counters (a travelling merchant)" : "the merchant is not followed"));
+        std::vector<uint32_t> bags;   // a travelling merchant: the worn backpacks of its squad
+        if (trader && !world_.ShopCounters(req.trader, counters)) {
+            counters.clear();
+            std::vector<Handle> wearers;
+            if (world_.TravellingCounters(req.trader, wearers))
+                for (const Handle& wh : wearers) {
+                    Entity* we = entityByHandle(wh);
+                    Handle bh;
+                    std::string sid;
+                    if (!we || we->container || !world_.WornBackpack(wh, bh, sid)) continue;
+                    if (uint32_t b = EnsureBag(we->netId, bh, sid)) bags.push_back(b);
+                }
+        }
+        if (!trader || (counters.empty() && bags.empty())) {
+            log_("[" + who + "] cannot trade with " + merchant + ": " + (trader ? "no shop counters and no backpack to sell from" : "the merchant is not followed"));
             if (!trader) continue;
-            m.note = merchant + " n'a pas d'étal : le commerce avec les marchands ambulants n'est pas encore géré en multijoueur.";
+            m.note = merchant + " n'a rien à vendre ici (ni étal ni sac de caravane).";
             Writer w;
             Encode(w, m);
             SendReliable(pl->second.peer, w);
@@ -1060,12 +1186,20 @@ void Session::HostTrades(double now) {
                 entities_[id] = std::move(e);
             }
             Entity& e = entities_[id];
-            if (!e.container) continue;   // never a character
+            if (!e.container || e.bag) continue;   // never a character
             e.openBy.insert(pl->first);
             e.invHash = 0;                // its items go out now
             t.counters.push_back(id);
             m.counters.push_back({id, c.sid, c.pos});
         }
+        for (uint32_t id : bags) {   // already synced to everyone: nothing more to send
+            if (t.counters.size() >= kMaxTradeCounters) break;
+            Entity& e = entities_[id];
+            e.openBy.insert(pl->first);
+            t.counters.push_back(id);
+            m.counters.push_back({id, e.bagSid, {}, e.bagOwner});
+        }
+        t.travelling = !bags.empty();
         trades_[pl->first] = t;
         Writer w;
         Encode(w, m);
@@ -1075,7 +1209,7 @@ void Session::HostTrades(double now) {
             std::vector<ItemState> items;
             if (world_.ReadInventory(entities_[id].handle, items)) stacks += items.size();
         }
-        log_("[" + who + "] trades with " + merchant + " (" + std::to_string(t.counters.size()) + " shop counters holding " +
+        log_("[" + who + "] trades with " + merchant + " (" + std::to_string(t.counters.size()) + (bags.empty() ? " shop counters" : " backpacks of a travelling merchant's squad") + " holding " +
              std::to_string(stacks) + " stacks, the merchant has " + std::to_string(m.traderMoney) + " cats)");
     }
     scratchTradeReqs_.clear();
@@ -1114,7 +1248,61 @@ void Session::HostTrades(double now) {
             EndTrade(pid, "trop loin du marchand");
             continue;
         }
+        // the merchant (or, for a caravan, one of the pack beasts or guards carrying its stock) is
+        // knocked out, killed, fighting, gone or out of reach: the window closes
+        std::string why;
+        auto unable = [&](const Entity& e, const char* what) {
+            EntityState es;
+            EntityVitals v;
+            Handle target;
+            if ((world_.Read(e.handle, es) && (es.flags & (kFlagDown | kFlagDead))) ||
+                (world_.ReadVitals(e.handle, v) && (v.flags & (kVitUnconscious | kVitDead))))
+                why = std::string(what) + " est à terre";
+            else if (world_.ReadCombat(e.handle, target))
+                why = std::string(what) + " se bat";
+            else if (now - it->second.since > 5.0 && world_.Read(e.handle, es) && world_.DistanceTo(looter->second.handle, es.pos) > 150.0f)
+                why = std::string(what) + " est trop loin";
+            return !why.empty();
+        };
+        bool stop = unable(trader->second, "le marchand");
+        for (uint32_t id : it->second.counters) {
+            if (stop || !it->second.travelling) break;
+            auto b = entities_.find(id);
+            const Entity* w = b != entities_.end() ? Wearer(b->second) : nullptr;
+            if (!w) { why = "la caravane est partie"; stop = true; }
+            else if (w != &trader->second) stop = unable(*w, "une bête de la caravane");
+        }
+        if (stop) {
+            log_("[" + pl->second.name + "] trade window closed: " + why);
+            ++it;
+            EndTrade(pid, "Commerce interrompu : " + why + ".");
+            continue;
+        }
         ++it;
+    }
+}
+
+// Client: each backpack the host follows is bound to the same backpack (same template) worn by our
+// copy of its wearer. A new local backpack (the wearer streamed in, or its inventory was rebuilt)
+// takes the host's items again.
+void Session::ClientBags(double now) {
+    if (now < nextClientBags_) return;
+    nextClientBags_ = now + 0.5;
+    for (auto& [id, e] : entities_) {
+        if (!e.bag) continue;
+        auto w = entities_.find(e.bagOwner);
+        Handle local;
+        std::string sid;
+        const bool found = w != entities_.end() && w->second.present && world_.WornBackpack(w->second.handle, local, sid) && sid == e.bagSid;
+        if (!found) {
+            if (e.present && IsTradeCounter(id)) trade_.refresh = trade_.open;   // the window shows it again once it is back
+            e.present = false;
+            continue;
+        }
+        if (e.present && local == e.handle) continue;
+        e.handle = local;
+        e.present = true;
+        if (e.haveInv) { e.invDirty = true; e.invRetry = 0; }
     }
 }
 
@@ -1147,19 +1335,19 @@ void Session::ClientContainers(double now) {
         bool ready = true;
         for (uint32_t id : trade_.counters) {
             auto it = entities_.find(id);
-            if (it == entities_.end() || !it->second.haveInv || it->second.invDirty) ready = false;
+            if (it == entities_.end() || !it->second.haveInv || it->second.invDirty || (it->second.bag && !it->second.present)) ready = false;
         }
         auto trader = entities_.find(trade_.trader);
         auto looter = entities_.find(trade_.looter);
         const bool here = trader != entities_.end() && looter != entities_.end() && trader->second.present && looter->second.present;
         if (trade_.pendingSince == 0) trade_.pendingSince = now;
-        if (!here && now - trade_.pendingSince > 10.0) {
-            log_("trade window cancelled: the merchant or our character is not here");
+        if ((!here && now - trade_.pendingSince > 10.0) || (!ready && now - trade_.pendingSince > 20.0)) {
+            log_(!here ? "trade window cancelled: the merchant or our character is not here" : "trade window cancelled: the merchant's stock never arrived here");
             for (uint32_t id : trade_.counters) {
                 Writer w;
                 Encode(w, ContainerClose{id, {}});
                 SendReliable(net_.serverPeer(), w);
-                entities_.erase(id);
+                if (auto c = entities_.find(id); c != entities_.end() && !c->second.bag) entities_.erase(c);
             }
             EndClientTrade();
         } else if (here && ready) {
@@ -1216,9 +1404,19 @@ void Session::ClientContainers(double now) {
     if (windowOpenedAt_ > 0 && now - windowOpenedAt_ > 1.5 && !world_.ContainerWindowOpen()) {
         windowOpenedAt_ = -1;
         if (trade_.open) log_("trade window closed");
+        const std::vector<uint32_t> counters = trade_.counters;
         EndClientTrade();
         for (auto it = entities_.begin(); it != entities_.end();) {
             if (!it->second.container) { ++it; continue; }
+            if (it->second.bag) {   // a backpack the window sold from: the host is told, it stays synced
+                if (std::find(counters.begin(), counters.end(), it->first) != counters.end()) {
+                    Writer w;
+                    Encode(w, ContainerClose{it->first, {}});
+                    SendReliable(net_.serverPeer(), w);
+                }
+                ++it;
+                continue;
+            }
             Writer w;
             Encode(w, ContainerClose{it->first, {}});
             SendReliable(net_.serverPeer(), w);
@@ -1339,6 +1537,16 @@ void Session::Assign(const Handle& h, uint8_t playerId) {
     if (Entity* e = entityByHandle(h); e && e->squad) {
         e->owner = playerId;
         for (auto& [pid, p] : players_) if (p.inGame) SendBind(*e, p.peer);  // Bind doubles as an ownership update
+        // An animal follows its squad: it goes into the squad of its new owner's own character
+        if (world_.IsAnimal(h)) {
+            Handle leader;
+            if (auto sy = sync_.find(playerId); playerId != hostId_ && sy != sync_.end() && entityByHandle(sy->second.own)) leader = sy->second.own;
+            for (auto& [nid, o] : entities_) {
+                if (leader.valid()) break;
+                if (o.squad && !o.container && o.owner == playerId && !(o.handle == h) && !world_.IsAnimal(o.handle)) leader = o.handle;
+            }
+            if (leader.valid() && world_.JoinSquadOf(h, leader)) log_("the animal " + world_.CharacterNameOf(h) + " joins its owner's squad");
+        }
     }
     controllableDirty_ = true;
 }
@@ -1499,6 +1707,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         auto o = dialogOwner_.find(a.dialogId);
         if (o == dialogOwner_.end() || o->second != pl->id) { log_("ignored an answer to a conversation player " + std::to_string(pl->id) + " is not in"); break; }
         if (pendingAnswers_.size() < 64) pendingAnswers_.push_back(a);
+        lastDialogAnswer_[pl->id] = clock_();   // a purchase or a recruitment in it gives them the newcomer
         if (auto rr = dialogReplies_.find(a.dialogId); rr != dialogReplies_.end() && a.index < int(rr->second.size()))
             log_("[" + pl->name + "] answers: \"" + rr->second[size_t(a.index)] + "\"");
         break;
@@ -1540,7 +1749,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
 void Session::SendInventories(double now, bool force, PeerId onlyTo) {
     (void)now;
     for (auto& [id, e] : entities_) {
-        if (e.container && e.openBy.empty()) continue;
+        if (e.container && !e.bag && e.openBy.empty()) continue;
         std::vector<ItemState> items;
         if (!world_.ReadInventory(e.handle, items)) continue;
         const uint64_t h = InventoryHash(items);
@@ -1550,7 +1759,7 @@ void Session::SendInventories(double now, bool force, PeerId onlyTo) {
         m.items = std::move(items);
         Writer w(1024);
         Encode(w, m);
-        if (e.container) {   // only to the players who have it open
+        if (e.container && !e.bag) {   // only to the players who have it open
             e.invHash = h;
             for (uint8_t pid : e.openBy)
                 if (auto pl = players_.find(pid); pl != players_.end()) SendReliable(pl->second.peer, w);
@@ -1630,23 +1839,37 @@ void Session::HostInvOp(uint8_t from, const InvOp& op, const InvOp* swapWith) {
         return (world_.Read(e.handle, st) && (st.flags & (kFlagDown | kFlagDead)) != 0) ||
                (world_.ReadVitals(e.handle, v) && (v.flags & (kVitUnconscious | kVitDead)) != 0);
     };
-    // what this player may take from and put into: its own characters, a container it opened, an
-    // NPC knocked out or dead (the game lets one strip a body and also put things on it)
+    // what this player may take from and put into: its own characters (and the backpacks they
+    // wear), a container it opened, an NPC knocked out or dead (the game lets one strip a body and
+    // also put things on it, its backpack too), and, by stealing, an NPC's pack animal (or the
+    // backpack it carries)
+    auto beastToRob = [&](const Entity& e) {
+        const Entity* w = Wearer(e);
+        return w && !w->squad && !w->container && !isDown(*w) && world_.IsAnimal(w->handle);
+    };
     auto mayTouch = [&](const Entity& e) {
-        return (e.squad && e.owner == from) || (e.container && e.openBy.count(from)) || (!e.squad && !e.container && isDown(e));
+        if (e.bag) {
+            const Entity* w = Wearer(e);
+            if (!w) return false;
+            return (w->squad && w->owner == from) || (!w->squad && isDown(*w)) || beastToRob(e);   // a merchant's: HostTradeOp
+        }
+        return (e.squad && e.owner == from) || (e.container && e.openBy.count(from)) || (!e.squad && !e.container && isDown(e)) || beastToRob(e);
     };
     const bool srcOk = mayTouch(src->second);
     if (op.kind == InvOpKind::Drop) {
-        if (src->second.owner == from) world_.ExecuteInvOp(src->second.handle, src->second.handle, op);
+        const Entity* w = Wearer(src->second);
+        if (w && w->squad && w->owner == from) world_.ExecuteInvOp(src->second.handle, src->second.handle, op);
         src->second.invHash = 0;
         return;
     }
     auto dst = entities_.find(op.toNetId);
     const bool dstOk = dst != entities_.end() && mayTouch(dst->second);
-    // Taking from a container that is not ours is stealing: the game decides, on the host, like it
-    // does for its own player (crime, the owners may notice).
-    if (dstOk && srcOk && src->second.container && !dst->second.container) {
-        const int theft = world_.TheftCheck(dst->second.handle, src->second.handle, op.item);
+    // Taking from a container, or from an NPC's pack animal, that is not ours is stealing: the game
+    // decides, on the host, like it does for its own player (crime, the owners may notice, bounty).
+    const Entity* thief = dst != entities_.end() ? Wearer(dst->second) : nullptr;
+    const bool robbing = srcOk && (beastToRob(src->second) || (src->second.container && !src->second.bag));
+    if (dstOk && robbing && thief && !thief->container && thief->squad && thief->owner == from) {
+        const int theft = world_.TheftCheck(thief->handle, src->second.handle, op.item);
         const std::string who = players_.count(from) ? players_[from].name : "?";
         if (theft == 2) {
             log_("[" + who + "] caught stealing " + world_.TemplateName(op.item.templateSid));
@@ -1715,7 +1938,10 @@ void Session::HostTradeOp(uint8_t from, const InvOp& op) {
     if (t == trades_.end() || t->second.trader != op.traderNetId) return refuse("no trade window open with that merchant", "Le commerce est fermé.");
     if (src == entities_.end() || dst == entities_.end()) return refuse("unknown inventory", {});
     auto counter = [&](uint32_t id) { return std::find(t->second.counters.begin(), t->second.counters.end(), id) != t->second.counters.end(); };
-    auto own = [&](const Entity& e) { return e.squad && e.owner == from; };
+    auto own = [&](const Entity& e) {   // their character, or the backpack it wears
+        const Entity* w = Wearer(e);
+        return w && !w->container && w->squad && w->owner == from;
+    };
     const bool buying = counter(op.fromNetId) && own(dst->second);
     const bool selling = own(src->second) && counter(op.toNetId);
     // A purchase the player could not pay puts the item back in the first counter with room, maybe
@@ -1731,7 +1957,7 @@ void Session::HostTradeOp(uint8_t from, const InvOp& op) {
         return refuse("price " + std::to_string(op.price) + " does not fit a " + (buying ? "purchase" : "sale"), "Le prix n'a pas pu être compté : rien n'a changé.");
     auto trader = entities_.find(t->second.trader);
     if (trader == entities_.end()) return refuse("the merchant is gone", {});
-    const Handle& player = buying ? dst->second.handle : src->second.handle;
+    const Handle player = Wearer(buying ? dst->second : src->second)->handle;   // who pays or is paid: the character
     int32_t playerMoney = 0, traderMoney = 0;
     world_.MoneyOf(player, playerMoney);
     world_.MoneyOf(trader->second.handle, traderMoney);
@@ -1782,9 +2008,10 @@ void Session::ClientInventoryDiff(double now) {
     std::string foreignOwner;
     auto foreign = [&](uint32_t netId) {
         auto it = entities_.find(netId);
-        if (it == entities_.end() || !it->second.squad || it->second.owner == localId_) return false;
-        auto pl = players_.find(it->second.owner);
-        foreignOwner = pl != players_.end() ? pl->second.name : (it->second.owner == 1 ? "l'hote" : "un autre joueur");
+        const Entity* w = it != entities_.end() ? Wearer(it->second) : nullptr;   // a backpack: its wearer's
+        if (!w || !w->squad || w->owner == localId_) return false;
+        auto pl = players_.find(w->owner);
+        foreignOwner = pl != players_.end() ? pl->second.name : (w->owner == 1 ? "l'hote" : "un autre joueur");
         return true;
     };
     bool refused = false;
@@ -2147,6 +2374,7 @@ void Session::ClientTick(double now, bool live) {
             }
         }
     }
+    ClientBags(now);
     ClientInventoryDiff(now);
     SendLocalDrops();
     for (auto& [id, e] : entities_) {
@@ -2397,6 +2625,22 @@ void Session::ClientPacket(Msg type, Reader& r) {
         if (e.squad) controllableDirty_ = true;
         break;
     }
+    case Msg::BagBind: {
+        BagBind m;
+        if (state_ != SessionState::Connected || !Decode(r, m)) break;
+        auto it = entities_.find(m.netId);
+        if (it != entities_.end() && !it->second.bag) break;   // never over a character or a container
+        Entity& e = entities_[m.netId];
+        if (e.bagOwner != m.ownerNetId || e.bagSid != m.sid) { e.present = false; e.handle = Handle{}; }
+        e.netId = m.netId;
+        e.container = true;
+        e.bag = true;
+        e.checked = true;
+        e.bagOwner = m.ownerNetId;
+        e.bagSid = m.sid;
+        nextClientBags_ = 0;   // bound to our copy of that backpack right away
+        break;
+    }
     case Msg::Unbind: {
         Unbind m;
         if (!Decode(r, m)) break;
@@ -2404,7 +2648,14 @@ void Session::ClientPacket(Msg type, Reader& r) {
         if (it == entities_.end()) break;
         if (it->second.squad) controllableDirty_ = true;
         if (it->second.spawned) despawnQueue_.push_back(it->second.handle);   // removed on the next live tick
-        byHandle_.erase(it->second.handle);
+        if (IsTradeCounter(m.netId) || ((trade_.open || trade_.pending) && (m.netId == trade_.trader || m.netId == trade_.looter))) {
+            // a backpack the window sells from (its wearer left, died, dropped it) or the merchant: the window goes
+            EndClientTrade();
+            world_.CloseContainerWindows();
+            windowOpenedAt_ = -1;
+            log_("trade window closed: the merchant or a backpack it sells from is no longer followed");
+        }
+        if (!it->second.bag) byHandle_.erase(it->second.handle);
         entities_.erase(it);
         break;
     }
@@ -2497,9 +2748,9 @@ void Session::ClientPacket(Msg type, Reader& r) {
     case Msg::ContainerClose: {
         ContainerClose m;
         if (state_ != SessionState::Connected || !Decode(r, m)) break;
-        if (auto it = entities_.find(m.netId); it != entities_.end() && it->second.container) {
+        if (auto it = entities_.find(m.netId); it != entities_.end()) {
             if (IsTradeCounter(m.netId)) EndClientTrade();   // the whole trade window goes
-            entities_.erase(it);
+            if (it->second.container && !it->second.bag) entities_.erase(it);   // a backpack stays synced
             world_.CloseContainerWindows();
             windowOpenedAt_ = -1;
             if (!m.reason.empty()) AddChat("* " + m.reason, "the host closes the window: " + m.reason);
@@ -2531,6 +2782,16 @@ void Session::ClientPacket(Msg type, Reader& r) {
         std::vector<uint32_t> ids;
         bool missing = trader == entities_.end() || !trader->second.present;
         for (const auto& c : m.counters) {
+            if (c.ownerNetId) {   // a worn backpack of the merchant's squad: already synced (BagBind)
+                auto b = entities_.find(c.netId);
+                if (b == entities_.end() || !b->second.bag || b->second.bagOwner != c.ownerNetId) {
+                    missing = true;
+                    log_("trade: backpack " + world_.TemplateName(c.sid) + " of the merchant's squad not known here");
+                    continue;
+                }
+                ids.push_back(c.netId);
+                continue;
+            }
             Handle local;
             if (!world_.FindContainer(c.sid, c.pos, local)) {
                 missing = true;
@@ -2554,7 +2815,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
                 Writer w;
                 Encode(w, ContainerClose{c.netId, {}});
                 SendReliable(net_.serverPeer(), w);
-                entities_.erase(c.netId);
+                if (!c.ownerNetId) entities_.erase(c.netId);
             }
             break;
         }
@@ -2801,13 +3062,13 @@ uint8_t Session::ownerOf(const Handle& h) const {
 
 size_t Session::npcCount() const {
     size_t n = 0;
-    for (auto& [id, e] : entities_) if (!e.squad) ++n;
+    for (auto& [id, e] : entities_) if (!e.squad && !e.container) ++n;
     return n;
 }
 
 uint32_t Session::missingNpcs() const {
     uint32_t n = 0;
-    for (auto& [id, e] : entities_) if (!e.squad && e.checked && !e.present) ++n;
+    for (auto& [id, e] : entities_) if (!e.squad && !e.container && e.checked && !e.present) ++n;
     return n;
 }
 
