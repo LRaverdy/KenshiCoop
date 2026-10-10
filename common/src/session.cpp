@@ -1637,7 +1637,20 @@ void Session::HostInvOp(uint8_t from, const InvOp& op, const InvOp* swapWith) {
     };
     const bool srcOk = mayTouch(src->second);
     if (op.kind == InvOpKind::Drop) {
-        if (src->second.owner == from) world_.ExecuteInvOp(src->second.handle, src->second.handle, op);
+        // its own character (or pack animal), a chest it has open, a body it may strip. A chest's item
+        // is dropped by that player's character nearest to the chest (where the game drops it).
+        Handle dropper = src->second.handle;
+        if (src->second.container) {
+            float best = 1e30f;
+            dropper = Handle{};
+            for (const auto& [id, e] : entities_) {
+                if (!e.squad || e.owner != from) continue;
+                const float d = world_.DistanceTo(e.handle, src->second.containerPos);
+                if (d < best) { best = d; dropper = e.handle; }
+            }
+        }
+        if ((srcOk || src->second.owner == from) && dropper.valid()) world_.ExecuteInvOp(src->second.handle, dropper, op);
+        else log_("refused a drop to the ground from player " + std::to_string(from) + ": " + op.item.templateSid);
         src->second.invHash = 0;
         return;
     }
@@ -1939,6 +1952,7 @@ void Session::SendLocalDrops() {
     std::vector<std::pair<Handle, ItemState>> drops;
     world_.TakeLocalDrops(drops);
     for (const auto& [h, item] : drops) {
+        bool sent = false;
         for (auto& [id, e] : entities_) {
             if (e.handle != h) continue;
             InvOp op;
@@ -1948,8 +1962,10 @@ void Session::SendLocalDrops() {
             Writer w;
             Encode(w, op);
             SendReliable(net_.serverPeer(), w);
+            sent = true;
             break;
         }
+        if (!sent) log_("drop to the ground not sent: the host does not know that inventory (" + item.templateSid + ")");
     }
 }
 

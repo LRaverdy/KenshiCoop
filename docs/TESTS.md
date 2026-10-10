@@ -100,6 +100,7 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `farlong` (`--seconds 300`) | le perso du client à plus de 30000 unités pendant 5 min : zone comparée toutes les 30 s (PNJ, santé, inventaires), combat lancé et bâtiment posé là-bas, l'escouade de l'hôte bouge ; pas de PNJ manquant ni d'écart de position qui dure (le même perso sur deux relevés de suite) près du perso du client (1000 unités pour les absents, 300 pour les positions ; les chiffres de toute la zone vont seulement dans le journal : PNJ autour de l'escouade de l'hôte que le client n'a pas chargés, trafic), l'hôte simule la zone, pas de plantage, aller-retour d'une commande < 1 s ; retour (TP admin) et comparaison |
 | `progress` | compétences, argent, bulles et ordres : l'hôte décide, le client suit |
 | `ground` / `clientpickup` | objets posés et ramassés ; ramassage demandé par un client |
+| `grounddrop` | objets lâchés par le chemin du glisser-déposer (`uidrop` = `Inventory::dropItem`) : une pile de minerai, une arme, une armure, par l'hôte puis par le client, puis les deux à la fois, puis ce qui tombe sur un K.-O. et une mort. Chaque objet une seule fois des deux côtés, même pile, à moins de 5 unités ; ramassé par l'hôte, il disparaît partout. Compteurs `groundstats` des deux côtés au journal. Pas encore lancée |
 | `anim` / `animframe` / `gait` | animations de combat et d'action ; tout ce qui est à l'écran ; allure |
 | `fx` / `fxlive` | effets météo (orage forcé puis comparaison en pause ; en direct) |
 | `bodies` / `dead` / `items` | où reposent les corps ; morts ; objets |
@@ -276,6 +277,10 @@ l'escouade triée par handle.
 | `drop <index>` | ce membre pose un objet non équipé (répond avec son handle) |
 | `pickup <index> <clé>` / `pickupreq <index> <modèle> <x,y,z>` | ramasser (hôte) ; ce qu'envoie le « ramasser » d'un client |
 | `groundnear <rayon>` / `ground <clé de l'hôte>` | objets au sol autour ; cet objet est-il au sol ici ? |
+| `uidrop <index> <weapon\|armour\|item\|modèle>` | ce membre lâche cet objet comme le glisser-déposer vers le monde (`Inventory::dropItem`) ; client : demandé à l'hôte |
+| `fetchitem <index> <weapon\|armour\|modèle>` | (hôte) prend un objet de ce genre à un autre membre (porté ou non) et le met dans son sac |
+| `groundall <rayon> [index]` / `groundcopy <clé de l'hôte>` | objets posés dans le monde autour, `clé\|modèle\|nombre\|x,y,z` ; (client) sa copie de cet objet de l'hôte |
+| `groundstats` | compteurs des objets au sol (crochets, relevé, répétitions ; côté client : créés, adoptés, fusionnés, retirés) |
 | `invmove <de> <vers> <rang\|main\|worn> [qté] [x] [y] [section]` | ce que fait un glisser-déposer d'inventaire |
 | `loot <cible> [index]` / `lootorder <cible>` | fouille d'un corps telle qu'un client la fait ; le chemin du clic droit |
 | `containerreq <sélection> <nom>` | clic droit sur le contenant le plus proche de ce nom |

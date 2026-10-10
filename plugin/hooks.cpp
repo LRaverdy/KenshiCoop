@@ -69,6 +69,9 @@ GiveItemFn o_giveItem = nullptr;
 using PickupFn = void (*)(void* pi, void* item);
 PickupFn o_pickup = nullptr;
 DropItemFn o_dropItem = nullptr;
+DropItemFn o_dropItemAnimal = nullptr;
+using InvDropFn = void (*)(void* inv, void* item);
+InvDropFn o_invDrop = nullptr;
 LabelTrackFn o_labelTrack = nullptr;
 LabelColorFn o_labelColor = nullptr;
 // host: the damage number addWound is building (created, then tracked, then coloured)
@@ -767,18 +770,39 @@ bool hk_giveItem(void* chr, void* item, bool dropOnFail, bool destroyOnFail) {
         if (KenshiWorld* w = TheWorld()) w->NoteGround(e);
     return ok;
 }
-void hk_dropItem(void* chr, void* item) {
+// A character's own drop (the game's: a full inventory, the AI; the inventory window's, through
+// Inventory::dropItem below). Humans and pack animals each have their own.
+void DropItemCommon(DropItemFn orig, void* chr, void* item) {
     if (KenshiWorld::ClientActive() && !g_hostCall && KenshiWorld::View()->replicated.count(chr)) {
         // the player dropped it from one of their characters: the host does it (and everyone sees it)
-        if (KenshiWorld* w = TheWorld(); w && item && kenshi::IsCharacter(chr)) w->QueueLocalDrop(static_cast<kenshi::Character*>(chr), item);
+        if (KenshiWorld* w = TheWorld(); w && item && kenshi::IsCharacter(chr)) w->QueueLocalDrop(chr, item);
         return;
     }
-    o_dropItem(chr, item);
-    if (KenshiWorld::ClientActive() || !KenshiWorld::View()->active || !item || !kenshi::ItemOnGround(item)) return;
-    kc::GroundEvent e;
-    e.kind = kc::GroundKind::Dropped;
-    if (kenshi::DescribeGroundItem(item, e.item, e.state, e.pos))
-        if (KenshiWorld* w = TheWorld()) w->NoteGround(e);
+    orig(chr, item);
+    if (!KenshiWorld::ClientActive() && item)
+        if (KenshiWorld* w = TheWorld()) w->NoteItemDropped(item);
+}
+void hk_dropItem(void* chr, void* item) { DropItemCommon(o_dropItem, chr, item); }
+void hk_dropItemAnimal(void* chr, void* item) { DropItemCommon(o_dropItemAnimal, chr, item); }
+// An item released over the world from an inventory window (a character's, a pack animal's, a
+// chest's, a backpack's): the inventory asks its owner (callbackObject) to drop it, then lets it go.
+// Host: announced once it is in the world (whichever owner did it). Client: a character the host
+// drives or a building of the host's world: the host drops it; the item leaves our inventory as the
+// game would have it (the host's inventory comes back anyway).
+void hk_invDrop(void* inv, void* item) {
+    if (KenshiWorld::ClientActive() && !g_hostCall && item) {
+        void* holder = kenshi::InventoryCallback(inv);
+        auto v = KenshiWorld::View();
+        const bool character = kenshi::IsCharacter(holder);
+        if (holder && v->active && ((character && v->replicated.count(holder)) || (!character && !kenshi::IsItemObject(holder)))) {
+            if (KenshiWorld* w = TheWorld()) w->QueueLocalDrop(holder, item);
+            kenshi::InventoryRemove(inv, item);
+            return;
+        }
+    }
+    o_invDrop(inv, item);
+    if (!KenshiWorld::ClientActive() && item)
+        if (KenshiWorld* w = TheWorld()) w->NoteItemDropped(item);
 }
 std::string ColourHex(const float* c) {
     char b[16];
@@ -1377,6 +1401,8 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnAssignBounty, reinterpret_cast<void*>(&hk_assignBounty), reinterpret_cast<void**>(&o_assignBounty)},
         {kenshi::FnGiveItem, reinterpret_cast<void*>(&hk_giveItem), reinterpret_cast<void**>(&o_giveItem)},
         {kenshi::FnDropItemHuman, reinterpret_cast<void*>(&hk_dropItem), reinterpret_cast<void**>(&o_dropItem)},
+        {kenshi::FnDropItemAnimal, reinterpret_cast<void*>(&hk_dropItemAnimal), reinterpret_cast<void**>(&o_dropItemAnimal)},
+        {kenshi::FnInventoryDropItem, reinterpret_cast<void*>(&hk_invDrop), reinterpret_cast<void**>(&o_invDrop)},
         {kenshi::FnCreateScreenLabel, reinterpret_cast<void*>(&hk_createLabel), reinterpret_cast<void**>(&o_createLabel)},
         {kenshi::FnLabelSetTracking, reinterpret_cast<void*>(&hk_labelTrack), reinterpret_cast<void**>(&o_labelTrack)},
         {kenshi::FnLabelSetColor, reinterpret_cast<void*>(&hk_labelColor), reinterpret_cast<void**>(&o_labelColor)},

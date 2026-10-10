@@ -168,6 +168,9 @@ const FunctionSig kFunctions[FnCount] = {
     {"Character::getPermajob", 0x5C8EF0, {0x48, 0x8B, 0x81, 0x50, 0x06, 0x00, 0x00, 0x48, 0x8B, 0x48, 0x20, 0xE9}},
     {"Character::getPermajobCount", 0x5C8F30, {0x48, 0x8B, 0x81, 0x50, 0x06, 0x00, 0x00, 0x48, 0x8B, 0x48, 0x20, 0xE9}},
     {"CharMovement::_setPositionAndTeleport", 0x65E940, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48}},
+    // ---- ground drops
+    {"Inventory::dropItem", 0x745D90, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x83}},
+    {"CharacterAnimal::dropItem", 0x5CA4A0, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48}},
 };
 
 namespace {
@@ -2102,6 +2105,9 @@ bool MoveInventoryItem(void* from, void* to, const kc::InvOp& op, std::string* e
     const int bestQty = found.qty;
     if (!best) { if (err) *err = "item not found"; return false; }
     if (op.kind == kc::InvOpKind::Drop) {
+        // a chest's item: dropped by the player's character standing by it (`to`), as the game does
+        // with the chest's user; a character's: its inventory drops it, as the inventory window does
+        if (!IsCharacter(from) && IsCharacter(to)) return DropFromHolder(from, best, static_cast<Character*>(to));
         void* fn = VSlot(src, INVV_drop);
         return fn && CallPtrArg2(fn, src, best);
     }
@@ -3251,6 +3257,91 @@ void ItemsNearIf(const kc::Vec3& pos, float radius, std::vector<void*>& out, boo
     if (lk.data) reinterpret_cast<FnDelete>(Addr(kGameDelete))(lk.data);
 }
 } // namespace
+
+namespace {
+// Every class whose activate is Item::activate (vt 0x228 -> 0x75D9B0): Item and its subclasses.
+constexpr uintptr_t kItemVtables[] = {0x1685358 /* SeveredLimbItem */, 0x16857C8 /* Gear */, 0x1685F78 /* RobotLimbItem */,
+                                      0x16B61F8 /* BlueprintItem */, 0x170DD18 /* Item */, 0x170E138 /* MapItem */,
+                                      0x170E9F8 /* NestItem */, 0x170EF28 /* MoneyItem */, 0x170F4F8 /* ContainerItem */,
+                                      0x1723B18 /* Weapon */, 0x1724398 /* Armour */, 0x17247F8 /* LockedArmour */,
+                                      0x1726CB8 /* Sword */, 0x17270F8 /* Crossbow */};
+constexpr uintptr_t IT_active = 0x190;            // set by activate (vt 0x230), cleared by deactivate
+constexpr int kItemTypeArmour = 3;                // itemType::ARMOUR
+} // namespace
+
+bool IsItemObject(const void* obj) {
+    const uintptr_t vt = obj ? Vtable(obj) : 0;
+    if (!vt) return false;
+    for (uintptr_t v : kItemVtables)
+        if (vt == Addr(v)) return true;
+    return false;
+}
+
+bool ItemInWorld(void* item) {
+    uint8_t inInv = 1, active = 0;
+    void* group = nullptr;
+    return IsItemObject(item) && Rd(item, IT_inInventoryFlag, inInv) && inInv == 0 && Rd(item, IT_active, active) && active != 0 &&
+           Rd(item, IT_itemGroup, group) && !group;
+}
+
+void WorldItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out) {
+    ItemsNearIf(pos, radius, out, [](void* o) { return ItemInWorld(o); });
+}
+
+void* InventoryCallback(void* inventory) {
+    void* cb = nullptr;
+    return inventory && Rd(inventory, 0x80, cb) ? cb : nullptr;
+}
+
+void* InventoryOfHolder(void* holder) { return InventoryOf(holder); }
+
+bool InventoryDrop(void* inventory, void* item) {
+    void* fn = inventory && item ? VSlot(inventory, INVV_drop) : nullptr;
+    return fn && CallPtrArg2(fn, inventory, item);
+}
+
+bool InventoryRemove(void* inventory, void* item) {
+    void* fn = inventory && item ? VSlot(inventory, INVV_removeDontDestroy) : nullptr;
+    using FnRemove = bool (*)(void* inv, void* item, int qty, bool returnCopyIfSomeLeft);
+    __try { return fn && reinterpret_cast<FnRemove>(fn)(inventory, item, -1, true); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+bool DropFromHolder(void* holder, void* item, Character* dropper) {
+    void* inv = InventoryOf(holder);
+    if (!inv || !item || !IsCharacter(dropper)) return false;
+    // out of the chest first (the dropper's dropItem would otherwise look for it in its own body's
+    // sections), whole stack, never destroyed
+    if (!InventoryRemove(inv, item)) return false;
+    return CallDropItem(dropper, item);
+}
+
+void* FindItemOfKind(void* holder, const std::string& kind) {
+    void* inv = InventoryOf(holder);
+    if (!inv) return nullptr;
+    void* worn = nullptr;
+    for (void* it : InventoryItems(inv)) {
+        void* gd = nullptr;
+        int type = -1;
+        std::string sid, name;
+        if (!Rd(it, off::RO_data, gd) || !gd || !GameDataSid(gd, sid)) continue;
+        Rd(gd, off::GD_type, type);
+        bool match = false;
+        if (kind == "weapon") match = type == kItemTypeWeapon;
+        else if (kind == "armour") match = type == kItemTypeArmour;
+        else if (kind == "item") match = type != kItemTypeWeapon && type != kItemTypeArmour;
+        else {
+            std::string part = kind;
+            std::replace(part.begin(), part.end(), '_', ' ');
+            match = sid == kind || (TemplateDisplayName(sid, name) && name.find(part) != std::string::npos);
+        }
+        if (!match) continue;
+        uint8_t equipped = 0;
+        Rd(it, IT_equipped, equipped);
+        if (!equipped) return it;
+        if (!worn) worn = it;
+    }
+    return worn;
+}
 
 bool DestroyItem(void* item) {
     constexpr uintptr_t IV_deactivate = 0x238;   // out of the world first, as a pickup does

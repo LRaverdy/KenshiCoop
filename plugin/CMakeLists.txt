@@ -6,7 +6,7 @@ target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
 target_compile_definitions(imgui PUBLIC IMGUI_DISABLE_DEMO_WINDOWS IMGUI_DISABLE_DEBUG_TOOLS)
 
 add_library(KenshiCoop SHARED main.cpp kenshi.cpp world.cpp hooks.cpp overlay.cpp util.cpp debug.cpp
-    steam_link.cpp host_console.cpp factions.cpp doors.cpp prisons.cpp ranged.cpp buildings.cpp)
+    steam_link.cpp host_console.cpp factions.cpp doors.cpp prisons.cpp ranged.cpp buildings.cpp ground.cpp)
 target_link_libraries(KenshiCoop PRIVATE kc_common minhook imgui d3d11 dxgi bcrypt dinput8 dxguid ws2_32 comctl32)
 target_compile_options(KenshiCoop PRIVATE /W4 /WX /permissive- /Zi)
 target_link_options(KenshiCoop PRIVATE /DEBUG /OPT:REF /OPT:ICF)
