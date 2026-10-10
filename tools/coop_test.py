@@ -2605,26 +2605,242 @@ def exp_lootclick(host, cli):
     log("host pid", host, "client pid", cli, "npc", text.split()[1] if ok else "?")
 
 
-def exp_soak(host, cli, minutes=15):
-    """Long run at x3 speed: periodic whole-world comparisons, crash detection."""
-    time.sleep(8)
-    log("give", cmd(host, "give 2 0"))
-    log("speed", cmd(host, "speed 3"))
-    worst = {}
-    for i in range(minutes):
-        time.sleep(60)
-        if i % 3 == 2:   # keep the squad on the move: the world streams in and out around it
-            log("host move", cmd(host, f"moverel 1 {200 if i % 2 else -200} {150 if i % 4 < 2 else -150}"))
-            log("client move", cmd(cli, f"moverel 0 {150 if i % 2 else -150} {-100 if i % 4 < 2 else 100}"))
-        r = frozen_check(host, cli, f"soak {i + 1}", radius=10000000)
-        cmd(host, "speed 3")
-        summary = {k: r.get(k) for k in ("host_chars", "client_chars", "missing_on_client", "extra_on_client", "vital_flag_mismatch",
-                                         "combat_mismatch", "inventory_mismatch", "weather_mismatch", "hours_diff", "paused", "speed")}
-        log(f"soak {i + 1}:", summary)
-        for k, v in summary.items():
-            if isinstance(v, (int, float)) and k not in ("host_chars", "client_chars"):
-                worst[k] = max(worst.get(k, 0), v)
-    log("soak worst:", worst)
+def proc_memory_mb(pid):
+    """Resident memory of a process in MB (psutil when installed, else tasklist's 'Mem Usage')."""
+    try:
+        import psutil
+        return round(psutil.Process(pid).memory_info().rss / 1048576, 1)
+    except ImportError:
+        pass
+    except Exception:
+        return None
+    out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        parts = [p.strip('"') for p in line.split('","')]
+        if len(parts) >= 5 and parts[1] == str(pid):
+            digits = re.sub(r"[^0-9]", "", parts[4])
+            return round(int(digits) / 1024, 1) if digits else None
+    return None
+
+
+def exp_soak(host, cli, minutes=20, phase_seconds=90, kinds=("Feu", "Tente", "Coffre", "Lit", "Mur")):
+    """Stability soak: speed cycled 1 -> 2 -> 3 -> 2 -> 1 (one phase each, repeated), a burst of rapid
+    speed / pause changes at the start of every phase, the client asking for speed changes itself (the
+    host's clock must win, nothing may crash), and activity on both sides during every phase: squads
+    moving, fights with spawned NPCs, knock out and loot, a trade window opened and closed, buildings
+    placed, the client's character teleported far away and back once. Every 30 s: both games alive,
+    frozen host/client comparison (the suite's tolerances), command round trip and memory of both."""
+    import random
+    rnd = random.Random(1234)
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    own_c = own_index(cli)
+    hidx = 0 if own != 0 else 1
+    sid = find_building(host, kinds)
+    log(f"soak: {minutes} min, phases of {phase_seconds} s; client's character index host {own} client {own_c}, "
+        f"host mover {hidx}, building {sid}")
+    speeds = (1, 2, 3, 2, 1)
+    t0 = time.time()
+    deadline = t0 + minutes * 60
+    samples = []          # one dict per 30 s health sample
+    client_speed = []     # (asked, host speed before, host speed after, client speed after)
+    tp_state = {"done": False, "back_at": None, "home": None}
+    npc = {"key": None}
+    cur_speed = {"v": 1}
+
+    def vec(text):
+        return tuple(map(float, text.split()[1].split(",")))
+
+    def speed_of(pid):
+        t = cmd(pid, "paused")[1].split()   # ok <paused> <speed>
+        return (t[1] == "1", float(t[2])) if len(t) >= 3 else (None, -1.0)
+
+    def set_speed(v):
+        cur_speed["v"] = v
+        return cmd(host, f"speed {v}")
+
+    def rtt(pid):
+        a = time.time()
+        cmd(pid, "echo")
+        return round((time.time() - a) * 1000)
+
+    def health(label):
+        if not alive(host) or not alive(cli):
+            raise RuntimeError(f"instance died (crash?) before sample {label}: host alive {alive(host)} client alive {alive(cli)}")
+        s = {"label": label, "t": round(time.time() - t0), "speed": cur_speed["v"],
+             "rtt": (rtt(host), rtt(cli)), "mem": (proc_memory_mb(host), proc_memory_mb(cli)),
+             "client_state": status(cli).get("state")}
+        cmd(host, "pause 1")
+        time.sleep(2.5)
+        h = dump(host, "h_soak_" + label)
+        rep = compare(h, dump(cli, "c_soak_" + label), "soak " + label, pos_tol=0.1)
+        cmd(host, "pause 0")
+        set_speed(cur_speed["v"])
+        # as the suite: a body lying on the ground is a ragdoll each game simulates itself
+        down = {k for k, v in h["squad"].items() if int(v.get("vflags", 0) or 0) & 3}
+        s["squad_bad"] = [t for t in rep["squad"] if not isinstance(t[1], (int, float)) or t[1] > (8.0 if t[0] in down else 0.1)]
+        for k in ("vital_flag_mismatch", "inventory_mismatch", "missing_on_client", "extra_on_client", "pos_err_max", "hours_diff",
+                  "host_chars", "client_chars", "missing_sample", "inventory_mismatch_sample"):
+            s[k] = rep.get(k)
+        log(f"[{s['t']}s] sample {label} speed x{s['speed']}: rtt ms host/client {s['rtt']} mem MB host/client {s['mem']} "
+            f"client {s['client_state']} | chars {s['host_chars']}/{s['client_chars']} missing {s['missing_on_client']} "
+            f"vitals {s['vital_flag_mismatch']} inv {s['inventory_mismatch']} squad_bad {s['squad_bad']} hours_diff {s['hours_diff']}")
+        samples.append(s)
+
+    def burst(seconds=20):
+        """Rapid changes every 1-2 s: speeds 1/2/3 and pause toggles from the host, speed keys on the client."""
+        end = time.time() + seconds
+        n = 0
+        while time.time() < end:
+            r = rnd.random()
+            if r < 0.2:
+                cmd(host, "pause 1")
+                time.sleep(rnd.uniform(0.5, 1.0))
+                cmd(host, "pause 0")
+            elif r < 0.3:
+                cmd(cli, f"speed {rnd.choice((1, 2, 3))}")
+            else:
+                set_speed(rnd.choice((1, 2, 3)))
+            n += 1
+            time.sleep(rnd.uniform(1.0, 2.0))
+        log(f"rapid burst: {n} changes in {seconds} s")
+
+    def client_asks_speed():
+        hs = cur_speed["v"]
+        ask = rnd.choice([v for v in (1, 2, 3) if v != hs])
+        log(f"client asks for speed {ask} (host at {hs}):", cmd(cli, f"speed {ask}"))
+        time.sleep(2)
+        hp, hv = speed_of(host)
+        cp, cv = speed_of(cli)
+        log(f"  after 2 s: host paused={hp} speed={hv} | client paused={cp} speed={cv}")
+        client_speed.append((ask, hs, hv, cv))
+        log("client asks for a pause:", cmd(cli, "pause 1"))
+        time.sleep(2)
+        hp2, hv2 = speed_of(host)
+        cp2, cv2 = speed_of(cli)
+        log(f"  after 2 s: host paused={hp2} speed={hv2} | client paused={cp2} speed={cv2}")
+        # paused on either side counts as speed 0: a pause the host did not ask for is a failure
+        client_speed.append(("pause", hs, 0.0 if hp2 else hv2, 0.0 if cp2 else cv2))
+
+    def act_moves():
+        log("host squad moves:", cmd(host, f"moverel {hidx} {rnd.choice((-1, 1)) * 200} {rnd.choice((-1, 1)) * 150}"))
+        log("client's character moves (client order):",
+            cmd(cli, f"moverel {own_c} {rnd.choice((-1, 1)) * 150} {rnd.choice((-1, 1)) * 100}"))
+
+    def act_fight():
+        ok, t = cmd(host, f"spawnnpc 40 20 {hidx}")
+        log("spawn npc:", t)
+        npc["key"] = t.split()[1] if ok else None
+        if npc["key"]:
+            log("host fights:", cmd(host, f"fight {hidx}"), "client's character fights:", cmd(host, f"fight {own}"))
+
+    def act_ko_loot():
+        if not npc["key"]:
+            return
+        log("ko:", cmd(host, "ko"))
+        time.sleep(3)
+        log("client loots the body:", cmd(cli, f"loot {npc['key']} {own_c}"))
+        npc["key"] = None
+
+    def act_trade():
+        log("trade window for the client's character:", cmd(host, f"tradeopen {own} any"))
+        time.sleep(3)
+        log("client trade state:", cmd(cli, "tradestate")[1][:120])
+        log("close windows client/host:", cmd(cli, "closewindows"), cmd(host, "closewindows"))
+
+    def act_build():
+        if not sid:
+            return
+        log("client places", sid, cmd(cli, f"buildplace {sid} {rnd.randint(-80, 80)} {rnd.randint(40, 90)} 0 {own_c}"))
+        log("host places", sid, cmd(host, f"buildplace {sid} {rnd.randint(-80, 80)} {rnd.randint(-90, -40)} 0 {hidx}"))
+
+    def act_teleport():
+        now = time.time()
+        if not tp_state["done"] and now - t0 > minutes * 60 * 0.4:
+            x, y, z = vec(cmd(host, f"where {own}")[1])
+            tp_state.update(done=True, home=(x, y, z), back_at=now + 60)
+            log("client's character teleported far away:", cmd(host, f"teleport {own} {x + 30000} {y + 300} {z + 30000}"))
+            time.sleep(3)
+            cmd(cli, f"camto {own_c}")
+        elif tp_state["back_at"] and now >= tp_state["back_at"]:
+            tp_state["back_at"] = None
+            log("client's character brought back:", cmd(host, "tpplayer 2"))
+            time.sleep(5)
+            cmd(cli, f"camto {own_c}")
+            back = vec(cmd(host, f"where {own}")[1])
+            tp_state["back_dist"] = dist(back[::2], tp_state["home"][::2])
+
+    actions = [act_moves, act_fight, act_trade, act_ko_loot, act_build, client_asks_speed, act_moves, act_teleport]
+    crash = None
+    last_sample = time.time()
+    phase = 0
+    try:
+        while time.time() < deadline:
+            sp = speeds[phase % len(speeds)]
+            log(f"=== phase {phase + 1}: speed x{sp}")
+            burst()
+            log("phase speed", set_speed(sp))
+            phase_end = min(deadline, time.time() + phase_seconds)
+            ai = 0
+            while time.time() < phase_end:
+                if time.time() - last_sample >= 30:
+                    health(f"p{phase + 1}_{len(samples) + 1}")
+                    last_sample = time.time()
+                    continue
+                actions[(ai + phase) % len(actions)]()
+                ai += 1
+                if ai == 3:   # pause / unpause once per phase, mid-activity
+                    log("pause:", cmd(host, "pause 1"))
+                    time.sleep(rnd.uniform(1, 3))
+                    log("unpause:", cmd(host, "pause 0"))
+                    set_speed(sp)
+                time.sleep(rnd.uniform(4, 8))
+            phase += 1
+        if tp_state["back_at"]:   # the run ended while the client's character was far away
+            tp_state["back_at"] = time.time()
+            act_teleport()
+        set_speed(1)
+        health("end")
+    except RuntimeError as e:
+        crash = str(e)
+        log("SOAK STOPPED:", crash)
+    check("stabilite : aucun plantage de l'hote ni du client", crash is None and alive(host) and alive(cli),
+          crash or f"{len(samples)} releves, {phase} phases")
+    check("stabilite : le client reste connecte", samples and all(s["client_state"] == "connected" for s in samples),
+          [(s["label"], s["client_state"]) for s in samples if s["client_state"] != "connected"][:5])
+
+    def bad(key):
+        return [(s["label"], s[key]) for s in samples if s[key]]
+    check("stabilite : escouade identique en pause (<= 0.1, 8 pour un corps au sol)", not bad("squad_bad"), bad("squad_bad")[:5])
+    check("stabilite : aucun etat vital different", not bad("vital_flag_mismatch"), bad("vital_flag_mismatch")[:5])
+    check("stabilite : aucun inventaire different", not bad("inventory_mismatch"),
+          [(s["label"], s["inventory_mismatch_sample"]) for s in samples if s["inventory_mismatch"]][:5])
+    check("stabilite : personne ne manque chez le client", not bad("missing_on_client"),
+          [(s["label"], s["missing_sample"]) for s in samples if s["missing_on_client"]][:5])
+    check("stabilite : meme heure de jeu (< 0.01 h)", all((s["hours_diff"] or 0) < 0.01 for s in samples),
+          [(s["label"], s["hours_diff"]) for s in samples if (s["hours_diff"] or 0) >= 0.01][:5])
+    worst_rtt = max([max(s["rtt"]) for s in samples] or [0])
+    check("stabilite : aller-retour d'une commande < 1 s", worst_rtt < 1000, f"pire {worst_rtt} ms")
+    # the client's speed / pause requests: the host's clock is unchanged and the client follows it
+    wrong = [c for c in client_speed if abs(c[2] - c[1]) > 0.01 or abs(c[3] - c[2]) > 0.01]
+    check("stabilite : demande de vitesse / pause du client ignoree (horloge de l'hote)", client_speed and not wrong,
+          f"{len(client_speed)} demandes, ecarts {wrong[:4]}")
+    if tp_state["done"]:
+        check("stabilite : TP loin puis retour du perso du client", tp_state.get("back_dist", 1e9) < 2000, tp_state.get("back_dist"))
+    # memory: baseline = first sample after 2 min, fail if it grows by more than 40 % afterwards
+    log("memory (MB) host/client:", [(s["label"], s["mem"]) for s in samples])
+    base = next((s for s in samples if s["t"] >= 120 and None not in s["mem"]), None)
+    if base:
+        grow = [(s["label"], round(s["mem"][0] / base["mem"][0], 2), round(s["mem"][1] / base["mem"][1], 2))
+                for s in samples if s["t"] > base["t"] and None not in s["mem"]]
+        over = [g for g in grow if g[1] > 1.4 or g[2] > 1.4]
+        check("stabilite : memoire stable (< +40 % apres 2 min)", not over,
+              f"base {base['mem']} MB, ratios max {max([g[1] for g in grow] or [1])}/{max([g[2] for g in grow] or [1])} {over[:3]}")
+    else:
+        check("stabilite : memoire stable (< +40 % apres 2 min)", False, "pas de releve memoire apres 2 min")
+    summary()
 
 
 def exp_walk(host, cli):
@@ -2821,9 +3037,11 @@ def main():
     lc = sub.add_parser("lootclick")
     lc.add_argument("--save", default="kctest_base")
     lc.add_argument("--keep", action="store_true")
-    sk = sub.add_parser("soak")
+    sk = sub.add_parser("soak", help="stability: speeds 1-2-3-2-1, rapid speed/pause changes, client speed requests, "
+                        "activity on both sides; every 30 s alive, frozen comparison, round trip, memory")
     sk.add_argument("--save", default="kctest_base")
-    sk.add_argument("--minutes", type=int, default=15)
+    sk.add_argument("--minutes", type=int, default=20, help="duration in minutes (default 20)")
+    sk.add_argument("--keep", action="store_true")
     wk = sub.add_parser("walk")
     wk.add_argument("--save", default="kctest_base")
     t = sub.add_parser("trace")
