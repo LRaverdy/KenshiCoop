@@ -29,6 +29,9 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `TestRejections` | version, exe, mods, nom, partie pleine, exclusion |
 | `TestWorldAuthority` | le client n'exécute rien lui-même, ses ordres passent par l'hôte |
 | `TestSpawnReplication` | personnages créés chez l'hôte puis recréés chez le client |
+| `TestStreamingTools` | (0.3.1) délais de réessai, limites de journal, délais des doublures perdues, décisions de resync de zone |
+| `TestPerPlayerStreaming` | (0.3.1) deux clients loin l'un de l'autre : chacun ne reçoit que les persos autour des siens ; foule créée 2 par image ; doublure perdue sans cesse ; resync automatique de la zone d'un client (`KC_ONLY_STREAMING=1` : ces tests seuls) |
+| `TestStandInArea` | (0.3.1) hôte qui envoie tout : le client ne recrée ni ne compte manquant ce qui est loin de ses persos |
 | `TestInventories` | inventaires identiques, fouille rejouée par l'hôte |
 | `TestGroundDrops` | objets lâchés au sol par un client : depuis son perso (l'hôte le lâche), depuis un coffre ouvert (lâché par son perso près du coffre, nommé dans `InvOp::toNetId`), depuis le perso de l'hôte (refusé) ; dépôts forgés (perso de l'hôte, aucun perso, son perso loin du coffre) refusés par le contrôle d'autorité |
 | `TestFactions` | relations de la faction du joueur et primes de l'hôte identiques chez le client, changements suivis, dérive du client corrigée |
@@ -112,6 +115,7 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `jitter` (`kctest_town`) | les PNJ immobiles ne tremblent pas chez le client, quelle que soit la vitesse |
 | `kosquad` | des membres de l'escouade K.-O. chez l'hôte tombent et restent au sol chez le client, puis se relèvent ensemble |
 | `far` | le personnage du client à environ 5 km de l'escouade de l'hôte : l'hôte simule-t-il bien sa zone, et le client voit-il la même chose ? |
+| `camjump` | (0.3.1, plantages de rob) perso du client à 5 km, escouade de l'hôte dans la foule (`kctest_town`) à vitesse 3 ; la caméra du client saute 20 fois entre les deux : client vivant, toujours connecté, moins de 200 « is gone here » |
 | `squads` | nouvelles escouades et déplacements entre escouades, depuis l'hôte et depuis le client |
 | `squadui` | fenêtre Escouade et réglages d'IA : le client renomme son escouade, renomme celle de l'hôte (refusé), crée une escouade, y met son perso, le fait chef, tente de déplacer le perso de l'hôte (refusé), glisse son escouade en tête ; renommages et déplacements **simultanés** de l'hôte et du client (même résultat partout) ; nom de son perso (passe), de celui de l'hôte (refusé) ; fiche identique ; passif (valeur, pas bascule), style, tenir, allure ; réglage d'une recrue à personne et réglages simultanés hôte + client ; tâches ajoutées des deux côtés identiques. Vérifications « escouade : … » et « ia : … » |
 | `stuck` | la copie d'un PNJ poussée dans un mur ou sous le sol chez le client revient où l'hôte l'a |

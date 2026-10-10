@@ -24,7 +24,9 @@ constexpr PeerId kNoPeer = 0;
 
 struct NetStats {
     uint32_t rttMs = 0;
-    uint64_t bytesIn = 0, bytesOut = 0;
+    uint64_t bytesIn = 0, bytesOut = 0;   // ENet's own counters (its bandwidth throttle resets them every second)
+    uint64_t queued = 0;                  // bytes we handed to this peer since it connected (never reset)
+    uint32_t lossPermille = 0;            // packets lost, as ENet measures it (0..1000)
 };
 
 class Net {
@@ -82,6 +84,7 @@ private:
     PeerId serverPeer_ = kNoPeer;
     PeerId nextId_ = 1;
     std::unordered_map<PeerId, double> quietUntil_;   // peers with a longer timeout, until then (steady seconds)
+    std::unordered_map<PeerId, uint64_t> queued_;     // bytes sent to each peer (NetStats::queued)
 };
 
 } // namespace kc

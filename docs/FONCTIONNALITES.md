@@ -984,8 +984,15 @@ la fenêtre du client.
 - Test : expérience `farnpc` (pire écart des marcheurs lointains, objectif < 3 unités).
 
 ### Joueurs éloignés, précision des PNJ lointains 🟡
-- Avec `interest_radius=0` (défaut), l'hôte réplique **chaque** personnage actif de son jeu, où
+- Avec `interest_radius=0` (défaut), l'hôte suit **chaque** personnage actif de son jeu, où
   qu'il soit. Un joueur à l'autre bout de la carte garde donc sa zone simulée par l'hôte.
+- **Diffusion par joueur (0.3.1, à vérifier en jeu)** : chaque client ne reçoit l'état que des PNJ
+  autour de **ses** persos (`stream_radius`, 3000), plus la foule autour de l'hôte ; il ne recrée
+  que ceux-là, 2 par image au plus ; une doublure que son jeu décharge sans cesse revient de plus
+  en plus tard ; une zone où il lui manque des PNJ 15 s de suite lui est renvoyée toute seule
+  (sans pause ni clic de l'hôte) ; les chiffres de dégâts de ses combats arrivent même quand la
+  caméra de l'hôte n'est pas sur lui. Limite : la caméra d'un client posée loin de tous ses persos
+  ne fait pas venir la foule de cet endroit.
 - L'expérience `far` du harnais compare un combat à environ 5 km de l'escouade de l'hôte avec le
   même combat à côté.
 - **Limite connue** : le jeu ne déplace les PNJ lointains que quelques fois par seconde. Ceux qui

@@ -947,6 +947,27 @@ void* hk_createLabel(void* gui, const void* text, const float* colour, int size,
     }
     return label;
 }
+// The host's game makes a damage number only for a character its camera sees (Character +0x1A9,
+// kenshi::CH_inView): a client player fighting away from the host's camera saw none until the host
+// looked at them (10 October session). For a character near a client player's own characters, the
+// flag is set for the duration of the call (0.3.1); the number appears off the host's screen and goes
+// to that player through hk_createLabel. Nothing else in addWound reads that flag (disassembly).
+using AddWoundFn = uint64_t (*)(void* medical, uint64_t a2, uint64_t a3, void* a4, void* a5, void* a6, void* a7, void* a8);
+AddWoundFn o_addWound = nullptr;
+uint64_t hk_addWound(void* medical, uint64_t a2, uint64_t a3, void* a4, void* a5, void* a6, void* a7, void* a8) {
+    uint8_t* flag = nullptr;
+    if (!KenshiWorld::ClientActive() && medical) {
+        auto v = KenshiWorld::View();
+        if (v->active && v->remoteNear && !v->remoteNear->empty())
+            if (kenshi::Character* c = kenshi::MedicalCharacter(medical); c && v->remoteNear->count(c)) {
+                uint8_t* f = reinterpret_cast<uint8_t*>(c) + kenshi::CH_inView;
+                if (*f == 0) { *f = 1; flag = f; }
+            }
+    }
+    const uint64_t r = o_addWound(medical, a2, a3, a4, a5, a6, a7, a8);
+    if (flag && *flag == 1) *flag = 0;   // as it was (the game sets it again on its next frame anyway)
+    return r;
+}
 void hk_labelTrack(void* label, const void* hand, const float* offset) {
     o_labelTrack(label, hand, offset);
     if (label && label == t_floaterLabel) {
@@ -1024,7 +1045,7 @@ bool AnimHookBlocked(void* ac, kc::AnimEvent* report) {
     if (KenshiWorld::ClientActive()) {
         const bool blocked = !g_animReplay && KenshiWorld::View()->replicated.count(c) > 0;
         static std::atomic<int> logged{0};
-        if (!g_animReplay && !blocked && report && logged.fetch_add(1) < 40)
+        if (!g_animReplay && !blocked && report && logged.fetch_add(1) < 10)
             Log("anim not blocked here: kind=%d name='%s' (character not driven by the host)", int(report->kind), report->name.c_str());
         return blocked;
     }
@@ -1302,6 +1323,10 @@ WorldDestroyFn o_worldDestroy = nullptr;
 bool hk_worldDestroy(void* world, void* obj, bool justUnloaded, const char* info) {
     if (!justUnloaded && obj)
         if (KenshiWorld* w = TheWorld()) w->NoteObjectDestroyed(obj);
+    // why a character left our game (a client's stand-in found gone says it: its zone unloaded here?),
+    // and its address is dropped from everything of ours that holds it (KenshiWorld::PurgeDestroyed)
+    if (obj && KenshiWorld::View()->active && kenshi::IsCharacter(obj))
+        if (KenshiWorld* w = TheWorld()) w->NoteCharacterDestroyed(obj, justUnloaded, info);
     return o_worldDestroy(world, obj, justUnloaded, info);
 }
 
@@ -1624,6 +1649,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnDropItemAnimal, reinterpret_cast<void*>(&hk_dropItemAnimal), reinterpret_cast<void**>(&o_dropItemAnimal)},
         {kenshi::FnInventoryDropItem, reinterpret_cast<void*>(&hk_invDrop), reinterpret_cast<void**>(&o_invDrop)},
         {kenshi::FnCreateScreenLabel, reinterpret_cast<void*>(&hk_createLabel), reinterpret_cast<void**>(&o_createLabel)},
+        {kenshi::FnMedAddWound, reinterpret_cast<void*>(&hk_addWound), reinterpret_cast<void**>(&o_addWound)},
         {kenshi::FnLabelSetTracking, reinterpret_cast<void*>(&hk_labelTrack), reinterpret_cast<void**>(&o_labelTrack)},
         {kenshi::FnLabelSetColor, reinterpret_cast<void*>(&hk_labelColor), reinterpret_cast<void**>(&o_labelColor)},
         {kenshi::FnRagdollMode, reinterpret_cast<void*>(&hk_ragdollMode), reinterpret_cast<void**>(&o_ragdollMode)},

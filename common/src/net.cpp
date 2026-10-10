@@ -146,6 +146,7 @@ void Net::Close() {
     for (auto& e : deferred_) if (e.packet) enet_packet_destroy(e.packet);
     deferred_.clear();
     quietUntil_.clear();
+    queued_.clear();
     if (!host_) return;
     for (size_t i = 0; i < host_->peerCount; ++i) {
         ENetPeer* p = &host_->peers[i];
@@ -220,6 +221,7 @@ bool Net::Send(PeerId peer, uint8_t channel, const void* data, size_t size, bool
         enet_packet_destroy(pkt);
         return false;
     }
+    queued_[peer] += size;
     return true;
 }
 
@@ -232,7 +234,7 @@ void Net::Broadcast(uint8_t channel, const void* data, size_t size, bool reliabl
     for (size_t i = 0; i < host_->peerCount; ++i) {
         ENetPeer* p = &host_->peers[i];
         if (p->state != ENET_PEER_STATE_CONNECTED || IdOf(p) == kNoPeer || IdOf(p) == except) continue;
-        enet_peer_send(p, channel, pkt);
+        if (enet_peer_send(p, channel, pkt) == 0) queued_[IdOf(p)] += size;
     }
     if (pkt->referenceCount == 0) enet_packet_destroy(pkt);
 }
@@ -263,7 +265,9 @@ NetStats Net::stats(PeerId peer) const {
         s.rttMs = p->roundTripTime;
         s.bytesIn = p->incomingDataTotal;
         s.bytesOut = p->outgoingDataTotal;
+        s.lossPermille = uint32_t(uint64_t(p->packetLoss) * 1000 / ENET_PEER_PACKET_LOSS_SCALE);
     }
+    if (auto q = queued_.find(peer); q != queued_.end()) s.queued = q->second;
     return s;
 }
 

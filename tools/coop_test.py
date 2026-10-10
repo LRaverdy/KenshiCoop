@@ -2743,6 +2743,42 @@ def exp_far(host, cli):
     measure("about 5 km away", own)
 
 
+def exp_camjump(host, cli, rounds=20):
+    """0.3.1, rob's crashes (22:32 and 00:28): his client's camera jumped away from a crowd of
+    stand-ins, his game unloaded their zone (a whole local squad "is gone here" at once) and crashed a
+    few seconds later. The client's character goes far away (dry land, about 5 km), the host's squad
+    stays in the town crowd at speed 3, and the client's camera jumps between the two again and again.
+    Checks: the client is still alive, never loses its session, and each stand-in it loses waits
+    longer before it is made again (no 3 s loop)."""
+    time.sleep(6)
+    own, own_h = own_index(cli), own_index(host)
+    vec = lambda text: tuple(map(float, text.split()[1].split(",")))
+    x, y, z = vec(cmd(host, f"where {own_h}")[1])
+    log("teleport the client's character far away (dry land):",
+        teleport_dry(host, own_h, (x, y, z), [(40000, 30000), (40000, 34000), (44000, 30000), (36000, 30000), (40000, 26000)]))
+    time.sleep(8)
+    log("speed", cmd(host, "speed 3"))
+    alive_all = True
+    for r in range(rounds):
+        log(f"round {r + 1}/{rounds}: client camera on the host's squad (crowd)", cmd(cli, "camto 0"))
+        time.sleep(4)
+        log("  client camera back on its own character (far)", cmd(cli, f"camto {own}"))
+        time.sleep(4)
+        if not alive(cli) or not status(cli):
+            alive_all = False
+            log("  the client is gone")
+            break
+    cmd(host, "speed 1")
+    clog = open(os.path.join(KENSHI, f"KenshiCoop-{cli}.log"), encoding="utf-8", errors="replace").read()
+    gone = clog.count("is gone here")
+    unloaded = clog.count("unloaded with its zone")
+    vanished = [l for l in clog.splitlines() if "stand-in(s) vanished here lately" in l]
+    log(f"client log: {gone} 'is gone here' lines ({unloaded} said unloaded with its zone), {len(vanished)} vanish summaries")
+    check("camjump: the client survives 20 camera jumps between a crowd and its far character", alive_all and alive(cli))
+    check("camjump: the client still in the session", bool(status(cli)), str(status(cli))[:120])
+    check("camjump: no stand-in loop (fewer than 200 'is gone here' lines)", gone < 200, f"{gone}")
+
+
 def exp_squads(host, cli):
     """New squads and moves between squads, from the host and from the client: both see the same squads."""
     time.sleep(6)
@@ -5674,6 +5710,9 @@ def main():
     sq = sub.add_parser("squads")
     sq.add_argument("--save", default="kctest_base")
     sq.add_argument("--keep", action="store_true")
+    cj = sub.add_parser("camjump", help="0.3.1: client camera jumping between a crowd and its far character (rob's crashes)")
+    cj.add_argument("--save", default="kctest_town")
+    cj.add_argument("--keep", action="store_true")
     fr = sub.add_parser("far")
     fr.add_argument("--save", default="kctest_base")
     fr.add_argument("--keep", action="store_true")
@@ -5800,6 +5839,8 @@ def main():
             exp_squadui(host, cli)
         elif a.what == "far":
             exp_far(host, cli)
+        elif a.what == "camjump":
+            exp_camjump(host, cli)
         elif a.what == "kosquad":
             exp_kosquad(host, cli)
         elif a.what == "facing":

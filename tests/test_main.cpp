@@ -21,6 +21,7 @@
 #include "kc/call_scopes.h"
 #include "kc/protocol.h"
 #include "kc/session.h"
+#include "kc/streaming.h"
 #include "kc/world_identity.h"
 #include "../plugin/map_view.h"
 
@@ -89,6 +90,11 @@ struct FakeWorld : IWorld {
     bool corruptImport = false;
     int imports = 0;
     int spawns = 0, despawns = 0;
+    bool refuseSpawn = false;                 // client: the factory refuses everything (0.3.1 tests)
+    std::vector<Handle> remoteInterest;       // host: SetRemoteInterest's last list
+    int resyncs = 0;                          // client: ResyncCharacter calls
+    void SetRemoteInterest(const std::vector<Handle>& handles) override { remoteInterest = handles; }
+    void ResyncCharacter(const Handle&) override { ++resyncs; }
 
     static Handle H(uint32_t serial) { Handle h; h.type = 3; h.index = serial; h.serial = serial; return h; }
 
@@ -191,7 +197,7 @@ struct FakeWorld : IWorld {
         return true;
     }
     bool Spawn(const Handle& h, const SpawnInfo& info, const EntityState& at) override {
-        if (chars.count(h.serial) || info.templateSid != "tmpl-" + std::to_string(h.serial)) return false;
+        if (refuseSpawn || chars.count(h.serial) || info.templateSid != "tmpl-" + std::to_string(h.serial)) return false;
         FakeChar c;
         c.squad = false;
         c.pos = at.pos;
@@ -4437,7 +4443,198 @@ static void TestClockSync() {
     std::puts("clock sync ok");
 }
 
+// ---------------------------------------------------------------- 0.3.1: per-player streaming
+static void TestStreamingTools() {
+    std::printf("streaming: retry backoff, log limits, stand-in loss delays, automatic zone resync decisions\n");
+    Backoff<std::string> b(30.0, 600.0);
+    CHECK(b.Allowed("Cat", 0.0));
+    CHECK(b.Fail("Cat", 0.0) == 30.0);
+    CHECK(!b.Allowed("Cat", 29.0) && b.Allowed("Cat", 30.0));
+    CHECK(b.Fail("Cat", 30.0) == 60.0);
+    CHECK(b.Fail("Cat", 90.0) == 120.0);
+    for (int i = 0; i < 10; ++i) b.Fail("Cat", 1000.0);
+    CHECK(b.next("Cat") == 1600.0);          // never more than the ceiling
+    CHECK(b.Allowed("Ruka", 0.0));           // per kind
+    b.Succeed("Cat");
+    CHECK(b.Allowed("Cat", 1000.0) && b.failures("Cat") == 0);
+
+    LogLimiter lim(3, 10.0);
+    int written = 0;
+    for (int i = 0; i < 10; ++i) written += lim.Allow(1.0) ? 1 : 0;
+    CHECK(written == 3 && lim.held() == 7);
+    uint32_t held = 0;
+    CHECK(lim.Allow(11.5, &held) && held == 7);   // the next window says what was held back
+    CHECK(lim.held() == 0);
+
+    CHECK(StandInLossDelay(0) == 0.0 && StandInLossDelay(1) == 2.0 && StandInLossDelay(2) == 10.0);
+    CHECK(StandInLossDelay(3) == 30.0 && StandInLossDelay(4) == 60.0 && StandInLossDelay(9) == 120.0);
+
+    ZoneHealth z;
+    std::string why;
+    double t = 0;
+    CHECK(z.Report(2, 41, 0, t += 5, why) == ZoneHealth::Action::None);
+    CHECK(z.Report(2, 41, 0, t += 5, why) == ZoneHealth::Action::None);
+    CHECK(z.Report(2, 41, 0, t += 5, why) == ZoneHealth::Action::Resync);   // 15 s of missing NPCs
+    CHECK(why.find("41 NPCs missing") != std::string::npos);
+    CHECK(z.Report(3, 0, 0, t, why) == ZoneHealth::Action::None);           // another player: untouched
+    for (int i = 0; i < 6; ++i) CHECK(z.Report(2, 41, 0, t += 5, why) == ZoneHealth::Action::None);   // not again within a minute
+    ZoneHealth::Action a = ZoneHealth::Action::None;
+    for (int i = 0; i < 6 && a == ZoneHealth::Action::None; ++i) a = z.Report(2, 41, 0, t += 5, why);
+    CHECK(a == ZoneHealth::Action::Resync && z.tries(2) == 2);
+    CHECK(z.Report(2, 1, 0, t += 5, why) == ZoneHealth::Action::None && z.tries(2) == 0);   // a good report: all forgotten
+    t += 100;   // (a minute after the last zone resync)
+    CHECK(z.Report(2, 0, 4, t += 5, why) == ZoneHealth::Action::None);
+    CHECK(z.Report(2, 0, 4, t += 5, why) == ZoneHealth::Action::None);
+    CHECK(z.Report(2, 0, 4, t += 5, why) == ZoneHealth::Action::Resync && why.find("4 characters off") != std::string::npos);
+    // tried maxTries times without a good report: said once, then tried again only every 5 min
+    ZoneHealthConfig quick;
+    quick.minGap = 0;
+    ZoneHealth q(quick);
+    int resyncs = 0, still = 0;
+    for (int i = 0; i < 100; ++i) {
+        const ZoneHealth::Action r = q.Report(4, 20, 0, 1000.0 + i * 5.0, why);
+        resyncs += r == ZoneHealth::Action::Resync;
+        still += r == ZoneHealth::Action::StillDiffers;
+    }
+    CHECK(still == 1);
+    CHECK(resyncs == 3 + 1);   // three quick ones, then one more 5 min after the last (in 500 s)
+}
+
+// The host sends each client the characters around that client's own characters, never the crowd
+// around the host or another player; a client recreates a few per frame, near its characters only;
+// a client that keeps missing NPCs gets its zone again by itself.
+static void TestPerPlayerStreaming() {
+    std::printf("streaming: each client is sent the characters around its own characters (not the host's crowd)\n");
+    FakeWorld hw, aw, bw;
+    SetupHost(hw);
+    AtMenu(aw);
+    AtMenu(bw);
+    SessionConfig hc; hc.name = "Host"; hc.port = ++g_port;   // a character per player: the default
+    Session host(hw, hc, Now, Quiet("host"));
+    std::string err;
+    CHECK(host.Host(&err));
+    SessionConfig ac; ac.name = "First"; ac.port = hc.port;
+    SessionConfig bc; bc.name = "Second"; bc.port = hc.port;
+    Session cliA(aw, ac, Now, Quiet("cliA"));
+    std::vector<std::string> bLog;
+    Session cliB(bw, bc, Now, [&](const std::string& s) { bLog.push_back(s); });
+    std::vector<std::pair<Session*, FakeWorld*>> all = {{&host, &hw}, {&cliA, &aw}, {&cliB, &bw}};
+    aw.editorSupported = bw.editorSupported = true;   // each player confirms their character at once
+    auto confirm = [&] { aw.editorOpen = bw.editorOpen = false; };
+    CHECK(cliA.Join("127.0.0.1", hc.port, &err));
+    Run(all, 10.0, [&] { confirm(); return cliA.state() == SessionState::Connected && aw.controllable.size() == 1; });
+    CHECK(cliB.Join("127.0.0.1", hc.port, &err));
+    Run(all, 15.0, [&] { confirm(); return cliB.state() == SessionState::Connected && bw.controllable.size() == 1 && hw.named.count("Second"); });
+    CHECK(cliB.state() == SessionState::Connected);
+    const uint8_t idA = cliA.localId(), idB = cliB.localId();
+    const uint32_t first = hw.named["First"], second = hw.named["Second"];
+    // the second player walks 2 km away; one of the host's characters is 2 km the other way
+    hw.chars[second].pos = hw.chars[second].dest = {20000, 0, 0};
+    hw.chars[3].pos = hw.chars[3].dest = {-20000, 0, 0};
+    Run(all, 2.0);
+    // NPCs appear after the joins: next to the first player and the host, next to the second player,
+    // next to the host's far character only
+    auto npc = [&](uint32_t s, Vec3 p) { FakeChar c; c.squad = false; c.pos = c.dest = p; c.vit.blood = 50; hw.chars[s] = c; };
+    npc(70, {150, 0, 30});
+    npc(71, {20100, 0, 0});
+    npc(72, {-20050, 0, 0});
+    Run(all, 8.0, [&] { return aw.chars.count(70) && bw.chars.count(71); });
+    CHECK(host.streamsTo(FakeWorld::H(70), idA) && !host.streamsTo(FakeWorld::H(70), idB));
+    CHECK(host.streamsTo(FakeWorld::H(71), idB) && !host.streamsTo(FakeWorld::H(71), idA));
+    CHECK(!host.streamsTo(FakeWorld::H(72), idA) && !host.streamsTo(FakeWorld::H(72), idB));   // the host's crowd: nobody else's
+    CHECK(host.streamsTo(FakeWorld::H(second), idA) && host.streamsTo(FakeWorld::H(3), idB));   // every player's characters: everyone
+    CHECK(aw.chars.count(70) == 1 && aw.chars.count(71) == 0 && aw.chars.count(72) == 0);
+    CHECK(bw.chars.count(71) == 1 && bw.chars.count(70) == 0 && bw.chars.count(72) == 0);
+    CHECK(cliA.missingNpcs() == 0 && cliB.missingNpcs() == 0);   // what is not sent is not "missing"
+    CHECK(host.streamedTo(idA) < host.npcCount() + 6 && host.streamedTo(idB) < host.npcCount() + 6);
+    // damage numbers: made for characters near a client player's own characters, not the host's far crowd
+    auto interest = [&](uint32_t s) {
+        for (const Handle& h : hw.remoteInterest) if (h.serial == s) return true;
+        return false;
+    };
+    CHECK(interest(70) && interest(71) && interest(first) && !interest(72));
+    // the second player comes back: the NPCs there are sent to them at once, with their state
+    hw.chars[second].pos = hw.chars[second].dest = {60, 0, -20};
+    Run(all, 8.0, [&] { return bw.chars.count(70) && Dist(bw.chars[70].pos, hw.chars[70].pos) < 1e-3f && bw.chars[70].vit.blood == 50; });
+    CHECK(host.streamsTo(FakeWorld::H(70), idB));
+    CHECK(bw.chars.count(70) == 1 && bw.chars[70].vit.blood == 50);
+
+    std::printf("streaming: a crowd appearing at once is created a few characters per frame, nearest first\n");
+    const int peakBefore = cliA.spawnPeak();
+    (void)peakBefore;
+    for (uint32_t i = 0; i < 12; ++i) npc(100 + i, {200.0f + float(i) * 10, 0, 50});
+    Run(all, 10.0, [&] {
+        for (uint32_t i = 0; i < 12; ++i) if (!aw.chars.count(100 + i)) return false;
+        return true;
+    });
+    for (uint32_t i = 0; i < 12; ++i) CHECK(aw.chars.count(100 + i) == 1);
+    CHECK(cliA.spawnPeak() >= 1 && cliA.spawnPeak() <= 2);   // never more than spawnsPerTick in one frame
+
+    std::printf("streaming: a stand-in our game keeps dropping comes back after a growing delay\n");
+    int remade = 0;
+    Run(all, 9.0, [&] {
+        if (bw.chars.count(70)) { bw.chars.erase(70); ++remade; }   // unloaded at once, every time
+        return false;
+    });
+    // 0 s, +2 s, +10 s: at most three in 9 s whatever the spawn grace; the 0.3.0 loop made one every ~3 s
+    if (remade > 3) std::printf("    stand-in made again %d times in 9 s\n", remade);
+    CHECK(remade <= 3);
+    bool told = false;
+    for (const auto& l : bLog) told = told || l.find("stand-in(s) vanished here lately") != std::string::npos;
+    CHECK(told);
+
+    std::printf("streaming: a client that keeps missing NPCs gets its zone sent again, by itself\n");
+    aw.refuseSpawn = true;   // its game will not make them (as the factory refusing a kind)
+    for (uint32_t i = 0; i < 6; ++i) npc(130 + i, {120, 0, float(i) * 10});
+    Run(all, 30.0, [&] { return host.zoneResyncs() >= 1; });
+    CHECK(host.zoneResyncs() >= 1);
+    Run(all, 1.0, [&] { return cliA.resyncedHere() > 0; });
+    CHECK(cliA.resyncedHere() > 0);
+    CHECK(cliB.resyncedHere() == 0);   // nobody else is touched
+    CHECK(aw.resyncs > 0);             // the characters it has are put on the host's spot
+    aw.refuseSpawn = false;
+    Run(all, 6.0, [&] {
+        for (uint32_t i = 0; i < 6; ++i) if (!aw.chars.count(130 + i)) return false;
+        return true;
+    });
+    for (uint32_t i = 0; i < 6; ++i) CHECK(aw.chars.count(130 + i) == 1);
+}
+
+// A 0.3.0 host (or stream_radius = 0) sends everything to everyone: the client still recreates only
+// what is near its own characters, and does not count the rest as missing.
+static void TestStandInArea() {
+    std::printf("streaming: a client recreates host characters only near its own characters\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    AtMenu(cw);
+    SessionConfig hc; hc.name = "Host"; hc.port = ++g_port; hc.streamRadius = 0;   // everything to everyone
+    SessionConfig cc; cc.name = "Client"; cc.port = hc.port;
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    CHECK(host.Host(&err));
+    CHECK(cli.Join("127.0.0.1", hc.port, &err));
+    Run({{&host, &hw}, {&cli, &cw}}, 10.0, [&] { return cli.state() == SessionState::Connected && cw.controllable.size() == 1; });
+    FakeChar near; near.squad = false; near.pos = near.dest = {150, 0, 30};
+    FakeChar far = near; far.pos = far.dest = {30000, 0, 0};
+    hw.chars[80] = near;
+    hw.chars[81] = far;
+    Run({{&host, &hw}, {&cli, &cw}}, 6.0, [&] { return cw.chars.count(80) != 0; });
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0);
+    CHECK(cw.chars.count(80) == 1);
+    CHECK(cw.chars.count(81) == 0);    // its land is not loaded by our game: never made there
+    CHECK(cli.missingNpcs() == 0);     // nor counted as missing
+}
+
 int main() {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);   // every line out before a crash
+    if (std::getenv("KC_ONLY_STREAMING")) {   // the 0.3.1 streaming tests alone
+        TestStreamingTools();
+        TestPerPlayerStreaming();
+        TestStandInArea();
+        std::printf("%d checks, %d failed\n", g_checks, g_failed);
+        return g_failed ? 1 : 0;
+    }
     TestWire();
     TestClockSync();
     TestFuzz();
@@ -4450,6 +4647,9 @@ int main() {
     TestWorldIdentity();
     TestNoDuplicatePlayers();
     TestSpawnReplication();
+    TestStreamingTools();      // 0.3.1: per-player streaming
+    TestPerPlayerStreaming();
+    TestStandInArea();
     TestInventories();
     TestInventorySwaps();
     TestGroundDrops();

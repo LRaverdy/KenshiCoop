@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 
@@ -41,6 +42,7 @@ KenshiWorld::KenshiWorld(const Config& cfg) : cfg_(cfg) {}
 
 void KenshiWorld::BeginFrame(bool live) {
     live_ = live;
+    PurgeDestroyed();
     squad_.clear();
     resolved_.clear();
     bySerial_.clear();
@@ -176,6 +178,9 @@ void KenshiWorld::ResetWorldBound() {
     captiveHold_.clear();
     captiveMissing_.clear();
     resolved_.clear();
+    factoryRefused_.Clear();
+    resyncSnap_.clear();
+    { std::lock_guard<std::mutex> lk(destroyedMutex_); destroyed_.clear(); }
     ResetGround();
     { std::lock_guard<std::mutex> lk(doorMutex_); doorReqs_.clear(); doorCache_.clear(); }
     { std::lock_guard<std::mutex> lk(tradeMutex_); tradeReqs_.clear(); hostTradeLooter_ = {}; hostTradeTrader_ = {}; }
@@ -186,6 +191,7 @@ void KenshiWorld::ResetWorldBound() {
 }
 
 void KenshiWorld::EndFrame() {
+    PurgeDestroyed();   // our own calls this frame may have unloaded or destroyed characters too
     // Clients run the host's clock: speed and pause are imposed every frame, so local keys
     // (space, F2/F3/F4) have no lasting effect.
     if (active_ && client_ && haveHostTime_) {
@@ -234,6 +240,9 @@ void KenshiWorld::EndFrame() {
     // one (paused, a skipped tick) must not hand it back to the client's own game for that frame.
     const double nowView = NowSeconds();
     for (const void* c : applied_) replicatedAt_[c] = nowView;
+    // Only characters Apply found this very frame are touched below: an address kept from an earlier
+    // frame may belong to a character the game has unloaded since (0.3.1, rob's crashes).
+    const std::unordered_set<const void*> appliedNow = std::move(applied_);
     applied_.clear();
     for (auto it = replicatedAt_.begin(); it != replicatedAt_.end();) {
         if (nowView - it->second > 1.0 || !active_ || !client_) { it = replicatedAt_.erase(it); continue; }
@@ -241,6 +250,7 @@ void KenshiWorld::EndFrame() {
         ++it;
     }
     v->gameSpeed = kenshi::GetFrameSpeed();
+    if (active_ && !client_) v->remoteNear = remoteNear_;
     if (active_ && client_) {
         // fighting and fallen characters play the host's combat and fall animations: their master
         // clock is still corrected, but not counted (the tests measure walking cycles)
@@ -250,6 +260,7 @@ void KenshiWorld::EndFrame() {
                 if (kenshi::Character* c = Find(h)) busy.insert(c);
         for (auto it = animTargets_.begin(); it != animTargets_.end();) {
             if (nowView - it->second->sampledAt > 1.0 || !v->replicated.count(it->first)) { it = animTargets_.erase(it); continue; }
+            if (!appliedNow.count(it->first)) { ++it; continue; }
             if (void* ac = kenshi::AnimationOf(it->first)) {
                 v->anims[ac] = it->second;
                 const auto& tg = *it->second;
@@ -407,6 +418,10 @@ bool KenshiWorld::Spawn(const kc::Handle& h, const kc::SpawnInfo& info, const kc
     // a template whose factory call faulted once is not tried again: each try may leave another
     // half set-up character in the game's update lists (see kenshi::CreateCharacter)
     if (factoryFaulted_.count(info.templateSid)) return false;
+    // a template the factory refused lately waits (0.3.1): unique characters ('Cat', 'Ruka', 'Kang')
+    // were asked for again every 2 to 15 s on a client, hundreds of times, each try costing a frame
+    const double now = NowSeconds();
+    if (!factoryRefused_.Allowed(info.templateSid, now)) return false;
     std::string err;
     const kc::ScopeCounts mark = MarkCallScopes();
     kenshi::Character* c = nullptr;
@@ -420,10 +435,16 @@ bool KenshiWorld::Spawn(const kc::Handle& h, const kc::SpawnInfo& info, const kc
     kc::Handle local;
     if (!c || !kenshi::GetHandle(c, local)) {
         const bool faulted = err.rfind("exception", 0) == 0;
-        if (faulted) factoryFaulted_.insert(info.templateSid);
-        Log("cannot recreate host character %s: %s%s", info.templateSid.c_str(), err.c_str(), faulted ? " (not tried again)" : "");
+        if (faulted) {
+            factoryFaulted_.insert(info.templateSid);
+            Log("cannot recreate host character %s: %s (not tried again)", info.templateSid.c_str(), err.c_str());
+        } else {
+            const double wait = factoryRefused_.Fail(info.templateSid, now);
+            Log("cannot recreate host character %s: %s (that kind is tried again in %.0f s)", info.templateSid.c_str(), err.c_str(), wait);
+        }
         return false;
     }
+    factoryRefused_.Succeed(info.templateSid);
     HostCallScope scope;
     kenshi::Teleport(c, at.pos, at.rot);
     alias_[h] = local;
@@ -513,7 +534,17 @@ bool KenshiWorld::Exists(const kc::Handle& h) {
                 LocalRehandled(a->second, moved);
                 return true;
             }
-            Log("stand-in %s for the host's %s is gone here: it can be recreated", KeyOf(a->second).c_str(), KeyOf(h).c_str());
+            std::string why;
+            {
+                std::lock_guard<std::mutex> lk(destroyedMutex_);
+                if (auto d = destroyed_.find(a->second); d != destroyed_.end()) { why = d->second; destroyed_.erase(d); }
+            }
+            uint32_t held = 0;
+            if (goneLog_.Allow(NowSeconds(), &held)) {
+                const std::string skipped = held ? " [" + std::to_string(held) + " more such lines not written]" : std::string();
+                Log("stand-in %s for the host's %s is gone here (%s): it can be recreated%s", KeyOf(a->second).c_str(), KeyOf(h).c_str(),
+                    why.empty() ? "no longer in the game" : why.c_str(), skipped.c_str());
+            }
             spawned_.erase(a->second);
             alias_.erase(a);
             resolved_.erase(h);
@@ -821,8 +852,10 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         else syncErr_.erase(h);
     }
     HostCallScope scope;
-    // Far off (late join, lag spike, teleport on the host): snap straight to the host state.
-    if (err > cfg_.snapDistance) {
+    // Far off (late join, lag spike, teleport on the host): snap straight to the host state. Also
+    // once after a zone resync (0.3.1), whatever the offset.
+    const bool resync = !resyncSnap_.empty() && resyncSnap_.erase(h) > 0 && err > 1.0f;
+    if (err > cfg_.snapDistance || resync) {
         kenshi::Teleport(c, target.pos, target.rot);
         lastDest_.erase(h);
         return;
@@ -1486,6 +1519,96 @@ void KenshiWorld::ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) {
     }
     Log("vitals: %s %s as on the host (now down=%d unconscious=%d dead=%d)", KeyOf(h).c_str(), dies ? "dies" : "faints",
         int(kenshi::IsRagdoll(c)), int(kenshi::IsUnconscious(c)), int(kenshi::IsDead(c)));
+}
+
+// Host (0.3.1): characters near a client player's own characters, resolved once per interest update.
+void KenshiWorld::SetRemoteInterest(const std::vector<kc::Handle>& handles) {
+    auto set = std::make_shared<std::unordered_set<const void*>>();
+    if (!client_)
+        for (const kc::Handle& h : handles)
+            if (kenshi::Character* c = Find(h)) set->insert(c);
+    remoteNear_ = std::move(set);
+}
+
+void KenshiWorld::ResyncCharacter(const kc::Handle& h) {
+    if (client_) resyncSnap_.insert(h);
+}
+
+void KenshiWorld::NoteCharacterDestroyed(void* chr, bool justUnloaded, const char* info) {
+    {
+        std::lock_guard<std::mutex> lk(destroyedMutex_);
+        if (destroyedPtrs_.size() < 100000) destroyedPtrs_.push_back(chr);
+    }
+    kc::Handle h;
+    if (!kenshi::GetHandle(static_cast<kenshi::Character*>(chr), h) || !h.valid()) return;
+    std::string why = justUnloaded ? "unloaded with its zone by our game" : "destroyed by our game";
+    if (info) {
+        const size_t n = strnlen(info, 60);
+        if (n) why += " (" + std::string(info, n) + ")";
+    }
+    std::lock_guard<std::mutex> lk(destroyedMutex_);
+    if (destroyed_.size() > 512) destroyed_.clear();
+    destroyed_[h] = std::move(why);
+}
+
+// Game thread: forget every address of a character the game destroyed (see destroyedPtrs_).
+void KenshiWorld::PurgeDestroyed() {
+    std::vector<const void*> gone;
+    {
+        std::lock_guard<std::mutex> lk(destroyedMutex_);
+        if (destroyedPtrs_.empty()) return;
+        gone.swap(destroyedPtrs_);
+    }
+    const std::unordered_set<const void*> dead(gone.begin(), gone.end());
+    uint64_t n = 0;
+    auto drop = [&](auto& map) {
+        for (auto it = map.begin(); it != map.end();) {
+            if (dead.count(it->first)) { it = map.erase(it); ++n; }
+            else ++it;
+        }
+    };
+    drop(animTargets_);
+    drop(replicatedAt_);
+    drop(lastFloater_);
+    for (auto* map : {&squad_, &resolved_})   // keyed by handle, the address is the value
+        for (auto it = map->begin(); it != map->end();) {
+            if (dead.count(it->second)) { it = map->erase(it); ++n; }
+            else ++it;
+        }
+    {   // host: animation events not taken yet, and the last one per character
+        std::lock_guard<std::mutex> lk(animMutex_);
+        const size_t before = animOut_.size();
+        animOut_.erase(std::remove_if(animOut_.begin(), animOut_.end(), [&](const auto& e) { return dead.count(e.first) != 0; }), animOut_.end());
+        n += before - animOut_.size();
+        drop(animLast_);
+    }
+    for (auto it = applied_.begin(); it != applied_.end();) {
+        if (dead.count(*it)) { it = applied_.erase(it); ++n; }
+        else ++it;
+    }
+    for (auto it = handTools_.begin(); it != handTools_.end();) {
+        if (dead.count(it->second.who)) { it = handTools_.erase(it); ++n; }
+        else ++it;
+    }
+    const size_t editedBefore = edited_.size();
+    edited_.erase(std::remove_if(edited_.begin(), edited_.end(), [&](kenshi::Character* c) { return dead.count(c) != 0; }), edited_.end());
+    n += editedBefore - edited_.size();
+    animCreateTried_.clear();   // keyed by address too (a new character may reuse one)
+    bySerial_.clear();
+    bySerialBuilt_ = false;
+    if (n) {
+        purgedPointers += n;
+        // the view the hooks read named them too: published again without them
+        auto v = std::make_shared<HookView>(*View());
+        for (const void* c : dead) {
+            v->replicated.erase(c);
+            v->squadForeign.erase(c);
+        }
+        // keyed by their animation and movement objects (freed with them): rebuilt by the next EndFrame
+        v->anims.clear();
+        v->facing.clear();
+        view_.store(std::shared_ptr<const HookView>(std::move(v)), std::memory_order_release);
+    }
 }
 
 // A gone player's character (left, crashed, connection lost): it stops walking and drops the task
@@ -2503,7 +2626,7 @@ void KenshiWorld::ApplyAnimFrame(const kc::Handle& h, const kc::AnimFrame& frame
 void KenshiWorld::ApplyAnim(const kc::Handle& h, const kc::AnimEvent& e) {
     kenshi::Character* c = Find(h);
     static int logged = 0;
-    if (logged < 300 && e.kind != kc::AnimKind::State && e.kind != kc::AnimKind::WeaponState && e.kind != kc::AnimKind::CombatMode) {
+    if (logged < 20 && e.kind != kc::AnimKind::State && e.kind != kc::AnimKind::WeaponState && e.kind != kc::AnimKind::CombatMode) {
         ++logged;
         Log("anim in: idx=%u kind=%d name='%s' found=%d tech=%d data=%d", h.index, int(e.kind), e.name.c_str(), c ? 1 : 0,
             e.kind <= kc::AnimKind::CombatRun && kenshi::FindTechnique(e.name) ? 1 : 0, c && kenshi::FindAnimData(c, e.name) ? 1 : 0);
