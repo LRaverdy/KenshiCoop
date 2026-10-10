@@ -341,6 +341,23 @@ Vtables (pour reconnaître un objet) :
 | +0x2A0 | `Faction*` du joueur |
 | +0x2A8 | escouade montrée par la barre d'escouade (`setCurrentPlatoon`) |
 | +0x2B0 | `lektor<Character*>` des personnages du joueur |
+| +0x1E4 | étage affiché, 0 à 3 (`setViewFloor` `0x7F3530`, boutons d'étage et PgPréc/PgSuiv) [D] |
+| +0x270 | `hand` du perso **suivi** par la vue des étages (type 0xB : aucun) [D] |
+| +0x290 | étage de ce perso vu à la dernière image [D] |
+
+- **Vue des étages** [D] : la mise à jour de `PlayerInterface` (`0x801630`, sautée si +0x2F0) résout
+  +0x270 (rien si son type vaut 0xB), lit l'étage du perso (vt 0x60 = `0xD1F80`, `RootObject+0xA4`,
+  écrit chaque image par vt 0xD8 `0x5C7C30` depuis `CharMovement::getCurrentFloor` `0x6610E0`) et,
+  s'il diffère de +0x290 (`0x801CD1`), écrit `clamp(étage, 0, 3)` dans +0x1E4 (`0x801D09`). La vue
+  suit donc ce perso, pas la sélection. Seul `0x7F5400` (`RootObject*` ou null : le premier perso
+  du joueur) le change : il copie `obj+0x60..+0x70` dans +0x278..+0x288, pose +0x290 et +0x1E4, puis
+  `Camera::setTarget` (`0x6AE520`, qui garde sa propre copie du `hand` à `Camera+0x28`). Appelé par
+  un double appui sur une touche d'escouade (`0x7F8F60`), la fenêtre d'un perso (`0x727820`), la fin
+  de l'éditeur de personnage (`0x5F5D10`) et `ActivePlatoon::addCharacterAt` quand le perso déplacé
+  était suivi. `objectSelected` et `focusCameraSelectedCharacter` (`0x7F37F0`) n'y touchent pas.
+  Chez un client, +0x270 restait le perso de la partie chargée (celui de l'hôte) : le mod
+  (`kenshi::SetFloorFocus`, `KenshiWorld::UpdateFloorFocus`) écrit les champs du `hand` d'un perso
+  du joueur et +0x290 = -1, sans toucher à la caméra.
 
 - `PlayerInterface::playerMove(const Vector3& pos, Building*)` (détourné) reçoit le point du sol où
   le joueur a cliqué droit pour un déplacement, hauteur du sol comprise : l'administration le garde
@@ -1160,6 +1177,16 @@ Recherche faite le 9 octobre 2026 pour le commerce. Fiabilité de chaque fait :
       fenêtre ;
   - le mod refait la même chose (`kenshi::ShopCounters`, et `kenshi::WornBackpack` /
     `TravellingWearers` pour les sacs) pour savoir quels contenants envoyer.
+  - détail [D] : `getOwnerships` (`0x7956A0`, par le thunk `0x4BCB3`) ; `cmp [own+0x40], 0xB` (aucun
+    domicile) ; `hand::isValid` (thunk `0x3F954`) ; le type 0 (bâtiment) se résout par `0x9F8F20` ;
+    puis `Building+0x1F0` → `0x54ACB0`. Celle-ci prend d'abord l'ensemble de `hand` de l'intérieur
+    (+0x100/+0x108/+0x120, chaque `hand` de type 0 résolu), et seulement s'il ne donne rien, tous
+    les meubles de l'intérieur (+0x88 nombre, +0x90 données) dont vt 0x20 renvoie 0 ;
+  - pour un PNJ, `getOwnerships` est celle de son escouade : une **doublure** créée par le mod
+    (`createRandomCharacter`) n'a pas de domicile, et sa fenêtre ne montre rien (les sacs de son
+    escouade, vides). C'était la fenêtre vide des clients (0.3.0) : `kenshi::GiveShopHome` écrit
+    dans `own+0x38` les champs du `hand` du bâtiment des comptoirs (`FurnitureParent`, celui dont
+    `0x54ACB0` rend le plus de ces comptoirs) avant d'ouvrir la fenêtre.
 - **Sacs à dos** [D] : un sac est un `ContainerItem` (vtables `0x170F4F8`, et `0x170F4D8` pour sa
   seconde base). `RootObject::getInventory` est l'emplacement vt 0x160 de tout objet : `Item` le
   laisse à `0xD2280` (renvoie null), `ContainerItem` le remplace par `0x76BE60` (renvoie
@@ -1393,6 +1420,31 @@ Changer l'orientation du nœud juste après `shoot` change donc toute la traject
   `setConstructionProgress` (vt 0x238, `0x559AD0`) termine le bâtiment (vt 0x240
   `notifyConstructionComplete`) quand l'avancement atteint le total. `addConstructionProgress`
   `0x5595A0`, `addDismantleProgress` `0x2A2860`.
+- **Matériaux d'un chantier** (la jauge) [D] : liste à état+0x18 (nombre, `uint32`) / +0x20
+  (données : pointeurs) ; une entrée : +0x0 `GameData*` du matériau, +0x8 quantité voulue, +0xC
+  quantité apportée (flottants). Le panneau du chantier (`0x302380`, `0x302921`–`0x3029B5`) dessine
+  apportée / voulue, sauf pour un bâtiment terminé. Les livraisons n'ont lieu que chez l'hôte :
+  le client reçoit les quantités apportées (message 87 `BuildMaterials`, 0.3.1) et les écrit
+  (`KenshiWorld::ApplyBuildMaterials`, bornées à la quantité voulue, chantier non terminé).
+  `addConstructionProgress` ne réécrit +0xC que quand le chantier repart de zéro (vt 0x330).
+- **Collision d'un bâtiment terminé** [D] : la construction de son apparence (vt 0x200 `0x5609E0`
+  → `0x553DC0`) crée ses corps physiques (liste `Building+0x250`, nombre +0x258, données +0x260)
+  **éteints** : +0x269 (collision allumée) = 0, +0x268 (physique) = « terminé ». Seuls les
+  allument :
+  - vt 0xE0 (`0x5626A0`, base de `Building` et `UseableStuff` ; `0x5628B2`–`0x562955`) : visible
+    (+0x19D), physique (+0x268), terminé (vt 0x228 → +0) et +0x269 encore à 0 → `0xFBD70` sur
+    chaque corps, +0x269 = 1 (et l'inverse quand une condition tombe) ;
+  - vt 0x100 (`setVisible`, `0x548F70`), mais seulement quand la visibilité change (sortie à
+    `0x548F86` sinon).
+  `notifyConstructionComplete` (`0x562340`) : terminé = 1, vt 0x100(1) (sans effet : le chantier
+  est déjà visible), changement des matériaux du mesh, vt 0x318(1), vt 0x310(0), vt 0x460(1),
+  puis vt 0x468(1) (`0x2973E0` : +0x268 = 1) ; jamais vt 0xE0. Les bâtiments ne sont pas mis à jour
+  à chaque image (`TownList::update` `0x92D850` n'appelle vt 0xE0 que pour les villes et objets à
+  part) : un bâtiment fini en cours de partie restait **sans collision** jusqu'au rechargement de
+  sa zone. Un bâtiment chargé d'une sauvegarde est créé terminé et `0x5609E0` appelle vt 0xE0
+  (`0x56147F`). Le mod (`EnsureCollision`, `plugin/buildings.cpp`) appelle vt 0xE0 une fois quand
+  terminé, visible, physique et +0x269 = 0 : chez le client après chaque état reçu, chez l'hôte
+  pour chaque bâtiment suivi (rien si le jeu l'a déjà fait).
 - **Achat** : `buyMeAsk` (vt 0x280) ouvre la confirmation ; `buyMeCallback(int)` `0x7AD6C0`
   achète si la réponse vaut 2 (prix `calculateSaleValue` `0x7AD300`, pris aux cats de la faction du
   joueur) ; `isForSale` vt 0x2C0. Démontage : `confirmDismantle(int)` `0x54FEA0` (2 = oui).

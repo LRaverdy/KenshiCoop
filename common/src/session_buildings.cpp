@@ -23,6 +23,12 @@ constexpr double kForgetFinishedSite = 30.0;   // host: a finished site not plac
 constexpr size_t kMaxPendingPlaces = 32;
 
 bool SameState(float a, uint8_t fa, float b, uint8_t fb) { return fa == fb && std::fabs(a - b) < 0.01f; }
+bool SameMaterials(const std::vector<float>& a, const std::vector<float>& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i)
+        if (std::fabs(a[i] - b[i]) >= 0.01f) return false;
+    return true;
+}
 } // namespace
 
 void Session::ResetBuildings() {
@@ -32,6 +38,7 @@ void Session::ResetBuildings() {
     hostPlaces_.clear();
     hostActions_.clear();
     hostStates_.clear();
+    hostMaterials_.clear();
     hostRemoves_.clear();
     buildSyncedPlayers_.clear();
     nextBuildStates_ = nextSiteScan_ = nextBuildFull_ = 0;
@@ -64,20 +71,34 @@ uint32_t Session::TrackBuilding(const Handle& h, const std::string& sid, const V
 
 void Session::SendBuildStates(double now, bool full, PeerId onlyTo) {
     BuildStateMsg m;
-    auto flush = [&] {
-        if (m.entries.empty()) return;
+    BuildMaterialsMsg mats;   // the materials delivered to sites still being built (the gauge)
+    auto send = [&](const auto& msg) {
         Writer w;
-        Encode(w, m);
+        Encode(w, msg);
         if (onlyTo != kNoPeer) SendReliable(onlyTo, w);
         else BroadcastReliable(w, true);
+    };
+    auto flush = [&] {
+        if (!m.entries.empty()) send(m);
+        if (!mats.entries.empty()) send(mats);
         m.entries.clear();
+        mats.entries.clear();
     };
     for (auto& [id, b] : buildings_) {
         float progress = 0;
         uint8_t flags = 0;
         if (!world_.ReadBuildState(b.handle, progress, flags)) continue;   // its zone is not loaded now
         if (!(flags & kSiteComplete) || (flags & kSiteDismantling)) b.seenBuilding = now;
-        if (!full && SameState(progress, flags, b.progress, b.flags)) continue;
+        std::vector<float> delivered;
+        if (!(flags & kSiteComplete) && world_.ReadBuildMaterials(b.handle, delivered) && !delivered.empty() &&
+            (full || !SameMaterials(delivered, b.materials))) {
+            if (onlyTo == kNoPeer) b.materials = delivered;
+            mats.entries.push_back({id, std::move(delivered)});
+        }
+        if (!full && SameState(progress, flags, b.progress, b.flags)) {
+            if (mats.entries.size() >= 200) flush();
+            continue;
+        }
         if (onlyTo == kNoPeer) {
             b.progress = progress;
             b.flags = flags;
@@ -246,6 +267,11 @@ void Session::ClientBuildingPacket(Msg type, Reader& r) {
         if (Decode(r, m)) for (auto& e : m.entries) if (hostStates_.size() < 4096) hostStates_.push_back(std::move(e));
         break;
     }
+    case Msg::BuildMaterials: {
+        BuildMaterialsMsg m;
+        if (Decode(r, m)) for (auto& e : m.entries) if (hostMaterials_.size() < 4096) hostMaterials_.push_back(std::move(e));
+        break;
+    }
     case Msg::BuildRemove: {
         BuildRemove m;
         if (Decode(r, m) && hostRemoves_.size() < 1024) hostRemoves_.push_back(std::move(m));
@@ -315,6 +341,13 @@ void Session::ClientBuildings(double now) {
         b.wantFlags = e.flags;
     }
     hostStates_.clear();
+    for (auto& e : hostMaterials_) {
+        auto it = buildings_.find(e.netId);   // a site the host told us about (its state comes first)
+        if (it == buildings_.end()) continue;
+        it->second.haveMaterials = true;
+        it->second.wantMaterials = std::move(e.delivered);
+    }
+    hostMaterials_.clear();
     for (auto& [id, b] : buildings_) {
         if (!b.resolved) {
             if (now < b.tryAt || b.sid.empty()) continue;
@@ -325,11 +358,18 @@ void Session::ClientBuildings(double now) {
             b.resolved = true;
             b.progress = -1;
             b.flags = 0xFF;
+            b.materials.clear();
         }
-        if (!b.haveWant || SameState(b.progress, b.flags, b.wantProgress, b.wantFlags)) continue;
-        world_.ApplyBuildState(b.handle, b.wantProgress, b.wantFlags);
-        b.progress = b.wantProgress;
-        b.flags = b.wantFlags;
+        if (b.haveWant && !SameState(b.progress, b.flags, b.wantProgress, b.wantFlags)) {
+            world_.ApplyBuildState(b.handle, b.wantProgress, b.wantFlags);
+            b.progress = b.wantProgress;
+            b.flags = b.wantFlags;
+        }
+        // the materials brought to the site (the gauge): only while it is being built
+        if (b.haveMaterials && !(b.flags != 0xFF && (b.flags & kSiteComplete)) && !SameMaterials(b.materials, b.wantMaterials)) {
+            world_.ApplyBuildMaterials(b.handle, b.wantMaterials);
+            b.materials = b.wantMaterials;
+        }
     }
     // Removed on the host: removed here.
     for (const auto& m : hostRemoves_) {

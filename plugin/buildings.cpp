@@ -30,6 +30,18 @@ constexpr uintptr_t CS_complete = 0x0, CS_paused = 0x1, CS_dismantled = 0x2, CS_
 // Building vtable
 constexpr uintptr_t BV_getFaction = 0x58, BV_getBuildState = 0x228, BV_setConstructionProgress = 0x238,
                     BV_notifyConstructionComplete = 0x240, BV_isForSale = 0x2C0, BV_setupMiningResourceLevel = 0x2D8;
+// Collision of a finished building (docs/MOTEUR.md section 10): its physics bodies (+0x250 list) are
+// made switched off; only vt 0xE0 (base 0x5626A0) switches them on, when the building is visible
+// (+0x19D), physical (+0x268) and complete and +0x269 is still 0. notifyConstructionComplete sets
+// +0x268 (vt 0x468) after its setVisible(1) (vt 0x100), a no-op on a site already visible, and never
+// calls vt 0xE0: a building finished in the session stayed without collision until its zone reloaded.
+constexpr uintptr_t BV_refreshState = 0xE0;
+constexpr uintptr_t BU_visible = 0x19D, BU_physical = 0x268, BU_physicsOn = 0x269;
+// The construction materials (ConstructionState = Building+0x160): lektor of entries at state+0x18
+// (count) / +0x20 (data); an entry: +0x0 GameData* material, +0x8 needed, +0xC delivered (floats).
+// The site's gauge (0x302380) shows delivered / needed; deliveries happen only on the host.
+constexpr uintptr_t CS_materialCount = 0x18, CS_materials = 0x20, MAT_needed = 0x8, MAT_delivered = 0xC;
+constexpr uint32_t kMaxMaterials = 16;
 constexpr uintptr_t LV_floorLayout = 0x40;          // Layout vtable: the layout build mode uses for an upper floor (see createBuildings)
 constexpr uintptr_t PI_faction = 0x2A0;             // PlayerInterface: the player faction
 constexpr uintptr_t kSnapCallbackVt = 0x16DFB00;    // build mode's callback for a building snapped to another one: {vt, PlayerInterface*, Building* snappedTo}
@@ -494,8 +506,49 @@ bool KenshiWorld::DebugPlace(const kc::BuildPlace& p) {
 
 // ---------------------------------------------------------------- construction state
 
+namespace {
+// Switches the collision of a finished building on, as vt 0xE0 does once it is complete; nothing when
+// it already has it (or is not complete, visible and physical yet).
+bool EnsureCollision(void* b) {
+    void* st = BuildState(b);
+    uint8_t complete = 0, visible = 0, physical = 0, on = 1;
+    if (!st || !Rd(st, CS_complete, complete) || !complete || !Rd(b, BU_visible, visible) || !visible || !Rd(b, BU_physical, physical) ||
+        !physical || !Rd(b, BU_physicsOn, on) || on)
+        return false;
+    void* fn = Slot(b, BV_refreshState);
+    if (!fn || !VoidSeh(fn, b)) return false;
+    Rd(b, BU_physicsOn, on);
+    return on != 0;
+}
+
+bool MaterialEntries(void* b, std::vector<void*>& out) {
+    out.clear();
+    void* st = BuildState(b);
+    uint32_t n = 0;
+    void** data = nullptr;
+    if (!st || !Rd(st, CS_materialCount, n) || n > kMaxMaterials || (n && (!Rd(st, CS_materials, data) || !data))) return false;
+    for (uint32_t i = 0; i < n; ++i) {
+        void* e = nullptr;
+        if (!Rd(data, i * sizeof(void*), e) || !e) return false;
+        out.push_back(e);
+    }
+    return true;
+}
+} // namespace
+
 bool KenshiWorld::ReadBuildState(const kc::Handle& h, float& progress, uint8_t& flags) {
-    return ReadBuildStateOf(kenshi::ResolveObject(h), progress, flags);
+    void* b = kenshi::ResolveObject(h);
+    if (!ReadBuildStateOf(b, progress, flags)) return false;
+    // host: a followed building finished here gets its collision too (nothing if the game did it)
+    if (!client_ && (flags & kc::kSiteComplete) && !(flags & kc::kSiteDismantling)) {
+        HostCallScope scope;
+        if (EnsureCollision(b)) {
+            std::string sid;
+            kenshi::ObjectTemplate(b, sid);
+            Log("building %s finished: its collision switched on (the game's own refresh, vt 0xE0)", sid.c_str());
+        }
+    }
+    return true;
 }
 
 bool KenshiWorld::ReadBuildStateOf(void* b, float& progress, uint8_t& flags) {
@@ -506,6 +559,34 @@ bool KenshiWorld::ReadBuildStateOf(void* b, float& progress, uint8_t& flags) {
     if (!std::isfinite(progress)) progress = 0;
     flags = uint8_t((complete ? kc::kSiteComplete : 0) | (paused ? kc::kSitePaused : 0) | (dismantled ? kc::kSiteDismantling : 0));
     return true;
+}
+
+
+bool KenshiWorld::ReadBuildMaterials(const kc::Handle& h, std::vector<float>& delivered) {
+    delivered.clear();
+    std::vector<void*> entries;
+    if (!MaterialEntries(kenshi::ResolveObject(h), entries)) return false;
+    for (void* e : entries) {
+        float v = 0;
+        if (!Rd(e, MAT_delivered, v) || !std::isfinite(v)) v = 0;
+        delivered.push_back(v);
+    }
+    return true;
+}
+
+void KenshiWorld::ApplyBuildMaterials(const kc::Handle& h, const std::vector<float>& delivered) {
+    void* b = kenshi::ResolveObject(h);
+    std::vector<void*> entries;
+    uint8_t complete = 1;
+    void* st = BuildState(b);
+    if (!st || !Rd(st, CS_complete, complete) || complete || !MaterialEntries(b, entries)) return;
+    // the same materials in the same order (the same template): the host's amounts, within what is needed
+    for (size_t i = 0; i < entries.size() && i < delivered.size(); ++i) {
+        float need = 0;
+        if (!Rd(entries[i], MAT_needed, need) || !std::isfinite(need) || need < 0) continue;
+        const float v = std::clamp(delivered[i], 0.0f, need);
+        Wr(entries[i], MAT_delivered, v);
+    }
 }
 
 void KenshiWorld::ApplyBuildState(const kc::Handle& h, float progress, uint8_t flags) {
@@ -529,6 +610,11 @@ void KenshiWorld::ApplyBuildState(const kc::Handle& h, float progress, uint8_t f
     const uint8_t paused = (flags & kc::kSitePaused) ? 1 : 0, dismantled = (flags & kc::kSiteDismantling) ? 1 : 0;
     Wr(st, CS_paused, paused);
     Wr(st, CS_dismantled, dismantled);
+    if (EnsureCollision(b)) {
+        std::string sid;
+        kenshi::ObjectTemplate(b, sid);
+        Log("building %s finished here: its collision switched on (the game's own refresh, vt 0xE0)", sid.c_str());
+    }
 }
 
 void KenshiWorld::ConstructionSitesNear(const std::vector<kc::Vec3>& centers, float radius, std::vector<kc::Handle>& out) {

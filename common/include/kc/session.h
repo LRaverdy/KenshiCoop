@@ -211,7 +211,11 @@ public:
     virtual bool MoneyOf(const Handle& who, int32_t& money) { (void)who; (void)money; return false; }
     virtual bool PayTrade(const Handle& buyer, const Handle& trader, int32_t price) { (void)buyer; (void)trader; (void)price; return false; }
     virtual void RefreshTradeWindow(const Handle& trader) { (void)trader; }
-    virtual bool OpenTradeWindow(const Handle& looter, const Handle& trader) { (void)looter; (void)trader; return false; }
+    // counters: our local shop counters the host sells from (the window must sell from them: our
+    // merchant may be a stand-in without the shop as its home)
+    virtual bool OpenTradeWindow(const Handle& looter, const Handle& trader, const std::vector<Handle>& counters) {
+        (void)looter; (void)trader; (void)counters; return false;
+    }
     virtual bool TradeWindowBusy() { return false; }   // client: an item is on the mouse (do not reopen the window now)
     virtual int TradeWindowStock() { return -1; }      // client: stacks the open trade window's merchant side shows (-1: no window)
     virtual void SetMoneyOf(const Handle& who, int32_t money) { (void)who; (void)money; }
@@ -344,6 +348,10 @@ public:
     virtual bool BuildingIdentity(const Handle& h, std::string& sid, Vec3& pos) { (void)h; (void)sid; (void)pos; return false; }
     virtual bool ReadBuildState(const Handle& h, float& progress, uint8_t& flags) { (void)h; (void)progress; (void)flags; return false; }
     virtual void ApplyBuildState(const Handle& h, float progress, uint8_t flags) { (void)h; (void)progress; (void)flags; }
+    // The construction materials delivered to a site (the game's list order: what its gauge shows).
+    // Host: read them; client: impose the host's (deliveries happen only on the host).
+    virtual bool ReadBuildMaterials(const Handle& h, std::vector<float>& delivered) { (void)h; delivered.clear(); return false; }
+    virtual void ApplyBuildMaterials(const Handle& h, const std::vector<float>& delivered) { (void)h; (void)delivered; }
     virtual void ConstructionSitesNear(const std::vector<Vec3>& centers, float radius, std::vector<Handle>& out) { (void)centers; (void)radius; out.clear(); }
     virtual void TrackBuilding(const Handle& h) { (void)h; }
     virtual void TakeBuildingRemovals(std::vector<Handle>& out) { out.clear(); }
@@ -824,6 +832,9 @@ private:
         bool haveWant = false;               // client: the host's state of it
         float wantProgress = 0;
         uint8_t wantFlags = 0;
+        std::vector<float> materials;        // materials delivered: last sent (host) / applied (client)
+        bool haveMaterials = false;          // client: the host's materials of it
+        std::vector<float> wantMaterials;
     };
     std::map<uint32_t, BuildingRec> buildings_;
     std::vector<std::pair<uint8_t, BuildPlace>> pendingPlaces_;          // host: clients' placements
@@ -831,6 +842,7 @@ private:
     std::vector<BuildPlace> hostPlaces_;     // client: the host's buildings to build here
     std::vector<BuildAction> hostActions_;   // client: purchases to replay
     std::vector<BuildStateEntry> hostStates_;   // client: to apply on the next live tick
+    std::vector<BuildMaterialsEntry> hostMaterials_;   // client: to apply on the next live tick
     std::vector<BuildRemove> hostRemoves_;
     std::set<uint8_t> buildSyncedPlayers_;   // host: players who got every followed building once
     double nextBuildStates_ = 0, nextSiteScan_ = 0, nextBuildFull_ = 0;
@@ -894,7 +906,6 @@ private:
         bool pending = false, open = false, refresh = false;
         double pendingSince = 0;
         double checkAt = 0;   // when to check that the window shows the counters' stock (0: checked)
-        int reopens = 0;      // times it was opened again because it showed none of it
     };
     ClientTrade trade_;
     bool IsTradeCounter(uint32_t netId) const;

@@ -810,6 +810,7 @@ const MessageRule kMessageRules[] = {
     {Msg::Captives, AuthRole::HostOnly, AuthSubject::None, "captives"},
     {Msg::BuildState, AuthRole::HostOnly, AuthSubject::None, "build state"},
     {Msg::BuildRemove, AuthRole::HostOnly, AuthSubject::None, "build remove"},
+    {Msg::BuildMaterials, AuthRole::HostOnly, AuthSubject::None, "build materials"},
     {Msg::JobList, AuthRole::HostOnly, AuthSubject::None, "job list"},
     {Msg::Stall, AuthRole::HostOnly, AuthSubject::None, "stall"},
     {Msg::Floors, AuthRole::HostOnly, AuthSubject::None, "floors"},
@@ -880,6 +881,7 @@ const char* MsgName(Msg type) {
     case Msg::BuildPlace: return "BuildPlace";
     case Msg::BuildState: return "BuildState";
     case Msg::BuildRemove: return "BuildRemove";
+    case Msg::BuildMaterials: return "BuildMaterials";
     case Msg::BuildAction: return "BuildAction";
     case Msg::JobList: return "JobList";
     case Msg::Stall: return "Stall";
@@ -1572,6 +1574,33 @@ bool Decode(Reader& r, BuildStateMsg& m) {
         e.progress = r.f32();
         e.flags = r.u8();
         if (!e.netId || e.sid.empty()) return false;
+    }
+    return Done(r);
+}
+void Encode(Writer& w, const BuildMaterialsMsg& m) {
+    w.u8(uint8_t(Msg::BuildMaterials));
+    const size_t n = std::min<size_t>(m.entries.size(), kMaxBuildStates);
+    w.varint(n);
+    for (size_t i = 0; i < n; ++i) {
+        const auto& e = m.entries[i];
+        w.varint(e.netId);
+        const size_t k = std::min<size_t>(e.delivered.size(), kMaxBuildMaterials);
+        w.varint(k);
+        for (size_t j = 0; j < k; ++j) w.f32(e.delivered[j]);
+    }
+}
+bool Decode(Reader& r, BuildMaterialsMsg& m) {
+    const uint32_t n = r.count(kMaxBuildStates, 2);
+    m.entries.resize(n);
+    for (auto& e : m.entries) {
+        e.netId = GetU32Var(r);
+        const uint32_t k = r.count(kMaxBuildMaterials, 4);
+        e.delivered.resize(k);
+        for (float& v : e.delivered) {
+            v = r.f32();
+            if (!std::isfinite(v)) return false;
+        }
+        if (!e.netId) return false;
     }
     return Done(r);
 }

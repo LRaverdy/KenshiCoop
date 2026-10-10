@@ -458,7 +458,22 @@ struct FakeWorld : IWorld {
         merchantMoney[trader.serial] += price;
         return true;
     }
-    bool OpenTradeWindow(const Handle&, const Handle&) override { tradeWindow = true; ++tradeWindowOpens; return true; }
+    std::vector<Handle> tradeWindowCounters;   // the counters the last window was told to sell from
+    bool OpenTradeWindow(const Handle&, const Handle&, const std::vector<Handle>& counters) override {
+        tradeWindow = true;
+        ++tradeWindowOpens;
+        tradeWindowCounters = counters;
+        return true;
+    }
+    int tradeWindowShows = -1;   // stacks the merchant side shows (-1: as many as the counters hold)
+    int TradeWindowStock() override {
+        if (!tradeWindow) return -1;
+        if (tradeWindowShows >= 0) return tradeWindowShows;
+        int n = 0;
+        for (const Handle& h : tradeWindowCounters)
+            if (auto b = boxes.find(h.serial); b != boxes.end()) n += int(b->second.items.size());
+        return n;
+    }
     // travelling merchants: their squads (merchant serial -> wearers), worn backpacks, animals
     std::map<uint32_t, std::vector<uint32_t>> caravans;
     std::vector<std::pair<uint32_t, uint32_t>> joins;   // JoinSquadOf(who, leader) asked
@@ -487,7 +502,7 @@ struct FakeWorld : IWorld {
     bool ContainerWindowOpen() override { return tradeWindow; }
     void CloseContainerWindows() override { tradeWindow = false; }
     // ---- lot E: buildings (handle type 0, serials from bldgSerial: they differ between machines)
-    struct FakeBldg { std::string sid; Vec3 pos; float progress = 0; uint8_t flags = 0; bool forSale = false, ours = true; };
+    struct FakeBldg { std::string sid; Vec3 pos; float progress = 0; uint8_t flags = 0; bool forSale = false, ours = true; std::vector<float> materials; };
     std::map<uint32_t, FakeBldg> bldgs;
     uint32_t bldgSerial = 20000;
     std::vector<LocalPlacement> placements;     // build mode here
@@ -538,6 +553,19 @@ struct FakeWorld : IWorld {
     void ApplyBuildState(const Handle& h, float progress, uint8_t flags) override {
         auto it = bldgs.find(h.serial);
         if (it != bldgs.end()) { it->second.progress = progress; it->second.flags = flags; }
+    }
+    bool ReadBuildMaterials(const Handle& h, std::vector<float>& delivered) override {
+        auto it = bldgs.find(h.serial);
+        if (h.type != 0 || it == bldgs.end()) return false;
+        delivered = it->second.materials;
+        return true;
+    }
+    int materialsApplied = 0;
+    void ApplyBuildMaterials(const Handle& h, const std::vector<float>& delivered) override {
+        auto it = bldgs.find(h.serial);
+        if (it == bldgs.end() || (it->second.flags & kSiteComplete)) return;
+        it->second.materials = delivered;
+        ++materialsApplied;
     }
     void ConstructionSitesNear(const std::vector<Vec3>& centers, float radius, std::vector<Handle>& out) override {
         out.clear();
@@ -1447,6 +1475,13 @@ static void TestWire() {
         BuildStateMsg bs2; CHECK(Decode(sr, bs2));
         CHECK(bs2.entries.size() == 2 && bs2.entries[0].progress == 42.5f && bs2.entries[0].flags == (kSiteComplete | kSitePaused) &&
               bs2.entries[1].sid == "wall" && bs2.entries[1].pos.y == 5);
+        BuildMaterialsMsg bm; bm.entries = {{7, {12.5f, 0, 3}}, {8, {}}};
+        Writer mw; Encode(mw, bm);
+        Reader mr(mw.data(), mw.size()); CHECK(PeekType(mr) == Msg::BuildMaterials);
+        BuildMaterialsMsg bm2; CHECK(Decode(mr, bm2));
+        CHECK(bm2.entries.size() == 2 && bm2.entries[0].netId == 7 && bm2.entries[0].delivered == std::vector<float>({12.5f, 0, 3}) &&
+              bm2.entries[1].delivered.empty());
+        CHECK(MessageRuleFor(Msg::BuildMaterials) && MessageRuleFor(Msg::BuildMaterials)->role == AuthRole::HostOnly);
         Writer rw; Encode(rw, BuildRemove{9, "hut", {1, 2, 3}});
         Reader rr(rw.data(), rw.size()); CHECK(PeekType(rr) == Msg::BuildRemove);
         BuildRemove rm; CHECK(Decode(rr, rm) && rm.netId == 9 && rm.sid == "hut" && rm.pos.x == 1);
@@ -1551,6 +1586,7 @@ static void TestFuzz() {
     add([](Writer& w) { InvOp m; m.fromNetId = 5; m.toNetId = 2; m.item.templateSid = "x"; m.traderNetId = 4; m.price = 12; Encode(w, m); });
     add([](Writer& w) { BuildPlace m; m.netId = 3; m.sid = "hut"; m.parentSid = "house"; Encode(w, m); });
     add([](Writer& w) { BuildStateMsg m; m.entries = {{1, "hut", {1, 2, 3}, 5, 1}}; Encode(w, m); });
+    add([](Writer& w) { BuildMaterialsMsg m; m.entries = {{1, {2, 3}}}; Encode(w, m); });
     add([](Writer& w) { Encode(w, BuildRemove{4, "hut", {}}); });
     add([](Writer& w) { BuildAction m; m.sid = "shop"; Encode(w, m); });
     add([](Writer& w) { Encode(w, StallMsg{90}); });   // fix G6
@@ -1611,6 +1647,7 @@ static void TestFuzz() {
         case Msg::BagBind: { BagBind m; Decode(r, m); break; }
         case Msg::BuildPlace: { BuildPlace m; Decode(r, m); break; }
         case Msg::BuildState: { BuildStateMsg m; Decode(r, m); break; }
+        case Msg::BuildMaterials: { BuildMaterialsMsg m; Decode(r, m); break; }
         case Msg::BuildRemove: { BuildRemove m; Decode(r, m); break; }
         case Msg::BuildAction: { BuildAction m; Decode(r, m); break; }
         case Msg::Stall: { StallMsg m; Decode(r, m); break; }
@@ -2536,6 +2573,9 @@ static void TestTrade() {
     Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cli.tradeView().open; });
     CHECK(cli.tradeView().open && cli.tradeView().counters == 1 && host.hostTrades() == 1);
     CHECK(cw.boxes[900].items == hw.boxes[900].items && cw.merchantMoney[50] == 500 && cw.tradeWindow);
+    // the window is told which of our objects are the shop's counters (our merchant may be a stand-in
+    // without that shop as its home: the game would build an empty window)
+    CHECK(cw.tradeWindowCounters.size() == 1 && cw.tradeWindowCounters[0] == FakeWorld::B(900));
     // the client's game buys 2 breads for 60 cats (part of a stack, into the bag)
     cw.boxes[900].items[0].quantity = 3;
     cw.chars[me].items.push_back(item("bread", 2, "main", 4, 1));
@@ -2574,6 +2614,17 @@ static void TestTrade() {
     }
     Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return cw.boxes[900].items == hw.boxes[900].items && cw.tradeWindowOpens > opens; });
     CHECK(cw.boxes[900].items == hw.boxes[900].items && cw.tradeWindowOpens > opens);
+    // a window that shows none of the stock is no longer closed and opened again (it flickered)
+    {
+        const int before = cw.tradeWindowOpens;
+        cw.tradeWindowShows = 0;
+        hw.boxes[900].items.push_back(item("bread", 1, "main", 6, 0));
+        Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cw.boxes[900].items == hw.boxes[900].items && cw.tradeWindowOpens > before; });
+        const int after = cw.tradeWindowOpens;
+        Run({{&host, &hw}, {&cli, &cw}}, 2.5);
+        CHECK(after == before + 1 && cw.tradeWindowOpens == after);
+        cw.tradeWindowShows = -1;
+    }
     // the merchant's cats change on the host: the client's copy follows
     hw.merchantMoney[50] = 777;
     Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cw.merchantMoney[50] == 777; });
@@ -2748,6 +2799,18 @@ static void TestBuildings() {
     CHECK(hw.placementsBuilt == 1 && cw.placementsBuilt == 1);
     if (findSid(hw, "hut") && findSid(cw, "hut")) CHECK(Dist(findSid(hw, "hut")->pos, findSid(cw, "hut")->pos) < 0.01f);
     CHECK(host.buildingCount() == 1);
+    // materials brought to the site on the host: the client's gauge shows them (0.3.1)
+    if (auto* b = findSid(hw, "hut")) b->materials = {4, 0};
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { auto* c = findSid(cw, "hut"); return c && c->materials == std::vector<float>({4, 0}); });
+    CHECK(findSid(cw, "hut") && findSid(cw, "hut")->materials == std::vector<float>({4, 0}));
+    if (auto* b = findSid(hw, "hut")) b->materials = {10, 6};
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { auto* c = findSid(cw, "hut"); return c && c->materials == std::vector<float>({10, 6}); });
+    CHECK(findSid(cw, "hut") && findSid(cw, "hut")->materials == std::vector<float>({10, 6}));
+    {   // unchanged: not imposed again every second
+        const int applied = cw.materialsApplied;
+        Run({{&host, &hw}, {&cli, &cw}}, 2.5);
+        CHECK(cw.materialsApplied == applied);
+    }
     // the host's workers build: the client sees the progress, then the end
     if (auto* b = findSid(hw, "hut")) b->progress = 40;
     Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { auto* c = findSid(cw, "hut"); return c && c->progress == 40; });

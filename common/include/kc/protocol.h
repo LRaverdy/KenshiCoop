@@ -87,6 +87,7 @@ enum class Msg : uint8_t {
     BuildPlace = 52,      // both  a building placed in build mode (client: asks the host; host: everyone builds it)
     BuildState = 53,      // S->C  construction progress of player buildings (complete, paused, dismantling)
     BuildRemove = 54,     // S->C  a player building is gone (dismantled, destroyed)
+    BuildMaterials = 87,  // S->C  0.3.1: construction materials delivered to sites (the gauge); unknown to 0.3.0 clients, which ignore it
     BuildAction = 55,     // both  buy / dismantle a building (client: asks the host; host: replay of a purchase)
     // ---- fix G6
     Stall = 70,           // S->C  your game is about to freeze a while (a far teleport loads a zone): keep the link up
@@ -871,6 +872,16 @@ struct BuildStateMsg {
     std::vector<BuildStateEntry> entries;
 };
 constexpr uint32_t kMaxBuildStates = 256;
+// The construction materials delivered to a site, in the order of the game's list (the same template
+// lists the same materials everywhere): what the site's gauge shows. Deliveries happen on the host.
+struct BuildMaterialsEntry {
+    uint32_t netId = 0;
+    std::vector<float> delivered;
+};
+struct BuildMaterialsMsg {
+    std::vector<BuildMaterialsEntry> entries;
+};
+constexpr uint32_t kMaxBuildMaterials = 16;   // per site
 // fix G5: a character's job list, by kind (TaskType), in the panel's order.
 struct JobListEntry {
     uint32_t netId = 0;
@@ -898,6 +909,8 @@ void Encode(Writer& w, const BuildPlace& m);
 bool Decode(Reader& r, BuildPlace& m);
 void Encode(Writer& w, const BuildStateMsg& m);
 bool Decode(Reader& r, BuildStateMsg& m);
+void Encode(Writer& w, const BuildMaterialsMsg& m);
+bool Decode(Reader& r, BuildMaterialsMsg& m);
 void Encode(Writer& w, const BuildRemove& m);
 bool Decode(Reader& r, BuildRemove& m);
 void Encode(Writer& w, const BuildAction& m);

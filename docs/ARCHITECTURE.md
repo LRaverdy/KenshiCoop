@@ -365,6 +365,7 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | 52 | BuildPlace | ⇄ | lot E : une pose du mode construction (client : demande à l'hôte, netId 0 ; hôte : à bâtir par tous, avec son netId) |
 | 53 | BuildState | H→C | lot E : avancement des chantiers suivis (terminé, en pause, en démontage), avec type et endroit |
 | 54 | BuildRemove | H→C | lot E : un bâtiment suivi a été détruit pour de bon chez l'hôte |
+| 87 | BuildMaterials | H→C | 0.3.1 : matériaux apportés aux chantiers suivis (dans l'ordre de la liste du jeu), ce que montre la jauge ; ignoré par un client 0.3.0 (type inconnu), sans changement de version du protocole |
 | 55 | BuildAction | ⇄ | lot E : acheter / démonter (client : demande ; hôte : rejeu d'un achat chez tous) |
 | 56 | Research | H→C | atelier (protocole 34) : la recherche de la faction du joueur : technologies connues (plans lus compris), file dans l'ordre et avancement, niveau du banc |
 | 57 | ResearchRequest | C→H | atelier : mettre en file / retirer une technologie, apprendre un plan (acteur : le perso du joueur ; règle `OwnCharacter`) |
