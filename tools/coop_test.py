@@ -365,19 +365,31 @@ def setup_many(save, clients):
     return host, clis
 
 
-def arrange_grid(pids):
-    """Two rows of two windows (the second row overlaps the first a little on a 1080p screen)."""
+def tile(pids):
+    """Every game window glued to the next one and fully visible: side by side for two, 2x2 for more.
+    Each window gets an equal share of the work area (above the taskbar), keeping its aspect ratio, and
+    is brought to the front so the user can watch every instance."""
     sw, sh = user32.GetSystemMetrics(0), user32.GetSystemMetrics(17)   # SM_CYFULLSCREEN: above the taskbar
     wins = [hwnd for pid in pids for hwnd, w, h in windows_of(pid) if w >= 640]
     if not wins:
         return
     r = wt.RECT()
     user32.GetWindowRect(wins[-1], ctypes.byref(r))
-    W, H = r.right - r.left, r.bottom - r.top
+    aspect = (r.bottom - r.top) / max(1, r.right - r.left)
+    cols = 1 if len(wins) == 1 else 2
+    rows = (len(wins) + cols - 1) // cols
+    W = sw // cols
+    H = int(W * aspect)
+    if H * rows > sh:
+        H = sh // rows
+        W = int(H / aspect)
     for i, hwnd in enumerate(wins):
-        x = 0 if i % 2 == 0 else sw - W
-        y = 0 if i < 2 else max(0, sh - H)
-        user32.SetWindowPos(hwnd, 0, x, y, W, H, 0x0004)
+        user32.ShowWindow(hwnd, 9)   # SW_RESTORE
+        user32.SetWindowPos(hwnd, 0, (i % cols) * W, (i // cols) * H, W, H, 0x0040)   # HWND_TOP, SWP_SHOWWINDOW
+
+
+def arrange_grid(pids):
+    tile(pids)
 
 
 def exp_four(host, clis):
@@ -430,16 +442,8 @@ def exp_four(host, clis):
 
 
 def arrange(host, cli):
-    """Side by side: host on the left half of the screen, client on the right."""
-    sw = user32.GetSystemMetrics(0)
-    wins = [hwnd for pid in (host, cli) for hwnd, w, h in windows_of(pid) if w >= 640]
-    if len(wins) != 2:
-        return
-    r = wt.RECT()
-    user32.GetWindowRect(wins[1], ctypes.byref(r))   # the client's window was never squeezed by the screen edge
-    W, H = r.right - r.left, r.bottom - r.top
-    user32.SetWindowPos(wins[0], 0, 0, 0, W, H, 0x0004)        # SWP_NOZORDER
-    user32.SetWindowPos(wins[1], 0, sw - W, 0, W, H, 0x0004)
+    """Side by side, glued: host on the left, client right next to it."""
+    tile([host, cli])
 
 
 def frozen_check(host, cli, label, radius=3000):
