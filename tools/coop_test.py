@@ -1512,7 +1512,7 @@ def exp_construct(host, cli, kinds=("Tente", "Feu", "Coffre", "Lit", "Mur"), mat
     time.sleep(3)
     own = own_index(host)
     hidx = 0 if own != 0 else 1
-    tasks = tasks or list(range(1, 100))
+    tasks = tasks or [2]   # TaskType BUILD = 2 (KenshiLib numbering, checked against the game's other orders)
     sid = find_building(host, kinds)
     mat = find_material(host, material)
     check("construction : un modele de batiment trouve", sid is not None, sid)
@@ -2863,7 +2863,7 @@ def main():
     cs.add_argument("--save", default="kctest_base")
     cs.add_argument("--keep", action="store_true")
     cs.add_argument("--material", default=None, help="name part or sid of the building materials item ('_' for spaces)")
-    cs.add_argument("--task", type=int, action="append", default=None, help="TaskType of the 'build' order (repeatable; default: probe 1..99)")
+    cs.add_argument("--task", type=int, action="append", default=None, help="TaskType of the 'build' order (repeatable; default: 2, BUILD)")
     bh = sub.add_parser("buyhouse", help="buying a building for sale: price, owner, doors and containers, refusal, simultaneous purchase")
     bh.add_argument("--save", default="kctest_town")
     bh.add_argument("--keep", action="store_true")
