@@ -13,7 +13,7 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT = ["suite", "trade", "doors", "factions", "diplomacy", "prison", "ranged", "build", "placevalid", "stuck", "farnpc", "beds", "tpdown"]
+DEFAULT = ["suite", "trade", "doors", "factions", "diplomacy", "prison", "ranged", "build", "placevalid", "stuck", "farnpc", "beds", "tpdown", "research"]
 
 which = sys.argv[1:] or DEFAULT
 os.makedirs(os.path.join(ROOT, "test_out"), exist_ok=True)

@@ -1406,6 +1406,37 @@ extern void (*o_openButton)(void*, void*);
 extern void (*o_lockButton)(void*, void*);
 } // namespace doorhooks
 // ---- end lot A
+// ---- workshop (plugin/workshop.cpp)
+namespace workshophooks {
+bool hk_start(void*, void*);
+void hk_stop(void*, void*);
+bool hk_pay(void*, void*);
+void hk_progress(void*, float);
+bool hk_learn(void*);
+void* hk_addCraft(void*, void*, void*, float, int);
+void hk_removeCraft(void*, int);
+void hk_queueAdd(void*, void*);
+void hk_queueRemove(void*, void*);
+void hk_queueRemoved(void*, int, void*);
+void hk_queueRepeat(void*, void*);
+void hk_grid(void*);
+void hk_power(void*, void*);
+void hk_batt(void*, void*);
+extern bool (*o_start)(void*, void*);
+extern void (*o_stop)(void*, void*);
+extern bool (*o_pay)(void*, void*);
+extern void (*o_progress)(void*, float);
+extern bool (*o_learn)(void*);
+extern void* (*o_addCraft)(void*, void*, void*, float, int);
+extern void (*o_removeCraft)(void*, int);
+extern void (*o_queueAdd)(void*, void*);
+extern void (*o_queueRemove)(void*, void*);
+extern void (*o_queueRemoved)(void*, int, void*);
+extern void (*o_queueRepeat)(void*, void*);
+extern void (*o_grid)(void*);
+extern void (*o_power)(void*, void*);
+extern void (*o_batt)(void*, void*);
+} // namespace workshophooks
 
 bool InstallHooks(TickFn tick, std::string* err) {
     g_tick = tick;
@@ -1517,6 +1548,21 @@ bool InstallHooks(TickFn tick, std::string* err) {
         // ---- map markers: the squad bar's portraits
         {kenshi::FnPortraitCellUpdate, reinterpret_cast<void*>(&mapmarks::hk_portraitUpdate), reinterpret_cast<void**>(&mapmarks::o_portraitUpdate)},
         {kenshi::FnPortraitCellDtor, reinterpret_cast<void*>(&mapmarks::hk_portraitDtor), reinterpret_cast<void**>(&mapmarks::o_portraitDtor)},
+        // ---- workshop: research, crafting benches, power
+        {kenshi::FnResearchStart, reinterpret_cast<void*>(&workshophooks::hk_start), reinterpret_cast<void**>(&workshophooks::o_start)},
+        {kenshi::FnResearchStop, reinterpret_cast<void*>(&workshophooks::hk_stop), reinterpret_cast<void**>(&workshophooks::o_stop)},
+        {kenshi::FnResearchPayCosts, reinterpret_cast<void*>(&workshophooks::hk_pay), reinterpret_cast<void**>(&workshophooks::o_pay)},
+        {kenshi::FnResearchProgress, reinterpret_cast<void*>(&workshophooks::hk_progress), reinterpret_cast<void**>(&workshophooks::o_progress)},
+        {kenshi::FnLearnResearch, reinterpret_cast<void*>(&workshophooks::hk_learn), reinterpret_cast<void**>(&workshophooks::o_learn)},
+        {kenshi::FnCraftAdd, reinterpret_cast<void*>(&workshophooks::hk_addCraft), reinterpret_cast<void**>(&workshophooks::o_addCraft)},
+        {kenshi::FnCraftRemove, reinterpret_cast<void*>(&workshophooks::hk_removeCraft), reinterpret_cast<void**>(&workshophooks::o_removeCraft)},
+        {kenshi::FnCraftQueueAdd, reinterpret_cast<void*>(&workshophooks::hk_queueAdd), reinterpret_cast<void**>(&workshophooks::o_queueAdd)},
+        {kenshi::FnCraftQueueRemove, reinterpret_cast<void*>(&workshophooks::hk_queueRemove), reinterpret_cast<void**>(&workshophooks::o_queueRemove)},
+        {kenshi::FnCraftQueueRemoved, reinterpret_cast<void*>(&workshophooks::hk_queueRemoved), reinterpret_cast<void**>(&workshophooks::o_queueRemoved)},
+        {kenshi::FnCraftQueueRepeat, reinterpret_cast<void*>(&workshophooks::hk_queueRepeat), reinterpret_cast<void**>(&workshophooks::o_queueRepeat)},
+        {kenshi::FnUpdatePowerGrid, reinterpret_cast<void*>(&workshophooks::hk_grid), reinterpret_cast<void**>(&workshophooks::o_grid)},
+        {kenshi::FnTogglePowerButton, reinterpret_cast<void*>(&workshophooks::hk_power), reinterpret_cast<void**>(&workshophooks::o_power)},
+        {kenshi::FnToggleBattButton, reinterpret_cast<void*>(&workshophooks::hk_batt), reinterpret_cast<void**>(&workshophooks::o_batt)},
         // ---- crash report
         {kenshi::FnWriteCrashDump, reinterpret_cast<void*>(&hk_writeCrashDump), reinterpret_cast<void**>(&o_writeCrashDump)},
     };

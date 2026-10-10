@@ -98,6 +98,13 @@ void KenshiWorld::BeginFrame(bool live) {
 // frame call the game on freed memory.
 void KenshiWorld::ResetWorldBound() {
     alias_.clear();   // stand-ins belonged to the previous world
+    {
+        std::lock_guard<std::mutex> lk(workshopMutex_);   // workshop: pointers of the previous world
+        craftMeta_.clear();
+        hostPoweredTowns_.clear();
+        researchAsks_.clear();
+        machineAsks_.clear();
+    }
     pendingLoot_.clear();
     strangerSince_.clear();
     lastTarget_.clear();

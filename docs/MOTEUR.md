@@ -207,6 +207,38 @@ Les six adresses : traduites de KenshiLib 1.0.65 (décalage +0x780 / +0x17B0 dan
 confirmées dans le 1.0.68 comme cibles des appels lus dans `placementVerification`, `createBuildings`
 et le clic du mode construction ; prologues relevés dans `kenshi_x64.exe` et vérifiés au démarrage.
 
+### Atelier : recherche, établis, machines, énergie (`plugin/workshop.cpp`)
+
+| Groupe | Enum | Fonction | RVA | Hook | Rôle |
+|---|---|---|---|---|---|
+| recherche | `FnResearchStart` | `Research::startResearch(GameData*)` | `0x8348A0` | oui | niveau du banc (`GameData` « level » contre `Research+0x170`), `payCosts`, retrait de la liste « disponible », `isInQueue`, ajout en fin de file ; seul appelant : le bouton « ajouter » de la fenêtre Recherche (`0x4976C0`), qui ignore le résultat |
+| recherche | `FnResearchStop` | `Research::stopResearch(GameData*)` | `0x830DE0` | oui | retire de la file, remet dans la liste disponible, rien n'est rendu ; appelée par les boutons « retirer » (`0x49A930`, `0x49AA50`) avec `*(0x2134690)+0x38`, et par `refreshResearchList` (retour `0x49A5B0`) pour chaque technologie en file dont `checkRequirements_andQueue` échoue : chez un client ce nettoyage est ignoré (la file est celle de l'hôte) |
+| recherche | `FnResearchComplete` | `Research::completeResearch(GameData*)` | `0x834550` | — | `upgradeShit`, **dépile l'avant de la file** si une entrée correspond (quelle que soit sa place), ajoute à l'ensemble `finished` (+0xF0), `_updateTheAllList`, rafraîchit la fenêtre, message « Research complete: {1} » ; ne consomme rien |
+| recherche | `FnResearchPayCosts` | `Research::payCosts(GameData*)` | `0x8343C0` | oui | `canPayCosts` (`0x832E50`), `deleteAllArtifactsFor` (`0x832F20`), message « Used artifacts for '{1}' research. » ; seul appelant : `startResearch` |
+| recherche | `FnResearchProgress` | `Research::progressResearch(float)` | `0x836B70` | oui | ajoute au `progress` (+8) du premier `ResearchItem`, `completeResearch` quand il suffit ; appelée par `0x7B65B0` (le travail des chercheurs, rangé par `ResearchBuilding::operate` dans une liste globale `0x21346D8`) |
+| recherche | `FnResearchIsInQueue` | `Research::isInQueue(GameData*)` | `0x82EAA0` | — | parcourt la file (+0x38) |
+| recherche | `FnResearchCheckRequirements` | `Research::checkRequirements(GameData*, bool twoLevels, bool checkCost)` | `0x832FA0` | — | tests seulement (`researchpick`) |
+| recherche | `FnLearnResearch` | `Item::learnResearch()` | `0x2B65D0` | oui | un plan lu (« Failed to learn from blueprint… », « Research already known ») : `checkRequirements` puis `completeResearch` de sa technologie ; l'appelant (`0x714A20`, clic droit dans l'inventaire sur un objet de type 0x15) retire ensuite le plan par `Inventory` vt 0x30 `removeItemAutoDestroy(item, 1)` |
+| établi | `FnCraftAdd` | `CraftingBuilding::_addCraft(GameData* base, GameData* matériau, float progress, YesNoMaybe crit)` | `0x2B5CA0` | oui | ajoute un `CraftingItem` (crée l'objet) ; appelée par le chargement, `addFinishedCraftItem` (répéter) et le bouton « ajouter » de la fenêtre Fabrication |
+| établi | `FnCraftRemove` | `CraftingBuilding::_removeCraft(int)` | `0x2B6A20` | oui | retire l'ordre n (l'ordre 0 libère aussi `+0x448`) ; chaîne « _removeCraft » |
+| établi | `FnCraftQueueAdd` | `CraftingQueue::addCraftButton(Widget*)` (nom du mod) | `0x2B9770` | oui | lit les chaînes « id » / « id2 » du bouton, établi = `hand` à `CraftingQueue+0x60`, appelle `_addCraft(base, mat, 0, 2)` |
+| établi | `FnCraftQueueRemove` | `CraftingQueue::removeCraftButton(Widget*)` (nom du mod) | `0x2B9940` | oui | lit « index », appelle `_removeCraft` |
+| établi | `FnCraftQueueRemoved` | `CraftingQueue::craftRemoved(int, const CraftItemViewData&)` (nom du mod) | `0x2B9A50` | oui | ordre glissé hors de la liste : `_removeCraft` |
+| établi | `FnCraftQueueRepeat` | `CraftingQueue::repeatButton(Widget*)` (nom du mod) | `0x2B5000` | oui | inverse `CraftingBuilding+0x4CC` |
+| machine | `FnStopOperating` | `UseableStuff::stopOperating(const hand&)` | `0x2ACA90` | — | `erase` dans l'ensemble des opérateurs (+0x3D0) |
+| machine | `FnOperatorSetInsert` | `std::set<hand>::insert(pair* ret, const hand&, bool)` | `0xF7D90` | — | l'insertion qu'appelle `UseableStuff::tryOperate` (`0xF8030`, vt 0x4F8) |
+| énergie | `FnUpdatePowerGrid` | `Town::updatePowerGrid()` | `0x92CD60` | oui | vt 0x2B8 de `Town` : remet à zéro puis répartit l'énergie des générateurs et batteries de la ville (totaux à `Town+0x470`…`+0x490`) |
+| énergie | `FnTogglePowerButton` | `UseableStuff::togglePowerButton(DataPanelLine*)` | `0x297A60` | oui | bouton marche / arrêt du panneau : `switchPowerOn(!powerOn)` (vt 0x318, `0x2973F0`) ; la ligne n'est pas lue |
+| énergie | `FnToggleBattButton` | `UseableStuff::toggleBattButton(DataPanelLine*)` | `0x297AE0` | oui | inverse `+0x3B4` (reçoit l'énergie des batteries) |
+| recherche | `FnRefreshResearchList` | `ManagementScreen::refreshResearchList()` | `0x49A4C0` | — | redessine la fenêtre Recherche après un changement imposé |
+
+Trouvées par leurs chaînes (« Research complete: {1} » → `0x834550`, « Used artifacts… » →
+`0x8343C0`, « Failed to learn from blueprint… » → `0x2B65D0`, « _removeCraft » → `0x2B6A20`) puis
+par leurs appelants (`startResearch` : seul appel de `0x4976C0`, la fonction de « Cannot research
+'{1}' » ; `stopResearch` : les boutons « retirer » de la fenêtre) ; les fonctions de `Research` et de
+`CraftingBuilding` sont décalées de +0x1590, +0x1240 et +0x4B0 par rapport à KenshiLib 1.0.65 dans
+ces zones. Prologues relevés dans `kenshi_x64.exe` et vérifiés au démarrage.
+
 Les cinq passent par `Character::ai` (+0x650) puis `AI::orders` (+0x20, `OrdersReceiver`, tâches
 à +0x90 nombre et +0x98 tableau de `Tasker*`). `Character::clearPermajobs` (`0x5C8FE0`) n'a aucun
 appelant : le panneau n'a pas de « tout effacer » propre.
@@ -1419,3 +1451,41 @@ KenshiLib (`InventoryGUI::playSound(eventId, Item*)` dépend d'un objet) : les p
   plantent souvent à leur tour (`0x86D6D6` appelle un destructeur par une vtable morte), et c'est
   ce second plantage que voyait le filtre du mod. Dans le dump, la pile au-dessus de `rsp` est
   déjà en partie réécrite (déroulement C++ et écriture du dump).
+
+## 13. Atelier : recherche, établis, machines, énergie [D]
+- **Recherche** : un seul objet `Research` pour la faction du joueur, `PlayerInterface+0x38`
+  (`*(0x2134690)+0x38` dans le code de la fenêtre). Champs vérifiés dans le 1.0.68 : +0x0
+  `ManagementScreen*`, +0x38 la file `std::deque<ResearchItem>` (VS2010 : +0x40 tableau de blocs,
+  +0x48 taille du tableau, +0x50 premier indice, +0x58 nombre ; un `ResearchItem` de 16 octets par
+  bloc : `GameData*` à +0, `float progress` à +8), +0xF0 l'ensemble `finished`
+  (`boost::unordered_set<GameData*>`, rempli par `completeResearch`), +0x170 niveau du meilleur banc
+  de recherche (int, comparé au « level » de la technologie), +0x174 nombre de chercheurs de
+  l'image. D'après KenshiLib, non vérifiés : +0x10 `craftableThings`
+  (`std::map<itemType, lektor<GameData*>>`), +0x130 `enabledObjects` (ce que proposent le menu de
+  construction et les listes de fabrication), +0xD8 `paidFor`.
+- Un **plan lu** est une technologie terminée (`learnResearch` → `completeResearch`) : il n'y a pas
+  d'état « plan » à part.
+- `completeResearch` dépile l'avant de la file pour **toute** entrée qui correspond : appelée sur une
+  technologie qui n'est pas en tête, elle retire la mauvaise. Le mod la retire d'abord de la file
+  (`stopResearch`).
+- Le coût est payé une fois (`payCosts` avant `isInQueue` dans `startResearch` ; un second
+  `startResearch` de la même technologie paie avant d'être refusé, d'où la vérification `isInQueue`
+  du mod avant d'appeler le jeu).
+- **Machines** (`UseableStuff`, vtable `0x16B21C8`) : +0x3A4 barre de progression (float, écrite par
+  `UseableStuff::operate` `0x297530`), +0x3AC opérateurs max (int), +0x3B4 reçoit l'énergie des
+  batteries, +0x3B5 en marche, +0x3B8, +0x3BC sortie max (> 0 : générateur), +0x3C0 énergie reçue
+  dans l'image, +0x3C4 charge de batterie, +0x3C8 charge max (> 0 : batterie), +0x3D0 les opérateurs
+  `std::set<hand>` (+0x3D8 nœud de tête, +0x3E0 nombre ; nœud : gauche +0, parent +8, droite +0x10,
+  `hand` à +0x18, nul à +0x39). Building vt 0x300 `getUseableStuff` (lui-même ou nul), vt 0x3B0
+  `getProductionBuilding`. `ProductionBuilding+0x448` : l'objet produit (`ConsumptionItem*`, quantité
+  float à +0). `CraftingBuilding` (vtable `0x16B5A58`) : +0x498 les ordres (`std::deque<CraftingItem>`,
+  nombre à +0x4B8, un par bloc ; `CraftingItem` : `Item*` +0, `progress01` +0xC), +0x4CC répéter.
+  `Item+0xC8` : son matériau. Le bâtiment connaît sa ville par le `hand` à +0x1D0 (`Town`, vtable
+  `0x1735BA8`).
+- Les opérateurs ne sont ajoutés que par la tâche du personnage (`tryOperate`), donc par l'IA : chez
+  un client (IA coupée) l'ensemble restait vide, d'où « 0/3 » dans la fenêtre de la mine.
+- **Énergie** (`Town::updatePowerGrid`) : générateurs (ensemble de `hand` à +0x408…), batteries
+  (+0x448…), consommateurs (tableau trié de `hand` +0x3D8 / +0x3E0) ; totaux +0x474 production,
+  +0x478, +0x47C demande, +0x480 sortie des batteries, +0x484, +0x488 charge, +0x48C charge stockée,
+  +0x490 charge max ; +0x470 vrai quand la ville tourne sur batterie. Le nom exact de +0x478 et +0x484
+  n'est pas connu (le mod les copie tels quels).

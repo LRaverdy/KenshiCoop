@@ -176,6 +176,7 @@ void Session::Leave() {
     ResetFactions();
     ResetDiplomacy();
     ResetDoors();   // lot A
+    ResetWorkshop();   // research, crafting, machines, power
     floorSent_.clear(); floors_.clear(); nextFloors_ = nextFloorsFull_ = 0; floorPlayers_ = 0;   // fix G6
     ResetJobs();   // fix G5
     captiveSent_.clear(); captives_.clear(); captivesDirty_.clear();   // lot D: prisons
@@ -254,6 +255,9 @@ void Session::HostTick(double now, bool live) {
     HostBags(now);
     HostTrades(now);
     HostDoors(now);   // lot A
+    HostWorkshopRequests();   // research and machine requests, one after the other
+    HostResearch(now);
+    HostMachines(now);   // before the inventories: a machine's inventory entity is announced first
     HostCaptives(now);   // lot D: prisons
     HostMapMarkers(now);   // map markers and pings
     HostRanged(now);   // lot C
@@ -829,7 +833,7 @@ void Session::UpdateInterest() {
         if (it->second.keep) { ++it; continue; }
         if (it->second.container) {   // only the players who have it open know it
             const bool walking = std::any_of(walkingToContainers_.begin(), walkingToContainers_.end(), [&](const PendingContainer& p) { return p.netId == it->first; });
-            if (!it->second.openBy.empty() || walking) { ++it; continue; }
+            if (!it->second.openBy.empty() || walking || it->second.machine) { ++it; continue; }   // a machine: HostMachines decides
             byHandle_.erase(it->second.handle);
             for (auto& [pid, s] : sync_) s.sent.erase(it->first);
             it = entities_.erase(it);
@@ -1531,6 +1535,7 @@ void Session::ClientContainers(double now) {
             Writer w;
             Encode(w, ContainerClose{it->first, {}});
             SendReliable(net_.serverPeer(), w);
+            if (it->second.machine) { ++it; continue; }   // a machine's inventory stays synced
             it = entities_.erase(it);
         }
     }
@@ -1857,6 +1862,8 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         break;
     }
     case Msg::DoorRequest: HostDoorPacket(pl->id, r); break;   // lot A
+    case Msg::ResearchRequest: HostResearchPacket(pl->id, r); break;   // workshop
+    case Msg::MachineRequest: HostMachinePacket(pl->id, r); break;
     case Msg::MapPing: if (pl && pl->inGame) HostPingPacket(pl->id, r); break;   // map pings
     default: break;  // host ignores host-bound-only messages from clients
     }
@@ -1865,7 +1872,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
 void Session::SendInventories(double now, bool force, PeerId onlyTo) {
     (void)now;
     for (auto& [id, e] : entities_) {
-        if (e.container && !e.bag && e.openBy.empty()) continue;
+        if (e.container && !e.bag && !e.machine && e.openBy.empty()) continue;
         std::vector<ItemState> items;
         if (!world_.ReadInventory(e.handle, items)) continue;
         const uint64_t h = InventoryHash(items);
@@ -1875,6 +1882,12 @@ void Session::SendInventories(double now, bool force, PeerId onlyTo) {
         m.items = std::move(items);
         Writer w(1024);
         Encode(w, m);
+        if (e.container && !e.bag && e.machine) {   // a player machine: every player keeps it in step
+            if (onlyTo != kNoPeer) { SendReliable(onlyTo, w); continue; }
+            e.invHash = h;
+            BroadcastReliable(w, true);
+            continue;
+        }
         if (e.container && !e.bag) {   // only to the players who have it open
             e.invHash = h;
             for (uint8_t pid : e.openBy)
@@ -2650,6 +2663,7 @@ void Session::ClientTick(double now, bool live) {
     ClientFactionsTick(now);   // lot B
     ClientDiplomacyTick(now);
     ClientDoors(now);   // lot A
+    ClientWorkshop(now);   // research, crafting, machines, power
     ClientCaptives(now);   // lot D: prisons
     PrunePings(now);   // map pings
     ClientRanged(now);   // lot C
@@ -2947,6 +2961,11 @@ void Session::ClientPacket(Msg type, Reader& r) {
         e.checked = true;
         e.containerPos = m.pos;
         e.looter = m.looterNetId;
+        if (auto old = entities_.find(m.netId); old != entities_.end() && old->second.machine) {   // a machine: its items stay as they are
+            e.machine = true;
+            e.inv = old->second.inv;
+            e.haveInv = old->second.haveInv;
+        }
         entities_[m.netId] = std::move(e);
         pendingWindow_ = m.netId;
         break;
@@ -2956,7 +2975,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
         if (state_ != SessionState::Connected || !Decode(r, m)) break;
         if (auto it = entities_.find(m.netId); it != entities_.end()) {
             if (IsTradeCounter(m.netId)) EndClientTrade();   // the whole trade window goes
-            if (it->second.container && !it->second.bag) entities_.erase(it);   // a backpack stays synced
+            if (it->second.container && !it->second.bag && !it->second.machine) entities_.erase(it);   // a backpack, a machine stay synced
             world_.CloseContainerWindows();
             windowOpenedAt_ = -1;
             if (!m.reason.empty()) AddChat("* " + m.reason, "the host closes the window: " + m.reason);
@@ -3062,6 +3081,19 @@ void Session::ClientPacket(Msg type, Reader& r) {
         for (auto& c : m.chars) {
             auto it = entities_.find(c.netId);
             if (it == entities_.end()) continue;
+            // learning by doing is the host's (the local game gains nothing): its level ups, told here
+            if (it->second.squad && it->second.owner == localId_ && it->second.stats.size() == kStatCount && c.stats.size() == kStatCount) {
+                int told = 0;
+                for (size_t i = 0; i < kStatCount && told < 3; ++i) {
+                    const int before = int(std::floor(it->second.stats[i])), after = int(std::floor(c.stats[i]));
+                    if (after <= before) continue;
+                    ++told;
+                    const std::string name = world_.CharacterNameOf(it->second.handle);
+                    AddChat("* " + (name.empty() ? std::string("Ton personnage") : name) + " : " + StatNameFr(i) + " " + std::to_string(before) + " -> " +
+                                std::to_string(after),
+                            "skill up (host): stat " + std::to_string(i) + " " + std::to_string(before) + " -> " + std::to_string(after));
+                }
+            }
             it->second.stats = std::move(c.stats);
             it->second.modes = c.modes;
             it->second.style = c.style;
@@ -3128,6 +3160,8 @@ void Session::ClientPacket(Msg type, Reader& r) {
         break;
     }
     case Msg::Doors: ClientDoorsPacket(r); break;   // lot A
+    case Msg::Research: ClientResearchPacket(r); break;   // workshop
+    case Msg::Machines: ClientMachinesPacket(r); break;
     case Msg::JobList: ClientJobsPacket(r); break;   // fix G5
     case Msg::Shots: case Msg::Ranged: ClientRangedPacket(type, r); break;   // lot C
     case Msg::Result: {   // the host's answer to one of our requests
@@ -3221,6 +3255,8 @@ void Session::ForgetPlayer(uint8_t id) {
     drop(pendingPlaces_);
     drop(pendingBuildActions_);
     drop(pendingDoorReqs_);
+    drop(pendingResearchReqs_);
+    drop(pendingMachineReqs_);
     walkingToContainers_.erase(std::remove_if(walkingToContainers_.begin(), walkingToContainers_.end(), [id](const PendingContainer& c) { return c.player == id; }),
                                walkingToContainers_.end());
     // containers and trade windows they had open are free again
@@ -3232,6 +3268,8 @@ void Session::ForgetPlayer(uint8_t id) {
     buildSyncedPlayers_.erase(id);
     factionsServed_.erase(peer);
     diploServed_.erase(peer);
+    researchServed_.erase(peer);
+    machinesServed_.erase(peer);
     log_("player " + std::to_string(id) + " cleaned up: " + std::to_string(owned.size()) + " character(s) back to the host and halted, " +
          std::to_string(closed) + " container window(s) and " + (traded ? "a" : "no") + " trade window closed" +
          (wasEditing ? ", character editor hold released" : ""));

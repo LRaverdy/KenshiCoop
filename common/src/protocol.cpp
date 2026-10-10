@@ -743,6 +743,8 @@ const MessageRule kMessageRules[] = {
     {Msg::Chat, AuthRole::Connected, AuthSubject::None, "chat"},
     {Msg::Ping, AuthRole::Connected, AuthSubject::None, "ping"},
     {Msg::MapPing, AuthRole::InGame, AuthSubject::None, "map ping", 0.5},   // = Session::kPingInterval
+    {Msg::ResearchRequest, AuthRole::InGame, AuthSubject::OwnCharacter, "research request"},
+    {Msg::MachineRequest, AuthRole::InGame, AuthSubject::OwnCharacter, "machine request"},
     // host -> client only
     {Msg::Welcome, AuthRole::HostOnly, AuthSubject::None, "welcome"},
     {Msg::Reject, AuthRole::HostOnly, AuthSubject::None, "reject"},
@@ -785,6 +787,8 @@ const MessageRule kMessageRules[] = {
     {Msg::BagBind, AuthRole::HostOnly, AuthSubject::None, "bag bind"},
     {Msg::MapMarkers, AuthRole::HostOnly, AuthSubject::None, "map markers"},
     {Msg::Diplomacy, AuthRole::HostOnly, AuthSubject::None, "diplomacy"},
+    {Msg::Research, AuthRole::HostOnly, AuthSubject::None, "research"},
+    {Msg::Machines, AuthRole::HostOnly, AuthSubject::None, "machines"},
     {Msg::Result, AuthRole::HostOnly, AuthSubject::None, "result"},
 };
 } // namespace
@@ -852,6 +856,10 @@ const char* MsgName(Msg type) {
     case Msg::MapMarkers: return "MapMarkers";
     case Msg::MapPing: return "MapPing";
     case Msg::Diplomacy: return "Diplomacy";
+    case Msg::Research: return "Research";
+    case Msg::ResearchRequest: return "ResearchRequest";
+    case Msg::Machines: return "Machines";
+    case Msg::MachineRequest: return "MachineRequest";
     case Msg::Result: return "Result";
     }
 #pragma warning(pop)

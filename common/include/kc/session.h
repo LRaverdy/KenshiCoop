@@ -304,6 +304,35 @@ public:
     // ok: done; refused: why not (French, for the player)
     virtual bool ExecuteBuildAction(const BuildAction& a, std::string& refused) { (void)a; refused.clear(); return false; }
 
+    // ---- workshop (plugin/workshop.cpp): research, crafting benches, machines and power.
+    // Research. Host: the player faction's research as its game has it; run a client's request on
+    // its game (actor: the asking player's character, already admitted; false: refused or failed,
+    // why in French). Client: impose the host's research (finished techs, queue, progress); its own
+    // game never researches, pays or completes anything by itself. Returns what had to change.
+    virtual bool ReadResearch(ResearchState& out) { out = ResearchState{}; return false; }
+    virtual bool ExecuteResearchRequest(const ResearchRequest& r, const Handle& actor, std::string& refusedFr) {
+        (void)r; (void)actor; refusedFr.clear(); return false;
+    }
+    virtual size_t ApplyResearch(const ResearchState& s) { (void)s; return 0; }
+    // Machines. Host: the player's machines within `radius` of the points (operators as game handles,
+    // netId 0) and the power panels of their towns; run a client's machine request. Client: impose a
+    // machine's state (`operators`: host handles of the replicated characters working it) and a town's
+    // power totals (its own game then stops computing that town's power).
+    struct WorldMachine { MachineState state; Handle handle; std::vector<Handle> operators; };
+    virtual void ReadMachines(const std::vector<Vec3>& centers, float radius, std::vector<WorldMachine>& out, std::vector<TownPower>& towns) {
+        (void)centers; (void)radius; out.clear(); towns.clear();
+    }
+    virtual bool ExecuteMachineRequest(const MachineRequest& r, const Handle& actor, std::string& refusedFr) {
+        (void)r; (void)actor; refusedFr.clear(); return false;
+    }
+    virtual bool ApplyMachine(const MachineState& s, const std::vector<Handle>& operators) { (void)s; (void)operators; return false; }
+    virtual bool ApplyTownPower(const TownPower& t) { (void)t; return false; }
+    // Client: what the local player asked in the research, crafting and building windows (never done
+    // locally). actor: our character concerned (host handle; invalid: the session picks the player's own).
+    struct LocalResearchAsk { ResearchRequest req; Handle actor; };
+    struct LocalMachineAsk { MachineRequest req; Handle actor; };
+    virtual void TakeWorkshopAsks(std::vector<LocalResearchAsk>& research, std::vector<LocalMachineAsk>& machines) { research.clear(); machines.clear(); }
+
     // Inventories. Host: read; execute a client's item movement (false = refused/impossible).
     virtual bool ReadInventory(const Handle& h, std::vector<ItemState>& out) = 0;
     virtual bool ExecuteInvOp(const Handle& from, const Handle& to, const InvOp& op) = 0;
@@ -468,6 +497,14 @@ public:
     DiplomacyView diplomacyView() const;
     // the host's diplomacy as this side knows it (host: its last read; client: what it received)
     const DiplomacyState& hostDiplomacy() const { return hostDiplo_; }
+    // ---- workshop (tests, overlay): counters; the research as this side knows it (host: last sent;
+    // client: received); a machine as the host sent it (key "sid@x,y,z", null: unknown here)
+    struct WorkshopView { size_t researchSent = 0, researchReceived = 0, researchApplied = 0, machinesSent = 0, machinesReceived = 0, machinesApplied = 0, requestsDone = 0, requestsRefused = 0, asked = 0; };
+    WorkshopView workshopView() const { return workshop_; }
+    const ResearchState& knownResearch() const { return isHost() ? researchSent_ : hostResearch_; }
+    size_t machinesKnown() const { return isHost() ? machinesSent_.size() : clientMachines_.size(); }
+    const MachineState* knownMachine(const std::string& key) const;
+    static std::string MachineKey(const std::string& sid, const Vec3& pos);
     const FactionsMsg& hostFactions() const { return hostFactions_; }      // client: the host's relations (host: last sent)
     const BountiesMsg& hostBounties() const { return hostBounties_; }      // client: the host's bounties (host: last sent)
     // ---- lot A: doors (tests): doors sent (host) / known and applied here (client)
@@ -561,6 +598,7 @@ private:
         bool keep = false;                   // scratch flag for interest updates
         bool container = false;              // a container a player has open (no character)
         bool bag = false;                    // a worn backpack (also `container`): its wearer is bagOwner
+        bool machine = false;                // a player machine's inventory (also `container`): synced to every player while tracked
         uint32_t bagOwner = 0;
         std::string bagSid;
         std::set<uint8_t> openBy;            // host: players who have it open
@@ -837,6 +875,43 @@ private:
     void ClientDoorsPacket(Reader& r);
     void ResetDoors();
     // ---- end lot A
+    // ---- workshop (session_workshop.cpp): research, crafting benches, machines and power.
+    // Host: the research as last sent, the requests to run; the machines tracked (key: kind and place)
+    // and what was last sent of each; town power totals. Client: the host's research and machines,
+    // imposed (dirty: just received), with our requests numbered.
+    ResearchState researchSent_;
+    bool haveResearchSent_ = false;
+    std::set<PeerId> researchServed_, machinesServed_;
+    double nextResearch_ = 0, researchFullAt_ = 0;
+    std::vector<std::pair<uint8_t, ResearchRequest>> pendingResearchReqs_;
+    std::vector<std::pair<uint8_t, MachineRequest>> pendingMachineReqs_;
+    std::unordered_map<std::string, MachineState> machinesSent_;
+    std::unordered_map<std::string, uint32_t> machineNetIds_;   // host: kind and place -> its inventory entity
+    std::vector<TownPower> townsSent_;
+    double nextMachines_ = 0, machinesFullAt_ = 0;
+    std::vector<IWorld::WorldMachine> scratchMachines_;
+    std::vector<TownPower> scratchTowns_;
+    ResearchState hostResearch_;                 // client
+    bool haveResearch_ = false, researchDirty_ = false;
+    double researchReapplyAt_ = 0;
+    struct ClientMachine { MachineState state; bool dirty = true; bool found = false; };
+    std::unordered_map<std::string, ClientMachine> clientMachines_;
+    std::unordered_map<std::string, TownPower> clientTowns_;
+    double machinesReapplyAt_ = 0;
+    uint32_t workshopSeq_ = 0;
+    std::vector<IWorld::LocalResearchAsk> scratchResearchAsks_;
+    std::vector<IWorld::LocalMachineAsk> scratchMachineAsks_;
+    WorkshopView workshop_;
+    void HostResearch(double now);
+    void HostMachines(double now);
+    void HostWorkshopRequests();
+    void HostResearchPacket(uint8_t from, Reader& r);
+    void HostMachinePacket(uint8_t from, Reader& r);
+    void ClientWorkshop(double now);
+    void ClientResearchPacket(Reader& r);
+    void ClientMachinesPacket(Reader& r);
+    uint32_t OwnActorNear(const Vec3* pos);   // client: our character for a request (nearest to pos, else our first)
+    void ResetWorkshop();
     // ---- fix G5: job lists (session_jobs.cpp). Host: what each squad member's list was when last
     // sent. Client: the host's lists, imposed (dirty: just received).
     std::unordered_map<uint32_t, std::vector<int32_t>> jobsSent_;

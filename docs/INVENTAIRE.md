@@ -28,6 +28,7 @@ protocole 33, environ 25 500 lignes). L'état de chaque fonctionnalité au sens 
 | Objets au sol | hooks PickupItem, GiveItem, DropItemHuman ; Ground | vérifié en jeu |
 | Inventaires, fouille | Inventory/InvOp, `world.cpp` | vérifié en jeu, bug d'ordre des échanges |
 | Contenants, vol | ContainerOpen/Opened/Close, `kenshi.cpp` (ImStealin, notifyTheftFrom) | vérifié en jeu, vol 🟡 |
+| Atelier : recherche, établis, machines et mines, énergie | `common/src/session_workshop.cpp` (Research/ResearchRequest, Machines/MachineRequest, entités `machine`), `plugin/workshop.cpp` (hooks startResearch, stopResearch, payCosts, progressResearch, learnResearch, _addCraft, _removeCraft, CraftingQueue, updatePowerGrid, togglePowerButton, toggleBattButton) | testé unitairement, jamais testé en partie |
 | Panneau d'inventaire d'un bâtiment (mine) | hook ShowInventoryBuilding (`hooks.cpp`) | harnais `mine` seulement |
 | Commerce | hook ShowTradeWindow, TradeOpen, `kenshi.cpp`:2060-2066 | vérifié en jeu (9/10) |
 | Heure, vitesse, pause | TimeState | vérifié en jeu |

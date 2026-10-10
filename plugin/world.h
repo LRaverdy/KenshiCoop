@@ -1,6 +1,7 @@
 // IWorld implementation backed by the running Kenshi game, plus the state the hooks consult.
 #pragma once
 #include <atomic>
+#include <iosfwd>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -115,6 +116,26 @@ public:
     bool SetFactionPair(const std::string& fromSid, const std::string& toSid, const kc::RelationState& rel);
     bool SetUniqueState(const std::string& sid, uint8_t state, bool byPlayer);
     bool SetTownOwner(const std::string& townSid, const std::string& factionSid);
+    // ---- workshop: research, crafting benches, machines, power (plugin/workshop.cpp)
+    bool ReadResearch(kc::ResearchState& out) override;
+    bool ExecuteResearchRequest(const kc::ResearchRequest& r, const kc::Handle& actor, std::string& refusedFr) override;
+    size_t ApplyResearch(const kc::ResearchState& s) override;
+    void ReadMachines(const std::vector<kc::Vec3>& centers, float radius, std::vector<WorldMachine>& out, std::vector<kc::TownPower>& towns) override;
+    bool ExecuteMachineRequest(const kc::MachineRequest& r, const kc::Handle& actor, std::string& refusedFr) override;
+    bool ApplyMachine(const kc::MachineState& s, const std::vector<kc::Handle>& operators) override;
+    bool ApplyTownPower(const kc::TownPower& t) override;
+    void TakeWorkshopAsks(std::vector<LocalResearchAsk>& research, std::vector<LocalMachineAsk>& machines) override;
+    // hooks (client): a research window button, a blueprint read, a crafting window / building panel
+    // button the local player used (never run here); host: a crafting order the game made (what the
+    // window asked for); is this town's power the host's (its own grid update is then skipped)
+    void QueueResearchAsk(kc::ResearchAction a, void* gameData);
+    void QueueBlueprintAsk(void* item);
+    void QueueMachineAsk(void* building, kc::MachineAction a, void* base, void* material, int index, bool value);
+    void NoteCraftAdded(void* craftingItem, void* base, void* material);
+    bool TownPowerFromHost(void* town);
+    // tests: a machine of ours near that point, by name part ("sid@x,y,z" key; null: none); its state here
+    void* NearestMachine(const kc::Vec3& from, const std::string& part, float radius);
+    bool ReadMachineState(void* building, kc::MachineState& out, std::vector<kc::Handle>* operators);
     // ---- lot A: doors and locks (plugin/doors.cpp)
     void ReadDoors(const std::vector<kc::Vec3>& centers, float radius, std::vector<kc::DoorState>& out) override;
     bool ContainerLocked(const kc::Handle& container) override;
@@ -462,6 +483,12 @@ private:   // first few lifecycle events (tests)
     std::vector<TradeRequest> tradeReqs_;            // host, under tradeMutex_
     kc::Handle hostTradeLooter_, hostTradeTrader_;   // host: our own last trade window (under tradeMutex_)
     // ---- lot E: buildings (under buildMutex_)
+    // ---- workshop (plugin/workshop.cpp)
+    std::mutex workshopMutex_;
+    std::vector<LocalResearchAsk> researchAsks_;          // client, under workshopMutex_
+    std::vector<LocalMachineAsk> machineAsks_;            // client, under workshopMutex_
+    std::unordered_map<const void*, std::pair<std::string, std::string>> craftMeta_;   // host: CraftingItem -> what the window asked (base, material)
+    std::unordered_set<const void*> hostPoweredTowns_;    // client: towns whose power is the host's
     std::mutex buildMutex_;
     std::vector<LocalPlacement> localPlacements_;
     std::vector<kc::BuildAction> localBuildActions_;
@@ -505,5 +532,7 @@ private:
 };
 
 KenshiWorld* TheWorld();   // set by the plugin entry point
+// Test commands of the workshop (research, crafting benches, machines, power): plugin/workshop.cpp.
+std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& in, const std::string& cmd, bool& handled);
 
 } // namespace kcp

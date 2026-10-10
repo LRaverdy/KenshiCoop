@@ -9,7 +9,7 @@ Deux niveaux de tests :
 
 ```powershell
 .\build.ps1                            # compile aussi kc_tests
-.\build\bin\Release\kc_tests.exe       # dernière ligne : "26728 checks, 0 failed" (10 octobre 2026)
+.\build\bin\Release\kc_tests.exe       # dernière ligne : "26781 checks, 0 failed" (10 octobre 2026)
 .\build.ps1 -Asan                      # variante AddressSanitizer, dans build-asan\
 ```
 
@@ -38,6 +38,7 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `TestMap` | marqueurs de carte : 1 hôte + 2 clients reçoivent les persos (propriétaires, perso de chaque joueur, positions même très loin) et les escouades hostiles de l'hôte ; un ping de client chez l'hôte et l'autre client, refusé s'il suit le précédent de moins de 0,5 s, 5 au plus par joueur, effacé après 10 s |
 | `TestManyPlayers` | 1 hôte + 4 clients arrivant ensemble, 120 personnages |
 | `TestJoinQueue` | file d'attente des arrivées : 3 arrivées quasi simultanées (une pendant la sauvegarde, une pendant le chargement du premier), un joueur à la fois jusqu'à la fermeture de son éditeur, positions / joueur attendu / étape côté clients, liste côté hôte, personne rejeté pendant l'attente, chaque sauvegarde contient les persos des précédents ; le joueur dans l'éditeur plante (tour suivant), un joueur quitte la file (renumérotée) ; deux éditeurs ouverts ensemble : pause jusqu'à la fermeture du dernier |
+| `TestWorkshop` | atelier : recherche (connues, file, avancement) et machine de l'hôte identiques chez le client sans rien ouvrir (opérateurs, ordres de fabrication, inventaire de la machine, totaux d'énergie) ; machine loin des joueurs non envoyée ; un mineur qui part, vu partout ; technologie demandée sans artefact refusée ; la même demandée deux fois d'un coup : une fois en file, payée une fois ; annulée puis redemandée sans repayer ; changement local du client défait ; plan porté par le perso du client appris chez l'hôte et consommé partout ; plan au nom du perso de l'hôte : jamais envoyé par le client, refusé par le contrôle central s'il est forgé ; ordre de fabrication du client exécuté et vu partout ; deux « répéter » d'un coup : le dernier l'emporte partout ; ordre déjà retiré refusé ; machine coupée par le client, coupée partout, panneau d'énergie suivi ; demande d'un perso trop loin refusée ; passage de niveau de l'hôte annoncé au client (« Science 5 -> 6 ») |
 | `TestMessageRules` | autorité : chaque valeur de `Msg` (les 256 octets passés à `MsgName`) a exactement une règle dans `kMessageRules`, et `PeekType` n'accepte que ces messages ; numéros de la fusion du protocole 33 (`JoinQueue` 72, `BagBind` 80, `MapMarkers` 82, `MapPing` 83, `Diplomacy` 85, `Result` 90) ; un client qui envoie `Diplomacy`, `MapMarkers`, `JoinQueue`, `BagBind` ou `Result` est refusé ; 5 pings d'affilée : 1 passe, 4 ignorés (`minInterval` 0,5 s), puis un autre passe |
 
 ## 2. Tests en jeu (`tools/coop_test.py`)
@@ -132,6 +133,7 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `actorsafety` (`kctest_town`) | **sécurité des acteurs** : l'hôte sélectionne ses propres persos (comme un joueur) ; le client donne avec son perso chaque sorte d'ordre (lit, parler, piller, ramasser, commerce, tâche, construire, porte, premiers soins sur un perso de l'hôte, suivre, porter un perso de l'hôte K.-O., attaquer) : après chacun, la sélection de l'hôte est inchangée et ses persos n'ont rien reçu (pas de nouvelle tâche, pas de déplacement, pas de lit, pas de conversation ; `actorstats` leaks=0). Puis ordres forgés (`forgeorder`) au nom d'un perso de l'hôte : refusés ; et ordres de son perso visant une cible du mauvais type (dont le chemin du plantage de `stress4` : `npcreq <perso> 2 a`, construire sur un PNJ) : refusés, l'hôte et le client vivants. Contrôles « securite controle : ... ». Pas encore lancée en jeu |
 | `crashrejoin` (`--only abcdefg`) | client **tué** (`taskkill /F`) puis relancé avec le même faux id Steam et revenu : (a) au repos, (b) en combat à la vitesse 3, (c) en portant un corps, (d) fenêtre de commerce ouverte, (e) en fouillant un corps, (f) dans l'éditeur de personnage, (g) relancé avant que l'hôte ait vu la coupure. À chaque fois : l'hôte vit, voit la coupure (< 20 s) et nettoie (journal « disconnected (… » / « cleaned up: »), le joueur retrouve les mêmes persos (clés, inventaires ; sauf combat), pas de doublon, comparaison hôte / client propre, l'hôte n'est pas resté en pause |
 | `map` (`--clients 2`) | **carte, minicarte, repères, barre, pings** : chaque client reçoit le flux de l'hôte (âge < 2 s, mêmes persos, mêmes propriétaires et positions à 30 unités près, mêmes escouades hostiles ; un PNJ copié qui se bat contre l'escouade sert d'ennemi) ; chaque joueur a un perso « à lui » ; chaque machine dessine tous les persos, une couleur par joueur (`mapscene carte`) ; projection du jeu (`worldToMapCoords`) = la nôtre à 1,5 px près ; minicarte centrée sur son perso ; repères au-dessus des têtes ; cadres de la barre seulement aux couleurs des joueurs ; ping du client 1 visible chez l'hôte et chez le client 2 à son nom, second ping trop rapide refusé, 5 au plus, effacé après 10 s. Contrôles « carte : … », « minicarte : … », « tetes : … », « barre : … », « ping : … ». Pas encore lancée en jeu |
+| `research` | **atelier** (bac à sable posé par l'hôte : banc de recherche, établi, générateur, batterie, lampe, livres / artefacts et matériaux mis dans les bancs par `machinegive`) : même recherche des deux côtés ; le client met en file une technologie qu'il peut rechercher (`researchpick`, `researchreq`), l'hôte l'exécute, même file partout ; demandée de nouveau par le client et par l'hôte : une seule fois en file, rien consommé deux fois, inventaire du banc identique ; annulée par le client, vu partout ; avancée chez l'hôte (`researchprogress`) : terminée et connue partout, même arbre, menu de construction débloqué pareil ; le client pose et bâtit un bâtiment débloqué ; il commande une fabrication à l'établi (exécutée par l'hôte, même file partout), hôte et client changent « répéter » en même temps (même résultat partout), inventaire de l'établi identique, son perso travaille l'établi, il retire l'ordre ; compétences de son perso identiques ; mine : son perso et deux de l'hôte minent le même filon, même nombre de mineurs (3) et même minerai partout, un mineur retiré vu partout ; énergie : générateur, batterie et lampe identiques (sortie, charge, consommation) et totaux de la base, générateur coupé par le client coupé partout, le reste suit. Contrôles « recherche : … », « fabrication : … », « mine : … », « energie : … ». Pas encore lancée en jeu |
 | `cmd <pid> <commande…>` | envoie une commande de debug à une instance |
 
 ### La suite (`suite`) : 32 points
@@ -414,6 +416,23 @@ l'escouade triée par handle.
 | `state <fichier> [rayon]` | écrit tout ce que voit cette instance (session, heure, météo, effets, chaque personnage avec position, animations, inventaire, santé). C'est la base des comparaisons |
 | `anims <fichier>` | animations jouées par chaque membre de l'escouade |
 | `animstats` | (client) corrections de l'horloge d'animation depuis le dernier appel |
+
+**Atelier** (`plugin/workshop.cpp`)
+
+| Commande | Rôle |
+|---|---|
+| `research` | la recherche telle que cette instance l'a : `desk=` niveau du banc, `finished=` nombre, `fh=` empreinte des technologies connues, `queue=sid:avancement|…` |
+| `researchknown <sid>` | `ok 1` si la technologie est connue ici |
+| `researchenabled [type]` | ce qui est débloqué (`enabledObjects` ; type 0 : bâtiments du menu de construction) : nombre, `eh=` empreinte, puis les sids |
+| `researchpick [n]` | jusqu'à n technologies dont les prérequis sont remplis ici (coût non vérifié), ni connues ni en file |
+| `researchreq <queue\|cancel> <sid>` | le bouton ajouter / retirer de la fenêtre Recherche (client : devient une demande à l'hôte) |
+| `researchprogress <quantité>` | (hôte) le travail des chercheurs, accéléré : termine la technologie en tête |
+| `blueprintreq <index> <nom>` | « apprendre » un plan que porte ce membre (client : demande à l'hôte) |
+| `craftlist [n]` | ce que la faction sait fabriquer (`craftableThings`), par sid |
+| `machine <nom>` | la machine la plus proche du membre 0 : `ops=` opérateurs/max, `names=`, `flags=` (1 marche, 2 batterie, 4 établi, 8 répéter, 16 générateur, 32 batterie), `power=`, `stored=`, `prog=`, `prod=`, `crafts=objet:avancement,…`, `town=` totaux d'énergie de sa ville |
+| `machineinv <nom>` | son inventaire : piles, quantité totale, empreinte `ih=` |
+| `machinereq <nom> <addcraft base [matériau]\|removecraft i\|repeat 0/1\|power 0/1\|battery 0/1>` | hôte : exécuté ; client : les interrupteurs passent par les boutons du panneau (crochetés), les ordres de fabrication par la file des demandes comme les boutons de la fenêtre |
+| `machinegive <nom> <objet> <n>` | (hôte, bac à sable) n objets neufs dans l'inventaire de cette machine |
 
 ## 4. Après les tests : remettre la configuration du joueur
 
