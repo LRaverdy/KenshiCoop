@@ -56,6 +56,12 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   `TaskVia` 6 à 8 de la commande `Task`), et l'hôte envoie les listes de tâches (message `JobList`,
   68) : le client retire de la sienne ce que l'hôte n'a plus. Limite : une tâche ajoutée n'apparaît
   pas dans la liste du client (elle n'y est que par la sauvegarde, après un resync).
+  Test en jeu du 10/10 (`jobs`) : aucune tâche chez l'hôte, les contrôles de retrait passaient à vide.
+  Trouvé : l'ordre du client arrive bien à l'hôte, mais la commande de test `jobreq` passait
+  `shift = false` à `addJobSelectedCharacters` ; ce booléen fait d'un ordre une **tâche permanente**
+  (liste du panneau Tâches) : sans lui, `OrdersReceiver::addJob` (`0x5086D0`) le range dans les ordres
+  passagers. Le chemin réel (clic avec Maj, panneau) transmet déjà ce booléen à l'hôte. `jobreq` le met
+  maintenant, et le test échoue franchement s'il n'y a pas de tâche à retirer. À revérifier : `jobs`.
   Ancienne description : toujours là après la 0.2.0. Le bouton stop
   arrête maintenant la tâche en cours chez l'hôte, mais retirer une tâche de la liste des tâches du perso
   (panneau Tâches, clic sur la croix) ne passe que par le jeu du client : l'hôte la garde, et elle revient.
@@ -125,6 +131,12 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
   propre perso (« sa sélection passe sur les persos des autres »). Maintenant les persos des autres
   joueurs sont retirés de la sélection de l'hôte et l'ordre part à ses persos ; l'escouade créée ou
   rejointe pour un client ne change plus la sélection de l'hôte.
+  Test en jeu du 10/10 (`passive`) : la sélection mixte ne basculait toujours pas le mode du perso de
+  l'hôte. Trouvé (désassemblage) : `setOrderSelectedCharacters` choisit activé/désactivé d'après le
+  perso « principal » de la sélection (un `hand` global, le dernier cliqué), ici celui du client (pas
+  passif, donc « activer ») ou plus rien une fois retiré. Maintenant, quand des persos d'autres joueurs
+  sont retirés, l'hôte calcule la bascule d'après son propre premier perso et la pose lui-même sur ses
+  persos. À revérifier : expérience `passive`.
   Ancienne description : l'hôte se met en passif ; quand un
   client ordonne à son perso d'attaquer un PNJ, le perso de l'hôte part aussi à l'attaque. Pistes : l'ordre
   du client est exécuté chez l'hôte en sélectionnant le perso du client ; si la sélection de l'hôte (son

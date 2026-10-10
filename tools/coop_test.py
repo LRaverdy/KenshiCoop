@@ -1377,7 +1377,15 @@ def exp_jobs(host, cli):
         if jobs.startswith("ok") and jobs.split()[1] != "0":
             break
     log("host jobs:", jobs, "| client jobs:", cmd(cli, f"jobs {own}")[1])
-    check("taches : le travail est chez l'hote", jobs.startswith("ok") and jobs.split()[1] != "0", jobs)
+    has_job = jobs.startswith("ok") and jobs.split()[1] != "0"
+    check("taches : le travail est chez l'hote", has_job, jobs)
+    if not has_job:
+        # nothing to remove: the removal checks would pass for nothing
+        log("NO JOB ON THE HOST: the client's job never reached it; removal not tested")
+        check("taches : retire chez l'hote", False, "pas de tache chez l'hote a retirer")
+        check("taches : ne revient pas chez le client", False, "pas de tache chez l'hote a retirer")
+        summary()
+        return
     cjobs = cmd(cli, f"jobs {own}")[1]
     if not (cjobs.startswith("ok") and cjobs.split()[1] != "0"):
         log("the client's list does not show it (it only removes what the host lost); resync to get it")
@@ -1387,7 +1395,7 @@ def exp_jobs(host, cli):
     log("client removes slot 0:", cmd(cli, f"jobremove {own} 0"))
     time.sleep(3)
     jobs_h, jobs_c = cmd(host, f"jobs {own}")[1], cmd(cli, f"jobs {own}")[1]
-    check("taches : retire chez l'hote", jobs_h.split()[1:2] == ["0"] or len(jobs_h.split()) < len(jobs.split()), f"{jobs} -> {jobs_h}")
+    check("taches : retire chez l'hote", jobs_h.startswith("ok") and len(jobs_h.split()) < len(jobs.split()), f"{jobs} -> {jobs_h}")
     time.sleep(5)
     jobs_c2 = cmd(cli, f"jobs {own}")[1]
     check("taches : ne revient pas chez le client", jobs_c2 == jobs_c and jobs_c2.split()[1:] == jobs_h.split()[1:], f"{jobs_c} -> {jobs_c2} (hote {jobs_h})")

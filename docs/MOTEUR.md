@@ -647,6 +647,12 @@ Tâches par défaut d'un clic droit sur un meuble, selon la recherche :
 - `OrdersPanel::passiveButtonCallback` (`0x721640`) bascule le bouton **avant** d'appeler
   `setOrderSelectedCharacters(13)` : si cet appel est refusé, le bouton s'affiche activé sans que
   le mode soit posé.
+- `setOrderSelectedCharacters` (`0x7F3880`) : `on = ordre >= 10 ? !getStandingOrder(perso principal) : true`,
+  le perso principal étant lu dans un `hand` global (`0x2133A70`), puis `setStandingOrder(ordre, on)`
+  sur chaque perso de la sélection. Avec une sélection mixte, le sens vient donc du dernier cliqué.
+- `addJobSelectedCharacters(task, subject, shift, add, pos)` → `Character::addJob` →
+  `OrdersReceiver::addJob` (`0x5086D0`) : `shift` vrai = tâche permanente (liste +0x88/+0x90, panneau
+  Tâches), faux = ordre passager (liste +0x70). `add` faux vide d'abord les tâches.
 - `PlayerInterface::objectSelected` (`0x7F7F20`) écrit aussi un `hand` global (`0x21345D0`) et
   `PlayerInterface`+0xF0 ; `unselectAll` les vide.
 

@@ -746,7 +746,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         for (int i = 0; i < n; ++i) o += " " + std::to_string(kenshi::PermajobType(c, i));
         return o;
     }
-    if (cmd == "jobreq") {   // jobreq <selectIndex> <task> <subjectIndex>: that member alone gets a job on the other (addJobSelectedCharacters, as the UI does)
+    if (cmd == "jobreq") {   // jobreq <selectIndex> <task> <subjectIndex>: that member alone gets a permanent job on the other (addJobSelectedCharacters, as the UI does)
         size_t sel = 0, subj = 0;
         int task = 0;
         in >> sel >> task >> subj;
@@ -758,7 +758,9 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         const float loc[3] = {p.x, p.y, p.z};
         using FnAddJob = void (*)(void*, int, void*, bool, bool, const float*);
         kenshi::WithSelection(w.FindSquad(squad[sel]), [&] {
-            reinterpret_cast<FnAddJob>(kenshi::FnAddr(kenshi::FnAddJobSelected))(kenshi::Player(), task, s2, false, true, loc);
+            // the first bool (KenshiLib's "shift") makes it a permanent job, in the Tâches panel
+            // (OrdersReceiver +0x88 list); false only gives a passing order (+0x70 list)
+            reinterpret_cast<FnAddJob>(kenshi::FnAddr(kenshi::FnAddJobSelected))(kenshi::Player(), task, s2, true, true, loc);
         });
         return "ok";
     }

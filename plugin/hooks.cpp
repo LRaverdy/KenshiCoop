@@ -224,7 +224,22 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
     auto v = KenshiWorld::View();
     if (g_hostCall || !v->active) return true;
     const SelectionInfo s = ClassifySelection(*v);
-    if (!v->client) return HostDropForeign(s);
+    if (!v->client) {
+        if (!HostDropForeign(s)) return false;
+        if (via != kc::TaskVia::SetOrder || !s.foreign) return true;
+        // A squad bar toggle with another player's character in the selection: the game's
+        // setOrderSelectedCharacters takes on/off from the "main" selected character (a global
+        // hand, the last one clicked), which can be the other player's character, or nothing once
+        // it is unselected; it then turned the host's passive character passive again instead of
+        // off. Done here from the host's own first character, on the host's characters only.
+        kenshi::Character* first = kenshi::Resolve(s.mine.front());
+        const bool on = task >= 10 && first ? !kenshi::GetStandingOrder(first, task) : true;
+        HostCallScope scope;
+        for (const auto& h : s.mine)
+            if (kenshi::Character* c = kenshi::Resolve(h)) kenshi::SetStandingOrder(c, task, on);
+        Log("host mode %d %s on %zu own character(s), the other players' left out", task, on ? "on" : "off", s.mine.size());
+        return false;
+    }
     KenshiWorld* w = TheWorld();
     if (!w) return false;
     if (OpensWindow(task)) {
