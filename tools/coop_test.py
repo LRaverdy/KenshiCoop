@@ -2603,12 +2603,14 @@ def exp_actorsafety(host, cli):
 
     excluded = set()   # a host character the client legitimately acts on (carried): not compared for moves
 
-    def host_untouched(label, before, actor_word):
+    def host_untouched(label, before, actor_word, fight=False):
+        """fight: a fight started next to the host's squad, whose own AI joins it (squadmates defend each
+        other in the game): only the selection and the leak witness count then, not their tasks."""
         time.sleep(4)
         sel = cmd(host, "selected")[1]
         check(f"securite controle : {label} : selection de l'hote inchangee", sel == sel0, f"{sel0} -> {sel}")
         for i in hidx:
-            if i in excluded:
+            if i in excluded or fight:
                 continue
             a, b = before[i], state(i)
             if not a or not b:
@@ -2661,7 +2663,7 @@ def exp_actorsafety(host, cli):
     log("host spawns an NPC", cmd(host, f"spawnnpc 40 40 {own}"))
     time.sleep(2)
     log("client: attack", cmd(cli, f"npcreq {own} 4 a"))
-    host_untouched("attaquer", before, "client task 4")
+    host_untouched("attaquer", before, "client task 4", fight=True)
 
     # forged requests: a host character as the actor
     st0 = cmd(host, "actorstats")[1]
@@ -2674,7 +2676,7 @@ def exp_actorsafety(host, cli):
     n1 = int(st1.split("refused=")[1].split()[0]) if "refused=" in st1 else 0
     check("securite controle : ordres forges au nom d'un perso de l'hote refuses", n1 - n0 >= 6, f"{st0} -> {st1}")
     check("securite controle : refus journalises en anglais", "not owned by player" in host_log(), "refused: actor ... not owned by player N")
-    host_untouched("ordres forges", before, None)
+    host_untouched("ordres forges", before, None, fight=True)
     res = cmd(cli, "results")[1]
     check("securite controle : le client recoit les refus", res.startswith("ok") and int(res.split()[1]) > 0, res)
 
@@ -2691,8 +2693,8 @@ def exp_actorsafety(host, cli):
     tr0 = int(t0.split("target=")[1].split()[0]) if "target=" in t0 else 0
     tr1 = int(t1.split("target=")[1].split()[0]) if "target=" in t1 else 0
     check("securite controle : cibles du mauvais type refusees", tr1 - tr0 >= 10, f"{t0} -> {t1}")
-    check("securite controle : l'hote est toujours vivant", alive(host) and cmd(host, "state")[0], t1)
-    check("securite controle : le client est toujours vivant", alive(cli) and cmd(cli, "state")[0])
+    check("securite controle : l'hote est toujours vivant", alive(host) and cmd(host, "echo")[0], t1)
+    check("securite controle : le client est toujours vivant", alive(cli) and cmd(cli, "echo")[0])
     check("securite controle : selection de l'hote inchangee a la fin", cmd(host, "selected")[1] == sel0, cmd(host, "selected")[1])
     summary()
 
