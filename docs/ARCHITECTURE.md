@@ -265,8 +265,15 @@ Ordre dans `Tick()` (`main.cpp`) :
     ouvert, et va vers ses personnages ou ce contenant ;
   - qu'une réponse vise une conversation de ce joueur ;
   - qu'une apparence est celle de son personnage.
-- **Contrôle central** (`common/src/session_authority.cpp`) : chaque message client → hôte a sa règle
-  dans la table `kMessageRules` (`protocol.cpp` : rôle requis, sujet à contrôler). `Session::Authorize`
+- **Contrôle central** (`common/src/session_authority.cpp`) : **chaque** message a sa règle dans la
+  table `kMessageRules` (`protocol.cpp` : rôle requis, sujet à contrôler, intervalle minimal). Rôles :
+  `Connected`, `Joining`, `InGame` pour ce qu'un client envoie ; `Handshake` pour `Hello` (lu avant
+  qu'un joueur existe) ; `HostOnly` pour les messages hôte → client (`Diplomacy`, `MapMarkers`,
+  `JoinQueue`, `BagBind`, `Result`...), que l'hôte refuse d'un client. `MapPing` (83) : `InGame`,
+  au plus un toutes les 0,5 s par joueur (`minInterval` : les autres sont ignorés sans refus, compteur
+  `rateLimited`). `MsgName` a un `case` par message, sans `default`, compilé avec l'avertissement
+  C4062 en erreur : un nouveau message ne compile pas sans son nom, et `TestMessageRules` vérifie
+  qu'il a sa règle. `Session::Authorize`
   l'applique **avant** le gestionnaire (`HostPacket`) ; le client filtre ce qu'il envoie avec la même
   table (`ClientMaySend`). Sujet `OwnCharacter` (Command, ContainerOpen, Appearance, dépôt d'objet) :
   l'acteur nommé doit être un membre d'escouade attribué à ce joueur (`CheckActor` ; pour un dépôt
@@ -287,6 +294,11 @@ Ordre dans `Tick()` (`main.cpp`) :
 Version du protocole : **33** (sacs à dos portés : `BagBind` ; sécurité des acteurs : `Result` ; file d'attente des arrivées : `JoinQueue` ; diplomatie : `Diplomacy` ; carte : `MapMarkers`, `MapPing`) au moment de la rédaction. Elle augmente à chaque changement de
 format, et une version différente est refusée à la connexion.
 
+Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51, 56 à 67, 69, 73 à 79, 81, 84,
+86 à 89, 91 et plus) sont refusés par `PeekType`, qui n'accepte que les messages de l'énumération `Msg`
+(`MsgName`). Chaque message a sa règle d'autorité (`kMessageRules`, voir « Contrôle central ») ; sens
+« H→C » : règle `HostOnly`, refusé par l'hôte s'il vient d'un client.
+
 | # | Message | Sens | Rôle |
 |---|---|---|---|
 | 1 | Hello | C→H | version, empreinte de l'exe, des mods, nom, identifiant Steam |
@@ -300,7 +312,7 @@ format, et une version différente est refusée à la connexion.
 | 9 | Snapshot | H→C (non fiable) | position, rotation, destination, drapeaux (bouge, court, à terre, mort), cible de combat, allure, corps porté |
 | 10 | Command | C→H | ordre pour un personnage du joueur (aller, arrêter, ramasser, tâche, changement d'escouade) |
 | 11 | TimeState | H→C | vitesse, pause, heure du jeu |
-| 12 / 13 | Ping / Pong | ⇄ | mesure du ping |
+| 12 / 13 | Ping / Pong | C→H / H→C | mesure du ping (le client envoie `Ping`, l'hôte répond `Pong`) |
 | 14 | Vitals | H→C (non fiable) | sang, minuteur de K.-O., faim, inconscient ou mort, chair, étourdissement et bandage de chaque membre |
 | 15 | WorldBegin | H→C | début du transfert du monde (taille, nombre de fichiers) |
 | 16 | WorldChunk | H→C | morceau d'un fichier de la sauvegarde (16 Ko) |
@@ -326,23 +338,26 @@ format, et une version différente est refusée à la connexion.
 | 36 | ContainerOpen | C→H | mon personnage veut regarder dans ce contenant (type, endroit) |
 | 37 | ContainerOpened | H→C | il y est : netId du contenant (son contenu suit en `Inventory`) |
 | 38 | ContainerClose | ⇄ | fenêtre fermée (client) ou à fermer (hôte : vol repéré, trop loin) |
-| 43 | Factions | H→C | relations de la faction du joueur avec chaque faction, dans les deux sens ; rang et réputation |
-| 44 | Bounties | H→C | primes par faction, crime en cours, peine de prison et laissez-passer de chaque personnage de l'escouade |
-| 82 | MapMarkers | H→C | carte : joueurs, position de chaque perso de l'escouade (joueur, perso du joueur, à terre, mort) et escouades hostiles proches, 3 fois par seconde |
-| 83 | MapPing | ⇄ | ping sur la carte (client : demande à l'hôte, au plus un toutes les 0,5 s ; hôte : à tous, avec son id et son joueur) |
-| 85 | Diplomacy | H→C | diplomatie, une partie par message : paires de factions (hors joueur) changées depuis le début, personnages uniques (mort, vivant, emprisonné, par les joueurs), villes (faction, variante) |
+| 39 | TradeOpen | H→C | commerce avec un marchand : ses comptoirs (ou les sacs portés de sa caravane : `ownerNetId`), ses cats ; leurs objets suivent en `Inventory` |
 | 40 | Doors | H→C | portes et serrures près des joueurs : ouverte/fermée, verrouillée, niveau de serrure, cassée (lot A) |
 | 41 | DoorRequest | C→H | le joueur a cliqué un bouton du panneau d'une porte (ouvrir, verrouiller) (lot A) |
-| 49 | Captives | H→C | lot D : personnages en cage, enchaînés, esclaves, évadés, enlevés, en peine de prison (et ceux libérés, une fois) |
+| 43 | Factions | H→C | relations de la faction du joueur avec chaque faction, dans les deux sens ; rang et réputation |
+| 44 | Bounties | H→C | primes par faction, crime en cours, peine de prison et laissez-passer de chaque personnage de l'escouade |
 | 46 | Shots | H→C | (lot C) projectiles tirés par les personnages et tourelles de l'hôte : tireur, cible, point visé, orientation de départ, tourelle |
 | 47 | Ranged | H→C | (lot C) point visé des personnages en combat à distance, tourelles proches des joueurs, fins de combat à distance |
+| 49 | Captives | H→C | lot D : personnages en cage, enchaînés, esclaves, évadés, enlevés, en peine de prison (et ceux libérés, une fois) |
 | 52 | BuildPlace | ⇄ | lot E : une pose du mode construction (client : demande à l'hôte, netId 0 ; hôte : à bâtir par tous, avec son netId) |
 | 53 | BuildState | H→C | lot E : avancement des chantiers suivis (terminé, en pause, en démontage), avec type et endroit |
 | 54 | BuildRemove | H→C | lot E : un bâtiment suivi a été détruit pour de bon chez l'hôte |
 | 55 | BuildAction | ⇄ | lot E : acheter / démonter (client : demande ; hôte : rejeu d'un achat chez tous) |
+| 68 | JobList | H→C | fix G5 : la liste de tâches (panneau Tâches) des persos des joueurs, telle que l'hôte l'a |
 | 70 | Stall | H→C | fix G6 : ton jeu va se figer (TP lointaine, zone à charger), la connexion attend jusqu'à 2 min |
 | 71 | Floors | H→C | fix G6 : groupe d'étage (`CharMovement::floorGroup`) des persos, à chaque changement et toutes les 5 s |
 | 72 | JoinQueue | H→C | file d'attente des arrivées : ta place (1 = ton tour), le total, qui arrive et son étape (sauvegarde, chargement, éditeur) ; à chaque changement et toutes les 2 s |
+| 80 | BagBind | H→C | sac à dos porté par un personnage : son netId, son porteur, son modèle (son contenu suit en `Inventory`) |
+| 82 | MapMarkers | H→C | carte : joueurs, position de chaque perso de l'escouade (joueur, perso du joueur, à terre, mort) et escouades hostiles proches, 3 fois par seconde |
+| 83 | MapPing | ⇄ | ping sur la carte (client : demande à l'hôte, au plus un toutes les 0,5 s ; hôte : à tous, avec son id et son joueur) |
+| 85 | Diplomacy | H→C | diplomatie, une partie par message : paires de factions (hors joueur) changées depuis le début, personnages uniques (mort, vivant, emprisonné, par les joueurs), villes (faction, variante) |
 | 90 | Result | H→C | sécurité des acteurs (protocole 33) : réponse à une demande (type, `seq` du `Command`, acteur) : rejetée (raison, texte français) ou faite ; le client annule ce qu'il avait prédit (tâche ajoutée au panneau) |
 
 ## Les flux, système par système

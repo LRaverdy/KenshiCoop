@@ -494,6 +494,7 @@ public:
     ActorVerdict CheckActor(uint8_t player, uint32_t actorNetId) const;
     static const char* VerdictText(ActorVerdict v);
     uint32_t actorRefusals() const { return actorRefusals_; }   // host: requests refused (all rules)
+    uint32_t rateLimited() const { return rateLimited_; }       // host: messages dropped by a rule's minInterval
     double recentRefusals(uint8_t player) const;                // host: refusals of that player, decaying (half-life 60 s)
     // client: the host's answers received (newest last, at most 64), and how many rejected
     const std::deque<Result>& results() const { return results_; }
@@ -640,6 +641,8 @@ private:
     uint32_t actorRefusals_ = 0;
     struct Decaying { double value = 0, at = 0; };
     std::map<std::pair<uint8_t, std::string>, Decaying> refusals_;   // host: per player and rule
+    std::map<std::pair<uint8_t, Msg>, double> lastAccepted_;        // host: when each player's message of a rate-limited rule last passed
+    uint32_t rateLimited_ = 0;                                        // host: messages dropped for coming too often
     std::deque<Result> results_;                                      // client
     uint32_t rejected_ = 0;
     double nextResultNote_ = 0;

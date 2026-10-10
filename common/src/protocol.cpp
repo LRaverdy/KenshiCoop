@@ -725,6 +725,8 @@ bool Decode(Reader& r, Result& m) {
 
 namespace {
 const MessageRule kMessageRules[] = {
+    // client -> host (or both ways)
+    {Msg::Hello, AuthRole::Handshake, AuthSubject::None, "hello"},
     {Msg::Ready, AuthRole::Joining, AuthSubject::None, "ready"},
     {Msg::Command, AuthRole::InGame, AuthSubject::OwnCharacter, "order"},
     {Msg::ContainerOpen, AuthRole::InGame, AuthSubject::OwnCharacter, "look into a container"},
@@ -740,9 +742,121 @@ const MessageRule kMessageRules[] = {
     {Msg::ClientReport, AuthRole::Connected, AuthSubject::None, "sync report"},
     {Msg::Chat, AuthRole::Connected, AuthSubject::None, "chat"},
     {Msg::Ping, AuthRole::Connected, AuthSubject::None, "ping"},
-    {Msg::MapPing, AuthRole::InGame, AuthSubject::None, "map ping"},   // rate-limited by HostPingPacket (kPingInterval)
+    {Msg::MapPing, AuthRole::InGame, AuthSubject::None, "map ping", 0.5},   // = Session::kPingInterval
+    // host -> client only
+    {Msg::Welcome, AuthRole::HostOnly, AuthSubject::None, "welcome"},
+    {Msg::Reject, AuthRole::HostOnly, AuthSubject::None, "reject"},
+    {Msg::PlayerJoined, AuthRole::HostOnly, AuthSubject::None, "player joined"},
+    {Msg::PlayerLeft, AuthRole::HostOnly, AuthSubject::None, "player left"},
+    {Msg::Bind, AuthRole::HostOnly, AuthSubject::None, "bind"},
+    {Msg::Unbind, AuthRole::HostOnly, AuthSubject::None, "unbind"},
+    {Msg::Snapshot, AuthRole::HostOnly, AuthSubject::None, "snapshot"},
+    {Msg::TimeState, AuthRole::HostOnly, AuthSubject::None, "time state"},
+    {Msg::Pong, AuthRole::HostOnly, AuthSubject::None, "pong"},
+    {Msg::Vitals, AuthRole::HostOnly, AuthSubject::None, "vitals"},
+    {Msg::WorldBegin, AuthRole::HostOnly, AuthSubject::None, "world begin"},
+    {Msg::WorldChunk, AuthRole::HostOnly, AuthSubject::None, "world chunk"},
+    {Msg::WorldEnd, AuthRole::HostOnly, AuthSubject::None, "world end"},
+    {Msg::Weather, AuthRole::HostOnly, AuthSubject::None, "weather"},
+    {Msg::Inventory, AuthRole::HostOnly, AuthSubject::None, "inventory"},
+    {Msg::Effects, AuthRole::HostOnly, AuthSubject::None, "effects"},
+    {Msg::Anim, AuthRole::HostOnly, AuthSubject::None, "anim"},
+    {Msg::AnimFrame, AuthRole::HostOnly, AuthSubject::None, "anim frame"},
+    {Msg::Ground, AuthRole::HostOnly, AuthSubject::None, "ground"},
+    {Msg::Progress, AuthRole::HostOnly, AuthSubject::None, "progress"},
+    {Msg::Dialog, AuthRole::HostOnly, AuthSubject::None, "dialog"},
+    {Msg::Squads, AuthRole::HostOnly, AuthSubject::None, "squads"},
+    {Msg::EditCharacter, AuthRole::HostOnly, AuthSubject::None, "edit character"},
+    {Msg::Resync, AuthRole::HostOnly, AuthSubject::None, "resync"},
+    {Msg::ContainerOpened, AuthRole::HostOnly, AuthSubject::None, "container opened"},
+    {Msg::TradeOpen, AuthRole::HostOnly, AuthSubject::None, "trade open"},
+    {Msg::Doors, AuthRole::HostOnly, AuthSubject::None, "doors"},
+    {Msg::Factions, AuthRole::HostOnly, AuthSubject::None, "factions"},
+    {Msg::Bounties, AuthRole::HostOnly, AuthSubject::None, "bounties"},
+    {Msg::Shots, AuthRole::HostOnly, AuthSubject::None, "shots"},
+    {Msg::Ranged, AuthRole::HostOnly, AuthSubject::None, "ranged"},
+    {Msg::Captives, AuthRole::HostOnly, AuthSubject::None, "captives"},
+    {Msg::BuildState, AuthRole::HostOnly, AuthSubject::None, "build state"},
+    {Msg::BuildRemove, AuthRole::HostOnly, AuthSubject::None, "build remove"},
+    {Msg::JobList, AuthRole::HostOnly, AuthSubject::None, "job list"},
+    {Msg::Stall, AuthRole::HostOnly, AuthSubject::None, "stall"},
+    {Msg::Floors, AuthRole::HostOnly, AuthSubject::None, "floors"},
+    {Msg::JoinQueue, AuthRole::HostOnly, AuthSubject::None, "join queue"},
+    {Msg::BagBind, AuthRole::HostOnly, AuthSubject::None, "bag bind"},
+    {Msg::MapMarkers, AuthRole::HostOnly, AuthSubject::None, "map markers"},
+    {Msg::Diplomacy, AuthRole::HostOnly, AuthSubject::None, "diplomacy"},
+    {Msg::Result, AuthRole::HostOnly, AuthSubject::None, "result"},
 };
 } // namespace
+const char* MsgName(Msg type) {
+    // no default: a Msg without its case does not compile (C4062 as an error), so each new message
+    // gets a name here, and TestMessageRules then asks for its rule
+#pragma warning(push)
+#pragma warning(error : 4062)
+    switch (type) {
+    case Msg::Hello: return "Hello";
+    case Msg::Welcome: return "Welcome";
+    case Msg::Reject: return "Reject";
+    case Msg::PlayerJoined: return "PlayerJoined";
+    case Msg::PlayerLeft: return "PlayerLeft";
+    case Msg::Chat: return "Chat";
+    case Msg::Bind: return "Bind";
+    case Msg::Unbind: return "Unbind";
+    case Msg::Snapshot: return "Snapshot";
+    case Msg::Command: return "Command";
+    case Msg::TimeState: return "TimeState";
+    case Msg::Ping: return "Ping";
+    case Msg::Pong: return "Pong";
+    case Msg::Vitals: return "Vitals";
+    case Msg::WorldBegin: return "WorldBegin";
+    case Msg::WorldChunk: return "WorldChunk";
+    case Msg::WorldEnd: return "WorldEnd";
+    case Msg::Ready: return "Ready";
+    case Msg::Weather: return "Weather";
+    case Msg::Inventory: return "Inventory";
+    case Msg::InvOp: return "InvOp";
+    case Msg::Effects: return "Effects";
+    case Msg::Anim: return "Anim";
+    case Msg::AnimFrame: return "AnimFrame";
+    case Msg::Ground: return "Ground";
+    case Msg::Progress: return "Progress";
+    case Msg::Dialog: return "Dialog";
+    case Msg::DialogReply: return "DialogReply";
+    case Msg::Squads: return "Squads";
+    case Msg::Appearance: return "Appearance";
+    case Msg::EditCharacter: return "EditCharacter";
+    case Msg::EditState: return "EditState";
+    case Msg::ClientLog: return "ClientLog";
+    case Msg::ClientReport: return "ClientReport";
+    case Msg::Resync: return "Resync";
+    case Msg::ContainerOpen: return "ContainerOpen";
+    case Msg::ContainerOpened: return "ContainerOpened";
+    case Msg::ContainerClose: return "ContainerClose";
+    case Msg::TradeOpen: return "TradeOpen";
+    case Msg::Doors: return "Doors";
+    case Msg::DoorRequest: return "DoorRequest";
+    case Msg::Factions: return "Factions";
+    case Msg::Bounties: return "Bounties";
+    case Msg::Shots: return "Shots";
+    case Msg::Ranged: return "Ranged";
+    case Msg::Captives: return "Captives";
+    case Msg::BuildPlace: return "BuildPlace";
+    case Msg::BuildState: return "BuildState";
+    case Msg::BuildRemove: return "BuildRemove";
+    case Msg::BuildAction: return "BuildAction";
+    case Msg::JobList: return "JobList";
+    case Msg::Stall: return "Stall";
+    case Msg::Floors: return "Floors";
+    case Msg::JoinQueue: return "JoinQueue";
+    case Msg::BagBind: return "BagBind";
+    case Msg::MapMarkers: return "MapMarkers";
+    case Msg::MapPing: return "MapPing";
+    case Msg::Diplomacy: return "Diplomacy";
+    case Msg::Result: return "Result";
+    }
+#pragma warning(pop)
+    return nullptr;
+}
 const MessageRule* MessageRuleFor(Msg type) {
     for (const auto& r : kMessageRules) if (r.type == type) return &r;
     return nullptr;
@@ -922,7 +1036,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || (t > uint8_t(Msg::BuildAction) && t != uint8_t(Msg::JobList) && t != uint8_t(Msg::Stall) && t != uint8_t(Msg::Floors) && t != uint8_t(Msg::BagBind) && t != uint8_t(Msg::MapMarkers) && t != uint8_t(Msg::MapPing) && t != uint8_t(Msg::JoinQueue) && t != uint8_t(Msg::Diplomacy) && t != uint8_t(Msg::Result))) return std::nullopt;
+    if (!r.ok() || !MsgName(Msg(t))) return std::nullopt;   // every message of the Msg enum, nothing else
     return Msg(t);
 }
 

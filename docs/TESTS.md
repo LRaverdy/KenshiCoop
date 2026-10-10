@@ -9,7 +9,7 @@ Deux niveaux de tests :
 
 ```powershell
 .\build.ps1                            # compile aussi kc_tests
-.\build\bin\Release\kc_tests.exe       # dernière ligne : "4033 checks, 0 failed" (10 octobre 2026)
+.\build\bin\Release\kc_tests.exe       # dernière ligne : "26728 checks, 0 failed" (10 octobre 2026)
 .\build.ps1 -Asan                      # variante AddressSanitizer, dans build-asan\
 ```
 
@@ -38,6 +38,7 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `TestMap` | marqueurs de carte : 1 hôte + 2 clients reçoivent les persos (propriétaires, perso de chaque joueur, positions même très loin) et les escouades hostiles de l'hôte ; un ping de client chez l'hôte et l'autre client, refusé s'il suit le précédent de moins de 0,5 s, 5 au plus par joueur, effacé après 10 s |
 | `TestManyPlayers` | 1 hôte + 4 clients arrivant ensemble, 120 personnages |
 | `TestJoinQueue` | file d'attente des arrivées : 3 arrivées quasi simultanées (une pendant la sauvegarde, une pendant le chargement du premier), un joueur à la fois jusqu'à la fermeture de son éditeur, positions / joueur attendu / étape côté clients, liste côté hôte, personne rejeté pendant l'attente, chaque sauvegarde contient les persos des précédents ; le joueur dans l'éditeur plante (tour suivant), un joueur quitte la file (renumérotée) ; deux éditeurs ouverts ensemble : pause jusqu'à la fermeture du dernier |
+| `TestMessageRules` | autorité : chaque valeur de `Msg` (les 256 octets passés à `MsgName`) a exactement une règle dans `kMessageRules`, et `PeekType` n'accepte que ces messages ; numéros de la fusion du protocole 33 (`JoinQueue` 72, `BagBind` 80, `MapMarkers` 82, `MapPing` 83, `Diplomacy` 85, `Result` 90) ; un client qui envoie `Diplomacy`, `MapMarkers`, `JoinQueue`, `BagBind` ou `Result` est refusé ; 5 pings d'affilée : 1 passe, 4 ignorés (`minInterval` 0,5 s), puis un autre passe |
 
 ## 2. Tests en jeu (`tools/coop_test.py`)
 

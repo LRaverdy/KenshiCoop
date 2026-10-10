@@ -2809,7 +2809,7 @@ static void TestTaskTargets() {
     for (Msg m : {Msg::Command, Msg::ContainerOpen, Msg::Appearance}) CHECK(MessageRuleFor(m) && MessageRuleFor(m)->subject == AuthSubject::OwnCharacter);
     CHECK(MessageRuleFor(Msg::DialogReply)->subject == AuthSubject::OwnConversation);
     CHECK(MessageRuleFor(Msg::InvOp)->subject == AuthSubject::Inventory);
-    for (Msg m : {Msg::Snapshot, Msg::Bind, Msg::Welcome, Msg::Result, Msg::Resync}) CHECK(MessageRuleFor(m) == nullptr);
+    for (Msg m : {Msg::Snapshot, Msg::Bind, Msg::Welcome, Msg::Result, Msg::Resync}) CHECK(MessageRuleFor(m) && MessageRuleFor(m)->role == AuthRole::HostOnly);
     for (size_t i = 0; i < n; ++i) CHECK(rules[i].name && *rules[i].name);
     // Result round trip
     Result r;
@@ -2962,6 +2962,79 @@ static void TestActorSafety() {
     CHECK(hw.tasksRun == run0 + 2);
     CHECK(cli.rejectedCount() > 0);
     CHECK(host.state() == SessionState::Hosting && cli.state() == SessionState::Connected);   // everyone alive
+}
+
+// Every message has exactly one authority rule; PeekType accepts exactly the messages; host->client
+// messages sent by a client are refused; a client's map pings are rate-limited by their rule.
+static void TestMessageRules() {
+    std::printf("authority: every message type has its rule; host-only ones refused from clients; pings rate-limited\n");
+    size_t n = 0;
+    const MessageRule* rules = MessageRules(n);
+    std::set<int> ruled;
+    for (size_t i = 0; i < n; ++i) {
+        CHECK(ruled.insert(int(rules[i].type)).second);   // one rule per message
+        CHECK(MsgName(rules[i].type) != nullptr);          // ... and only for messages
+        CHECK(rules[i].name && *rules[i].name);
+    }
+    int messages = 0;
+    for (int t = 0; t < 256; ++t) {   // every Msg value (MsgName has a case for each enumerator)
+        const Msg m = Msg(t);
+        const bool isMsg = MsgName(m) != nullptr;
+        const MessageRule* r = MessageRuleFor(m);
+        if (isMsg) {
+            ++messages;
+            if (!r) std::printf("    no authority rule for message %d (%s)\n", t, MsgName(m));
+            CHECK(r != nullptr && r->type == m);
+        } else {
+            CHECK(r == nullptr);
+        }
+        const uint8_t b = uint8_t(t);
+        Reader rd(&b, 1);
+        CHECK(PeekType(rd).has_value() == isMsg);
+    }
+    CHECK(messages == int(n) && messages >= 59);
+    // the ids of the messages merged together (protocol 33): no clash, the right direction
+    static_assert(uint8_t(Msg::JoinQueue) == 72 && uint8_t(Msg::BagBind) == 80 && uint8_t(Msg::MapMarkers) == 82 && uint8_t(Msg::MapPing) == 83 &&
+                  uint8_t(Msg::Diplomacy) == 85 && uint8_t(Msg::Result) == 90, "message ids of protocol 33");
+    for (Msg m : {Msg::Diplomacy, Msg::MapMarkers, Msg::JoinQueue, Msg::BagBind, Msg::Result, Msg::Welcome, Msg::Pong})
+        CHECK(MessageRuleFor(m)->role == AuthRole::HostOnly);
+    CHECK(MessageRuleFor(Msg::Hello)->role == AuthRole::Handshake);
+    CHECK(MessageRuleFor(Msg::MapPing)->role == AuthRole::InGame && MessageRuleFor(Msg::MapPing)->minInterval == Session::kPingInterval);
+    for (size_t i = 0; i < n; ++i)
+        if (rules[i].type != Msg::MapPing) CHECK(rules[i].minInterval == 0);
+    // on a host: a client sending host->client messages is refused; its pings pass at most once per interval
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    AtMenu(cw);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    const uint8_t me = cli.localId();
+    const uint32_t r0 = host.actorRefusals();
+    const size_t ents0 = host.entityCount();
+    { DiplomacyMsg m; m.part = DiploPart::Towns; m.towns = {{"town-1", "holy", "town-1-destroyed"}}; Writer w; Encode(w, m); CHECK(host.InjectForTest(me, w)); }
+    { MapMarkersMsg m; m.players = {{me, "C"}}; Writer w; Encode(w, m); CHECK(host.InjectForTest(me, w)); }
+    { JoinQueueMsg m; m.position = 1; m.total = 1; m.current = "C"; Writer w; Encode(w, m); CHECK(host.InjectForTest(me, w)); }
+    { BagBind m{77, 1, "backpack"}; Writer w; Encode(w, m); CHECK(host.InjectForTest(me, w)); }
+    { Result m; m.state = ResultState::Done; Writer w; Encode(w, m); CHECK(host.InjectForTest(me, w)); }
+    CHECK(host.actorRefusals() == r0 + 5);
+    CHECK(host.entityCount() == ents0);   // the forged BagBind made nothing
+    const size_t pings0 = host.pings().size();
+    const uint32_t limited0 = host.rateLimited();
+    for (int i = 0; i < 5; ++i) {
+        MapPingMsg p; p.kind = PingKind::Danger; p.pos = {float(i), 0, 0};
+        Writer w; Encode(w, p); CHECK(host.InjectForTest(me, w));
+    }
+    CHECK(host.pings().size() == pings0 + 1 && host.rateLimited() == limited0 + 4);
+    CHECK(host.actorRefusals() == r0 + 5);   // too fast is not a refusal
+    Run({{&host, &hw}, {&cli, &cw}}, Session::kPingInterval + 0.2);
+    { MapPingMsg p; p.kind = PingKind::Go; p.pos = {9, 0, 9}; Writer w; Encode(w, p); CHECK(host.InjectForTest(me, w)); }
+    CHECK(host.pings().size() == pings0 + 2);
+    Run({{&host, &hw}, {&cli, &cw}}, 1.0, [&] { return cli.pings().size() >= 2; });
+    CHECK(cli.pings().size() == 2);
 }
 
 // Players join one at a time; the others wait in a queue and are told their place.
@@ -3262,6 +3335,7 @@ int main() {
     TestMap();
     TestManyPlayers();
     TestJoinQueue();
+    TestMessageRules();   // the authority table covers every message
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

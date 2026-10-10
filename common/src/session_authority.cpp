@@ -91,8 +91,10 @@ bool Session::AdmitActor(uint8_t player, uint32_t actorNetId, const std::string&
 
 bool Session::Authorize(RemotePlayer& pl, Msg type, Reader r) {
     const MessageRule* rule = MessageRuleFor(type);
-    if (!rule) {
-        Refuse(pl.id, type, 0, 0, ResultReason::NotAllowed, "message not accepted from a client", "type " + std::to_string(int(type)), {});
+    if (!rule || rule->role == AuthRole::HostOnly || rule->role == AuthRole::Handshake) {   // host->client only, or a second Hello
+        const char* n = MsgName(type);
+        Refuse(pl.id, type, 0, 0, ResultReason::NotAllowed, "message not accepted from a client",
+               "type " + std::to_string(int(type)) + (n ? std::string(" (") + n + ")" : std::string()), {});
         return false;
     }
     if (rule->role == AuthRole::InGame && !pl.inGame) {
@@ -100,6 +102,14 @@ bool Session::Authorize(RemotePlayer& pl, Msg type, Reader r) {
         return false;
     }
     if (rule->role == AuthRole::Joining && pl.inGame) return false;   // a second Ready: nothing to say
+    if (rule->minInterval > 0) {   // too often (map pings): dropped quietly, the player only clicked fast
+        const double now = clock_();
+        auto [last, first] = lastAccepted_.try_emplace({pl.id, type}, now);
+        if (!first) {
+            if (now - last->second < rule->minInterval) { ++rateLimited_; return false; }
+            last->second = now;
+        }
+    }
     auto malformed = [&] {
         Refuse(pl.id, type, 0, 0, ResultReason::NoActor, "well-formed request naming its actor", "could not be read (no actor, or invalid fields)",
                "Action refusée : demande invalide (aucun personnage désigné).");
@@ -159,7 +169,7 @@ bool Session::InjectForTest(uint8_t playerId, const Writer& w) {
 // ---- client
 bool Session::ClientMaySend(Msg type, uint32_t netId, const char* what) {
     const MessageRule* rule = MessageRuleFor(type);
-    if (!rule) return false;
+    if (!rule || rule->role == AuthRole::HostOnly || rule->role == AuthRole::Handshake) return false;
     if (rule->subject != AuthSubject::OwnCharacter && !(rule->subject == AuthSubject::Inventory && netId)) return true;
     const ActorVerdict v = CheckActor(localId_, netId);
     if (v == ActorVerdict::Ok) return true;

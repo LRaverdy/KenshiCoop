@@ -708,22 +708,31 @@ struct Result {
 void Encode(Writer& w, const Result& m);
 bool Decode(Reader& r, Result& m);
 
-// ---- authority: what each client->host message requires, checked by the host before its handler
-// runs (Session::Authorize) and by the client before it sends (the same table).
-enum class AuthRole : uint8_t { Connected, Joining, InGame };   // after Hello / still loading / in the game
+// ---- authority: what each message requires when a client sends it, checked by the host before its
+// handler runs (Session::Authorize) and by the client before it sends (the same table). Every Msg has
+// exactly one rule (TestMessageRules goes through all of them): a new message needs one.
+enum class AuthRole : uint8_t {
+    Connected,   // after Hello
+    Joining,     // still loading the host's world
+    InGame,      // in the game
+    Handshake,   // Hello: read before a player exists (HostPacket), never through Authorize
+    HostOnly,    // host->client only: the host refuses it from a client
+};
 enum class AuthSubject : uint8_t {
     None,              // nothing to check beyond the role
     OwnCharacter,      // the netId it names is a squad member assigned to the sender
     OwnConversation,   // the conversation it answers is the sender's
-    Inventory,         // drop: from its own character; moves: the inventory rules (own, opened, bodies)
+    Inventory,         // drop: the character that drops it is the sender's; moves: the inventory rules (own, opened, bodies)
 };
 struct MessageRule {
     Msg type;
     AuthRole role;
     AuthSubject subject;
     const char* name;
+    double minInterval = 0;   // seconds between two of one player's (more often: dropped); 0: no limit
 };
-const MessageRule* MessageRuleFor(Msg type);   // null: never accepted from a client
+const char* MsgName(Msg type);                 // the enumerator's name; null: no such message
+const MessageRule* MessageRuleFor(Msg type);   // null only for a value that is no message
 const MessageRule* MessageRules(size_t& count);
 // Containers (chests, shelves, safes...) are furniture: other handles on every machine, so they
 // are named by kind and place. The host gives an open one a netId; its items then travel like a

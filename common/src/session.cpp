@@ -3226,6 +3226,7 @@ void Session::ForgetPlayer(uint8_t id) {
     // containers and trade windows they had open are free again
     size_t closed = 0;
     for (auto& [nid, e] : entities_) closed += e.openBy.erase(id);
+    for (auto it = lastAccepted_.begin(); it != lastAccepted_.end();) it = it->first.first == id ? lastAccepted_.erase(it) : std::next(it);
     const bool traded = trades_.erase(id) > 0;
     for (auto it = dialogOwner_.begin(); it != dialogOwner_.end();) it = it->second == id ? dialogOwner_.erase(it) : std::next(it);
     buildSyncedPlayers_.erase(id);
