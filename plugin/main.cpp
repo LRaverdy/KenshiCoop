@@ -777,6 +777,26 @@ void AfterLeavingHostWorld() {
     OverlayOpenMultiplayer();
 }
 
+// The squad bar against the game's portraits, once per frame after everything the mod did to the
+// squads (kenshi::CheckSquadBar): a tab item holding a PortraitData the game no longer has is taken
+// out before the game's next rebuild of the tabs draws it (the 14:54 and 20:20 soak crashes).
+void SquadBarUpkeep() {
+    static double nextLog = 0;
+    static bool unreadable = false;
+    kenshi::SquadBarReport r;
+    if (!kenshi::CheckSquadBar(r, true)) {
+        if (!unreadable) Log("squad bar check: the squad bar or the game's portraits cannot be read here");
+        unreadable = true;
+        return;
+    }
+    unreadable = false;
+    if (!r.badTabs || NowSeconds() < nextLog) return;
+    nextLog = NowSeconds() + 2.0;
+    Log("squad bar check: %d of %d tab(s) hold %d portrait(s) the game does not have (%s); %d tab(s) emptied for the game to refill; %d tab(s) of no player "
+        "squad",
+        r.badTabs, r.tabs, r.badItems, r.firstBad.c_str(), r.repairedTabs, r.staleTabs);
+}
+
 void Tick(bool live) {
     SetCrashPhase("tick: begin frame");
     g_world->BeginFrame(live);
@@ -814,6 +834,8 @@ void Tick(bool live) {
     SetCrashPhase("tick: resync");
     ResyncUpkeep();
     AfterLeavingHostWorld();
+    SetCrashPhase("tick: squad bar check");
+    if (live && g_world->Ready()) SquadBarUpkeep();
     SetCrashPhase("tick: end frame");
     if (live) g_world->EndFrame();
     PublishOverlay();

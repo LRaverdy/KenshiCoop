@@ -2987,6 +2987,40 @@ static void TestSquadFallback() {
     CHECK(cw.legacyApplies > 0);
 }
 
+static void TestDeadSquad() {
+    std::printf("squad window: the game's dead squad (__DEAD_SQUAD__) is never sent, never asked of the host, never made\n");
+    CHECK(IsDeadSquadName("__DEAD_SQUAD__") && !IsDeadSquadName("__dead_squad__ ") && !IsDeadSquadName("Alpha"));
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    // the host's world as the 20:20 soak had it: its squad of the dead read like the others
+    hw.squads = {{FakeWorld::SquadId(500), "Alpha", {1, 2, 3}}, {FakeWorld::SquadId(501), kDeadSquadName, {}}};
+    AtMenu(cw);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; hc.name = "H";
+    SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    host.Assign(FakeWorld::H(2), cli.localId());
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}};
+    Run(all, 4.0, [&] { return !cli.squadState().squads.empty() && cw.squads.size() == 1; });
+    CHECK(cli.squadState().squads.size() == 1 && cli.squadState().squads[0].name == "Alpha");
+    CHECK(cw.squads.size() == 1 && cw.squads[0].name == "Alpha");   // no regular "__DEAD_SQUAD__" made here
+    // the client's own dead squad, empty and matched to nothing: never asked of the host as a new squad
+    cw.squads.push_back({FakeWorld::SquadId(900), kDeadSquadName, {}});
+    Run(all, 4.0);
+    CHECK(hw.squads.size() == 2);
+    // a client asking for a squad under that name (an earlier build): refused
+    std::map<uint32_t, uint32_t> net;
+    host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { net[h.serial] = id; });
+    SquadRequest q; q.seq = 91; q.actor = net[2]; q.op = SquadOp::Create; q.name = kDeadSquadName;
+    Writer w; Encode(w, q);
+    CHECK(host.InjectForTest(cli.localId(), w));
+    Run(all, 1.0);
+    CHECK(hw.squads.size() == 2);
+}
+
 static void TestSquadWindow() {
     std::printf("squad window: moves, new squads, renames, order, leader and names go through the host; concurrent edits end the same everywhere\n");
     FakeWorld hw, cw, cw2;
@@ -4250,6 +4284,7 @@ int main() {
     TestSquadWire();
     TestSquadWindow();   // squad window and AI settings
     TestSquadFallback();
+    TestDeadSquad();
     TestAdmin();
     TestTaskTargets();   // actor safety
     TestCallScopeRepair();   // crash at kenshi_x64+0x883B78

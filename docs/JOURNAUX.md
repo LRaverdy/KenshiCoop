@@ -173,6 +173,7 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 | `[X] clock: N h behind the host's: running +2 %` / `ahead of the host's: running -5 %` / `clock: back on the host's (…): host speed again` | l'horloge du client rattrape celle de l'hôte en tournant un peu plus vite ou plus lentement |
 | `[X] a local Y stands in for the host's` | un PNJ local remplace un PNJ de l'hôte de même type |
 | `[X] removed N local character(s) the host does not have` | PNJ créés par le jeu du client, retirés |
+| `[X] removed the local character 'Nom': the host does not have it` / `not removed: the local character 'Nom' … is in one of the player's squads` | chaque perso retiré, nommé ; un perso d'une escouade du joueur (portrait dans la barre) n'est jamais supprimé |
 | `[X] N host squad members are missing in the local world` | **le client n'a pas la même escouade** : mauvaise sauvegarde |
 | `[X] the host paused but this game refuses to pause …` | un menu ou un éditeur bloque la pause chez lui |
 | `[X] client order refused (task N opens a window)` | ordre non encore synchronisé (commerce…) |
@@ -182,6 +183,9 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 |---|---|
 | `CRASH (game crash reporter\|unhandled) code=… at … (module+0x…) … phase='…'`, puis les registres et `stack[i] module+0x…` | plantage du jeu, avec le module fautif, la pile et ce que faisait le mod (`game main loop …` : dans la frame du jeu lui-même ; `tick: …` : dans un appel du mod). `game crash reporter` : le plantage que le jeu rapporte (« Kenshi has crashed », crashDump*.zip) ; `unhandled` : un plantage hors de sa boucle (souvent à la sortie, après le premier). Un seul par processus. Toujours dans le journal **de la machine qui a planté** |
 | `tick: access violation caught (code …)` / `tick exception: …` | erreur rattrapée dans le mod, sans plantage. À signaler |
+| `squad bar check: N of M tab(s) hold K portrait(s) the game does not have (tab T ('Escouade') item I holds 0x…); …emptied…` | **la barre d'escouade s'est corrompue** (une case pointe hors des portraits du jeu : ce qui a fait planter les soaks de 14:54 et 20:20) ; l'onglet est vidé et le jeu le remplit à nouveau. À signaler, avec les lignes juste avant |
+| `squad bar: a portrait cell's data 0x… is not one of the game's portraits: not drawn (N so far)` | la même chose vue au moment du dessin : la case n'est pas redessinée au lieu de planter. À signaler |
+| `squad bar check: the squad bar or the game's portraits cannot be read here` | la vérification de la barre ne peut pas se faire (autre version du jeu ?) : elle est sautée |
 
 ## Diagnostiquer
 

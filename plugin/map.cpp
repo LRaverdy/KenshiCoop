@@ -491,11 +491,24 @@ float Dist2D(const kc::Vec3& a, const kc::Vec3& b) { return std::sqrt((a.x - b.x
 } // namespace
 
 namespace mapmarks {
+unsigned long long g_portraitsRefused = 0;
 // The squad bar draws a portrait (the game's GUI, on the game thread). Only the cell is remembered:
 // its PortraitData is never read here (the 20-minute soak's client crash was a corrupt PortraitData*
 // in this very call, 0x415150 -> 0x412D96), and only a cell of the right class, which the destructor
 // hook below forgets (its deleting destructor, vtable slot 0, goes through 0x426450).
+// The cell's PortraitData is first checked to be one the game has (its pointer looked up among the
+// PortraitManager's, never read): a cell whose data is not is left as it is for this draw instead of
+// letting the game read a hand from freed memory (the 20:20 soak crash went through here).
 void hk_portraitUpdate(void* cell, const void* info, void* data) {
+    if (!kenshi::IsGamePortrait(data)) {
+        static unsigned long long nextLog = 0;
+        ++g_portraitsRefused;
+        if (GetTickCount64() >= nextLog) {
+            nextLog = GetTickCount64() + 2000;
+            Log("squad bar: a portrait cell's data %p is not one of the game's portraits: not drawn (%llu so far)", data, g_portraitsRefused);
+        }
+        return;
+    }
     o_portraitUpdate(cell, info, data);
     uintptr_t vt = 0;
     if (!cell || !Rd(cell, 0, vt) || vt != kenshi::Addr(kenshi::rva::VtPortraitCell)) return;

@@ -185,6 +185,7 @@ const FunctionSig kFunctions[FnCount] = {
     {"FactionWarMgr::getCurrentCampaign", 0x283500, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x4C, 0x8B, 0x41, 0x30, 0x48, 0x8B}},
     {"PortraitMainCellView::update", 0x415150, {0x48, 0x8B, 0xC4, 0x56, 0x57, 0x41, 0x54, 0x48, 0x83, 0xEC, 0x70, 0x48}},
     {"PortraitMainCellView::~PortraitMainCellView", 0x426450, {0x48, 0x89, 0x4C, 0x24, 0x08, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0xC7}},
+    {"MainBarGUI::updateCurrentPlatoon", 0x415880, {0x48, 0x89, 0x4C, 0x24, 0x08, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41}},
     // ---- ground drops
     {"Inventory::dropItem", 0x745D90, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x83}},
     {"CharacterAnimal::dropItem", 0x5CA4A0, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48}},
@@ -919,7 +920,10 @@ void SquadMembers(void* squad, std::vector<Character*>& out) {
 }
 
 bool MoveToSquad(void* squad, Character* c, int index) {
-    return squad && IsCharacter(c) && AddAtSeh(FnAddr(FnSquadAddCharacterAt), squad, c, index);
+    // never a dead character, never into or out of the dead squad: the game alone moves the dead
+    // there, and a dead character in a regular squad gets a portrait in the squad bar
+    if (!squad || !IsCharacter(c) || IsDead(c) || IsDeadSquad(squad) || IsDeadSquad(SquadOf(c))) return false;
+    return AddAtSeh(FnAddr(FnSquadAddCharacterAt), squad, c, index);
 }
 
 void* ShownSquad() {
@@ -2998,7 +3002,12 @@ bool StandUp(Character* c) {
 
 bool DestroyObject(void* obj) {
     GameWorld* w = World();
-    return w && IsCharacter(obj) && CallDestroy(FnAddr(FnWorldDestroy), w, obj);
+    if (!w || !IsCharacter(obj)) return false;
+    // a character of the player's squads has a portrait in the squad bar (PortraitData, an item of a
+    // tab's ItemBox): the game only takes it out through its squad (ActivePlatoon), never by a
+    // straight delete; the mod never deletes one
+    if (InPlayerSquad(static_cast<Character*>(obj))) return false;
+    return CallDestroy(FnAddr(FnWorldDestroy), w, obj);
 }
 
 float GetFrameSpeed() {
@@ -4177,21 +4186,59 @@ void* PlatoonOf(void* squad) {
 }
 } // namespace
 
+namespace {
+// The game's own test for the dead squad (MainBarGUI 0x416140 / 0x4167B0, GameWorld's GUI events
+// 0x7B65B0): the Platoon's hand (+0x58) == PlayerInterface::deadPlayerSquad (+0x2C8), with
+// hand::operator== (0xCD060: type, container, container serial, index, serial). Never through
+// kc::Handle::valid(): the player's platoons have hands with index and serial 0, so the old test
+// (ObjectHandle(...) && h == dead) never matched and the dead squad was treated as a squad like
+// the others (the 20:20 soak: the host sent it, the client made a regular "__DEAD_SQUAD__").
+bool DeadSquadPlatoon(const void* platoon) {
+    PlayerInterface* pi = Player();
+    uint8_t a[off::HandSize], b[off::HandSize];
+    if (!pi || !platoon || !SafeCopy(a, static_cast<const uint8_t*>(platoon) + off::RO_handle, sizeof(a)) ||
+        !SafeCopy(b, reinterpret_cast<const uint8_t*>(pi) + PI_deadSquad, sizeof(b)))
+        return false;
+    uint32_t ta = 0, tb = 0;
+    std::memcpy(&ta, a + off::H_type, 4);
+    std::memcpy(&tb, b + off::H_type, 4);
+    if (tb == 0xB) return false;   // no dead squad yet (a null hand names nothing)
+    if (ta == tb && std::memcmp(a + off::H_container, b + off::H_container, off::H_serial + 4 - off::H_container) == 0) return true;
+    // the game's own name for it, in case the hand ever reads differently
+    std::string name;
+    return ReadGameString(static_cast<const uint8_t*>(platoon) + off::RO_name, name) && kc::IsDeadSquadName(name);
+}
+} // namespace
+
+bool IsDeadSquad(void* squad) {
+    return squad && DeadSquadPlatoon(PlatoonOf(squad));
+}
+
+bool InPlayerSquad(Character* c) {
+    void* sq = SquadOf(c);
+    void* platoon = PlatoonOf(sq);
+    void* f = PlayerFaction();
+    uint32_t n = 0;
+    void** data = nullptr;
+    if (!platoon || !f || !Rd(f, FA_platoonCount, n) || !Rd(f, FA_platoonData, data) || !data || n > 4096) return false;
+    for (uint32_t i = 0; i < n; ++i) {
+        void* p = nullptr;
+        if (Rd(data, i * sizeof(void*), p) && p == platoon) return true;
+    }
+    return false;
+}
+
 void PlayerSquads(std::vector<void*>& out) {
     out.clear();
     void* f = PlayerFaction();
     uint32_t n = 0;
     void** data = nullptr;
     if (!f || !Rd(f, FA_platoonCount, n) || !Rd(f, FA_platoonData, data) || !data || n > 4096) return;
-    kc::Handle dead;
-    PlayerInterface* pi = Player();
-    const bool haveDead = pi && ReadHandle(reinterpret_cast<const uint8_t*>(pi) + PI_deadSquad, dead) && dead.valid();
     for (uint32_t i = 0; i < n; ++i) {
         void* platoon = nullptr;
         void* active = nullptr;
         if (!Rd(data, i * sizeof(void*), platoon) || !platoon || !Rd(platoon, PL_activePlatoon, active) || !active) continue;
-        kc::Handle h;
-        if (haveDead && ObjectHandle(platoon, h) && h == dead) continue;
+        if (DeadSquadPlatoon(platoon)) continue;
         out.push_back(active);
     }
 }
@@ -4231,13 +4278,13 @@ int SquadFactionIndex(void* squad) {
 bool SetSquadOrder(void* squad, int factionIndex) {
     void* f = PlayerFaction();
     void* platoon = PlatoonOf(squad);
-    return f && platoon && factionIndex >= 0 && PtrIntSeh(FnAddr(FnChangePlatoonIndex), f, platoon, factionIndex);
+    return f && platoon && factionIndex >= 0 && !IsDeadSquad(squad) && PtrIntSeh(FnAddr(FnChangePlatoonIndex), f, platoon, factionIndex);
 }
 
 bool DestroySquad(void* squad) {
     void* f = PlayerFaction();
     void* platoon = PlatoonOf(squad);
-    return f && platoon && SquadSize(squad) == 0 && PtrPtrSeh(FnAddr(FnDestroyPlatoon), f, platoon);
+    return f && platoon && SquadSize(squad) == 0 && !IsDeadSquad(squad) && PtrPtrSeh(FnAddr(FnDestroyPlatoon), f, platoon);
 }
 
 int SquadSize(void* squad) {
@@ -4269,6 +4316,141 @@ bool AddPermajob(Character* c, int task, void* subject, const kc::Vec3& location
     if (!HasOrdersReceiver(c) || task < 0) return false;
     const float loc[3] = {location.x, location.y, location.z};
     return AddJobSeh(FnAddr(FnCharAddJob), c, task, subject, loc);
+}
+
+// ---- squad bar integrity (MainBarGUI, the portraits at the bottom of the screen) [D]
+// MainBarGUI (*0x21337C0): +0x210 its tabs (0x40 bytes each: +0x0 PortraitMainItemBox*, +0x8 the
+// ActivePlatoon), +0x218 their count. PortraitMainItemBox +0xF0: MyGUI::ItemBox, whose items are
+// MyGUI::Any (+0x6A8 / +0x6B0: begin / end, 8 bytes each: the Holder*). Holder<PortraitData*>: vtable
+// 0x16D1FB0, +0x8 the PortraitData*. Every PortraitData lives in the PortraitManager (*0x212EBE8,
+// built once: guard bit 0 of 0x212EBF4), std::map<hand, ...> at +0x70 (head +0x78; node: +0x0 left,
+// +0x8 parent, +0x10 right, +0x38 PortraitData*, +0x49 isnil), and is only deleted with the whole
+// world (0x414850, from the world reset 0x36CB80). Only the shown squad's tab is refilled when a
+// squad changes (0x4167B0 -> 0x415880); a rebuild of the tabs (0x416140, after a squad empties,
+// fills or is removed) resizes every tab kept, which redraws all its items: a PortraitData* that is
+// not the manager's is read there (kenshi_x64+0x412D96, the 14:54 and 20:20 soak crashes).
+namespace {
+constexpr uintptr_t kMainBarGui = 0x21337C0, kPortraitMgr = 0x212EBE8, kPortraitMgrGuard = 0x212EBF4, kVtPortraitHolder = 0x16D1FB0;
+constexpr uintptr_t MB_tabs = 0x210, MB_tabCount = 0x218, kTabSize = 0x40, TAB_box = 0x0, TAB_squad = 0x8;
+constexpr uintptr_t PB_itemBox = 0xF0, IB_itemsBegin = 0x6A8, IB_itemsEnd = 0x6B0;
+constexpr uintptr_t PM_head = 0x78, TN_left = 0x0, TN_parent = 0x8, TN_right = 0x10, TN_portrait = 0x38, TN_isnil = 0x49;
+using FnRemoveAll = void (*)(void*);
+using FnBarUpdate = void (*)(void*);
+bool RemoveAllSeh(void* fn, void* box) {
+    __try { reinterpret_cast<FnRemoveAll>(fn)(box); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool BarUpdateSeh(void* fn, void* bar) {
+    __try { reinterpret_cast<FnBarUpdate>(fn)(bar); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool IsNil(void* node) {
+    uint8_t nil = 1;
+    return !node || !Rd(node, TN_isnil, nil) || nil != 0;
+}
+// Every PortraitData the game has (in-order walk of the manager's map, as 0x414850 does).
+bool GamePortraits(std::unordered_set<uintptr_t>& out) {
+    out.clear();
+    uint32_t guard = 0;
+    void* pm = nullptr;
+    void* head = nullptr;
+    void* n = nullptr;
+    if (!Rd(reinterpret_cast<void*>(Addr(kPortraitMgrGuard)), 0, guard) || !(guard & 1) || !Rd(reinterpret_cast<void*>(Addr(kPortraitMgr)), 0, pm) || !pm ||
+        !Rd(pm, PM_head, head) || !head || !Rd(head, TN_left, n))
+        return false;
+    for (int steps = 0; n && n != head; ++steps) {
+        if (steps > 8192) return false;
+        void* pd = nullptr;
+        if (!Rd(n, TN_portrait, pd)) return false;
+        out.insert(reinterpret_cast<uintptr_t>(pd));
+        void* r = nullptr;
+        if (!Rd(n, TN_right, r)) return false;
+        if (!IsNil(r)) {
+            n = r;
+            for (void* l = nullptr; Rd(n, TN_left, l) && !IsNil(l);) n = l;
+        } else {
+            void* p = nullptr;
+            if (!Rd(n, TN_parent, p)) return false;
+            for (void* pr = nullptr; !IsNil(p) && Rd(p, TN_right, pr) && pr == n;) {
+                n = p;
+                if (!Rd(n, TN_parent, p)) return false;
+            }
+            n = p;
+        }
+    }
+    return true;
+}
+std::unordered_set<uintptr_t> g_portraitCache;   // game thread only (the squad bar's draw, the tick)
+} // namespace
+
+bool IsGamePortrait(const void* portraitData) {
+    const auto p = reinterpret_cast<uintptr_t>(portraitData);
+    if (!p) return false;
+    if (g_portraitCache.count(p)) return true;
+    // a portrait made since (a new member): the manager is read again; unreadable (another build of
+    // the game?): the game draws as it would without the mod
+    if (!GamePortraits(g_portraitCache)) { g_portraitCache.clear(); return true; }
+    return g_portraitCache.count(p) != 0;
+}
+
+bool CheckSquadBar(SquadBarReport& out, bool repair) {
+    out = SquadBarReport{};
+    void* bar = nullptr;
+    void* tabs = nullptr;
+    uint64_t count = 0;
+    if (!Rd(reinterpret_cast<void*>(Addr(kMainBarGui)), 0, bar) || !bar || !Rd(bar, MB_tabs, tabs) || !Rd(bar, MB_tabCount, count) || count > 256) return false;
+    if (count && !tabs) return false;
+    // read again every frame: the cache of the draw hook (IsGamePortrait) never outlives a world
+    if (!GamePortraits(g_portraitCache)) { g_portraitCache.clear(); return false; }
+    const std::unordered_set<uintptr_t>& portraits = g_portraitCache;
+    std::vector<void*> squads;
+    PlayerSquads(squads);
+    static void* removeAll = nullptr;
+    if (!removeAll)
+        if (HMODULE gui = GetModuleHandleW(L"MyGUIEngine_x64.dll")) removeAll = reinterpret_cast<void*>(GetProcAddress(gui, "?removeAllItems@ItemBox@MyGUI@@QEAAXXZ"));
+    const uintptr_t holderVt = Addr(kVtPortraitHolder);
+    bool refill = false;
+    for (uint64_t t = 0; t < count; ++t) {
+        const uint8_t* tab = static_cast<const uint8_t*>(tabs) + t * kTabSize;
+        void* pbox = nullptr;
+        void* squad = nullptr;
+        void* box = nullptr;
+        void** begin = nullptr;
+        void** end = nullptr;
+        if (!Rd(tab, TAB_box, pbox) || !Rd(tab, TAB_squad, squad)) return false;
+        ++out.tabs;
+        const bool known = std::find(squads.begin(), squads.end(), squad) != squads.end();
+        if (!known) ++out.staleTabs;   // a tab whose squad is not the player's (any more): the next rebuild drops it
+        if (!pbox || !Rd(pbox, PB_itemBox, box) || !box || !Rd(box, IB_itemsBegin, begin) || !Rd(box, IB_itemsEnd, end)) continue;
+        const ptrdiff_t n = end - begin;
+        if (n < 0 || n > 256) { ++out.badTabs; continue; }
+        int bad = 0;
+        bool holdersOk = true;
+        for (ptrdiff_t i = 0; i < n; ++i) {
+            ++out.items;
+            void* holder = nullptr;
+            uintptr_t vt = 0;
+            void* pd = nullptr;
+            if (!Rd(begin, size_t(i) * sizeof(void*), holder) || !holder || !Rd(holder, 0, vt) || vt != holderVt) { holdersOk = false; ++bad; continue; }
+            if (!Rd(holder, 8, pd) || !portraits.count(reinterpret_cast<uintptr_t>(pd))) {
+                ++bad;
+                if (out.firstBad.empty()) {
+                    char b[160];
+                    std::string name;
+                    if (known) SquadName(squad, name);
+                    snprintf(b, sizeof(b), "tab %llu ('%s'%s) item %lld holds %p", static_cast<unsigned long long>(t), name.c_str(), known ? "" : ", not a player squad",
+                             static_cast<long long>(i), pd);
+                    out.firstBad = b;
+                }
+            }
+        }
+        if (!bad) continue;
+        out.badItems += bad;
+        ++out.badTabs;
+        // the items go (MyGUI deletes each Holder by its vtable: only when every one is intact); the
+        // shown squad's tab is refilled by the game below, another one when it is shown next
+        if (repair && holdersOk && removeAll && RemoveAllSeh(removeAll, box)) { ++out.repairedTabs; refill = true; }
+    }
+    if (refill) BarUpdateSeh(FnAddr(FnMainBarUpdateCurrent), bar);
+    return true;
 }
 
 } // namespace kenshi
