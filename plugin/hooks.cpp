@@ -263,7 +263,13 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
         w->Toast("Cette action n'est pas encore disponible en multijoueur.");
         return false;
     }
-    if (s.mine.empty()) {
+    // AI settings (squad bar toggles, fight style, speed, permanent jobs) of a character nobody owns
+    // (a recruit never given to a player): anyone's, the host runs them in arrival order
+    const bool settings = via == kc::TaskVia::SetOrder || (via == kc::TaskVia::AddJob && shift);
+    std::vector<kc::Handle> sharedSel;
+    if (settings)
+        for (const auto& h : s.others) if (v->shared.count(h)) sharedSel.push_back(h);
+    if (s.mine.empty() && sharedSel.empty()) {
         if (s.foreign) ToastForeign();
         return false;
     }
@@ -273,6 +279,14 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
     c.task = task;
     c.shift = shift;
     c.add = add;
+    if (via == kc::TaskVia::SetOrder) {
+        // the value wanted, not a toggle: the host sets exactly that (two players clicking: the last one
+        // wins, instead of switching it back). From the first selected character, as the game does.
+        const kc::Handle& first = !s.mine.empty() ? s.mine.front() : sharedSel.front();
+        kenshi::Character* fc = w->FindSquad(first);
+        c.shift = true;
+        c.add = task > 10 && fc ? !kenshi::GetStandingOrder(fc, task) : true;
+    }
     if (loc) c.pos = {loc[0], loc[1], loc[2]};
     if (subjectHandle) c.subject = *subjectHandle;
     else if (subject) kenshi::ObjectHandle(subject, c.subject);
@@ -288,6 +302,7 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
         kenshi::ObjectPosition(building, c.buildingPos);
     }
     std::vector<kc::Handle> who = s.mine;
+    who.insert(who.end(), sharedSel.begin(), sharedSel.end());
     if (via == kc::TaskVia::TaskNearest && loc && who.size() > 1) {   // the game picks the nearest one
         kc::Handle best = who.front();
         float bestD = 1e30f;
@@ -316,7 +331,7 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
             if (kenshi::PermajobCount(ch) > before) w->NoteLocalJob(h, kenshi::PermajobType(ch, kenshi::PermajobCount(ch) - 1));
         }
     }
-    if (s.foreign) ToastForeign();
+    if (s.foreign > sharedSel.size()) ToastForeign();
     return false;
 }
 
@@ -336,7 +351,7 @@ bool ClientJobChange(void* chr, kc::TaskVia via, int task, int a, int b) {
     kc::Handle h;
     KenshiWorld* w = TheWorld();
     if (!w || !kenshi::GetHandle(static_cast<kenshi::Character*>(chr), h)) return true;
-    if (!v->controllable.count(h)) {
+    if (!v->controllable.count(h) && !v->shared.count(h)) {   // a nobody's character: anyone may change its jobs
         if (!v->squadForeign.count(chr)) return true;   // not a player's character
         ToastForeign();
         return false;
@@ -597,16 +612,40 @@ void hk_addAt(void* squad, void* c, int index) {
     if (!v->client) return o_addAt(squad, c, index);   // the host organises everyone's squads
     KenshiWorld* w = TheWorld();
     if (!mine || !w) { if (w) ToastForeign(); return; }
-    kc::Command cmd;
-    cmd.kind = kc::CommandKind::SquadMove;
-    cmd.task = std::max(0, index);
+    // a squad request naming the host's squad (a new squad of ours the host does not have yet: it makes
+    // it, with this character): the squad window's empty squads are not known by a member
     std::vector<kenshi::Character*> members;
     kenshi::SquadMembers(squad, members);
-    for (kenshi::Character* m : members)
-        if (m != c && kenshi::GetHandle(m, cmd.subject)) break;
-    if (members.empty() || (members.size() == 1 && members[0] == c)) cmd.subject = kc::Handle{};
+    int at = int(members.size());   // addCharacterAt's index counts every member: our request counts the squad's characters
+    for (size_t i = 0; i < members.size(); ++i)
+        if (kenshi::SquadMemberIndex(members[i]) >= index) { at = int(i); break; }
     Log("client squad change asked of the host");
-    w->QueueLocalOrder(h, cmd);
+    w->QueueSquadRequest(static_cast<kenshi::Character*>(c), squad, at);
+}
+
+// A portrait dropped on another one of its squad: the two swap places (index 0 leads the squad). On a
+// client it is asked of the host for the one of ours (the other, if not ours, only shifts there).
+using SwapFn = void (*)(void* squad, int a, int b);
+SwapFn o_swap = nullptr;
+void hk_swap(void* squad, int a, int b) {
+    auto v = KenshiWorld::View();
+    if (g_hostCall || !v->active || !v->client) return o_swap(squad, a, b);
+    KenshiWorld* w = TheWorld();
+    std::vector<kenshi::Character*> members;
+    kenshi::SquadMembers(squad, members);
+    kenshi::Character* ca = nullptr;
+    kenshi::Character* cb = nullptr;
+    int ia = -1, ib = -1;
+    for (size_t i = 0; i < members.size(); ++i) {
+        if (kenshi::SquadMemberIndex(members[i]) == a) { ca = members[i]; ia = int(i); }
+        if (kenshi::SquadMemberIndex(members[i]) == b) { cb = members[i]; ib = int(i); }
+    }
+    auto ours = [&](kenshi::Character* ch) { kc::Handle h; return ch && kenshi::GetHandle(ch, h) && v->controllable.count(h); };
+    if (!w || ia < 0 || ib < 0) return;
+    if (ours(ca)) w->QueueSquadRequest(ca, squad, ib);
+    else if (ours(cb)) w->QueueSquadRequest(cb, squad, ia);
+    else { ToastForeign(); return; }
+    Log("client squad swap asked of the host");
 }
 
 // The game's character editor was confirmed: its characters have new looks (and maybe a new name)
@@ -1336,7 +1375,8 @@ bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, 
         // decides from the host's own toggle buttons, not from that character
         HostCallScope scope;
         const int order = cmd.task;
-        const bool on = order > 10 ? !kenshi::GetStandingOrder(c, order) : true;
+        // shift: the client sent the value it wants (add); older clients: a toggle
+        const bool on = cmd.shift ? cmd.add : order > 10 ? !kenshi::GetStandingOrder(c, order) : true;
         kenshi::SetStandingOrder(c, order, on);
         return true;
     }
@@ -1428,6 +1468,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnPickupItem, reinterpret_cast<void*>(&hk_pickup), reinterpret_cast<void**>(&o_pickup)},
         {kenshi::FnIncreaseStat, reinterpret_cast<void*>(&hk_increaseStat), reinterpret_cast<void**>(&o_increaseStat)},
         {kenshi::FnSquadAddCharacterAt, reinterpret_cast<void*>(&hk_addAt), reinterpret_cast<void**>(&o_addAt)},
+        {kenshi::FnSquadSwapCharacters, reinterpret_cast<void*>(&hk_swap), reinterpret_cast<void**>(&o_swap)},
         {kenshi::FnCloseCharacterEditor, reinterpret_cast<void*>(&hk_closeEditor), reinterpret_cast<void**>(&o_closeEditor)},
         {kenshi::FnSetStandingOrder, reinterpret_cast<void*>(&hk_standing), reinterpret_cast<void**>(&o_standing)},
         {kenshi::FnPickupCharacter, reinterpret_cast<void*>(&hk_pickChar), reinterpret_cast<void**>(&o_pickChar)},

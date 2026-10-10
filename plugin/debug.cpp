@@ -876,6 +876,145 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         for (auto& [k, n] : kinds) o << " " << k << "x" << n;
         return o.str();
     }
+    // ---- squad window and AI settings (experiment squadui). Characters by name, '_' for spaces.
+    auto squadChar = [&](std::string n) -> kenshi::Character* {
+        std::replace(n.begin(), n.end(), '_', ' ');
+        std::vector<kenshi::Character*> all;
+        kenshi::PlayerCharacters(all);
+        for (kenshi::Character* c : all) { std::string cn; if (kenshi::CharacterName(c, cn) && cn == n) return c; }
+        return nullptr;
+    };
+    if (cmd == "squadsfull") {   // squadsfull: every squad in the squad window's order, empty ones too: "| name: a,b | ..."
+        std::vector<void*> sq;
+        kenshi::PlayerSquads(sq);
+        std::ostringstream o;
+        o << "ok";
+        for (void* q : sq) {
+            std::string n;
+            kenshi::SquadName(q, n);
+            o << " | " << n << ":";
+            std::vector<kenshi::Character*> m;
+            kenshi::SquadMembers(q, m);
+            for (size_t i = 0; i < m.size(); ++i) { std::string cn; kenshi::CharacterName(m[i], cn); o << (i ? "," : " ") << cn; }
+        }
+        return o.str();
+    }
+    if (cmd == "squadrename") {   // squadrename <position> <name>: the squad window's name box, as typed ('_' for spaces)
+        size_t pos = 0;
+        std::string name;
+        in >> pos >> name;
+        std::replace(name.begin(), name.end(), '_', ' ');
+        std::vector<void*> sq;
+        kenshi::PlayerSquads(sq);
+        if (pos >= sq.size() || name.empty()) return "err no such squad";
+        kenshi::SetSquadName(sq[pos], name);
+        return "ok";
+    }
+    if (cmd == "squadnew") {   // squadnew <name>: the squad window's "new squad" button, then its name box
+        std::string name;
+        in >> name;
+        std::replace(name.begin(), name.end(), '_', ' ');
+        void* q = nullptr;
+        kenshi::KeepSelection([&] { q = kenshi::NewSquad(); });
+        if (!q) return "err";
+        if (!name.empty()) kenshi::SetSquadName(q, name);
+        return "ok";
+    }
+    if (cmd == "squadorder") {   // squadorder <from> <to>: a squad dragged in the squad window (Faction::changePlatoonIndex)
+        size_t from = 0, to = 0;
+        in >> from >> to;
+        std::vector<void*> sq;
+        kenshi::PlayerSquads(sq);
+        if (from >= sq.size() || to >= sq.size()) return "err no such squad";
+        return kenshi::SetSquadOrder(sq[from], kenshi::SquadFactionIndex(sq[to])) ? "ok" : "err";
+    }
+    if (cmd == "squadlead") {   // squadlead <name>: that portrait dropped on its squad's first one (swapCharacters: it leads)
+        std::string who;
+        in >> who;
+        kenshi::Character* c = squadChar(who);
+        if (!c) return "err no " + who;
+        std::vector<kenshi::Character*> m;
+        kenshi::SquadMembers(kenshi::SquadOf(c), m);
+        if (m.empty() || m[0] == c) return "ok already";
+        using FnSwap = void (*)(void*, int, int);
+        reinterpret_cast<FnSwap>(kenshi::FnAddr(kenshi::FnSquadSwapCharacters))(kenshi::SquadOf(c), kenshi::SquadMemberIndex(c), kenshi::SquadMemberIndex(m[0]));
+        return "ok";
+    }
+    if (cmd == "charrename") {   // charrename <name> <new name>: the character window's rename
+        std::string who, name;
+        in >> who >> name;
+        std::replace(name.begin(), name.end(), '_', ' ');
+        kenshi::Character* c = squadChar(who);
+        if (!c) return "err no " + who;
+        return kenshi::SetCharacterName(c, name) ? "ok" : "err";
+    }
+    if (cmd == "aiorder") {   // aiorder <name> <standingOrder>: the squad bar's toggle for that character alone, as the UI does
+        std::string who;
+        int order = 0;
+        in >> who >> order;
+        kenshi::Character* c = squadChar(who);
+        if (!c) return "err no " + who;
+        kenshi::WithSelection(c, [&] { reinterpret_cast<void (*)(void*, int)>(kenshi::FnAddr(kenshi::FnSetOrderSelected))(kenshi::Player(), order); });
+        return "ok";
+    }
+    if (cmd == "aimodes") {   // aimodes <name>: standing orders (bits, see "modes"), fight style, speed order
+        std::string who;
+        in >> who;
+        kenshi::Character* c = squadChar(who);
+        if (!c) return "err no " + who;
+        uint8_t style = 0, gait = 0;
+        float pace = 0;
+        const uint16_t m = kenshi::ReadModes(c, style);
+        kenshi::ReadPace(c, gait, pace);
+        return "ok " + std::to_string(m) + " " + std::to_string(style) + " " + std::to_string(gait);
+    }
+    if (cmd == "aishared") {   // aishared <name>: 1 when nobody owns it (its AI settings are anyone's) in this machine's view
+        std::string who;
+        in >> who;
+        kenshi::Character* c = squadChar(who);
+        kc::Handle h;
+        if (!c || !kenshi::GetHandle(c, h)) return "err no " + who;
+        return std::string("ok ") + (KenshiWorld::View()->shared.count(h) ? "1" : "0");
+    }
+    if (cmd == "jobsof") {   // jobsof <name>: its job list (Tâches panel) by kind, in order
+        std::string who;
+        in >> who;
+        kenshi::Character* c = squadChar(who);
+        if (!c) return "err no " + who;
+        std::string o = "ok " + std::to_string(kenshi::PermajobCount(c));
+        for (int i = 0, n = kenshi::PermajobCount(c); i < n; ++i) o += " " + std::to_string(kenshi::PermajobType(c, i));
+        return o;
+    }
+    if (cmd == "jobfor") {   // jobfor <name> <task> <subjectName>: a permanent job, as the UI gives it (addJobSelectedCharacters)
+        std::string who, subj;
+        int task = 0;
+        in >> who >> task >> subj;
+        kenshi::Character* c = squadChar(who);
+        kenshi::Character* s2 = squadChar(subj);
+        kc::Vec3 p;
+        if (!c || !s2 || !kenshi::GetPosition(s2, p)) return "err";
+        const float loc[3] = {p.x, p.y, p.z};
+        using FnAddJob = void (*)(void*, int, void*, bool, bool, const float*);
+        kenshi::WithSelection(c, [&] { reinterpret_cast<FnAddJob>(kenshi::FnAddr(kenshi::FnAddJobSelected))(kenshi::Player(), task, s2, true, true, loc); });
+        return "ok";
+    }
+    if (cmd == "charinfo") {   // charinfo <name>: what its character windows show: skills, hunger, blood, lowest limb
+        std::string who;
+        in >> who;
+        kenshi::Character* c = squadChar(who);
+        std::vector<float> st;
+        if (!c || !kenshi::ReadStats(c, st)) return "err no " + who;
+        std::ostringstream o;
+        o << "ok ";
+        for (size_t i = 0; i < st.size(); ++i) o << (i ? "," : "") << int(st[i] * 10);
+        kc::EntityVitals v;
+        if (kenshi::ReadVitals(c, v)) {
+            float low = 1e9f;
+            for (const auto& p : v.parts) low = std::min(low, p.flesh);
+            o << " hunger=" << int(v.hunger) << " blood=" << int(v.blood) << " limb=" << int(low);
+        }
+        return o.str();
+    }
     if (cmd == "squads") {   // squads: the player's squads as this machine has them: "name: member,member | ..."
         std::vector<kc::IWorld::WorldSquad> ws;
         w.ReadSquads(ws);

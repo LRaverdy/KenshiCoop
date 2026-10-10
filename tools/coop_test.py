@@ -2570,6 +2570,165 @@ def own_index(pid):
     return len(keys) - 1
 
 
+def exp_squadui(host, cli):
+    """Squad window (Escouade) and AI settings, the host's everywhere: the client renames, creates,
+    reorders squads, moves and leads with its own character, renames it; refusals for the host's
+    characters; concurrent edits by the host and the client end the same on both; AI toggles, fight
+    style and jobs of its character and of a recruit nobody owns (any player, the last one wins)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(4)
+    me = client_char_name()
+
+    def squads(pid):
+        return cmd(pid, "squadsfull")[1]
+
+    def names_of(text):   # every character name in a squadsfull answer
+        out = []
+        for part in text.split(" | ")[1:]:
+            members = part.split(":", 1)[1].strip()
+            out += [m.replace(" ", "_") for m in members.split(",") if m]
+        return out
+
+    def settle(label, wait=5.0):
+        h = c = ""
+        end = time.time() + wait
+        while time.time() < end:
+            time.sleep(0.5)
+            h, c = squads(host), squads(cli)
+            if h == c:
+                break
+        log(label + ":", "SAME" if h == c else "DIFFERENT")
+        log("    host  :", h)
+        log("    client:", c)
+        return h, c
+
+    def pos_of(text, needle):   # position of the squad holding that character (or named so)
+        for i, part in enumerate(text.split(" | ")[1:]):
+            name, members = part.split(":", 1)
+            if needle.replace("_", " ") in [m.strip() for m in members.split(",")] or name.strip() == needle.replace("_", " "):
+                return i
+        return -1
+
+    h, c = settle("depart")
+    check("escouade : memes escouades au depart", h == c, h)
+    everyone = names_of(h)
+    others = [n for n in everyone if n != me]
+    log("client character:", me, "| others:", others)
+    if not others:
+        check("escouade : un perso de l'hote dans l'escouade", False, h)
+        summary()
+        return
+    host_char = others[0]
+
+    # 1. the client's own squad, renamed in the client's squad window
+    p = pos_of(h, me)
+    log("client renames its squad:", cmd(cli, f"squadrename {p} Les_Rats"))
+    h, c = settle("renamed by the client", 6)
+    check("escouade : renommage du client applique par l'hote", "Les Rats:" in h and h == c, h)
+    # 2. a squad without the client's characters: the host puts one of its characters alone
+    log("host: its character alone:", cmd(host, f"squadmove {host_char} new"))
+    h, c = settle("host squad")
+    p = pos_of(h, host_char)
+    log("client renames the host's squad:", cmd(cli, f"squadrename {p} Pas_a_toi"))
+    time.sleep(4)
+    h, c = settle("after the refused rename")
+    check("escouade : renommage d'une escouade sans ses persos refuse", "Pas a toi" not in h and "Pas a toi" not in c, c)
+    # 3. a new squad made in the client's window, then its character moved into it, then leading
+    log("client new squad:", cmd(cli, "squadnew Eclaireurs"))
+    h, c = settle("client new squad", 8)
+    check("escouade : nouvelle escouade du client creee chez l'hote", "Eclaireurs:" in h and h == c, h)
+    log("client moves its character to a new squad:", cmd(cli, f"squadmove {me} new"))
+    h, c = settle("client moved its character", 6)
+    check("escouade : deplacement du perso du client", h == c and pos_of(h, me) != pos_of(h, host_char), h)
+    log("client: its character back with the host's character:", cmd(cli, f"squadmove {me} {host_char}"))
+    settle("back with the host's character", 6)
+    log("client: its character leads:", cmd(cli, f"squadlead {me}"))
+    h, c = settle("leader", 6)
+    lead = h.split(" | ")[pos_of(h, me) + 1].split(":", 1)[1].strip().split(",")[0] if pos_of(h, me) >= 0 else ""
+    check("escouade : chef d'escouade choisi par le client", lead == me.replace("_", " ") and h == c, h)
+    # 4. the host's character: never moved by the client
+    before = squads(host)
+    log("client tries to move the host's character:", cmd(cli, f"squadmove {host_char} new"))
+    time.sleep(4)
+    check("escouade : deplacer le perso de l'hote refuse", pos_of(squads(host), host_char) == pos_of(before, host_char) and squads(host) == squads(cli),
+          squads(host))
+    # 5. order of the squads: the client drags its squad first
+    h = squads(cli)
+    p = pos_of(h, me)
+    log("client drags its squad first:", cmd(cli, f"squadorder {p} 0"))
+    h, c = settle("order", 6)
+    check("escouade : ordre des escouades identique", pos_of(h, me) == 0 and h == c, h)
+    # 6. concurrent: host and client rename the same squad at once, then move the same character at once
+    p = pos_of(squads(host), me)
+    log("simultaneous renames:", cmd(host, f"squadrename {p} Hote"), cmd(cli, f"squadrename {p} Client"))
+    h, c = settle("simultaneous renames", 8)
+    check("escouade : renommages simultanes, meme resultat partout", h == c and ("Hote:" in h or "Client:" in h), h)
+    log("simultaneous moves:", cmd(host, f"squadmove {me} new"), cmd(cli, f"squadmove {me} {host_char}"))
+    h, c = settle("simultaneous moves", 8)
+    check("escouade : deplacements simultanes, meme resultat partout", h == c, h)
+    # 7. names in the character windows
+    log("client renames its character:", cmd(cli, f"charrename {me} Kenji"))
+    time.sleep(5)
+    h, c = settle("character renamed")
+    check("escouade : nom du perso du client passe par l'hote", "Kenji" in h and h == c, h)
+    me = "Kenji"
+    log("client renames the host's character:", cmd(cli, f"charrename {host_char} Vole"))
+    time.sleep(5)
+    h, c = settle("host character renamed by the client")
+    check("escouade : renommer le perso de l'hote refuse", "Vole" not in h and "Vole" not in c, c)
+    info_h, info_c = cmd(host, f"charinfo {me}")[1], cmd(cli, f"charinfo {me}")[1]
+    check("escouade : fiche du perso identique (competences, faim, sang, membres)", info_h == info_c, f"{info_h} / {info_c}")
+
+    # 8. AI settings of the client's character: passive on, then off (the value, not a toggle)
+    def modes(pid, who):
+        t = cmd(pid, f"aimodes {who}")[1].split()
+        return (int(t[1]), int(t[2]), int(t[3])) if len(t) >= 4 else None
+    log("client passive:", cmd(cli, f"aiorder {me} 13"))
+    time.sleep(3)
+    mh = modes(host, me)
+    check("ia : passif du client chez l'hote", mh is not None and mh[0] & 32, mh)
+    log("client passive again:", cmd(cli, f"aiorder {me} 13"))
+    time.sleep(3)
+    mh, mc = modes(host, me), modes(cli, me)
+    check("ia : passif desactive, meme valeur partout", mh is not None and not (mh[0] & 32) and mh == mc, f"{mh} / {mc}")
+    log("client fight style defend:", cmd(cli, f"aiorder {me} 6"))
+    log("client hold:", cmd(cli, f"aiorder {me} 12"))
+    log("client walks:", cmd(cli, f"aiorder {me} 2"))
+    time.sleep(3)
+    mh, mc = modes(host, me), modes(cli, me)
+    check("ia : style de combat, tenir la position et allure du client", mh is not None and mh[1] == 1 and mh[0] & 16 and mh == mc, f"{mh} / {mc}")
+    log("client: host's character passive (refused):", cmd(cli, f"aiorder {host_char} 13"))
+    before = modes(host, host_char)
+    time.sleep(3)
+    shared_host = cmd(cli, f"aishared {host_char}")[1] == "ok 1"
+    if not shared_host:
+        check("ia : reglage du perso de l'hote refuse", modes(host, host_char) == before, f"{before} -> {modes(host, host_char)}")
+    # 9. a recruit nobody owns: any player sets it, the last one wins; concurrent toggles end the same
+    recruit = next((n for n in others if cmd(cli, f"aishared {n}")[1] == "ok 1"), None)
+    log("recruit nobody owns:", recruit)
+    if recruit:
+        log("client passive on the recruit:", cmd(cli, f"aiorder {recruit} 13"))
+        time.sleep(3)
+        mh = modes(host, recruit)
+        check("ia : une recrue sans joueur se regle par le client", mh is not None and mh[0] & 32, mh)
+        log("simultaneous:", cmd(host, f"aiorder {recruit} 13"), cmd(cli, f"aiorder {recruit} 14"))
+        time.sleep(4)
+        mh, mc = modes(host, recruit), modes(cli, recruit)
+        check("ia : reglages simultanes sur une recrue, meme resultat partout", mh == mc and mh is not None, f"{mh} / {mc}")
+    else:
+        log("no recruit nobody owns in this save (every host character is the host's): shared settings not tested in game")
+    # 10. jobs, with their targets, the same on both: one the client gives, one the host gives
+    log("client job (follow):", cmd(cli, f"jobfor {me} 31 {host_char}"))
+    log("host job (follow) for its character:", cmd(host, f"jobfor {host_char} 31 {me}"))
+    time.sleep(5)
+    jh, jc = cmd(host, f"jobsof {me}")[1], cmd(cli, f"jobsof {me}")[1]
+    check("ia : taches du perso du client identiques", jh == jc and jh != "ok 0", f"{jh} / {jc}")
+    jh, jc = cmd(host, f"jobsof {host_char}")[1], cmd(cli, f"jobsof {host_char}")[1]
+    check("ia : tache ajoutee chez l'hote visible chez le client", jh == jc and jh != "ok 0", f"{jh} / {jc}")
+    summary()
+
+
 # ---- actor safety: a client never makes a character it does not own act
 def exp_actorsafety(host, cli):
     """The host selects its own characters, as a player would. The client then gives every kind of order
@@ -4895,6 +5054,9 @@ def main():
     su = sub.add_parser("suite", help="every feature, PASS / FAIL per point")
     su.add_argument("--save", default="kctest_base")
     su.add_argument("--keep", action="store_true")
+    sui = sub.add_parser("squadui", help="squad window and AI settings: renames, new squads, order, leader, moves, names, toggles, jobs; concurrent host and client edits")
+    sui.add_argument("--save", default="kctest_base")
+    sui.add_argument("--keep", action="store_true")
     sq = sub.add_parser("squads")
     sq.add_argument("--save", default="kctest_base")
     sq.add_argument("--keep", action="store_true")
@@ -5015,6 +5177,8 @@ def main():
             exp_suite(host, cli)
         elif a.what == "squads":
             exp_squads(host, cli)
+        elif a.what == "squadui":
+            exp_squadui(host, cli)
         elif a.what == "far":
             exp_far(host, cli)
         elif a.what == "kosquad":

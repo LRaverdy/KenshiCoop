@@ -178,6 +178,7 @@ void Session::Leave() {
     ResetDoors();   // lot A
     floorSent_.clear(); floors_.clear(); nextFloors_ = nextFloorsFull_ = 0; floorPlayers_ = 0;   // fix G6
     ResetJobs();   // fix G5
+    ResetSquads();   // squad window and AI settings
     captiveSent_.clear(); captives_.clear(); captivesDirty_.clear();   // lot D: prisons
     ResetMap();   // map markers and pings
     haveMoneyBase_ = false;
@@ -245,6 +246,8 @@ void Session::HostTick(double now, bool live) {
     haltQueue_.clear();
     for (auto& [from, c] : pendingCommands_) ApplyCommand(from, c);
     pendingCommands_.clear();
+    for (auto& [from, q] : pendingSquadReqs_) HostSquadRequest(from, q);   // one at a time, in arrival order: the last one wins
+    pendingSquadReqs_.clear();
     HostInvOps();
     if (!pendingInvOps_.empty()) nextInventory_ = 0;   // show the result right away
     pendingInvOps_.clear();
@@ -297,6 +300,7 @@ void Session::HostTick(double now, bool live) {
         nextSquads_ = now + 0.5;
         SendSquads(now);
     }
+    if (anyInGame && live) SendSquadState(now);   // squad window: ids, empty squads, order, names
     if (anyInGame) SendDialogs();
     else { world_.TakeDialogEvents(scratchDialogs_); scratchDialogs_.clear(); }
     if (anyInGame && now >= nextProgress_) {
@@ -1760,6 +1764,11 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         if (pl->inGame && Decode(r, c) && pendingCommands_.size() < 1024) pendingCommands_.emplace_back(pl->id, c);
         break;
     }
+    case Msg::SquadRequest: {
+        SquadRequest q;
+        if (pl->inGame && Decode(r, q) && pendingSquadReqs_.size() < 256) pendingSquadReqs_.emplace_back(pl->id, q);
+        break;
+    }
     case Msg::ContainerOpen: {
         ContainerOpen m;
         if (!pl->inGame || !Decode(r, m)) break;
@@ -2337,7 +2346,9 @@ void Session::SendLocalDrops() {
 
 void Session::ApplyCommand(uint8_t from, const Command& c) {
     const std::string who = players_.count(from) ? players_[from].name : "player " + std::to_string(from);
-    if (!AdmitActor(from, c.netId, "order", Msg::Command, c.seq)) return;
+    // AI settings of a character nobody owns: any player's (the host runs them in arrival order)
+    const bool sharedSettings = IsSettingsCommand(c) && CheckActor(from, c.netId) != ActorVerdict::Ok && MaySetSettings(from, c.netId);
+    if (!sharedSettings && !AdmitActor(from, c.netId, "order", Msg::Command, c.seq)) return;
     auto it = entities_.find(c.netId);
     std::string what;
     switch (c.kind) {
@@ -2352,7 +2363,8 @@ void Session::ApplyCommand(uint8_t from, const Command& c) {
         break;
     case CommandKind::SquadMove: what = "change squad"; break;
     }
-    const bool ok = world_.Order(it->second.handle, c);
+    const bool ok = sharedSettings ? world_.OrderShared(it->second.handle, c) : world_.Order(it->second.handle, c);
+    if (sharedSettings) what += " (a character nobody owns)";
     if (c.kind != CommandKind::MoveTo || !ok) log_("[" + who + "] " + what + (ok ? " -> ok" : " -> FAILED"));
     Result res;
     res.request = Msg::Command;
@@ -2517,7 +2529,8 @@ void Session::ClientTick(double now, bool live) {
         Entity* e = entityByHandle(h);
         // not one of ours (the host's character, another player's, one the host does not know): never
         // sent, with a French notice (the host would refuse it anyway: Session::Authorize)
-        if (!e || !ClientMaySend(Msg::Command, e->netId, "order")) {
+        const bool sharedSettings = e && IsSettingsCommand(cmd) && MaySetSettings(localId_, e->netId);   // nobody's character: anyone's settings
+        if (!e || (!sharedSettings && !ClientMaySend(Msg::Command, e->netId, "order"))) {
             if (!e) log_("refused locally: order for a character the host does not know");
             continue;
         }
@@ -2656,7 +2669,8 @@ void Session::ClientTick(double now, bool live) {
     ClientBuildings(now);
     ClientJobs(now);   // fix G5
     // Squads: split our characters as the host does (again now and then: stand-ins, late arrivals).
-    if (haveSquads_ && now - squadsAt_ > 2.0) {
+    ClientSquads(now);   // squad window: the host's SquadState, our edits asked of the host
+    if (haveSquads_ && !haveSquadState_ && now - squadsAt_ > 2.0) {   // an older host: Squads only
         squadsAt_ = now;
         std::vector<IWorld::WorldSquad> ws;
         for (const auto& s : lastSquads_.squads) {
@@ -3129,6 +3143,8 @@ void Session::ClientPacket(Msg type, Reader& r) {
     }
     case Msg::Doors: ClientDoorsPacket(r); break;   // lot A
     case Msg::JobList: ClientJobsPacket(r); break;   // fix G5
+    case Msg::JobState: ClientJobStatePacket(r); break;
+    case Msg::SquadState: ClientSquadStatePacket(r); break;
     case Msg::Shots: case Msg::Ranged: ClientRangedPacket(type, r); break;   // lot C
     case Msg::Result: {   // the host's answer to one of our requests
         Result m;
@@ -3215,6 +3231,7 @@ void Session::ForgetPlayer(uint8_t id) {
     // nothing they asked for runs any more (their id may soon be someone else's)
     auto drop = [id](auto& v) { v.erase(std::remove_if(v.begin(), v.end(), [id](const auto& x) { return x.first == id; }), v.end()); };
     drop(pendingCommands_);
+    drop(pendingSquadReqs_);
     drop(pendingInvOps_);
     drop(pendingLooks_);
     drop(containerAsks_);

@@ -9,7 +9,7 @@ Deux niveaux de tests :
 
 ```powershell
 .\build.ps1                            # compile aussi kc_tests
-.\build\bin\Release\kc_tests.exe       # dernière ligne : "26728 checks, 0 failed" (10 octobre 2026)
+.\build\bin\Release\kc_tests.exe       # dernière ligne : "26787 checks, 0 failed" (10 octobre 2026)
 .\build.ps1 -Asan                      # variante AddressSanitizer, dans build-asan\
 ```
 
@@ -38,6 +38,8 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `TestMap` | marqueurs de carte : 1 hôte + 2 clients reçoivent les persos (propriétaires, perso de chaque joueur, positions même très loin) et les escouades hostiles de l'hôte ; un ping de client chez l'hôte et l'autre client, refusé s'il suit le précédent de moins de 0,5 s, 5 au plus par joueur, effacé après 10 s |
 | `TestManyPlayers` | 1 hôte + 4 clients arrivant ensemble, 120 personnages |
 | `TestJoinQueue` | file d'attente des arrivées : 3 arrivées quasi simultanées (une pendant la sauvegarde, une pendant le chargement du premier), un joueur à la fois jusqu'à la fermeture de son éditeur, positions / joueur attendu / étape côté clients, liste côté hôte, personne rejeté pendant l'attente, chaque sauvegarde contient les persos des précédents ; le joueur dans l'éditeur plante (tour suivant), un joueur quitte la file (renumérotée) ; deux éditeurs ouverts ensemble : pause jusqu'à la fermeture du dernier |
+| `TestSquadWire` | fenêtre Escouade : aller-retour de `SquadState`, `SquadRequest`, `JobState` ; demandes mal formées refusées (pas d'acteur, renommer sans escouade, nom vide, rang négatif) ; noms nettoyés (caractères de contrôle, 64 octets, lettre UTF-8 coupée) ; tâches 105 / 148 sans cible ; ce qu'est un réglage d'IA |
+| `TestSquadWindow` | fenêtre Escouade, 1 hôte + 2 clients : mêmes escouades partout ; recrue « à personne » (pas l'avatar de l'hôte) ; renommer son escouade (fait), celle d'un autre (remis) ; nouvelle escouade du client créée chez l'hôte, son perso déposé dedans puis chef de la première ; escouade vide retirée partout ; déplacer le perso de l'hôte refusé (côté client et côté hôte) ; ordre des escouades ; renommages simultanés de l'hôte et du client (le dernier arrivé gagne, même nom partout) ; déplacements simultanés du même perso ; noms des persos (le sien passe, celui de l'hôte est remis) ; passif d'une recrue réglé par les deux clients (le dernier gagne), refusé sur l'avatar de l'hôte, ordre de déplacement sur la recrue refusé ; listes de tâches avec cibles ajoutées et réordonnées chez les deux clients |
 | `TestMessageRules` | autorité : chaque valeur de `Msg` (les 256 octets passés à `MsgName`) a exactement une règle dans `kMessageRules`, et `PeekType` n'accepte que ces messages ; numéros de la fusion du protocole 33 (`JoinQueue` 72, `BagBind` 80, `MapMarkers` 82, `MapPing` 83, `Diplomacy` 85, `Result` 90) ; un client qui envoie `Diplomacy`, `MapMarkers`, `JoinQueue`, `BagBind` ou `Result` est refusé ; 5 pings d'affilée : 1 passe, 4 ignorés (`minInterval` 0,5 s), puis un autre passe |
 
 ## 2. Tests en jeu (`tools/coop_test.py`)
@@ -104,6 +106,7 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `kosquad` | des membres de l'escouade K.-O. chez l'hôte tombent et restent au sol chez le client, puis se relèvent ensemble |
 | `far` | le personnage du client à environ 5 km de l'escouade de l'hôte : l'hôte simule-t-il bien sa zone, et le client voit-il la même chose ? |
 | `squads` | nouvelles escouades et déplacements entre escouades, depuis l'hôte et depuis le client |
+| `squadui` | fenêtre Escouade et réglages d'IA : le client renomme son escouade, renomme celle de l'hôte (refusé), crée une escouade, y met son perso, le fait chef, tente de déplacer le perso de l'hôte (refusé), glisse son escouade en tête ; renommages et déplacements **simultanés** de l'hôte et du client (même résultat partout) ; nom de son perso (passe), de celui de l'hôte (refusé) ; fiche identique ; passif (valeur, pas bascule), style, tenir, allure ; réglage d'une recrue à personne et réglages simultanés hôte + client ; tâches ajoutées des deux côtés identiques. Vérifications « escouade : … » et « ia : … » |
 | `stuck` | la copie d'un PNJ poussée dans un mur ou sous le sol chez le client revient où l'hôte l'a |
 | `farnpc` | écart des PNJ qui marchent loin de l'escouade du client |
 | `beds` (`kctest_town`) | le perso du client dort dans le lit libre le plus proche, puis mine |
@@ -295,6 +298,17 @@ l'escouade triée par handle.
 |---|---|
 | `squads` | escouades vues par cette machine (`nom: membre,membre \| …`) |
 | `squadmove <nom> <autreNom\|new>` | glisser ce portrait dans l'escouade d'un autre membre, ou une nouvelle |
+| `squadsfull` | toutes les escouades dans l'ordre de la fenêtre, vides comprises (`\| nom: a,b \| …`) |
+| `squadrename <rang> <nom>` | la case de nom de l'escouade à ce rang, comme une frappe |
+| `squadnew <nom>` | le bouton « nouvelle escouade », puis son nom |
+| `squadorder <de> <vers>` | glisser une escouade (ordre des escouades) |
+| `squadlead <nom>` | déposer ce portrait sur le premier de son escouade (il devient chef) |
+| `charrename <nom> <nouveau>` | renommer ce perso (fenêtre du personnage) |
+| `aiorder <nom> <ordre>` | un bouton de la barre d'escouade pour ce perso seul |
+| `aimodes <nom>` | ordres permanents (bits), style, allure |
+| `aishared <nom>` | 1 si ce perso est « à personne » chez cette machine |
+| `jobsof <nom>` / `jobfor <nom> <tâche> <sujet>` | sa liste de tâches ; lui donner une tâche permanente sur un autre perso |
+| `charinfo <nom>` | ce que montrent ses fenêtres : compétences, faim, sang, membre le plus touché |
 
 **Dialogues**
 

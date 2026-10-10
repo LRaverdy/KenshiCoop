@@ -124,6 +124,13 @@ bool Session::Authorize(RemotePlayer& pl, Msg type, Reader r) {
             if (!Decode(r, c)) return malformed();   // no actor named (netId 0), or not a valid order
             actor = c.netId;
             seq = c.seq;
+            // AI settings (squad bar, Tâches panel) of a character nobody owns: any player's
+            if (IsSettingsCommand(c) && MaySetSettings(pl.id, actor)) return true;
+        } else if (type == Msg::SquadRequest) {
+            SquadRequest q;
+            if (!Decode(r, q)) return malformed();
+            actor = q.actor;
+            seq = q.seq;
         } else if (type == Msg::ContainerOpen) {
             ContainerOpen m;
             if (!Decode(r, m)) return malformed();
@@ -197,6 +204,7 @@ bool Session::SendRawCommandForTest(Command c) {
 
 void Session::OnResult(const Result& m) {
     results_.push_back(m);
+    if (m.request == Msg::SquadRequest) OnSquadResult(m);
     if (results_.size() > 64) results_.pop_front();
     auto sent = m.request == Msg::Command ? sentOrders_.find(m.seq) : sentOrders_.end();
     if (m.state != ResultState::Rejected) {

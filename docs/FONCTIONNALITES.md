@@ -232,6 +232,45 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
 - ⚠ Les deux points « escouades » de la suite passent aujourd'hui sans rien tester : ils
   utilisent un mauvais nom de personnage (voir [TESTS.md](TESTS.md)).
 
+### Fenêtre Escouade 🟡 (tests unitaires ; expérience `squadui` pas encore lancée en jeu)
+- **Le joueur** voit chez tout le monde les mêmes escouades, avec les mêmes noms, dans le même
+  ordre, les escouades vides comprises, le même chef (le premier portrait) et les mêmes noms de
+  personnages. Tout ce qu'il fait dans la fenêtre Escouade passe par l'hôte :
+  - déposer ou échanger un portrait (changer d'escouade, devenir chef) : **seulement ses propres
+    persos** ;
+  - renommer une escouade, la glisser (ordre des escouades), la retirer (croix) : une escouade qui
+    contient un de ses persos, ou vide ; retirer : seulement une escouade vide, jamais la dernière ;
+  - créer une escouade (bouton « nouvelle escouade ») ;
+  - renommer son personnage (fenêtre du personnage) ; le perso d'un autre garde son nom.
+- **Conflits** : l'hôte exécute les demandes une par une, dans l'ordre où elles arrivent ; la
+  dernière gagne et tout le monde reçoit le résultat. Un nom en cours de frappe reste affiché jusqu'à
+  la réponse de l'hôte ; un refus remet le nom de l'hôte, avec un message en français.
+- L'hôte organise toujours les escouades de tout le monde (il peut déplacer n'importe quel perso).
+
+### Réglages d'IA de chaque personnage 🟡 (tests unitaires ; `squadui` à lancer)
+- **Concerne** : passif, bloquer, tenir la position, narguer, furtif, distance, « tâches » (bouton
+  JOBS, la permanence des tâches : ordre 15), allure (courir / trottiner / marcher / vitesse du
+  groupe), style de combat (attaque / défense / esquive), boutons MEDIC et SECOURS (tâches
+  permanentes 58 et 148), liste et ordre des tâches (panneau Tâches).
+- **Qui** : le joueur du personnage ; les autres voient le résultat en direct. Les **recrues à
+  personne** (persos de l'hôte jamais donnés à un joueur, l'avatar de l'hôte excepté) : l'hôte et
+  **n'importe quel joueur** ; la dernière demande que l'hôte exécute gagne. Pour qu'une recrue ne
+  soit plus à tout le monde, l'hôte la donne (console `give`, à lui-même compris).
+- **Valeur, pas bascule** : un clic envoie la valeur voulue ; deux joueurs qui cliquent en même
+  temps finissent sur la même valeur partout.
+- **Tâches** : la liste de l'hôte, avec la cible de chaque tâche, est reconstruite chez chaque
+  client (ajouts compris) dans le même ordre.
+- **« Attribuer à »** : donner un personnage à un joueur reste réservé à l'hôte (console `give`,
+  raccourci) ; tout le monde voit le nouveau propriétaire (`Bind`).
+- **Pas dans Kenshi 1.0.68** : il n'existe pas de case « fuir / se replier à faible santé » ni
+  « s'équiper tout seul » dans l'interface ; ces comportements sont décidés par l'IA, chez l'hôte.
+
+### Fiches de personnage 🟡
+- **Le joueur** voit chez tout le monde : le nom (`SquadState`), les compétences et attributs
+  (`Progress`), la santé de chaque membre, le sang, la faim (`Vitals`), les ordres permanents et le
+  style (`Progress`). Les barres de la fenêtre de stats sont calculées par le jeu à partir de ces
+  valeurs. Kenshi n'a pas de « traits » de personnage dans cette version.
+
 ### Ordres permanents et style de combat ✅
 - **Concerne** : furtif, bloquer, tenir la position, passif, narguer, poursuivre, distance ;
   attaque / défense / esquive.
@@ -312,8 +351,8 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   joueur, ce perso en est retiré et l'ordre (déplacement, arrêt, mode passif...) part aux persos de
   l'hôte ; avant, l'ordre entier était refusé. Expérience `passive`.
 - **Panneau Tâches** (fix G5) : retirer une tâche (croix) ou la déplacer chez un client est fait par
-  l'hôte sur son perso ; l'hôte envoie les listes de tâches et le client retire ce que l'hôte n'a
-  plus (message `JobList`). Les tâches ajoutées n'apparaissent pas encore dans la liste du client.
+  l'hôte sur son perso ; l'hôte envoie les listes de tâches avec leurs cibles (`JobState`) et chaque
+  client fait la même liste (retire, ajoute, réordonne).
   Expérience `jobs`.
 - **Refusés côté client** : recruter au centre d'emploi (55), commerce (118, 119), et les tâches de
   stockage des PNJ (124, 284). Le joueur voit le message « Commercer et ouvrir un coffre ne sont

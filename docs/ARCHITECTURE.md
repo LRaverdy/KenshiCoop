@@ -296,7 +296,7 @@ Ordre dans `Tick()` (`main.cpp`) :
 Version du protocole : **33** (sacs à dos portés : `BagBind` ; sécurité des acteurs : `Result` ; file d'attente des arrivées : `JoinQueue` ; diplomatie : `Diplomacy` ; carte : `MapMarkers`, `MapPing`) au moment de la rédaction. Elle augmente à chaque changement de
 format, et une version différente est refusée à la connexion.
 
-Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51, 56 à 67, 69, 73 à 79, 81, 84,
+Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51, 56 à 59, 63 à 67, 69, 73 à 79, 81, 84,
 86 à 89, 91 et plus) sont refusés par `PeekType`, qui n'accepte que les messages de l'énumération `Msg`
 (`MsgName`). Chaque message a sa règle d'autorité (`kMessageRules`, voir « Contrôle central ») ; sens
 « H→C » : règle `HostOnly`, refusé par l'hôte s'il vient d'un client.
@@ -352,6 +352,9 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | 53 | BuildState | H→C | lot E : avancement des chantiers suivis (terminé, en pause, en démontage), avec type et endroit |
 | 54 | BuildRemove | H→C | lot E : un bâtiment suivi a été détruit pour de bon chez l'hôte |
 | 55 | BuildAction | ⇄ | lot E : acheter / démonter (client : demande ; hôte : rejeu d'un achat chez tous) |
+| 60 | SquadState | H→C | fenêtre Escouade : chaque escouade (handle de son `Platoon` chez l'hôte, nom, membres dans l'ordre : le premier est le chef) dans l'ordre de la faction, vides comprises ; nom et drapeau « à personne » (`kMemberShared`) de chaque perso de l'escouade ; à chaque changement et toutes les 10 s |
+| 61 | SquadRequest | C→H | une action de la fenêtre Escouade : déplacer son perso (dans une escouade, ou une nouvelle ; à un rang), créer, renommer, réordonner, retirer une escouade, renommer son perso ; nomme toujours un perso du joueur (`OwnCharacter`) |
+| 62 | JobState | H→C | listes de tâches des persos des joueurs avec la cible de chaque tâche (handle d'un perso, type et endroit d'un meuble, lieu) ; le client fait la même liste (retire, ajoute, réordonne) |
 | 68 | JobList | H→C | fix G5 : la liste de tâches (panneau Tâches) des persos des joueurs, telle que l'hôte l'a |
 | 70 | Stall | H→C | fix G6 : ton jeu va se figer (TP lointaine, zone à charger), la connexion attend jusqu'à 2 min |
 | 71 | Floors | H→C | fix G6 : groupe d'étage (`CharMovement::floorGroup`) des persos, à chaque changement et toutes les 5 s |
@@ -446,7 +449,38 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 - Le client prend pour chaque escouade de l'hôte l'escouade locale qui a déjà le plus de ses
   membres, ou en crée une (4 au plus par passe). Il y range les membres dans l'ordre, la renomme,
   puis montre une de ses escouades si la barre d'escouade est vide.
-- Le portrait déposé par un client devient `Command SquadMove`.
+- Le portrait déposé par un client devient `Command SquadMove` (anciens clients).
+
+### Fenêtre Escouade et réglages d'IA (`session_squads.cpp`, `plugin/squads.cpp`)
+- **Hôte** : `SendSquadState` lit les escouades de la faction (`Faction::activePlatoons`, ordre de la
+  fenêtre, escouade des morts exclue), leurs membres, le nom de chaque perso, et calcule les persos
+  « à personne » (`ComputeShared` : membres encore à l'hôte par défaut, jamais donnés à personne,
+  sauf l'avatar de l'hôte, celui qui porte son nom ou à défaut le premier). Envoyé quand il change,
+  et toutes les 10 s.
+- **Demandes** : `SquadRequest` passe par `Authorize` (acteur = un perso du joueur), puis attend le
+  tick suivant ; `HostSquadRequest` les exécute une par une dans l'ordre d'arrivée (la dernière
+  gagne), répond par `Result` et renvoie l'état tout de suite. Règles : déplacer seulement son perso
+  (sur un perso du même joueur dans la même escouade : échange, sinon insertion) ; renommer,
+  réordonner, retirer une escouade qui contient un de ses persos, ou vide (retirer : vide et pas la
+  dernière) ; renommer son perso.
+- **Client** (`ClientSquads`, deux fois par seconde) : les portraits déposés ou échangés deviennent
+  des demandes (hooks `addCharacterAt`, `swapCharacters`) ; le reste est vu en comparant nos
+  escouades à ce qu'on en avait fait au passage précédent (noms, ordre, escouades nouvelles ou
+  retirées, noms des persos) : un nom frappé est envoyé quand il ne change plus depuis 1 s, une
+  escouade vide nouvelle après 1,5 s, et reste affiché jusqu'à la réponse (au plus 5 s) ; puis l'état
+  de l'hôte (avec nos demandes en cours) est imposé : `ApplySquadViews` associe chaque escouade de
+  l'hôte à une des nôtres (même association qu'avant, même handle, celle qui a le plus de ses
+  membres, une vide à nous, sinon une nouvelle), y range les membres, la renomme, remet l'ordre et
+  retire les nôtres que l'hôte n'a plus (vides).
+- **Réglages d'IA** : bascules, style, allure et tâches permanentes passent par `Command` (`Task`,
+  `SetOrder` / panneau Tâches / `AddJob` permanent : `Session::IsSettingsCommand`). Un perso « à
+  personne » accepte ces commandes de tout joueur en jeu (`MaySetSettings`, contrôlé dans
+  `Authorize` et `ApplyCommand`, exécuté par `OrderShared`). `SetOrder` porte la valeur voulue
+  (`shift` = absolu, `add` = valeur).
+- **Tâches** (`JobState`) : l'hôte lit chaque tâche et sa cible (`Character::getPermajobData` :
+  `Tasker` +0x10 sujet, +0x58 lieu) ; le client retire ce qu'il a en trop, ajoute ce qui manque
+  (`Character::addJob`, sujet retrouvé par handle ou par type et endroit) et remet l'ordre
+  (`movePermajob`). Une tâche donnée ici il y a moins de 5 s est gardée en attendant l'hôte.
 
 ### Ordres (`RouteOrder`, `Session::ApplyCommand`, `KenshiWorld::Order`, `RunPlayerTask`)
 1. Le client note par quelle fonction de l'interface l'ordre est passé (`TaskVia`), le numéro de

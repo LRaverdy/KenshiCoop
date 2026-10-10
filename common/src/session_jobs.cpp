@@ -50,11 +50,31 @@ void Session::HostJobs(double now) {
         Encode(w, part);
         BroadcastReliable(w, true);
     }
+    // the same lists with each job's target (JobState): a client builds the same list (adds too)
+    JobStateMsg js;
+    for (auto& [id, e] : entities_) {
+        if (!e.squad || e.container) continue;
+        std::vector<JobEntry> jobs;
+        if (!world_.ReadJobList(e.handle, jobs)) continue;
+        if (jobs.size() > kMaxJobsPerCharacter) jobs.resize(kMaxJobsPerCharacter);
+        auto it = jobListSent_.find(id);
+        const bool changed = it == jobListSent_.end() || it->second != jobs;
+        if (changed || full) js.chars.push_back({id, jobs});
+        jobListSent_[id] = std::move(jobs);
+    }
+    for (auto it = jobListSent_.begin(); it != jobListSent_.end();) it = entities_.count(it->first) ? std::next(it) : jobListSent_.erase(it);
+    for (size_t i = 0; i < js.chars.size(); i += kMaxJobLists) {
+        JobStateMsg part;
+        part.chars.assign(js.chars.begin() + ptrdiff_t(i), js.chars.begin() + ptrdiff_t(std::min(js.chars.size(), i + size_t(kMaxJobLists))));
+        Writer w(4096);
+        Encode(w, part);
+        BroadcastReliable(w, true);
+    }
 }
 
 void Session::ClientJobsPacket(Reader& r) {
     JobListMsg m;
-    if (state_ != SessionState::Connected || !Decode(r, m)) return;
+    if (state_ != SessionState::Connected || !Decode(r, m) || haveJobState_) return;   // JobState says it all
     for (auto& e : m.entries) {
         jobsDirty_.insert(e.netId);
         hostJobs_[e.netId] = std::move(e.jobs);
@@ -70,6 +90,15 @@ void Session::ClientJobs(double now) {
         if (e->second.present && (reapply || jobsDirty_.count(it->first))) {
             world_.ApplyJobs(e->second.handle, it->second);
             jobsDirty_.erase(it->first);
+        }
+        ++it;
+    }
+    for (auto it = hostJobLists_.begin(); it != hostJobLists_.end();) {
+        auto e = entities_.find(it->first);
+        if (e == entities_.end()) { jobListDirty_.erase(it->first); it = hostJobLists_.erase(it); continue; }
+        if (e->second.present && (reapply || jobListDirty_.count(it->first))) {
+            world_.ApplyJobList(e->second.handle, it->second);
+            jobListDirty_.erase(it->first);
         }
         ++it;
     }
