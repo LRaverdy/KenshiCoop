@@ -1,6 +1,7 @@
 // Host administration, carried out on the host's game thread: god mode (kept by player identity and
 // re-applied every tick), teleports through the safe admin TP (KenshiWorld::TeleportCharacters),
-// experience through the game's own increaseStat, healing, money. Each action is logged in English
+// experience through the game's own increaseStat, healing, money, and an item spawner (new items
+// from the game's factory, lying near a player's character, announced to the clients at once). Each action is logged in English
 // and the affected player gets a French notice. Clients have none of it: every entry point refuses
 // unless this game hosts the session.
 #pragma once
@@ -33,5 +34,18 @@ void AdminUpkeep(kc::Session& s, KenshiWorld& w);
 // Host: everyone in the session (the host first), for the window.
 std::vector<AdminPlayer> AdminPlayers(kc::Session& s, KenshiWorld& w, const std::string& hostName);
 bool AdminGodAll();
+
+// The item spawner's list, for the window (host only; built once per loaded world).
+struct AdminItem {
+    std::string sid, name;
+    kc::admin::ItemCat category = kc::admin::ItemCat::Other;
+    int stack = 1;
+};
+struct AdminMaker {
+    std::string sid, name;
+    std::vector<std::string> weapons;                        // weapon template sids it makes
+    std::vector<std::pair<std::string, std::string>> models; // sid, name; best first
+};
+bool AdminItemCatalog(kc::Session& s, KenshiWorld& w, std::vector<AdminItem>& items, std::vector<AdminMaker>& makers);
 
 } // namespace kcp

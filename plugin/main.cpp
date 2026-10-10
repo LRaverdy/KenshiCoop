@@ -594,6 +594,27 @@ void PublishOverlay() {
     if (st == kc::SessionState::Failed && !g_session->lastError().empty()) m.errorText = FrenchError(g_session->lastError());
     m.leftHostWorld = g_leftHostWorld && g_world->Ready();
     if (st == kc::SessionState::Downloading) m.download = float(g_session->downloadProgress());
+    {   // the host's item spawner list: once per loaded world (none for a client)
+        static bool itemsSent = false;
+        static uint32_t itemsGen = 0;
+        const bool want = m.active && m.hosting && g_world->Ready();
+        if (want && (!itemsSent || itemsGen != g_world->WorldGeneration())) {
+            std::vector<AdminItem> items;
+            std::vector<AdminMaker> makers;
+            if (AdminItemCatalog(*g_session, *g_world, items, makers)) {
+                std::vector<OverlayItem> oi;
+                std::vector<OverlayMaker> om;
+                for (auto& a : items) oi.push_back({std::move(a.sid), std::move(a.name), int(a.category), a.stack});
+                for (auto& a : makers) om.push_back({std::move(a.sid), std::move(a.name), std::move(a.weapons), std::move(a.models)});
+                OverlayPublishItems(std::move(oi), std::move(om));
+                itemsSent = true;
+                itemsGen = g_world->WorldGeneration();
+            }
+        } else if (!want && itemsSent) {
+            OverlayPublishItems({}, {});
+            itemsSent = false;
+        }
+    }
     if (m.active && m.hosting) {   // the host's view also feeds its Administration section
         for (const auto& a : AdminPlayers(*g_session, *g_world, g_cfg.name)) {
             OverlayPlayer p;

@@ -12,6 +12,8 @@
 #include <tuple>
 #include <unordered_map>
 
+#include "kc/admin.h"
+
 namespace kenshi {
 
 const FunctionSig kFunctions[FnCount] = {
@@ -3950,6 +3952,68 @@ void ItemTemplates(const std::string& part, std::vector<std::pair<std::string, s
         if (out.size() >= max) break;
         out.emplace_back(std::move(sid), std::move(name));
     }
+}
+
+namespace {
+// A GameData's reference list under that key: (sid, first value) each.
+void GameDataRefs(const void* gd, const std::string& key, std::vector<std::pair<std::string, int>>& out) {
+    out.clear();
+    ForEachNode(gd, GDM_refs, [&](const std::string& k, const uint8_t* lst) {
+        if (k != key) return;
+        uint8_t* b = nullptr;
+        uint8_t* e = nullptr;
+        if (!Rd(lst, 0, b) || !Rd(lst, 8, e) || !b || e < b || size_t(e - b) / kRefSize > 4096) return;
+        for (uint8_t* r = b; r + kRefSize <= e; r += kRefSize) {
+            std::string sid;
+            int v = 0;
+            if (!ReadGameString(r + 0x10, sid) || sid.empty()) continue;
+            Rd(r, 0, v);
+            out.emplace_back(std::move(sid), v);
+        }
+    });
+}
+} // namespace
+
+void SpawnCatalog(std::vector<SpawnTemplate>& items, std::vector<WeaponMaker>& makers) {
+    items.clear();
+    makers.clear();
+    if (!g_gameDataBuilt) BuildGameDataIndex();
+    std::vector<std::pair<std::string, int>> refs;
+    std::unordered_set<std::string> made;   // weapons some manufacturer makes
+    for (const auto& [sid, gd] : g_gameDataBySid) {
+        int type = -1;
+        if (!Rd(gd, off::GD_type, type) || type != kc::admin::kTypeWeaponMaker) continue;
+        WeaponMaker m;
+        m.sid = sid;
+        if (!TemplateDisplayName(sid, m.name)) m.name = sid;
+        GameDataRefs(gd, "weapon types", refs);
+        for (auto& [w, v] : refs) {
+            made.insert(w);
+            m.weapons.push_back(std::move(w));
+        }
+        GameDataRefs(gd, "weapon models", refs);
+        std::stable_sort(refs.begin(), refs.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+        for (auto& [model, v] : refs) {
+            std::string name;
+            if (!FindGameData(model)) continue;
+            if (!TemplateDisplayName(model, name)) name = model;
+            m.models.emplace_back(model, std::move(name));
+        }
+        if (!m.weapons.empty() && !m.models.empty()) makers.push_back(std::move(m));
+    }
+    std::sort(makers.begin(), makers.end(), [](const WeaponMaker& a, const WeaponMaker& b) { return a.name < b.name; });
+    for (const auto& [sid, gd] : g_gameDataBySid) {
+        SpawnTemplate t;
+        if (!Rd(gd, off::GD_type, t.type) || !kc::admin::SpawnableType(t.type) || !TemplateDisplayName(sid, t.name)) continue;
+        if (t.type == kc::admin::kTypeWeapon && !made.count(sid)) continue;   // no manufacturer: the factory refuses it
+        t.sid = sid;
+        GameDataIntField(gd, "item function", t.function);
+        GameDataBoolField(gd, "artifact", t.artifact);
+        if (!GameDataIntField(gd, "stackable", t.stack) || t.stack < 1) t.stack = 1;
+        t.stack = std::min(t.stack, 10000);
+        items.push_back(std::move(t));
+    }
+    std::sort(items.begin(), items.end(), [](const SpawnTemplate& a, const SpawnTemplate& b) { return a.name != b.name ? a.name < b.name : a.sid < b.sid; });
 }
 
 void GameDataOfType(int type, std::vector<void*>& out, size_t max) {

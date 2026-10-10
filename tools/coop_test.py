@@ -1448,7 +1448,8 @@ def exp_admin(host, cli):
     """The host's Administration section (plugin/admin.cpp), through its debug mirror 'admin ...':
     refused on the client; god mode holds through a fight and survives a rejoin; experience (points in
     one skill, levels in all) is the game's own and identical on the client; teleports (player to host,
-    host to player, player to a map point) land where the client sees them; heal; money."""
+    host to player, player to a map point) land where the client sees them; heal; money; the item
+    spawner (building materials near the client: same stacks on both sides, the client picks one up)."""
     time.sleep(6)
     cmd(cli, "editdone")
     time.sleep(3)
@@ -1575,7 +1576,54 @@ def exp_admin(host, cli):
     time.sleep(3)
     m1h, m1c = cmd(host, "money")[1], cmd(cli, "money")[1]
     check("admin : argent +5000, pareil chez le client", ok and int(m1h.split()[1]) == m0 + 5000 and m1h == m1c, f"{m0} -> hote {m1h} / client {m1c}")
-    # 11. everyone at once, the host included
+    # 11. item spawner: building materials near the client's character; both sides see the same
+    # stacks, and the client's character can pick them up
+    bm = "580-gamedata.base"
+
+    def bm_ground(p):
+        ok, t = cmd(p, f"groundall 400 {own}")
+        out = {}
+        for x in (t.split()[2:] if ok and t.startswith("ok") else []):
+            k, sid, q, pos = x.split("|")
+            if sid == bm:
+                out[k] = (int(q), tuple(map(float, pos.split(","))))
+        return out
+
+    def bm_carried():
+        ok, t = cmd(host, f"invcount all {bm}")
+        return int(t.split()[1]) if ok else -1
+
+    hb, cb = bm_ground(host), bm_ground(cli)
+    ok, t = cmd(cli, f"admin spawn {bm} 5 here")
+    check("admin : spawn refuse chez le client", not ok, t)
+    ok, t = cmd(host, f"admin spawn {bm} 12 {pid}")
+    log("spawn 12 building materials near the client:", ok, t)
+    time.sleep(5)
+    hn = {k: v for k, v in bm_ground(host).items() if k not in hb}
+    cn = {k: v for k, v in bm_ground(cli).items() if k not in cb}
+    hq, cq = sum(v[0] for v in hn.values()), sum(v[0] for v in cn.values())
+    check("admin : spawn, 12 materiaux de construction au sol chez l'hote", ok and hq == 12, f"{hq} en {len(hn)} pile(s) | {t}")
+    check("admin : spawn, meme nombre au sol chez le client", cq == hq and len(cn) == len(hn),
+          f"hote {hq} en {len(hn)} pile(s) / client {cq} en {len(cn)} pile(s)")
+    far = [v for v in hn.values() if min((dist(v[1], w[1]) for w in cn.values()), default=99) > 3]
+    check("admin : spawn, memes endroits chez le client", not far, far[:3])
+    carried0 = bm_carried()
+    if hn:
+        q, pos = next(iter(hn.values()))
+        log("client asks its character to pick one up:", cmd(cli, f"pickupreq {own} {bm} {pos[0]:.1f},{pos[1]:.1f},{pos[2]:.1f}"))
+        for _ in range(15):
+            time.sleep(2)
+            if bm_carried() > carried0:
+                break
+    carried1 = bm_carried()
+    check("admin : spawn, le client ramasse un materiau", carried1 > carried0, f"porte {carried0} -> {carried1}")
+    time.sleep(3)
+    hl = {k: v for k, v in bm_ground(host).items() if k not in hb}
+    cl = {k: v for k, v in bm_ground(cli).items() if k not in cb}
+    hq2, cq2 = sum(v[0] for v in hl.values()), sum(v[0] for v in cl.values())
+    check("admin : spawn, apres ramassage, meme nombre au sol des deux cotes", hq2 == cq2 and hq2 == hq - (carried1 - carried0),
+          f"hote {hq2} / client {cq2} (avant {hq}, ramasse {carried1 - carried0})")
+    # 12. everyone at once, the host included
     ok, t = cmd(host, "admin god all on")
     time.sleep(1)
     st = state()

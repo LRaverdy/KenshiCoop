@@ -4,6 +4,7 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <cstdlib>
 #include <sstream>
 
 namespace kc::admin {
@@ -141,6 +142,7 @@ std::string Usage() {
            "admin tp <id|all> <x> <y> <z>  -  à ces coordonnées\n"
            "admin heal <id|all|host>  -  soigne et réveille\n"
            "admin money <n>  -  cats ajoutés à l'argent commun\n"
+           "admin spawn <sid|nom> <n> [here|<id>] [fabricant] [modèle]  -  n objets au sol près de toi (here) ou d'un joueur ; _ pour les espaces\n"
            "admin list  -  joueurs, persos et mode dieu";
 }
 
@@ -218,6 +220,29 @@ bool Parse(const std::string& line, Command& out, std::string& err) {
         out.to = to;
         return true;
     }
+    if (verb == "spawn" || verb == "give" || verb == "donne") {
+        out.verb = Verb::Spawn;
+        const char* usage = "usage : admin spawn <sid|nom> <n> [here|<id>] [fabricant] [modèle]  (ex. admin spawn 580-gamedata.base 20 here)";
+        if (t.size() < 3 || t.size() > 6) { err = usage; return false; }
+        out.item = t[1];
+        long long n = 0;
+        if (!ParseInt(t[2], n) || n <= 0) { err = "quantité attendue : un nombre entier positif"; return false; }
+        if (n > kMaxSpawn) { err = std::to_string(kMaxSpawn) + " objets au plus par commande"; return false; }
+        out.count = int(n);
+        out.spawnAt = Target{};
+        out.spawnAt.host = true;
+        if (t.size() > 3) {
+            const std::string d = Lower(t[3]);
+            if (d != "here" && d != "ici") {
+                Target to;
+                if (!ParseTarget(d, to) || to.all) { err = "cible : here (près de toi) ou un numéro de joueur"; return false; }
+                out.spawnAt = to;
+            }
+        }
+        if (t.size() > 4) out.maker = t[4];
+        if (t.size() > 5) out.model = t[5];
+        return true;
+    }
     err = "commande admin inconnue : " + t[0] + "\n" + Usage();
     return false;
 }
@@ -239,5 +264,101 @@ void GodRegistry::SetAll(bool on) {
     all_ = on;
     if (!on) keys_.clear();
 }
+
+bool SpawnableType(int t) {
+    return t == kTypeWeapon || t == kTypeArmour || t == kTypeItem || t == kTypeBackpack || t == kTypeMap || t == kTypeCrossbow || t == kTypeLimb;
+}
+
+ItemCat Classify(int type, int function, bool artifact) {
+    switch (type) {
+    case kTypeWeapon: return ItemCat::Weapon;
+    case kTypeCrossbow: return ItemCat::Crossbow;
+    case kTypeArmour: return ItemCat::Armour;
+    case kTypeBackpack: return ItemCat::Backpack;
+    case kTypeMap: return ItemCat::Map;
+    case kTypeLimb: return ItemCat::Limb;
+    case kTypeItem: break;
+    default: return ItemCat::Other;
+    }
+    if (artifact) return ItemCat::Artifact;   // ancient books, AI cores, engineering research...
+    // the game data's "item function" (gamedata.base, rebirth.mod)
+    switch (function) {
+    case 0: return ItemCat::Crafting;          // fabrics, leather, steel bars, hemp, raw iron...
+    case 1: case 2: case 12: return ItemCat::Medical;   // first aid kits, splints, skeleton repair kits
+    case 3: case 15: return ItemCat::Food;     // meals, raw meat
+    case 7: return ItemCat::Building;          // building materials, iron plates, copper alloy plates
+    case 8: return ItemCat::Drug;              // hashish, rum, sake
+    case 9: return ItemCat::Tool;              // hacksaw, tools
+    case 11: return ItemCat::Blueprint;
+    case 13: return ItemCat::Book;
+    case 14: return ItemCat::Money;
+    case 16: return ItemCat::Ammo;             // bolts
+    case 17: return ItemCat::Limb;             // severed limbs
+    default: return ItemCat::Other;
+    }
+}
+
+const char* CategoryFr(ItemCat c) {
+    switch (c) {
+    case ItemCat::Building: return "Matériaux de construction";
+    case ItemCat::Crafting: return "Matériaux d'artisanat";
+    case ItemCat::Food: return "Nourriture";
+    case ItemCat::Medical: return "Soins";
+    case ItemCat::Weapon: return "Arme";
+    case ItemCat::Crossbow: return "Arbalète";
+    case ItemCat::Armour: return "Armure";
+    case ItemCat::Backpack: return "Sac à dos";
+    case ItemCat::Book: return "Livre";
+    case ItemCat::Blueprint: return "Plan";
+    case ItemCat::Artifact: return "Artefact";
+    case ItemCat::Tool: return "Outil";
+    case ItemCat::Drug: return "Drogue, alcool";
+    case ItemCat::Ammo: return "Munitions";
+    case ItemCat::Limb: return "Membre";
+    case ItemCat::Map: return "Carte";
+    case ItemCat::Money: return "Argent";
+    case ItemCat::Other: break;
+    }
+    return "Autre";
+}
+
+std::vector<int> SplitStacks(int total, int maxStack) {
+    std::vector<int> out;
+    if (total <= 0) return out;
+    maxStack = std::max(1, maxStack);
+    for (int left = total; left > 0; left -= maxStack) out.push_back(std::min(left, maxStack));
+    return out;
+}
+
+std::vector<std::pair<float, float>> SpreadOffsets(size_t n, float spacing) {
+    std::vector<std::pair<float, float>> out;
+    out.reserve(n);
+    // square rings around the centre: ring r holds 8r spots
+    for (int r = 1; out.size() < n; ++r)
+        for (int i = -r; i <= r && out.size() < n; ++i)
+            for (int j = -r; j <= r && out.size() < n; ++j)
+                if (std::max(std::abs(i), std::abs(j)) == r) out.emplace_back(float(i) * spacing, float(j) * spacing);
+    return out;
+}
+
+bool SearchMatches(const std::string& name, const std::string& sid, const std::string& query) {
+    const std::string q = Lower(query);
+    if (q == Lower(sid)) return true;
+    const std::string n = Lower(name);
+    std::istringstream in(q);
+    for (std::string w; in >> w;)
+        if (n.find(w) == std::string::npos) return false;
+    return true;
+}
+
+const Favourite kFavourites[] = {
+    {"580-gamedata.base", "Matériaux de construction", 20},
+    {"584-gamedata.base", "Tissu", 20},
+    {"42159-gamedata.base", "Fer (plaques)", 20},
+    {"42158-gamedata.base", "Cuivre", 20},
+    {"1946-gamedata.base", "Nourriture (pain)", 20},
+    {"209-gamedata.base", "Bandages (trousse basique)", 10},
+};
+const size_t kFavouriteCount = sizeof(kFavourites) / sizeof(kFavourites[0]);
 
 } // namespace kc::admin

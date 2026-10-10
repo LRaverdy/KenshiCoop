@@ -1,7 +1,8 @@
 // Host administration (the "Administration" section of the Multijoueur window, the console's
-// "admin" commands): god mode, teleports, experience, healing, money. Game-agnostic parts only:
-// the command syntax, the skill names, the experience arithmetic of the game's increaseStat, and
-// the god-mode registry kept by player identity. The plugin (plugin/admin.cpp) carries them out
+// "admin" commands): god mode, teleports, experience, healing, money, the item spawner.
+// Game-agnostic parts only: the command syntax, the skill names, the experience arithmetic of the
+// game's increaseStat, the god-mode registry kept by player identity, and the spawner's item
+// categories, stack split and spread on the ground. The plugin (plugin/admin.cpp) carries them out
 // on the host's game thread.
 #pragma once
 #include <cstdint>
@@ -43,7 +44,7 @@ int GiveXp(double amount, const IncreaseFn& inc);
 bool RaiseTo(float target, const ReadFn& read, const IncreaseFn& inc, int maxCalls, int* calls = nullptr);
 
 // ---- commands ("admin <verb> ...", typed in the console or sent by the window's buttons)
-enum class Verb { None, God, Xp, Tp, Heal, Money, List, State };
+enum class Verb { None, God, Xp, Tp, Heal, Money, List, State, Spawn };
 enum class TpTo { Host, Player, Point, Pos };
 
 struct Target {
@@ -63,6 +64,10 @@ struct Command {
     Target to;                // Tp to a player
     Vec3 pos;                 // Tp to a position
     long long money = 0;      // Money
+    std::string item;         // Spawn: template sid, or a name ('_' for spaces)
+    int count = 0;            // Spawn: how many items in all
+    Target spawnAt;           // Spawn: near whose character (host: "here")
+    std::string maker, model; // Spawn, weapons: manufacturer sid and weapon model (material) sid; empty: a default
 };
 
 bool ParseTarget(const std::string& s, Target& out);
@@ -75,6 +80,37 @@ constexpr double kMaxXp = 20000;
 constexpr double kMaxLevels = 100;
 constexpr double kConfirmXp = 1000;      // the window asks twice above this
 constexpr double kConfirmLevels = 10;
+constexpr int kMaxSpawn = 500;           // items per command
+constexpr int kConfirmSpawn = 100;       // the window asks twice above this
+
+// ---- item spawner
+// itemType values of the game's GameData (the same numbers as in the game's data files), for the
+// templates the item factory makes into something that lies on the ground.
+constexpr int kTypeWeapon = 2, kTypeArmour = 3, kTypeItem = 4, kTypeBackpack = 46, kTypeWeaponMaker = 51, kTypeMap = 102,
+              kTypeCrossbow = 107, kTypeLimb = 111;
+bool SpawnableType(int itemType);
+// ITEM's "item function" field (the game's data): what the item is for.
+enum class ItemCat : uint8_t {
+    Building, Crafting, Food, Medical, Weapon, Crossbow, Armour, Backpack, Book, Blueprint, Artifact, Tool, Drug, Ammo, Limb, Map, Money, Other
+};
+constexpr int kItemCatCount = int(ItemCat::Other) + 1;
+ItemCat Classify(int itemType, int itemFunction, bool artifact);
+const char* CategoryFr(ItemCat c);   // shown in the window
+// total split into stacks of at most maxStack (at least 1 each), the full ones first.
+std::vector<int> SplitStacks(int total, int maxStack);
+// n spots (x, z offsets) around a character: a square spiral `spacing` apart, its centre (the
+// character's own spot) left free.
+std::vector<std::pair<float, float>> SpreadOffsets(size_t n, float spacing);
+// The window's search: every word of the query (any case) is in the name, or the query is the sid.
+bool SearchMatches(const std::string& name, const std::string& sid, const std::string& query);
+// The spawner's shortcuts: a template sid (gamedata.base) and its French label.
+struct Favourite {
+    const char* sid;
+    const char* fr;
+    int count;   // the quantity the window proposes
+};
+extern const Favourite kFavourites[];
+extern const size_t kFavouriteCount;
 
 // ---- god mode by player identity: it stays on across zone changes (characters re-resolved every
 // tick), reconnections and rejoins (same Steam account or name, whatever player id comes back).

@@ -96,13 +96,22 @@ recrutement au centre d'emploi, refusés avec un message.
   - **Soigner** (blessures, sang, réveil d'un K.-O.) ;
   - **XP** : la compétence (ou toutes) et la quantité, en points d'expérience ou en niveaux, se
     règlent sous la liste ; au-delà de 1000 points ou 10 niveaux, confirmation ;
-  - l'**argent commun** (cats ajoutés ou retirés).
+  - l'**argent commun** (cats ajoutés ou retirés) ;
+  - **Faire apparaître des objets** : cherche n'importe quel objet du jeu (armes, armures,
+    nourriture, matériaux de construction, livres, artefacts, sacs à dos, matériaux d'artisanat…)
+    par son nom anglais ou par catégorie, ou prends un favori (matériaux de construction, tissu,
+    fer, cuivre, nourriture, bandages) ; choisis la quantité (500 au plus, confirmation au-delà de
+    100), le fabricant et le modèle pour une arme, puis « près de moi » ou un joueur, et
+    **Faire apparaître** : les objets sont posés par terre autour du perso, en piles de la taille
+    que le jeu permet, et tout le monde les voit et peut les ramasser.
 
   Le joueur concerné reçoit un message (« L'hôte t'a téléporté près de lui. »…). Les mêmes actions
   existent en commandes : `admin god <id|all|host> on|off`, `admin tp <id|all> host`,
   `admin tp host <id>`, `admin tp <id> <id>`, `admin tp <id> point`, `admin tp <id> <x> <y> <z>`,
   `admin xp <id|all|host> <compétence|all> <n> [levels]`, `admin heal <id|all|host>`,
-  `admin money <n>`, `admin list` (tape `admin` pour l'aide). Un client n'a ni ces boutons ni ces
+  `admin money <n>`, `admin spawn <sid|nom> <n> [here|<id>] [fabricant] [modèle]` (ex.
+  `admin spawn 580-gamedata.base 20 here`, `admin spawn Iron_Plates 10 2`), `admin list` (tape
+  `admin` pour l'aide). Un client n'a ni ces boutons ni ces
   commandes ;
 - **TP vers moi** (`tp <id>`) : amène les personnages d'un joueur bloqué près de toi ;
 - **Resync** (`resync <id>`) et **Resynchroniser tout le monde** : en cas de désynchro, le joueur

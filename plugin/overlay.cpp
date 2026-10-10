@@ -287,6 +287,192 @@ void TpPopup(const OverlayModel& m, const std::string& who, int selfId, bool ris
     ImGui::EndPopup();
 }
 
+// ---- the item spawner (render thread state; the list comes from the game thread)
+std::mutex g_itemsMutex;
+bool g_itemsFresh = false;
+std::vector<OverlayItem> g_itemsIn;
+std::vector<OverlayMaker> g_makersIn;
+std::vector<OverlayItem> g_items;     // render thread's copy
+std::vector<OverlayMaker> g_makers;
+char g_spawnSearch[64] = "";
+int g_spawnCat = -1;                  // -1: every category
+int g_spawnSel = -1;                  // index into g_items
+int g_spawnCount = 20;
+int g_spawnTarget = -1;               // -1: near the host, else a player id
+int g_spawnMaker = 0, g_spawnModel = 0;
+
+void TakeItems() {
+    std::lock_guard<std::mutex> lk(g_itemsMutex);
+    if (!g_itemsFresh) return;
+    g_itemsFresh = false;
+    std::string sel = g_spawnSel >= 0 && g_spawnSel < int(g_items.size()) ? g_items[g_spawnSel].sid : std::string();
+    g_items.swap(g_itemsIn);
+    g_makers.swap(g_makersIn);
+    g_itemsIn.clear();
+    g_makersIn.clear();
+    g_spawnSel = -1;
+    for (size_t i = 0; i < g_items.size(); ++i)
+        if (g_items[i].sid == sel) g_spawnSel = int(i);
+}
+
+bool IsWeaponCat(int cat) { return cat == int(kc::admin::ItemCat::Weapon) || cat == int(kc::admin::ItemCat::Crossbow); }
+
+void SelectItem(int i) {
+    if (i == g_spawnSel) return;
+    g_spawnSel = i;
+    g_spawnMaker = 0;
+    g_spawnModel = 0;
+}
+
+// The manufacturers that make this weapon.
+std::vector<const OverlayMaker*> MakersOf(const std::string& sid) {
+    std::vector<const OverlayMaker*> out;
+    for (const auto& m : g_makers)
+        if (std::find(m.weapons.begin(), m.weapons.end(), sid) != m.weapons.end()) out.push_back(&m);
+    return out;
+}
+
+void DrawSpawner(const OverlayModel& m) {
+    TakeItems();
+    if (!ImGui::CollapsingHeader("Faire apparaître des objets")) return;
+    if (g_items.empty()) {
+        ImGui::TextDisabled("Liste des objets pas encore prête (une partie doit être chargée).");
+        return;
+    }
+    namespace adm = kc::admin;
+    // favourites
+    ImGui::TextUnformatted("Favoris :");
+    for (size_t f = 0; f < adm::kFavouriteCount; ++f) {
+        int idx = -1;
+        for (size_t i = 0; i < g_items.size() && idx < 0; ++i)
+            if (g_items[i].sid == adm::kFavourites[f].sid) idx = int(i);
+        if (idx < 0) continue;
+        ImGui::SameLine();
+        ImGui::PushID(int(f));
+        if (ImGui::SmallButton(adm::kFavourites[f].fr)) {
+            SelectItem(idx);
+            g_spawnCount = adm::kFavourites[f].count;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s (%s)", g_items[idx].name.c_str(), g_items[idx].sid.c_str());
+        ImGui::PopID();
+    }
+    // search and category
+    ImGui::SetNextItemWidth(200.0f);
+    ImGui::InputTextWithHint("##spawnsearch", "Rechercher (nom anglais ou sid)", g_spawnSearch, sizeof(g_spawnSearch));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(190.0f);
+    if (ImGui::BeginCombo("##spawncat", g_spawnCat < 0 ? "Toutes les catégories" : adm::CategoryFr(adm::ItemCat(g_spawnCat)))) {
+        if (ImGui::Selectable("Toutes les catégories", g_spawnCat < 0)) g_spawnCat = -1;
+        for (int c = 0; c < adm::kItemCatCount; ++c)
+            if (ImGui::Selectable(adm::CategoryFr(adm::ItemCat(c)), g_spawnCat == c)) g_spawnCat = c;
+        ImGui::EndCombo();
+    }
+    std::vector<int> shown;
+    for (size_t i = 0; i < g_items.size(); ++i) {
+        const auto& it = g_items[i];
+        if (g_spawnCat >= 0 && it.category != g_spawnCat) continue;
+        if (g_spawnSearch[0] && !adm::SearchMatches(it.name, it.sid, g_spawnSearch)) continue;
+        shown.push_back(int(i));
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%zu objet(s)", shown.size());
+    const ImGuiTableFlags tf = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_BordersInnerV;
+    if (ImGui::BeginTable("spawnlist", 3, tf, ImVec2(0.0f, 170.0f))) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Objet");
+        ImGui::TableSetupColumn("Catégorie", ImGuiTableColumnFlags_WidthFixed, 170.0f);
+        ImGui::TableSetupColumn("Pile", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+        ImGui::TableHeadersRow();
+        ImGuiListClipper clip;
+        clip.Begin(int(shown.size()));
+        while (clip.Step())
+            for (int r = clip.DisplayStart; r < clip.DisplayEnd; ++r) {
+                const int i = shown[size_t(r)];
+                const auto& it = g_items[size_t(i)];
+                ImGui::PushID(i);
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                if (ImGui::Selectable(it.name.c_str(), g_spawnSel == i, ImGuiSelectableFlags_SpanAllColumns)) SelectItem(i);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", it.sid.c_str());
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(adm::CategoryFr(adm::ItemCat(it.category)));
+                ImGui::TableNextColumn();
+                ImGui::Text("%d", it.stack);
+                ImGui::PopID();
+            }
+        ImGui::EndTable();
+    }
+    if (g_spawnSel < 0 || g_spawnSel >= int(g_items.size())) {
+        ImGui::TextDisabled("Choisis un objet dans la liste ou un favori.");
+        return;
+    }
+    const OverlayItem& it = g_items[size_t(g_spawnSel)];
+    ImGui::Text("%s", it.name.c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%s, piles de %d au plus)", adm::CategoryFr(adm::ItemCat(it.category)), it.stack);
+    // quantity
+    ImGui::SetNextItemWidth(90.0f);
+    ImGui::InputInt("quantité##spawncount", &g_spawnCount, 1, 10);
+    g_spawnCount = std::clamp(g_spawnCount, 1, adm::kMaxSpawn);
+    // weapons: who made it, which model
+    std::string gear;
+    if (IsWeaponCat(it.category)) {
+        const auto makers = MakersOf(it.sid);
+        if (makers.empty()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(fabricant par défaut)");
+        } else {
+            g_spawnMaker = std::clamp(g_spawnMaker, 0, int(makers.size()) - 1);
+            const OverlayMaker& mk = *makers[size_t(g_spawnMaker)];
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(150.0f);
+            if (ImGui::BeginCombo("##spawnmaker", mk.name.c_str())) {
+                for (int k = 0; k < int(makers.size()); ++k)
+                    if (ImGui::Selectable(makers[size_t(k)]->name.c_str(), k == g_spawnMaker)) { g_spawnMaker = k; g_spawnModel = 0; }
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Fabricant");
+            g_spawnModel = std::clamp(g_spawnModel, 0, int(mk.models.size()) - 1);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(150.0f);
+            if (ImGui::BeginCombo("##spawnmodel", mk.models[size_t(g_spawnModel)].second.c_str())) {
+                for (int k = 0; k < int(mk.models.size()); ++k)
+                    if (ImGui::Selectable(mk.models[size_t(k)].second.c_str(), k == g_spawnModel)) g_spawnModel = k;
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Modèle (qualité), le meilleur en premier");
+            gear = " " + mk.sid + " " + mk.models[size_t(g_spawnModel)].first;
+        }
+    }
+    // where
+    std::string targetName = "près de moi";
+    bool targetKnown = g_spawnTarget < 0;
+    for (const auto& p : m.players)
+        if (!p.you && int(p.id) == g_spawnTarget) { targetName = "près de " + p.name; targetKnown = true; }
+    if (!targetKnown) { g_spawnTarget = -1; targetName = "près de moi"; }
+    ImGui::SetNextItemWidth(170.0f);
+    if (ImGui::BeginCombo("##spawntarget", targetName.c_str())) {
+        if (ImGui::Selectable("près de moi", g_spawnTarget < 0)) g_spawnTarget = -1;
+        for (const auto& p : m.players) {
+            if (p.you) continue;
+            const std::string label = "près de " + p.name + "##" + std::to_string(p.id);
+            if (ImGui::Selectable(label.c_str(), g_spawnTarget == int(p.id))) g_spawnTarget = int(p.id);
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    const std::string where = g_spawnTarget < 0 ? "here" : std::to_string(g_spawnTarget);
+    const std::string label = "Faire apparaître " + std::to_string(g_spawnCount);
+    const std::string tip = "Au sol, autour du perso " + std::string(g_spawnTarget < 0 ? "sélectionné" : "du joueur") +
+                            ", en piles de " + std::to_string(it.stack) + " au plus. Tout le monde les voit.";
+    if (ConfirmButton(label.c_str(), "spawn", g_spawnCount > adm::kConfirmSpawn, tip.c_str()))
+        Admin("spawn " + it.sid + " " + std::to_string(g_spawnCount) + " " + where + gear);
+    if (g_spawnCount > adm::kConfirmSpawn) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "plus de %d : deux clics", adm::kConfirmSpawn);
+    }
+}
+
 // The host's player list with an admin row per player and one for everyone (host included).
 void DrawAdmin(const OverlayModel& m) {
     size_t othersDown = 0, hostDown = 0, allDown = 0;
@@ -394,6 +580,7 @@ void DrawAdmin(const OverlayModel& m) {
     ImGui::EndDisabled();
     if (m.movePoint.empty()) ImGui::TextDisabled("Point marqué : aucun (clic droit au sol pour en marquer un).");
     else ImGui::TextDisabled("Point marqué : %s (dernier clic droit au sol).", m.movePoint.c_str());
+    DrawSpawner(m);
 }
 
 // The host's diplomacy: the player faction's relations, the squad's bounties, the world's changes.
@@ -933,6 +1120,13 @@ void OverlayOpenMultiplayer() {
 }
 
 bool OverlayTyping() { return g_wantKeyboard.load(); }
+
+void OverlayPublishItems(std::vector<OverlayItem> items, std::vector<OverlayMaker> makers) {
+    std::lock_guard<std::mutex> lk(g_itemsMutex);
+    g_itemsIn = std::move(items);
+    g_makersIn = std::move(makers);
+    g_itemsFresh = true;
+}
 
 void OverlayPublishScene(MapScene scene) {
     std::lock_guard<std::mutex> lk(g_sceneMutex);

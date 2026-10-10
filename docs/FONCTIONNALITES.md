@@ -544,7 +544,7 @@ la fenêtre du client.
   personnage.
 - Vérifié par la suite.
 
-### Administration de l'hôte (dieu, TP, XP, soins, argent) 🟡 implémenté, à vérifier en jeu
+### Administration de l'hôte (dieu, TP, XP, soins, argent, objets) 🟡 implémenté, à vérifier en jeu
 - **L'hôte** a, dans la fenêtre Multijoueur, une liste des joueurs (nom, ping, personnages, persos
   à terre) avec une ligne d'actions par joueur et une ligne « Tout le monde » (l'hôte compris) :
   - **Dieu** : case à cocher, l'état est affiché. Le mode dieu est retenu par joueur (compte Steam,
@@ -570,19 +570,64 @@ la fenêtre du client.
   - **Soigner** : `Character::healCompletely` (blessures, sang, K.-O.), puis relève un perso resté
     inconscient.
   - **Argent** : cats ajoutés (ou retirés) à l'argent commun de l'escouade.
+  - **Faire apparaître des objets** (repli sous la liste) : n'importe quel objet du jeu, posé au
+    sol près du perso sélectionné de l'hôte (« près de moi ») ou près du premier perso debout d'un
+    joueur choisi dans la liste.
+    - *La liste* : tous les modèles d'objets que la fabrique du jeu sait faire, lus dans les
+      données du jeu une fois par monde chargé (`kenshi::SpawnCatalog`) : armes, arbalètes,
+      armures, objets, sacs à dos, cartes, membres robotiques (`itemType` 2, 107, 3, 4, 46, 102,
+      111 ; les mêmes numéros que dans les fichiers de données). Les armes qu'aucun fabricant ne
+      fait (les « armes » des animaux) sont écartées. Chaque objet a une catégorie
+      (`kc::admin::Classify`) : pour les objets, le champ « item function » des données (7 :
+      matériaux de construction, 3 et 15 : nourriture, 1, 2 et 12 : soins, 13 : livres, 11 : plans,
+      0 : matériaux d'artisanat, 8 : drogue et alcool, 9 : outils, 16 : munitions, 17 : membres,
+      14 : argent) et le drapeau « artifact » (artefacts : livres de science anciens, cœurs d'IA,
+      recherche d'ingénierie…).
+    - *La fenêtre* : une ligne de favoris (Matériaux de construction `580-gamedata.base`, Tissu,
+      Fer (plaques), Cuivre, Nourriture (pain), Bandages (trousse basique)), une recherche (tous
+      les mots dans le nom anglais, ou le sid exact), un filtre par catégorie, la liste (nom,
+      catégorie, taille de pile la plus grande), la quantité, la cible et « Faire apparaître ».
+      Pour une arme ou une arbalète : le fabricant et le modèle (le matériau que prend
+      `createItem` ; les références « weapon models » du fabricant, la meilleure d'abord).
+    - *La création* : la fabrique du jeu (`CreateItemFromState`, la même que pour les copies des
+      clients), puis l'objet est posé dans le monde comme un objet lâché (`CreateGroundItem` :
+      `setInventoryWeAreIn` vide, `Item::activate` à l'endroit voulu). Piles de la taille que
+      permet le champ « stackable » des données (1 pour la plupart des objets, dont les
+      matériaux de construction : 20 matériaux = 20 objets au sol), réparties en spirale carrée
+      autour du perso (5 unités entre deux piles, 7 pour les armes ; 500 objets tiennent dans
+      12 m), au niveau du terrain en plein air, à la hauteur du perso à l'intérieur.
+    - *Les clients* : chaque pile est annoncée tout de suite comme un objet lâché
+      (`KenshiWorld::NoteItemDropped`, le chemin des crochets de lâcher) ; le balayage du sol de
+      l'hôte la verrait aussi, mais seulement autour d'un perso immobile depuis 2 s : l'annonce
+      directe ne dépend pas de ça. Le client en fait sa copie (`ApplyGround`), et un ramassage
+      (par l'hôte ou par un client) passe par le chemin habituel.
+    - *Limites* : 500 objets par clic (commande refusée au-delà), confirmation (second clic)
+      au-delà de 100. Journal en anglais (« admin: spawned 12 x Building Material
+      (580-gamedata.base) in 12 stack(s) of up to 1 near player 2 (…) at (…), 12 announced to the
+      clients ») ; message à l'écran pour l'hôte ; message en français au joueur ciblé
+      (« L'hôte a fait apparaître 12 × Building Material au sol près de toi. »).
 - Chaque action s'exécute sur le fil du jeu de l'hôte, est journalisée en anglais (« admin: … ») et
   le joueur concerné reçoit un message en français dans son fil de discussion (« * L'hôte t'a
   téléporté près de lui. ») ; l'hôte, lui, voit un message à l'écran.
 - Les mêmes actions en commandes (console dans le jeu, console hors du jeu) : `admin god`,
-  `admin tp`, `admin xp`, `admin heal`, `admin money`, `admin list` (voir le README). Les anciennes
+  `admin tp`, `admin xp`, `admin heal`, `admin money`,
+  `admin spawn <sid|nom> <n> [here|<id>] [fabricant] [modèle]`, `admin list` (voir le README). Les anciennes
   `god`, `heal` et `xp <id> <n>` (niveaux dans toutes les compétences) passent par là.
 - **Le client** n'a ni la section ni les commandes : sa console répond « commande réservée à
   l'hôte », et aucun message réseau ne permet d'en demander une (pas de changement de protocole :
   le message au joueur est un `Chat` « de l'hôte », comme pour un commerce refusé).
 - Tests : `TestAdmin` (syntaxe, calcul de l'XP du jeu, registre du mode dieu, message à un seul
-  joueur) ; expérience `admin` (pas encore lancée en jeu).
+  joueur ; `admin spawn`, piles, répartition au sol, recherche, catégories) ; expérience `admin`
+  (pas encore lancée en jeu ; elle fait apparaître 12 matériaux de construction près du perso du
+  client, les compte des deux côtés et les fait ramasser par le client).
 - **Pas fait** : remettre la faim à zéro (l'échelle de la faim n'est pas connue avec certitude) ;
-  ressusciter un mort.
+  ressusciter un mort ; la qualité d'une armure apparue (le niveau passé à `createItem` vaut 0 :
+  son sens pour une armure n'est pas vérifié) ; noms des objets en français (ceux du jeu, en
+  anglais).
+- **À vérifier en jeu (objets)** : qu'un objet créé ainsi chez l'hôte se ramasse, se sauvegarde
+  et reste par terre comme un objet lâché ; la hauteur de pose (1 unité au-dessus du sol) ; une
+  arbalète sans fabricant ; les numéros de catégories lus dans les fichiers de données de Kenshi
+  1.0.68 (`gamedata.base`, `rebirth.mod`, `Newwworld.mod`, `Dialogue.mod`), pas dans le jeu.
 
 ### Téléportation admin (« TP vers moi ») ✅ — perso à terre ou porté 🟡 implémenté, à vérifier en jeu
 - Un personnage à terre (K.-O.) est désormais déplacé aussi : il quitte le ragdoll, est téléporté,

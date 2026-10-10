@@ -1,6 +1,7 @@
 #include "admin.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <sstream>
@@ -278,6 +279,159 @@ std::string RunTp(const adm::Command& c, kc::Session& s, KenshiWorld& w, const s
     return std::to_string(n) + " perso(s) de " + FrenchWho(s, c.who) + " téléporté(s) " + whereFr;
 }
 
+// ---- item spawner
+struct Catalog {
+    uint32_t generation = 0;
+    bool built = false;
+    double triedAt = -1e9;
+    std::vector<kenshi::SpawnTemplate> items;
+    std::vector<kenshi::WeaponMaker> makers;
+};
+Catalog g_catalog;
+
+const Catalog& CatalogOf(KenshiWorld& w) {
+    const double now = NowSeconds();
+    if (g_catalog.generation != w.WorldGeneration() || (!g_catalog.built && now - g_catalog.triedAt > 10.0)) {
+        g_catalog.generation = w.WorldGeneration();
+        g_catalog.triedAt = now;
+        kenshi::SpawnCatalog(g_catalog.items, g_catalog.makers);
+        g_catalog.built = !g_catalog.items.empty();
+        Log("admin: item spawner catalog: %zu template(s), %zu weapon manufacturer(s)", g_catalog.items.size(), g_catalog.makers.size());
+    }
+    return g_catalog;
+}
+
+std::string Lower(std::string v) {
+    for (auto& ch : v) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+    return v;
+}
+
+// A sid, else an exact name (any case, '_' for spaces), else the shortest name holding every word.
+const kenshi::SpawnTemplate* FindTemplate(const Catalog& cat, const std::string& what) {
+    for (const auto& t : cat.items)
+        if (t.sid == what) return &t;
+    std::string q = what;
+    std::replace(q.begin(), q.end(), '_', ' ');
+    const std::string lq = Lower(q);
+    for (const auto& t : cat.items)
+        if (Lower(t.name) == lq) return &t;
+    const kenshi::SpawnTemplate* best = nullptr;
+    for (const auto& t : cat.items)
+        if (adm::SearchMatches(t.name, t.sid, q) && (!best || t.name.size() < best->name.size())) best = &t;
+    return best;
+}
+
+bool Makes(const kenshi::WeaponMaker& m, const std::string& sid) { return std::find(m.weapons.begin(), m.weapons.end(), sid) != m.weapons.end(); }
+
+// Where a player's items go: the host's selected character (else its first), another player's first
+// standing character.
+bool SpawnSpot(kc::Session& s, const std::vector<Member>& squad, uint8_t owner, kc::Vec3& out) {
+    if (owner == s.localId()) {
+        std::vector<kc::Handle> sel;
+        kenshi::SelectedHandles(sel);
+        for (const auto& h : sel)
+            for (const auto& m : squad)
+                if (m.h == h && m.owner == owner && kenshi::GetPosition(m.c, out)) return true;
+    }
+    return FirstPosition(squad, owner, out);
+}
+
+std::string RunSpawn(const adm::Command& c, kc::Session& s, KenshiWorld& w, bool& ok) {
+    const Catalog& cat = CatalogOf(w);
+    const kenshi::SpawnTemplate* t = FindTemplate(cat, c.item);
+    if (!t) {
+        ok = false;
+        return kenshi::GameDataBySid(c.item) ? c.item + " n'est pas un objet qu'on peut faire apparaître"
+                                             : "objet inconnu : " + c.item + " (un sid, ou une partie du nom avec _ pour les espaces)";
+    }
+    // whose character
+    uint8_t owner = s.localId();
+    if (!c.spawnAt.host) {
+        const std::vector<uint8_t> ids = Resolve(s, c.spawnAt);
+        if (ids.empty()) { ok = false; return "joueur inconnu : tape players pour les numéros"; }
+        owner = ids.front();
+    }
+    const auto squad = Squad(s, w);
+    kc::Vec3 at;
+    if (!SpawnSpot(s, squad, owner, at)) { ok = false; return NameOf(s, owner) + " n'a pas de personnage"; }
+    // weapons and crossbows: a manufacturer and one of its models (the material)
+    std::string maker = c.maker, model = c.model;
+    if (t->type == adm::kTypeWeapon || t->type == adm::kTypeCrossbow) {
+        const kenshi::WeaponMaker* m = nullptr;
+        for (const auto& mk : cat.makers)
+            if (maker.empty() ? Makes(mk, t->sid) : (mk.sid == maker || Lower(mk.name) == Lower(maker))) { m = &mk; break; }
+        if (!maker.empty() && !m) { ok = false; return "fabricant inconnu : " + maker; }
+        if (!m && t->type == adm::kTypeWeapon) { ok = false; return "aucun fabricant ne fait " + t->name; }
+        if (m) {
+            maker = m->sid;
+            if (model.empty()) {
+                model = m->models.front().first;
+            } else {
+                bool known = false;
+                for (const auto& [msid, mname] : m->models)
+                    if (!known && (msid == model || Lower(mname) == Lower(model))) { model = msid; known = true; }
+                if (!known) { ok = false; return "modèle inconnu chez " + m->name + " : " + model; }
+            }
+        }
+    } else {
+        maker.clear();
+        model.clear();
+    }
+    const std::vector<int> stacks = adm::SplitStacks(c.count, t->stack);
+    const float spacing = (t->type == adm::kTypeWeapon || t->type == adm::kTypeCrossbow) ? 7.0f : 5.0f;
+    const auto offsets = adm::SpreadOffsets(stacks.size(), spacing);
+    // on open ground the items follow the terrain; indoors (a floor above it) the character's height
+    float g0 = 0, ww = 0;
+    const bool onTerrain = KenshiWorld::GroundAt(at.x, at.z, g0, ww) && g0 > -90.0f && std::fabs(at.y - g0) < 2.0f;
+    const auto before = w.GroundCounters();
+    int made = 0, placed = 0;
+    std::string why;
+    {
+        CallScopeGuard scopeRepair("admin");
+        HostCallScope scope;
+        for (size_t i = 0; i < stacks.size(); ++i) {
+            kc::Vec3 p{at.x + offsets[i].first, at.y, at.z + offsets[i].second};
+            float g = 0;
+            if (onTerrain && KenshiWorld::GroundAt(p.x, p.z, g, ww) && g > -90.0f) p.y = g;
+            p.y += 1.0f;   // just above the ground: it settles there
+            kc::ItemState st;
+            st.templateSid = t->sid;
+            st.manufacturerSid = maker;
+            st.materialSid = model;
+            st.quantity = stacks[i];
+            kc::Handle h;
+            void* item = kenshi::CreateGroundItem(st, p, h, &why);
+            if (!item) break;   // the factory refuses this template: the next stacks would fail alike
+            w.NoteItemDropped(item);   // the clients get it now (the ground scan would see it too, later)
+            ++made;
+            placed += stacks[i];
+        }
+    }
+    const auto after = w.GroundCounters();
+    const unsigned long long announced = after.hookDrops - before.hookDrops;
+    const bool host = owner == s.localId();
+    const std::string whereEn = host ? std::string("the host") : "player " + std::to_string(owner) + " (" + NameOf(s, owner) + ")";
+    if (!made) {
+        ok = false;
+        Log("admin: spawn of %d x %s (%s) near %s failed: %s", c.count, t->name.c_str(), t->sid.c_str(), whereEn.c_str(), why.c_str());
+        return "impossible de faire apparaître " + t->name + " : " + why;
+    }
+    const std::string gear = maker.empty() ? std::string() : ", maker " + maker + (model.empty() ? std::string() : ", model " + model);
+    const std::string early = placed < c.count ? ", stopped early: " + why : std::string();
+    Log("admin: spawned %d x %s (%s%s) in %d stack(s) of up to %d near %s at (%.1f, %.1f, %.1f), %llu announced to the clients%s", placed,
+        t->name.c_str(), t->sid.c_str(), gear.c_str(), made, t->stack, whereEn.c_str(), at.x, at.y, at.z, announced, early.c_str());
+    const std::string what = std::to_string(placed) + " × " + t->name;
+    const std::string nearFr = host ? std::string("toi") : NameOf(s, owner);
+    w.Toast(what + " au sol près de " + nearFr + ".");
+    if (!host) Notify(s, w, owner, "L'hôte a fait apparaître " + what + " au sol près de toi.");
+    std::string out = what + " au sol près de " + nearFr + " (" + std::to_string(made) + " pile(s))";
+    if (placed < c.count) {
+        ok = false;
+        out += " ; arrêté à " + std::to_string(placed) + " sur " + std::to_string(c.count) + " : " + why;
+    }
+    return out;
+}
+
 std::string RunList(kc::Session& s, KenshiWorld& w) {
     std::string out;
     for (const auto& p : AdminPlayers(s, w, "hôte")) {
@@ -325,6 +479,7 @@ std::string AdminRun(const std::string& line, kc::Session& s, KenshiWorld& w, bo
     case adm::Verb::Money: return done(RunMoney(c, s, w, ok));
     case adm::Verb::Xp: return done(RunXp(c, s, w, ids, ok));
     case adm::Verb::Tp: return done(RunTp(c, s, w, ids, ok));
+    case adm::Verb::Spawn: return done(RunSpawn(c, s, w, ok));
     case adm::Verb::List: return done(RunList(s, w));
     case adm::Verb::State: return done(RunState(s, w));
     case adm::Verb::None: break;
@@ -383,5 +538,23 @@ std::vector<AdminPlayer> AdminPlayers(kc::Session& s, KenshiWorld& w, const std:
 }
 
 bool AdminGodAll() { return g_gods.all(); }
+
+bool AdminItemCatalog(kc::Session& s, KenshiWorld& w, std::vector<AdminItem>& items, std::vector<AdminMaker>& makers) {
+    items.clear();
+    makers.clear();
+    if (!s.isHost() || !w.Ready()) return false;
+    const Catalog& cat = CatalogOf(w);
+    if (!cat.built) return false;
+    for (const auto& t : cat.items) {
+        AdminItem a;
+        a.sid = t.sid;
+        a.name = t.name;
+        a.category = adm::Classify(t.type, t.function, t.artifact);
+        a.stack = t.stack;
+        items.push_back(std::move(a));
+    }
+    for (const auto& m : cat.makers) makers.push_back({m.sid, m.name, m.weapons, m.models});
+    return true;
+}
 
 } // namespace kcp

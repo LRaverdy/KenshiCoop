@@ -77,6 +77,20 @@ struct OverlayAction {
     float value = 0;                    // SetOption: text = the option's key ([ui] in KenshiCoop.ini)
 };
 
+// The host's item spawner list (Administration section): every item template the game can make,
+// published once per loaded world (empty: none, not hosting).
+struct OverlayItem {
+    std::string sid, name;
+    int category = 0;   // kc::admin::ItemCat
+    int stack = 1;      // the most one stack holds
+};
+struct OverlayMaker {
+    std::string sid, name;
+    std::vector<std::string> weapons;                        // weapon template sids it makes
+    std::vector<std::pair<std::string, std::string>> models; // sid, name; best first
+};
+void OverlayPublishItems(std::vector<OverlayItem> items, std::vector<OverlayMaker> makers);
+
 bool OverlayInstall(std::string* err);      // hooks IDXGISwapChain::Present / ResizeBuffers, DirectInput reads
 void OverlayPublish(OverlayModel model);    // game thread -> render thread
 std::vector<OverlayAction> OverlayTakeActions();

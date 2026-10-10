@@ -6,6 +6,27 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+- **Administration : faire apparaître des objets.** Pas encore lancé en jeu.
+  - *Fenêtre de l'hôte* (section Administration, repli « Faire apparaître des objets ») : favoris
+    (matériaux de construction `580-gamedata.base`, tissu, fer, cuivre, nourriture, bandages),
+    recherche et filtre par catégorie sur tous les objets que la fabrique du jeu sait faire
+    (armes, arbalètes, armures, objets, sacs à dos, cartes, membres robotiques), quantité,
+    fabricant et modèle pour une arme, cible « près de moi » ou un joueur, bouton
+    « Faire apparaître ». 500 objets au plus par clic, confirmation au-delà de 100.
+  - *Commande* : `admin spawn <sid|nom> <n> [here|<id>] [fabricant] [modèle]` (console, console
+    hors du jeu, commande de test `admin spawn …`). Hôte seulement : un client est refusé.
+  - *Comment* : la fabrique du jeu (`CreateItemFromState`), l'objet posé comme un objet lâché
+    (`CreateGroundItem`), en piles de la taille du champ « stackable » des données, en spirale
+    autour du perso ; chaque pile est annoncée aux clients tout de suite
+    (`KenshiWorld::NoteItemDropped`), sans attendre le balayage du sol (qui ne regarde qu'autour
+    d'un perso immobile depuis 2 s). Catégories et tailles de pile lues dans les données du jeu
+    (« item function », « artifact », « stackable » ; fabricants : « weapon types »,
+    « weapon models »).
+  - *Messages* : journal « admin: spawned … », message à l'écran pour l'hôte, message en français
+    au joueur ciblé.
+  - *Tests* : `TestAdmin` (syntaxe, piles, répartition, recherche, catégories) ; étape « objets »
+    de l'expérience `admin` (pas encore lancée).
+
 ## v0.3.0 (10 octobre 2026)
 
 Protocole 34 : tout le monde doit installer cette version pour jouer ensemble. En bref :

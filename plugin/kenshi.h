@@ -7,6 +7,7 @@
 #pragma once
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <vector>
 
 #include "kc/protocol.h"
@@ -858,5 +859,24 @@ void BuildingTemplates(const std::string& part, std::vector<std::pair<std::strin
 void GameDataOfType(int type, std::vector<void*>& out, size_t max);   // every game data record of that itemType (21: research), by sid
 void ItemTemplates(const std::string& part, std::vector<std::pair<std::string, std::string>>& out, size_t max);   // every non-building template by sid/name part
 bool DestroyAnyObject(void* obj);   // GameWorld::destroy for good (any RootObject)
+// The admin item spawner: every template the item factory makes into something lying on the ground
+// (weapons, crossbows, armour, items, backpacks, maps, robotic limbs: kc::admin::SpawnableType),
+// with what the game data says of it, sorted by name. Weapons no manufacturer makes (an animal's
+// "weapon") are left out.
+struct SpawnTemplate {
+    std::string sid, name;
+    int type = -1;          // itemType
+    int function = 0;       // ITEM "item function"
+    bool artifact = false;  // ITEM "artifact"
+    int stack = 1;          // ITEM "stackable": the most one stack holds (1 for weapons, armour...)
+};
+// A weapon manufacturer (itemType WEAPON_MANUFACTURER): the weapons it makes and its weapon models
+// (the material createItem takes; their reference value: how good, higher is better).
+struct WeaponMaker {
+    std::string sid, name;
+    std::vector<std::string> weapons;                       // weapon template sids
+    std::vector<std::pair<std::string, std::string>> models; // sid, name; best first
+};
+void SpawnCatalog(std::vector<SpawnTemplate>& items, std::vector<WeaponMaker>& makers);
 
 } // namespace kenshi

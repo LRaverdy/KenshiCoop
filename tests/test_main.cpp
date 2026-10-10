@@ -3414,6 +3414,44 @@ static void TestAdmin() {
     CHECK(adm::Parse("heal all", c, err) && c.verb == adm::Verb::Heal && c.who.all);
     CHECK(adm::Parse("list", c, err) && c.verb == adm::Verb::List);
     CHECK(!adm::Parse("", c, err) && !adm::Parse("explode 2", c, err));
+    // the item spawner
+    CHECK(adm::Parse("spawn 580-gamedata.base 20 here", c, err) && c.verb == adm::Verb::Spawn && c.item == "580-gamedata.base" && c.count == 20 &&
+          c.spawnAt.host && c.maker.empty());
+    CHECK(adm::Parse("spawn Building_Material 5", c, err) && c.spawnAt.host && c.count == 5 && c.item == "Building_Material");
+    CHECK(adm::Parse("spawn 476-gamedata.base 1 3 1070-gamedata.base 1068-gamedata.base", c, err) && c.spawnAt.id == 3 && !c.spawnAt.host &&
+          c.maker == "1070-gamedata.base" && c.model == "1068-gamedata.base");
+    CHECK(adm::Parse("SPAWN bread 500 ici", c, err) && c.count == adm::kMaxSpawn && c.spawnAt.host);
+    CHECK(!adm::Parse("spawn bread 501 here", c, err) && err.find("500") != std::string::npos);
+    CHECK(!adm::Parse("spawn bread 0", c, err) && !adm::Parse("spawn bread -3", c, err) && !adm::Parse("spawn bread 2.5", c, err));
+    CHECK(!adm::Parse("spawn bread", c, err) && !adm::Parse("spawn bread 5 all", c, err) && !adm::Parse("spawn bread 5 bob", c, err));
+    CHECK(!adm::Parse("spawn a 1 here b c d", c, err));
+    CHECK(adm::Usage().find("admin spawn") != std::string::npos);
+    CHECK(adm::SplitStacks(20, 1).size() == 20 && adm::SplitStacks(0, 5).empty());
+    const auto st = adm::SplitStacks(23, 10);
+    CHECK(st.size() == 3 && st[0] == 10 && st[1] == 10 && st[2] == 3);
+    CHECK(adm::SplitStacks(7, 0).size() == 7 && adm::SplitStacks(250, 100).size() == 3);
+    const auto spots = adm::SpreadOffsets(500, 5.0f);
+    CHECK(spots.size() == 500);
+    bool spotsOk = true;
+    for (size_t i = 0; i < spots.size(); ++i) {
+        spotsOk &= std::hypot(spots[i].first, spots[i].second) >= 4.99f;   // never on the character's own spot
+        for (size_t j = i + 1; j < spots.size() && j < i + 40; ++j)
+            spotsOk &= std::hypot(spots[i].first - spots[j].first, spots[i].second - spots[j].second) >= 4.99f;   // apart
+        spotsOk &= std::fabs(spots[i].first) <= 60.0f && std::fabs(spots[i].second) <= 60.0f;   // 500 fit in 12 m
+    }
+    CHECK(spotsOk && adm::SpreadOffsets(8, 5.0f).back().first == 5.0f && adm::SpreadOffsets(0, 5.0f).empty());
+    CHECK(adm::SearchMatches("Building Material", "580-gamedata.base", "build mat"));
+    CHECK(adm::SearchMatches("Building Material", "580-gamedata.base", "580-GAMEDATA.base") && adm::SearchMatches("Iron Plates", "x", ""));
+    CHECK(!adm::SearchMatches("Building Material", "580-gamedata.base", "iron") && !adm::SearchMatches("Iron Plates", "x", "plates copper"));
+    CHECK(adm::SpawnableType(adm::kTypeItem) && adm::SpawnableType(adm::kTypeBackpack) && !adm::SpawnableType(0) && !adm::SpawnableType(1) &&
+          !adm::SpawnableType(adm::kTypeWeaponMaker) && !adm::SpawnableType(49));
+    CHECK(adm::Classify(adm::kTypeItem, 7, false) == adm::ItemCat::Building && adm::Classify(adm::kTypeItem, 3, false) == adm::ItemCat::Food);
+    CHECK(adm::Classify(adm::kTypeItem, 0, false) == adm::ItemCat::Crafting && adm::Classify(adm::kTypeItem, 0, true) == adm::ItemCat::Artifact);
+    CHECK(adm::Classify(adm::kTypeItem, 13, false) == adm::ItemCat::Book && adm::Classify(adm::kTypeItem, 1, false) == adm::ItemCat::Medical);
+    CHECK(adm::Classify(adm::kTypeWeapon, 0, false) == adm::ItemCat::Weapon && adm::Classify(adm::kTypeBackpack, 0, false) == adm::ItemCat::Backpack);
+    CHECK(adm::Classify(adm::kTypeArmour, 0, false) == adm::ItemCat::Armour && adm::Classify(adm::kTypeItem, 99, false) == adm::ItemCat::Other);
+    for (int k = 0; k < adm::kItemCatCount; ++k) CHECK(adm::CategoryFr(adm::ItemCat(k))[0] != 0);
+    CHECK(adm::kFavouriteCount == 6 && std::string(adm::kFavourites[0].sid) == "580-gamedata.base");
     // skills
     CHECK(adm::FindSkill("melee_attack") == 1 && adm::FindSkill("Attaque") == 1 && adm::FindSkill("33") == 33);
     CHECK(adm::FindSkill("34") == -1 && adm::FindSkill("TOUTES") == adm::kAllSkills && adm::FindSkill("armes_lourdes") == 24);
