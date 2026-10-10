@@ -71,6 +71,13 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   le client ne retrouve pas l'inventaire de son propre perso côté hôte pour un dépôt au sol, alors
   que le test `grounddrop` (39/39, en local) passe : chercher pourquoi (identifiant du perso après
   une reconnexion, perso créé par l'éditeur, handle différent par Steam).
+- **Parler aux PNJ : lent, et parfois impossible** (rob, Ruche, 23:14). (1) Lent : l'ordre
+  « parler » part chez l'hôte, le perso marche jusqu'au PNJ, puis la conversation s'ouvre ; aucun
+  retour visible pendant ce temps. (2) Impossible : « [rob] order "talk" (12) -> refused: Marchand
+  Ruche is busy talking with rob » : le PNJ est jugé occupé **avec rob lui-même** (conversation
+  précédente pas encore fermée côté hôte). Le refus « occupé » ne doit jamais viser le même
+  joueur : il doit reprendre ou remplacer sa propre conversation. Voir aussi les ordres « parler »
+  acceptés (« -> ok ») qui n'ont rien ouvert (23:14:02, 23:14:04).
 - **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
