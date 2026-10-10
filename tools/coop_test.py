@@ -1305,6 +1305,9 @@ def exp_build(host, cli, kinds=("Feu", "Lit", "Coffre", "Tente", "Mur")):
         time.sleep(4)
         check("batiments : achat demande par le client paye chez l'hote", cmd(host, "money")[1] != cats0, f"{cats0} -> {cmd(host, 'money')[1]}")
         check("batiments : le batiment n'est plus a vendre chez le client", cmd(cli, "buildforsale")[1] != sale[1], cmd(cli, "buildforsale")[1])
+    else:
+        log("SKIP step 5 (purchase): no building for sale within 3 km of the squad (" + sale[1] + "); "
+            "use --save kctest_town or run the buyhouse experiment")
     summary()
 
 
@@ -1367,6 +1370,410 @@ def exp_passive(host, cli):
     m = cmd(host, f"modes {mine}")[1]
     check("selection mixte : le mode passe chez le perso de l'hote", not (int(m.split()[1]) & 32), m)
     check("selection mixte : le perso du client n'est pas touche", cmd(host, f"modes {own}")[1] == before_cli, cmd(host, f"modes {own}")[1])
+    summary()
+
+
+def frame_latency(pid, n=5):
+    """Round trip of a no-op debug command (ms): the channel is polled once per game frame, so this
+    follows the frame time (a stalled or crawling game shows here). Best and worst of n."""
+    ts = []
+    for _ in range(n):
+        t0 = time.time()
+        cmd(pid, "echo")
+        ts.append((time.time() - t0) * 1000)
+    return round(min(ts)), round(max(ts))
+
+
+def find_material(pid, name=None):
+    """The building materials' item template (sid), searched by name on that machine."""
+    for part in ([name] if name else []) + ["Building_Materials", "Matériaux_de_construction", "Materiaux_de_construction", "construction"]:
+        t = cmd(pid, f"itemtypes {part}")[1]
+        log("item templates", part, ":", t[:300])
+        parts = t.split()
+        if t.startswith("ok") and len(parts) > 2:
+            return parts[2].split("=")[0]
+    return None
+
+
+def find_building(pid, kinds):
+    for k in kinds:
+        t = cmd(pid, f"buildtypes {k}")[1]
+        log("building templates", k, ":", t[:300])
+        parts = t.split()
+        if t.startswith("ok") and len(parts) > 2:
+            return parts[2].split("=")[0]
+    return None
+
+
+def site_list(pid, sid, idx=0, radius=1500):
+    """Construction sites of that kind around squad member idx: [(pos, progress, flags)], nearest first."""
+    t = cmd(pid, f"buildlist {sid} {radius} {idx}")[1]
+    out = []
+    for e in t.split()[2:]:
+        if not e.startswith(sid + "@"):
+            continue
+        where, rest = e.split("@", 1)[1].split(":", 1)
+        prog, flags = rest.split("/")
+        out.append((tuple(map(float, where.split(","))), float(prog), int(flags)))
+    return out
+
+
+def site_at(pid, sid, pos, idx=0):
+    """That site (within 1 unit of pos) as this machine has it, or None."""
+    for p, prog, flags in site_list(pid, sid, idx):
+        if dist(p, pos) < 1.0:
+            return p, prog, flags
+    return None
+
+
+BUILD_TASK = [None]   # the TaskType that made a worker build, found by the first probe
+
+
+def order_build(pid, idx, sid, site_pos, tasks, host):
+    """The player's right click on its construction site: newPlayerTaskSelectedCharacters on the building
+    with that member alone selected. The TaskType of 'build' is not in the engine notes, so the first
+    call tries each candidate until the host's progress moves (and remembers it)."""
+    cands = [BUILD_TASK[0]] if BUILD_TASK[0] is not None else tasks
+    for task in cands:
+        before = site_at(host, sid, site_pos)
+        r = cmd(pid, f"buildreq {idx} {task} {sid}")
+        log(f"build order task {task} from {pid}:", r)
+        if not r[0]:
+            continue
+        for _ in range(16):
+            time.sleep(0.5)
+            now = site_at(host, sid, site_pos)
+            if before and now and (now[1] > before[1] or now[2] & 1):
+                BUILD_TASK[0] = task
+                log(f"task {task} builds: progress {before[1]} -> {now[1]}")
+                return task
+    return None
+
+
+def construct_one(host, cli, builder, idx, sid, mat, tasks, dx, label, wait=240):
+    """One real construction: `builder` (host or client pid) places a site next to its character `idx`,
+    orders that character to build it, then host and client are compared until it is finished."""
+    who = "client" if builder == cli else "hote"
+    before_h = {s[0] for s in site_list(host, sid, idx)}
+    log(f"[{label}] {who} places", sid, cmd(builder, f"buildplace {sid} {dx} 25 0 {idx}"))
+    site = None
+    for _ in range(20):
+        time.sleep(0.5)
+        new = [s for s in site_list(host, sid, idx) if s[0] not in before_h]
+        if new:
+            site = new[0]
+            break
+    check(f"construction [{label}] : chantier pose chez l'hote", site is not None, site)
+    if not site:
+        return None
+    time.sleep(2)
+    check(f"construction [{label}] : chantier chez le client", site_at(cli, sid, site[0], idx) is not None, site_list(cli, sid, idx)[:3])
+    m0 = (cmd(host, f"invcount all {mat}")[1], cmd(cli, f"invcount all {mat}")[1])
+    log(f"[{label}] materials before: host {m0[0]} client {m0[1]}")
+    task = order_build(builder, idx, sid, site[0], tasks, host)
+    check(f"construction [{label}] : l'ordre de construire fait avancer le chantier chez l'hote", task is not None,
+          f"taches essayees {tasks if BUILD_TASK[0] is None else BUILD_TASK[0]}")
+    if task is None:
+        return site[0]
+    samples, t0, last = [], time.time(), None
+    while time.time() - t0 < wait:
+        time.sleep(5)
+        h, c = site_at(host, sid, site[0], idx), site_at(cli, sid, site[0], idx)
+        mh, mc = cmd(host, f"invcount all {mat}")[1], cmd(cli, f"invcount all {mat}")[1]
+        samples.append((h and h[1], c and c[1], mh, mc))
+        log(f"[{label}] t={int(time.time() - t0)}s progress host {h and h[1]} client {c and c[1]} | materials host {mh} client {mc}")
+        last = (h, c)
+        if h and h[2] & 1:
+            break
+    time.sleep(3)   # the last construction state and inventories reach the client
+    h, c = site_at(host, sid, site[0], idx), site_at(cli, sid, site[0], idx)
+    m1 = (cmd(host, f"invcount all {mat}")[1], cmd(cli, f"invcount all {mat}")[1])
+    log(f"[{label}] materials after: host {m1[0]} client {m1[1]}")
+    progressed_c = len({s[1] for s in samples if s[1] is not None}) > 1
+    check(f"construction [{label}] : l'avancement bouge aussi chez le client", progressed_c, [s[1] for s in samples][:12])
+    close = [abs(s[0] - s[1]) for s in samples if s[0] is not None and s[1] is not None]
+    check(f"construction [{label}] : avancement proche chez l'hote et le client", close and max(close) <= 0.25 * max(1.0, max(s[0] for s in samples if s[0] is not None)),
+          f"ecart max {max(close) if close else '?'}")
+    check(f"construction [{label}] : les materiaux baissent chez l'hote", m1[0] != m0[0], f"{m0[0]} -> {m1[0]}")
+    check(f"construction [{label}] : memes materiaux des deux cotes", m1[0] == m1[1], f"hote {m1[0]} / client {m1[1]}")
+    check(f"construction [{label}] : termine chez l'hote", bool(h and h[2] & 1), h)
+    check(f"construction [{label}] : termine pareil chez le client", bool(h and c and h[2] == c[2] and abs(h[1] - c[1]) < 0.01), f"{h} / {c}")
+    rep = compare(dump(host, f"h_construct_{label}"), dump(cli, f"c_construct_{label}"), f"construct_{label}")
+    check(f"construction [{label}] : inventaires identiques", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    return site[0]
+
+
+def exp_construct(host, cli, kinds=("Tente", "Feu", "Coffre", "Lit", "Mur"), material=None, tasks=None):
+    """Real construction: money and building materials for both players, a site placed by the client and
+    built by its own character on the client's order (the right-click path), progress and materials the
+    same on both sides; then a host's site; then both at the same time."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    hidx = 0 if own != 0 else 1
+    tasks = tasks or list(range(1, 100))
+    sid = find_building(host, kinds)
+    mat = find_material(host, material)
+    check("construction : un modele de batiment trouve", sid is not None, sid)
+    check("construction : les materiaux de construction trouves", mat is not None, mat)
+    if not sid or not mat:
+        summary()
+        return
+    log("money", cmd(host, "givemoney 50000"))
+    for i in (own, hidx):
+        log(f"materials for squad member {i}", cmd(host, f"giveitem {mat} 40 {i}"))
+    time.sleep(3)
+    mh, mc = cmd(host, f"invcount all {mat}")[1], cmd(cli, f"invcount all {mat}")[1]
+    check("construction : materiaux recus, memes chiffres chez le client", mh == mc and mh != "ok 0", f"hote {mh} / client {mc}")
+    check("construction : meme argent partout", cmd(host, "money")[1] == cmd(cli, "money")[1], f"{cmd(host, 'money')[1]} / {cmd(cli, 'money')[1]}")
+    frames = [frame_latency(host), frame_latency(cli)]
+    # 1. the client's site, built by the client's own character on the client's order
+    construct_one(host, cli, cli, own, sid, mat, tasks, 60, "client")
+    # 2. the host's site, built by a host character on the host's order
+    construct_one(host, cli, host, hidx, sid, mat, tasks, -60, "hote")
+    # 3. both at the same time: two sites, two orders, both finished identically
+    if BUILD_TASK[0] is None:
+        log("SKIP simultaneous construction: no build task found")
+        check("construction [ensemble] : les deux chantiers avancent", False, "pas de tache de construction trouvee")
+        summary()
+        return
+    before = {s[0] for s in site_list(host, sid, own, 2500)}
+    log("both place:", cmd(cli, f"buildplace {sid} 60 -60 0 {own}"), cmd(host, f"buildplace {sid} -60 -60 0 {hidx}"))
+    time.sleep(4)
+    new = [s for s in site_list(host, sid, own, 2500) if s[0] not in before]
+    check("construction [ensemble] : deux chantiers chez l'hote", len(new) >= 2, new)
+    m0 = cmd(host, f"invcount all {mat}")[1]
+    log("both order:", cmd(cli, f"buildreq {own} {BUILD_TASK[0]} {sid}"), cmd(host, f"buildreq {hidx} {BUILD_TASK[0]} {sid}"))
+    t0 = time.time()
+    while time.time() - t0 < 240:
+        time.sleep(5)
+        hs = [site_at(host, sid, s[0], own) for s in new[:2]]
+        log("both sites on the host:", hs)
+        if hs and all(x and x[2] & 1 for x in hs):
+            break
+    time.sleep(3)
+    hs = [site_at(host, sid, s[0], own) for s in new[:2]]
+    cs = [site_at(cli, sid, s[0], own) for s in new[:2]]
+    check("construction [ensemble] : les deux chantiers termines chez l'hote", len(hs) == 2 and all(x and x[2] & 1 for x in hs), hs)
+    check("construction [ensemble] : identiques chez le client", hs == cs, f"{hs} / {cs}")
+    m1h, m1c = cmd(host, f"invcount all {mat}")[1], cmd(cli, f"invcount all {mat}")[1]
+    check("construction [ensemble] : materiaux consommes, memes chiffres", m1h != m0 and m1h == m1c, f"{m0} -> hote {m1h} / client {m1c}")
+    frames.append(frame_latency(host))
+    frames.append(frame_latency(cli))
+    log("command round trips (ms, best/worst):", frames)
+    rep = compare(dump(host, "h_construct_end"), dump(cli, "c_construct_end"), "construct_end")
+    check("construction : inventaires identiques a la fin", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    summary()
+
+
+def exp_buyhouse(host, cli):
+    """Buying a building for sale (a town save): the client's purchase through the purchase window's
+    confirm (BuyMeCallback, what the Buy button runs), the host's own; price debited once everywhere,
+    the building ours everywhere, its doors and containers usable; refused without the money;
+    two purchases of the same building at once: one owner, one payment."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    hidx = 0 if own != 0 else 1
+    log("UI path: buildbuy calls Building::buyMeCallback(2), what the Buy window's confirm button does "
+        "(the right-click menu only opens that window)")
+
+    def money(pid):
+        t = cmd(pid, "money")[1]
+        return int(t.split()[1]) if t.startswith("ok") else None
+
+    def for_sale(pid):
+        r = cmd(pid, "buildforsale")
+        if not r[0]:
+            return None, None
+        where = r[1].split()[1]
+        return where, int(r[1].split("price=")[1])
+
+    def info(pid, where):
+        t = cmd(pid, f"buildinfo {where}")[1]
+        return dict(p.split("=") for p in t.split()[2:]) if t.startswith("ok") else {}
+
+    def gather():   # both characters next to squad member 0 (the host's), where the sale search is made
+        x, y, z = map(float, cmd(host, "where 0")[1].split()[1].split(","))
+        cmd(host, f"teleport {own} {x + 15} {y} {z}")
+        cmd(host, f"teleport {hidx} {x - 15} {y} {z}")
+        time.sleep(3)
+
+    gather()
+    where, price = for_sale(host)
+    log("for sale near the squad (host):", where, price, "| client:", for_sale(cli))
+    check("achat : un batiment a vendre trouve pres de l'escouade", where is not None,
+          "aucun batiment a vendre a 3 km (lancer avec --save d'une ville qui en a, ex. kctest_town)")
+    if not where:
+        summary()
+        return
+    # 1. not enough money: refused, nothing debited
+    cmd(host, "money 0")
+    time.sleep(2)
+    log("client tries to buy with 0 cats:", cmd(cli, "buildbuy"))
+    time.sleep(4)
+    ih, ic = info(host, where), info(cli, where)
+    check("achat : sans argent, refuse chez l'hote", ih.get("ours") == "0" and ih.get("forsale") == "1", ih)
+    check("achat : sans argent, refuse chez le client", ic.get("ours") == "0" and ic.get("forsale") == "1", ic)
+    check("achat : sans argent, rien debite", money(host) == 0 and money(cli) == 0, f"{money(host)} / {money(cli)}")
+    # 2. the client buys
+    cmd(host, f"money {price * 3 + 1000}")
+    time.sleep(2)
+    m0h, m0c = money(host), money(cli)
+    log("client buys", where, cmd(cli, "buildbuy"))
+    time.sleep(5)
+    m1h, m1c = money(host), money(cli)
+    log(f"cats host {m0h} -> {m1h} client {m0c} -> {m1c} (price {price})")
+    check("achat [client] : prix debite chez l'hote", m0h is not None and m1h is not None and m0h - m1h == price, f"{m0h} -> {m1h}, prix {price}")
+    check("achat [client] : meme argent chez le client", m1h == m1c, f"hote {m1h} / client {m1c}")
+    ih, ic = info(host, where), info(cli, where)
+    check("achat [client] : batiment a nous chez l'hote", ih.get("ours") == "1" and ih.get("forsale") == "0", ih)
+    check("achat [client] : batiment a nous chez le client", ic.get("ours") == "1" and ic.get("forsale") == "0", ic)
+    # its doors and containers: the client's character goes in front of it, opens its door, opens a container
+    bx, by, bz = map(float, where.split("@")[1].split(","))
+    cmd(host, f"teleport {own} {bx + 8} {by} {bz + 8}")
+    time.sleep(4)
+    log("doors around the client's character:", cmd(cli, f"doors {own}")[1][:200])
+    d0 = cmd(host, f"doorstate {own} door")[1]
+    log("client opens the door:", cmd(cli, f"doorbutton {own} door open"))
+    time.sleep(4)
+    d1h, d1c = cmd(host, f"doorstate {own} door")[1], cmd(cli, f"doorstate {own} door")[1]
+    log("door host", d0, "->", d1h, "| client", d1c)
+    st = lambda t: t.split("state=")[1].split()[0] if "state=" in t else None
+    check("achat [client] : la porte s'ouvre", st(d1h) is not None and st(d1h) != st(d0), f"{d0} -> {d1h}")
+    check("achat [client] : porte identique chez le client", st(d1h) == st(d1c), f"{d1h} / {d1c}")
+    log("client opens a container:", cmd(cli, f"containerreq {own} any"))
+    time.sleep(6)
+    cc = cmd(cli, "contcount any")[1]
+    log("client container window:", cc)
+    check("achat [client] : un conteneur s'ouvre chez le client", "windows=" in cc and cc.split("windows=")[1] != "0", cc)
+    cmd(cli, "closewindows")
+    gather()
+    # 3. the host buys another one
+    where2, price2 = for_sale(host)
+    log("next for sale:", where2, price2)
+    check("achat [hote] : un autre batiment a vendre", where2 is not None and where2 != where, where2)
+    if where2 and where2 != where:
+        m0h = money(host)
+        log("host buys", where2, cmd(host, "buildbuy"))
+        time.sleep(5)
+        m1h, m1c = money(host), money(cli)
+        check("achat [hote] : prix debite", m0h - m1h == price2, f"{m0h} -> {m1h}, prix {price2}")
+        check("achat [hote] : meme argent chez le client", m1h == m1c, f"hote {m1h} / client {m1c}")
+        ih, ic = info(host, where2), info(cli, where2)
+        check("achat [hote] : a nous chez l'hote", ih.get("ours") == "1", ih)
+        check("achat [hote] : a nous chez le client", ic.get("ours") == "1" and ic.get("forsale") == "0", ic)
+    # 4. both buy the same one at once: one owner, one payment
+    where3, price3 = for_sale(host)
+    wc, _ = for_sale(cli)
+    log("same building for both?", where3, wc)
+    check("achat [ensemble] : un troisieme batiment a vendre, le meme vu des deux cotes", where3 is not None and where3 == wc, f"{where3} / {wc}")
+    if where3 and where3 == wc:
+        cmd(host, f"money {price3 + 500}")
+        time.sleep(2)
+        m0h = money(host)
+        rc, rh = cmd(cli, "buildbuy"), cmd(host, "buildbuy")
+        log("both buy:", rc, rh)
+        time.sleep(6)
+        m1h, m1c = money(host), money(cli)
+        check("achat [ensemble] : un seul paiement", m0h - m1h == price3, f"{m0h} -> {m1h}, prix {price3}")
+        check("achat [ensemble] : meme argent chez le client", m1h == m1c, f"hote {m1h} / client {m1c}")
+        ih, ic = info(host, where3), info(cli, where3)
+        check("achat [ensemble] : achete une fois, a nous partout", ih.get("ours") == "1" and ic.get("ours") == "1", f"{ih} / {ic}")
+    rep = compare(dump(host, "h_buyhouse"), dump(cli, "c_buyhouse"), "buyhouse")
+    check("achat : inventaires identiques a la fin", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    summary()
+
+
+def exp_farlong(host, cli, seconds=300, kinds=("Tente", "Feu", "Coffre", "Lit", "Mur")):
+    """The client's character far from the host's squad (>= 30000 units) for a long time: every 30 s the
+    zone around it is compared (characters, health, inventories); a fight is started there and a
+    building placed there while the host's squad moves on its side. No desync may build up, the host
+    must keep simulating that zone, no crash, frame time fine; then the client comes back."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    hidx = 0 if own != 0 else 1
+
+    def vec(text):
+        return tuple(map(float, text.split()[1].split(",")))
+
+    x, y, z = vec(cmd(host, f"where {own}")[1])
+    home = (x, y, z)
+    log("teleport the client's character far away (as fartp):", cmd(host, f"teleport {own} {x + 30000} {y + 300} {z + 30000}"))
+    time.sleep(5)
+    cmd(cli, f"camto {own}")
+    time.sleep(30)   # zone streaming on both
+    far = vec(cmd(host, f"where {own}")[1])
+    check("loin longtemps : le perso du client est a plus de 30000", dist(far[::2], home[::2]) >= 30000, f"{home} -> {far}")
+    lat0 = (frame_latency(host), frame_latency(cli))
+    log("command round trips before (ms, best/worst): host", lat0[0], "client", lat0[1])
+    # a fight next to the client's character, on the host
+    sp = cmd(host, f"spawnnpc 20 10 {own}")
+    log("spawn near the client:", sp)
+    npc = sp[1].split()[1] if sp[0] else None
+    if npc:
+        log("fight", cmd(host, f"fight {own}"))
+    # a building next to the client's character, placed by the client
+    sid = find_building(host, kinds)
+    if sid:
+        log("client places", sid, "far away:", cmd(cli, f"buildplace {sid} -40 30 0 {own}"))
+    t0 = time.time()
+    worst = []
+    npc_moves, npc_last = 0, None
+    host_dir = 1
+    rounds = max(1, int(seconds // 30))
+    for r in range(rounds):
+        # the host acts on its side meanwhile: its squad walks back and forth
+        log("host moves", cmd(host, f"moverel {hidx} {150 * host_dir} 0"))
+        host_dir = -host_dir
+        for _ in range(6):
+            time.sleep(5)
+            if npc:
+                ok, t = cmd(host, f"where {npc}")
+                if ok:
+                    p = vec(t)
+                    if npc_last and dist(p, npc_last) > 0.5:
+                        npc_moves += 1
+                    npc_last = p
+        h, c = dump(host, f"h_farlong_{r}"), dump(cli, f"c_farlong_{r}")
+        rep = compare(h, c, f"farlong_{r}")
+        lat = (frame_latency(host, 3), frame_latency(cli, 3))
+        st = status(cli)
+        log(f"[{int(time.time() - t0)}s] chars host {rep['host_chars']} client {rep['client_chars']} missing {rep['missing_on_client']} "
+            f"extra {rep['extra_on_client']} pos_err_max {rep['pos_err_max']} over_tol {rep['pos_err_over_tol']} vitals {rep['vital_flag_mismatch']} "
+            f"inv {rep['inventory_mismatch']} | round trips host {lat[0]} client {lat[1]} | client {st.get('state')} missingNpcs {st.get('missingNpcs')}")
+        worst.append((rep["missing_on_client"], rep["pos_err_over_tol"], rep["vital_flag_mismatch"], rep["inventory_mismatch"], lat))
+        if st.get("state") != "connected":
+            break
+    check("loin longtemps : le client reste connecte", status(cli).get("state") == "connected", status(cli))
+    check("loin longtemps : l'hote simule la zone du client (le PNJ bouge chez l'hote)", npc is not None and npc_moves >= 2,
+          f"pnj {npc}, {npc_moves} deplacements vus")
+    tail = worst[len(worst) // 2:] or worst
+    check("loin longtemps : pas de PNJ manquant qui s'accumule", all(w[0] <= max(2, worst[0][0]) for w in tail), [w[0] for w in worst])
+    check("loin longtemps : pas d'ecart de position qui s'accumule", all(w[1] <= max(3, worst[0][1]) for w in tail), [w[1] for w in worst])
+    check("loin longtemps : sante identique", all(w[2] == 0 for w in tail), [w[2] for w in worst])
+    check("loin longtemps : inventaires identiques", all(w[3] == 0 for w in tail), [w[3] for w in worst])
+    check("loin longtemps : temps d'image correct (aller-retour d'une commande < 1 s)", all(w[4][0][1] < 1000 and w[4][1][1] < 1000 for w in worst),
+          [w[4] for w in worst])
+    if sid:
+        bh, bc = site_list(host, sid, own), site_list(cli, sid, own)
+        check("loin longtemps : batiment pose loin, chez l'hote et le client", bool(bh) and bool(bc) and min(dist(a[0], b[0]) for a in bh for b in bc) < 0.5,
+              f"{bh[:2]} / {bc[:2]}")
+    # back home
+    log("bring the client back:", cmd(host, "tpplayer 2"))
+    time.sleep(30)
+    cmd(cli, f"camto {own}")
+    back = vec(cmd(host, f"where {own}")[1])
+    check("loin longtemps : retour pres de l'hote", dist(back[::2], home[::2]) < 2000, f"{back} / {home}")
+    rep = compare(dump(host, "h_farlong_back"), dump(cli, "c_farlong_back"), "farlong_back")
+    log("after the return:", {k: rep[k] for k in ("host_chars", "client_chars", "missing_on_client", "pos_err_max", "pos_err_over_tol", "inventory_mismatch")})
+    check("loin longtemps : au retour, personne ne manque", rep["missing_on_client"] <= 2, rep["missing_sample"])
+    check("loin longtemps : au retour, positions identiques", rep["pos_err_over_tol"] <= 2, rep["worst"])
+    check("loin longtemps : au retour, inventaires identiques", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
     summary()
 
 
@@ -2452,6 +2859,18 @@ def main():
         g5.add_argument("--keep", action="store_true")
         if name == "tradepaths":
             g5.add_argument("--merchant", default="Marchand", help="part of the merchant's name ('_' for spaces)")
+    cs = sub.add_parser("construct", help="real construction: client and host order their characters to build (materials, progress, result the same everywhere)")
+    cs.add_argument("--save", default="kctest_base")
+    cs.add_argument("--keep", action="store_true")
+    cs.add_argument("--material", default=None, help="name part or sid of the building materials item ('_' for spaces)")
+    cs.add_argument("--task", type=int, action="append", default=None, help="TaskType of the 'build' order (repeatable; default: probe 1..99)")
+    bh = sub.add_parser("buyhouse", help="buying a building for sale: price, owner, doors and containers, refusal, simultaneous purchase")
+    bh.add_argument("--save", default="kctest_town")
+    bh.add_argument("--keep", action="store_true")
+    fl_ = sub.add_parser("farlong", help="the client's character far away (>= 30000) for a long time: zone compared every 30 s, fight, building")
+    fl_.add_argument("--save", default="kctest_base")
+    fl_.add_argument("--keep", action="store_true")
+    fl_.add_argument("--seconds", type=int, default=300, help="time spent far away")
     td = sub.add_parser("trade", help="a client trades with a merchant: purchase, sale, stock everywhere")
     td.add_argument("--save", default="kctest_town")
     td.add_argument("--keep", action="store_true")
@@ -2594,6 +3013,12 @@ def main():
             exp_prison(host, cli)
         elif a.what == "build":
             exp_build(host, cli)
+        elif a.what == "construct":
+            exp_construct(host, cli, material=a.material, tasks=a.task)
+        elif a.what == "buyhouse":
+            exp_buyhouse(host, cli)
+        elif a.what == "farlong":
+            exp_farlong(host, cli, seconds=a.seconds)
         elif a.what == "buildstate":
             exp_buildstate(host, cli)
         elif a.what == "mine":

@@ -233,13 +233,14 @@ hk_medKnockout) ; `ReadOperatorCount` +0x3E0 ; CharBody +0x648 / Tasker +0x68 / 
 - **Factions** : factions, factionsync, relation, setrelation, bounty, givebounty.
 - **Prisons** : cage, chain, captive, enslave.
 - **Construction** : buildtypes, buildlist, buildcount, buildplace, buildprogress, buildbuy,
-  buildforsale, builddismantle, furnplace, furnparent.
+  buildforsale, builddismantle, furnplace, furnparent, buildreq, buildinfo, givemoney, itemtypes,
+  giveitem, invcount.
 - **Divers** : robuststats.
 
 ### Expériences du harnais (`tools/coop_test.py`, lancées par `tools/run_all.py`)
 
 run, dead, items, lootui, lootorder, lootclick, soak, walk, trace, bodies, clientpickup, doors,
-prison, build, mine, admin, trade, factions, talk, ranged, jitter, suite, squads, far, kosquad, facing,
+prison, build, construct, buyhouse, farlong, mine, admin, trade, factions, talk, ranged, jitter, suite, squads, far, kosquad, facing,
 menu, four, progress, ground, animframe, anim, gait, fxlive, fx, up, cmd. Chacune lance un hôte et des
 clients locaux, rejoue un scénario par les commandes de debug et vérifie les journaux.
 

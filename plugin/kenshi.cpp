@@ -3155,6 +3155,17 @@ bool CallGiveItem(Character* c, void* item) {
     return IsCharacter(c) && item && reinterpret_cast<FnGive>(FnAddr(FnGiveItem))(c, item, false, false);
 }
 
+bool GiveNewItem(Character* c, const std::string& sid, int32_t qty, std::string* why) {
+    if (!IsCharacter(c)) { if (why) *why = "no character"; return false; }
+    kc::ItemState st;
+    st.templateSid = sid;
+    st.quantity = qty > 0 ? qty : 1;
+    void* item = CreateItemFromState(st, why);
+    if (!item) return false;
+    if (!CallGiveItem(c, item)) { if (why) *why = "giveItem refused (inventory full?)"; return false; }
+    return true;
+}
+
 namespace {
 constexpr uintptr_t kZoneManagerPtr = 0x21349C0;   // GameWorld::zoneMgr, as AI::findFoodOnGround reads it
 constexpr uintptr_t ZM_objectGrid = 0x80;          // ZoneSpacialGrid of objects
@@ -3457,6 +3468,19 @@ bool WriteRaw(void* obj, uintptr_t offset, const void* in, size_t n) {
 void* GameDataBySid(const std::string& sid) { return FindGameData(sid); }
 
 bool GameDataSidOf(const void* gd, std::string& out) { return GameDataSid(gd, out); }
+
+void ItemTemplates(const std::string& part, std::vector<std::pair<std::string, std::string>>& out, size_t max) {
+    out.clear();
+    if (!g_gameDataBuilt) BuildGameDataIndex();
+    for (const auto& [sid, gd] : g_gameDataBySid) {
+        int type = -1;
+        std::string name;
+        if (!Rd(gd, off::GD_type, type) || type == 0 || !TemplateDisplayName(sid, name)) continue;   // not a BUILDING
+        if (!part.empty() && name.find(part) == std::string::npos && sid != part) continue;
+        out.emplace_back(sid, name);
+        if (out.size() >= max) break;
+    }
+}
 
 void BuildingTemplates(const std::string& part, std::vector<std::pair<std::string, std::string>>& out, size_t max) {
     out.clear();

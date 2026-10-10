@@ -154,6 +154,7 @@ public:
     bool DebugPlace(const kc::BuildPlace& p);
     void* BuildingAt(const std::string& sid, const kc::Vec3& pos);
     static bool IsPlayerBuilding(void* b);
+    static bool IsBuildingForSale(void* b);   // tests: Building::isForSale
     static bool ReadBuildStateOf(void* building, float& progress, uint8_t& flags);   // false: not a building
     void* NearestBuilding(const kc::Vec3& from, const std::string& part, float radius, int want);   // want: 0 any, 1 for sale, 2 ours, 3 ours unfinished
     void TakeEditedCharacters(std::vector<kc::Handle>& out) override;

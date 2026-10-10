@@ -1403,18 +1403,19 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         return out;
     }
     if (cmd == "buildplace" || cmd == "furnplace") {
-        // buildplace <sid> <dx> <dz> [yawDeg]: a placement as build mode makes it, next to squad member 0
+        // buildplace <sid> <dx> <dz> [yawDeg] [squadIndex]: a placement as build mode makes it, next to squad member 0 (or that one)
         //   (client: asked of the host; host: built and announced)
         // furnplace <sid> <building name part> <dx> <dz>: a piece of furniture inside the nearest such
         //   building of ours (position relative to that building)
         std::string sid, part;
         float dx = 0, dz = 0, yaw = 0;
-        if (cmd == "buildplace") in >> sid >> dx >> dz >> yaw;
+        size_t near0 = 0;
+        if (cmd == "buildplace") { in >> sid >> dx >> dz >> yaw; if (!(in >> near0)) near0 = 0; }
         else in >> sid >> part >> dx >> dz;
         std::replace(part.begin(), part.end(), '_', ' ');
         auto squad = SortedSquad(w);
         kc::Vec3 me;
-        if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), me)) return "err no squad";
+        if (near0 >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[near0]), me)) return "err no squad";
         if (!kenshi::GameDataBySid(sid)) return "err unknown template " + sid;
         kc::BuildPlace p;
         p.sid = sid;
@@ -1435,15 +1436,17 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         return w.DebugPlace(p) ? "ok " + sid + (s.isHost() ? " built" : " asked") : "err placement failed";
     }
-    if (cmd == "buildlist") {   // buildlist [name part] [radius]: buildings around squad member 0 ("sid@x,y,z:progress/flags" each)
+    if (cmd == "buildlist") {   // buildlist [name part] [radius] [squadIndex]: buildings around squad member 0 or that one ("sid@x,y,z:progress/flags" each)
         std::string part = "any";
         float radius = 1500.0f;
+        size_t near0 = 0;
         in >> part >> radius;
+        if (!(in >> near0)) near0 = 0;
         if (!(radius > 0) || radius > 5000.0f) radius = 1500.0f;
         std::replace(part.begin(), part.end(), '_', ' ');
         auto squad = SortedSquad(w);
         kc::Vec3 me;
-        if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), me)) return "err no squad";
+        if (near0 >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[near0]), me)) return "err no squad";
         std::vector<void*> objs;
         kenshi::ObjectsNear(me, radius, objs);
         std::vector<std::pair<float, std::string>> found;   // nearest first: both games list the same ones
@@ -1504,6 +1507,110 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         // no HostCallScope: exactly what the building's window does (a client asks the host)
         reinterpret_cast<AnswerFn>(kenshi::FnAddr(cmd == "buildbuy" ? kenshi::FnBuyMeCallback : kenshi::FnConfirmDismantle))(b, 2);
         return std::string("ok ") + where;
+    }
+    // ---- construction, purchases and supplies (coop_test construct / buyhouse / farlong)
+    if (cmd == "givemoney") {   // givemoney <n>: (host) the player faction gets n more cats
+        int32_t n = 0, m = 0;
+        in >> n;
+        if (!s.isHost()) return "err host only";
+        if (!kenshi::ReadPlayerMoney(m) || !kenshi::WritePlayerMoney(m + n)) return "err no money";
+        kenshi::ReadPlayerMoney(m);
+        return "ok " + std::to_string(m);
+    }
+    if (cmd == "itemtypes") {   // itemtypes <name part>: item templates ("sid=name" each, '_' for spaces)
+        std::string part;
+        in >> part;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        std::vector<std::pair<std::string, std::string>> found;
+        kenshi::ItemTemplates(part, found, 20);
+        std::string out = "ok " + std::to_string(found.size());
+        for (auto& [sid, name] : found) {
+            std::replace(name.begin(), name.end(), ' ', '_');
+            out += " " + sid + "=" + name;
+        }
+        return out;
+    }
+    if (cmd == "giveitem") {   // giveitem <templateSid|name part> <n> <squadIndex>: (host) n new items into that member's inventory
+        std::string what;
+        int32_t n = 1;
+        size_t idx = 0;
+        in >> what >> n >> idx;
+        if (!s.isHost()) return "err host only";
+        std::replace(what.begin(), what.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        std::string sid = what;
+        if (!kenshi::GameDataBySid(sid)) {
+            std::vector<std::pair<std::string, std::string>> found;
+            kenshi::ItemTemplates(what, found, 1);
+            if (found.empty()) return "err unknown item " + what;
+            sid = found[0].first;
+        }
+        std::string why;
+        HostCallScope scope;
+        return kenshi::GiveNewItem(w.FindSquad(squad[idx]), sid, n, &why) ? "ok " + sid + " x" + std::to_string(n) : "err " + why;
+    }
+    if (cmd == "invcount") {   // invcount <squadIndex|all> <templateSid|name part>: how many of those items that member (or the whole squad) carries
+        std::string who, part;
+        in >> who >> part;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        long total = 0;
+        for (size_t i = 0; i < squad.size(); ++i) {
+            if (who != "all" && who != std::to_string(i)) continue;
+            std::vector<kc::ItemState> items;
+            if (!kenshi::ReadInventory(w.FindSquad(squad[i]), items)) continue;
+            for (const auto& it : items) {
+                std::string name;
+                if (!kenshi::TemplateDisplayName(it.templateSid, name)) name = it.templateSid;
+                if (it.templateSid == part || name.find(part) != std::string::npos) total += it.quantity;
+            }
+        }
+        return "ok " + std::to_string(total);
+    }
+    if (cmd == "buildreq") {   // buildreq <selectIndex> <task> [name part]: that member alone is ordered to work on the nearest unfinished building of ours (newPlayerTaskSelectedCharacters, as a right click does)
+        size_t sel = 0;
+        int task = 0;
+        std::string part = "any";
+        in >> sel >> task >> part;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kc::Vec3 mp, bp;
+        if (!kenshi::GetPosition(me, mp)) return "err";
+        void* b = w.NearestBuilding(mp, part, 3000.0f, 3);
+        std::string sid;
+        if (!b || !kenshi::ObjectTemplate(b, sid) || !kenshi::ObjectPosition(b, bp)) return "err no unfinished building of ours";
+        bool ok = false;
+        kenshi::WithSelection(me, [&] { ok = kenshi::CallNewPlayerTaskOn(task, b, bp, b); });
+        char where[160];
+        snprintf(where, sizeof(where), "%s@%.1f,%.1f,%.1f", sid.c_str(), bp.x, bp.y, bp.z);
+        return (ok ? "ok " : "err call failed ") + std::string(where);
+    }
+    if (cmd == "buildinfo") {   // buildinfo [name part] [squadIndex]: the nearest building (any owner): sid@pos forsale ours price
+        std::string part = "any";
+        size_t near0 = 0;
+        in >> part;
+        if (!(in >> near0)) near0 = 0;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        kc::Vec3 me, p;
+        if (near0 >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[near0]), me)) return "err no squad";
+        void* b = nullptr;
+        if (const size_t at = part.find('@'); at != std::string::npos) {   // sid@x,y,z: that very building
+            kc::Vec3 q;
+            if (sscanf(part.c_str() + at + 1, "%f,%f,%f", &q.x, &q.y, &q.z) == 3) b = w.BuildingAt(part.substr(0, at), q);
+        } else {
+            b = w.NearestBuilding(me, part, 3000.0f, 0);
+        }
+        std::string sid;
+        if (!b || !kenshi::ObjectTemplate(b, sid) || !kenshi::ObjectPosition(b, p)) return "err no such building";
+        using PriceFn = int (*)(void*);
+        char o[240];
+        snprintf(o, sizeof(o), "ok %s@%.1f,%.1f,%.1f forsale=%d ours=%d price=%d", sid.c_str(), p.x, p.y, p.z, KenshiWorld::IsBuildingForSale(b) ? 1 : 0,
+                 KenshiWorld::IsPlayerBuilding(b) ? 1 : 0, reinterpret_cast<PriceFn>(kenshi::FnAddr(kenshi::FnCalculateSaleValue))(b));
+        return o;
     }
     // ---- lot D: prisons
     if (cmd == "cage" || cmd == "chain" || cmd == "enslave" || cmd == "captive") {

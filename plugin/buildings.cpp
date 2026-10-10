@@ -359,6 +359,8 @@ bool KenshiWorld::IsPlayerBuilding(void* b) {
     return IsBuilding(b) && IsOurs(b);
 }
 
+bool KenshiWorld::IsBuildingForSale(void* b) { return ForSale(b); }
+
 // ---------------------------------------------------------------- removal
 
 void KenshiWorld::TrackBuilding(const kc::Handle& h) {

@@ -88,6 +88,9 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `factions` | lot B : mêmes relations au départ ; relation changée par l'hôte identique chez le client ; prime donnée puis levée par l'hôte visible chez le client ; une relation changée par le jeu du client revient à celle de l'hôte |
 | `ranged` (`--shooter <clé>`) | (lot C) 3 tirs d'un arbalétrier de l'hôte sur l'escouade sont refaits chez le client, sur la même trajectoire ; même point visé ; une tourelle proche tournée chez l'hôte tourne pareil chez le client ; santé et inventaires identiques ensuite |
 | `build` (lot E) | une pose du client bâtie par l'hôte puis par tous au même endroit, celle de l'hôte aussi ; avancement et fin du chantier ; démontage demandé par le client ; achat d'un bâtiment à vendre (avec `--save kctest_town`) |
+| `construct` (`--material`, `--task`) | vraie construction : argent et matériaux donnés aux deux joueurs ; le client pose un chantier et ordonne à son perso de le bâtir (clic droit : `newPlayerTaskSelectedCharacters`), puis l'hôte, puis les deux en même temps ; avancement des deux côtés, matériaux qui baissent pareil, chantier terminé identique. Le numéro de tâche « construire » n'est pas connu : sans `--task`, le test essaie 1 à 99 jusqu'à ce que l'avancement bouge chez l'hôte |
+| `buyhouse` (`kctest_town`) | achat d'un bâtiment à vendre par le client (`buildbuy` = le bouton de confirmation de la fenêtre d'achat) puis par l'hôte : même prix débité partout, bâtiment à nous partout, porte et conteneur utilisables ; refus sans argent ; achat simultané du même bâtiment : un seul paiement. ÉCHEC explicite s'il n'y a aucun bâtiment à vendre à 3 km |
+| `farlong` (`--seconds 300`) | le perso du client à plus de 30000 unités pendant 5 min : zone comparée toutes les 30 s (PNJ, santé, inventaires), combat lancé et bâtiment posé là-bas, l'escouade de l'hôte bouge ; pas de désync qui s'accumule, l'hôte simule la zone, pas de plantage, aller-retour d'une commande < 1 s ; retour (TP admin) et comparaison |
 | `progress` | compétences, argent, bulles et ordres : l'hôte décide, le client suit |
 | `ground` / `clientpickup` | objets posés et ramassés ; ramassage demandé par un client |
 | `anim` / `animframe` / `gait` | animations de combat et d'action ; tout ce qui est à l'écran ; allure |
@@ -310,13 +313,19 @@ l'escouade triée par handle.
 | Commande | Rôle |
 |---|---|
 | `buildtypes <nom>` | modèles de bâtiments dont le nom contient ce texte (`sid=nom`) |
-| `buildplace <sid> <dx> <dz> [lacet°]` | une pose comme le mode construction, à côté du membre 0 (client : demandée à l'hôte ; hôte : bâtie et annoncée) |
+| `buildplace <sid> <dx> <dz> [lacet°] [membre]` | une pose comme le mode construction, à côté du membre 0 ou de ce membre (client : demandée à l'hôte ; hôte : bâtie et annoncée) |
 | `furnplace <sid> <nom du bâtiment> <dx> <dz>` | un meuble dans le bâtiment à nous le plus proche de ce nom (position relative au bâtiment) |
-| `buildlist [nom]` | bâtiments autour du membre 0 : `sid@x,y,z:avancement/drapeaux` (1 terminé, 2 en pause, 4 démontage) |
+| `buildlist [nom] [rayon] [membre]` | bâtiments autour du membre 0 (ou de ce membre) : `sid@x,y,z:avancement/drapeaux` (1 terminé, 2 en pause, 4 démontage) |
 | `buildcount` | bâtiments suivis par la session, et combien sont trouvés ici |
 | `buildprogress <nom> <quantité>` | (hôte) avancement d'ouvrier sur le chantier à nous le plus proche |
 | `builddismantle <nom>` / `buildbuy <nom>` | confirme le démontage / l'achat comme la fenêtre du bâtiment (un client le demande à l'hôte) |
 | `buildforsale [nom]` | le bâtiment à vendre le plus proche et son prix |
+| `buildinfo [nom|sid@x,y,z] [membre]` | le bâtiment le plus proche (ou celui-là) : `forsale=0/1 ours=0/1 price=` |
+| `buildreq <membre> <tâche> [nom]` | ce membre seul reçoit l'ordre de travailler sur le chantier à nous le plus proche, comme un clic droit (`newPlayerTaskSelectedCharacters`) |
+| `givemoney <n>` | (hôte) n cats de plus pour la faction du joueur |
+| `itemtypes <nom>` | modèles d'objets (hors bâtiments) dont le nom contient ce texte |
+| `giveitem <sid|nom> <n> <membre>` | (hôte) n objets neufs (fabrique du jeu) dans l'inventaire de ce membre |
+| `invcount <membre|all> <sid|nom>` | combien de ces objets ce membre (ou toute l'escouade) porte |
 
 **Météo**
 

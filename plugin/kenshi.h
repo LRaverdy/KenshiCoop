@@ -619,6 +619,7 @@ void AllObjectsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out);
 void* FirstLooseItem(Character* c);                        // tests: an unequipped item it carries
 bool CallDropItem(Character* c, void* item);               // tests: the character drops it (the game's own drop)
 bool CallGiveItem(Character* c, void* item);               // tests: the character takes it
+bool GiveNewItem(Character* c, const std::string& sid, int32_t qty, std::string* why);   // tests: a new item (factory) into its inventory
 void* ShowFloater(Character* c, const std::string& text, const float colour[4], int size, int speed);   // returns the label
 bool SetLabelColor(void* label, const float colour[4]);
 bool CallSetCarryMode(Character* c, bool carried, bool left, bool right);
@@ -699,6 +700,7 @@ void* GameDataBySid(const std::string& sid);
 bool GameDataSidOf(const void* gd, std::string& out);
 // building templates (itemType BUILDING) whose players' name contains `part` ("sid name" each)
 void BuildingTemplates(const std::string& part, std::vector<std::pair<std::string, std::string>>& out, size_t max);
+void ItemTemplates(const std::string& part, std::vector<std::pair<std::string, std::string>>& out, size_t max);   // every non-building template by sid/name part
 bool DestroyAnyObject(void* obj);   // GameWorld::destroy for good (any RootObject)
 
 } // namespace kenshi
