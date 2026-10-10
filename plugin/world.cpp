@@ -1972,6 +1972,66 @@ bool KenshiWorld::TalkingWith(const kc::Handle& npc, kc::Handle& other) {
     return kenshi::GetHandle(t, other) && other.valid();
 }
 
+// A conversation the game still has for that NPC (with a player's own character, no window showing
+// it): ended, so that a new "talk" starts a fresh one.
+void KenshiWorld::EndConversationOf(const kc::Handle& npc) {
+    kenshi::Character* c = Find(npc);
+    if (!c) c = kenshi::Resolve(npc);
+    void* d = c ? kenshi::CharacterDialogue(c) : nullptr;
+    if (!d || kenshi::DialogueEnded(d)) return;
+    uint32_t shown = 0;
+    {
+        std::lock_guard<std::mutex> lk(dialogMutex_);
+        if (auto it = remoteDialogs_.find(d); it != remoteDialogs_.end()) shown = it->second.id;
+    }
+    if (shown) { EndDialog(shown); return; }
+    bool ended = false;
+    {
+        CallScopeGuard scopeRepair("dialogue end");   // the call runs our hooks (kc/call_scopes.h)
+        ended = kenshi::CallEndDialogue(d);
+    }
+    Log("a stale conversation of that NPC ended by the mod (%s)", ended ? "ok" : "failed");
+}
+
+bool KenshiWorld::RemoteRecruitOf(void* c, kc::Handle& pc) {
+    std::lock_guard<std::mutex> lk(dialogMutex_);
+    for (const auto& [d, r] : remoteDialogs_)
+        if (r.other == c && r.pcH.valid()) { pc = r.pcH; return true; }
+    return false;
+}
+
+void KenshiWorld::NoteRecruit(const kc::Handle& before, uint64_t identity, const kc::Handle& pc, bool editor) {
+    std::lock_guard<std::mutex> lk(dialogMutex_);
+    if (recruits_.size() < 16) recruits_.push_back({before, identity, pc, editor});
+}
+
+void KenshiWorld::TakeRecruits(std::vector<WorldRecruit>& out) {
+    std::lock_guard<std::mutex> lk(dialogMutex_);
+    out.swap(recruits_);
+    recruits_.clear();
+}
+
+// Client: the host's game recruited that character (Bind with the handle it had as an NPC): our copy
+// joins our player faction the same way, with the game's own recruit (no editor). Its handle changes
+// with its squad: the host's handle for it follows (LocalRehandled).
+bool KenshiWorld::AdoptRecruit(const kc::Handle& h) {
+    kenshi::Character* c = Find(h);
+    if (!c) return false;
+    if (kenshi::InPlayerSquad(c)) return true;
+    kc::Handle before, after;
+    kenshi::GetHandle(c, before);
+    bool ok = false;
+    {
+        CallScopeGuard scopeRepair("recruit");
+        HostCallScope scope;
+        ok = kenshi::RecruitCharacter(c);
+    }
+    if (ok && kenshi::GetHandle(c, after)) LocalRehandled(before, after);
+    const bool in = ok && kenshi::InPlayerSquad(c);
+    Log("recruit adopted here: %s", in ? "in the player faction" : (ok ? "recruit() ran, not in the player faction" : "recruit() faulted"));
+    return in;
+}
+
 std::vector<KenshiWorld::RemoteDialogInfo> KenshiWorld::RemoteDialogList() {
     std::vector<RemoteDialogInfo> out;
     std::lock_guard<std::mutex> lk(dialogMutex_);

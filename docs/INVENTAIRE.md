@@ -29,7 +29,7 @@ protocole 33, environ 25 500 lignes). L'état de chaque fonctionnalité au sens 
 | Inventaires, fouille | Inventory/InvOp, `world.cpp` | vérifié en jeu, bug d'ordre des échanges |
 | Contenants, vol | ContainerOpen/Opened/Close, `kenshi.cpp` (ImStealin, notifyTheftFrom) | vérifié en jeu, vol 🟡 |
 | Atelier : recherche, établis, machines et mines, énergie | `common/src/session_workshop.cpp` (Research/ResearchRequest, Machines/MachineRequest, entités `machine`), `plugin/workshop.cpp` (hooks startResearch, stopResearch, payCosts, progressResearch, learnResearch, _addCraft, _removeCraft, CraftingQueue, updatePowerGrid, togglePowerButton, toggleBattButton) | testé unitairement, jamais testé en partie |
-| Panneau d'inventaire d'un bâtiment (mine) | hook ShowInventoryBuilding (`hooks.cpp`) | harnais `mine` seulement |
+| Panneau d'inventaire d'un bâtiment (mine) | hook ShowInventoryBuilding (`hooks.cpp`) ; le jeu ne l'ouvre que pour un bâtiment du joueur : propriétaire de l'hôte imposé au client (`kMachOurs`, `SetBuildingOurs`, 11/10) | harnais `mine` seulement ; correction du 11/10 non vérifiée en jeu |
 | Commerce | hook ShowTradeWindow, TradeOpen, `kenshi.cpp`:2060-2066 | vérifié en jeu (9/10) |
 | Heure, vitesse, pause | TimeState | vérifié en jeu |
 | Météo et effets | hooks RegionUpdateBT, SeasonGetNewWeather, Effect* ; Weather, Effects | vérifié en jeu |

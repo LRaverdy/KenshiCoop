@@ -337,6 +337,14 @@ public:
     void DialogAnswer(uint32_t dialogId, int index) override;
     void EndDialog(uint32_t dialogId) override;
     bool TalkingWith(const kc::Handle& npc, kc::Handle& other) override;
+    bool SetBuildingOurs(void* building, bool ours);   // client: the host's owner of a machine (Building::setFaction)
+    void EndConversationOf(const kc::Handle& npc) override;
+    // Host (recruit hook, game thread): `c` is the NPC of a conversation shown on a client's screen;
+    // `pc`: the player's character in it.
+    bool RemoteRecruitOf(void* c, kc::Handle& pc);
+    void NoteRecruit(const kc::Handle& before, uint64_t identity, const kc::Handle& pc, bool editor);
+    void TakeRecruits(std::vector<WorldRecruit>& out) override;
+    bool AdoptRecruit(const kc::Handle& h) override;
     // Host, any thread (Dialogue::startConversation / startPlayerConversation): false when `dialogue`
     // starting a conversation with `target` would take an NPC out of another player's conversation
     // (one conversation at a time per NPC); the character asking is told "occupé".
@@ -595,6 +603,7 @@ private:
         kc::Handle pcH, otherH;
     };
     std::unordered_map<void*, RemoteDialog> remoteDialogs_;
+    std::vector<WorldRecruit> recruits_;                   // host, under dialogMutex_: recruitments in a client's conversation
     uint32_t nextDialogId_ = 1;
     double nextDialogSweep_ = 0;
     std::unordered_map<const void*, double> busyToldAt_;   // host: character -> last "occupé" (rate limit)

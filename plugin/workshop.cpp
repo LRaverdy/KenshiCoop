@@ -101,6 +101,14 @@ void* CallPtr(void* obj, uintptr_t slot) {
     if (!fn) return nullptr;
     __try { return reinterpret_cast<FnPtr0>(fn)(obj); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
 }
+// Building::select (vtable +0x130, 0x5504A0): what a click on the building does; it opens the
+// building's own inventory panel (showInventoryBuilding) only for a finished building of the player
+// faction.
+bool CallSelect(void* b) {
+    void* fn = Slot(b, 0x130);
+    if (!fn) return false;
+    __try { reinterpret_cast<void (*)(void*)>(fn)(b); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
 
 // ---- calls into the game (SEH: a fault gives false, never a crash)
 using FnBoolGd = bool (*)(void*, void*);
@@ -429,6 +437,7 @@ bool KenshiWorld::ReadMachineState(void* b, kc::MachineState& s, std::vector<kc:
     if (batt) s.flags |= kc::kMachBatteryOn;
     if (outMax > 0) s.flags |= kc::kMachGenerator;
     if (storeMax > 0) s.flags |= kc::kMachBattery;
+    if (IsPlayerBuilding(b)) s.flags |= kc::kMachOurs;
     s.maxOperators = uint8_t(std::clamp(maxOps, 0, 255));
     std::vector<kc::Handle> ops;
     ReadOperators(b, ops);
@@ -527,6 +536,19 @@ bool KenshiWorld::ApplyMachine(const kc::MachineState& s, const std::vector<kc::
     }
     CallScopeGuard scopeRepair("workshop");
     HostCallScope scope;
+    // whose it is: the game gives a mine or a natural node to the faction of whoever works it
+    // (Task_OperateMachine calls Building::setFaction); here nobody works it, so the host's owner is
+    // imposed. Building::select opens the building's inventory panel (its output) only for a building
+    // of the player faction: without this a client never saw a mine's output window.
+    if (((s.flags & kc::kMachOurs) != 0) != IsPlayerBuilding(b)) {
+        static std::unordered_map<const void*, double> lastOwnerTry;   // one try every 30 s per building (a refusal is logged once each time)
+        if (lastOwnerTry.size() > 512) lastOwnerTry.clear();
+        double& at = lastOwnerTry[b];
+        if (at == 0 || NowSeconds() - at > 30.0) {
+            at = NowSeconds();
+            SetBuildingOurs(b, (s.flags & kc::kMachOurs) != 0);
+        }
+    }
     auto setByte = [&](uintptr_t off, bool v) {
         uint8_t cur = 0;
         if (Rd(b, off, cur) && (cur != 0) != v) Wr(b, off, uint8_t(v ? 1 : 0));
@@ -1000,6 +1022,25 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
             out += " " + sids[i] + "=" + name;
         }
         return out;
+    }
+    if (cmd == "machineselect") {   // machineselect <part>: a click on that machine (Building::select): does its inventory panel open?
+        std::string part;
+        in >> part;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        kc::Vec3 me;
+        if (!squadAt(0, me)) return "err no squad";
+        void* b = w.NearestMachine(me, part, 3000.0f);
+        kc::MachineState st;
+        if (!b || !w.ReadMachineState(b, st, nullptr)) return "err no machine " + part;
+        const int before = kenshi::OpenInventoryWindows();
+        bool called = false;
+        {
+            HostCallScope scope;
+            called = CallSelect(b);
+        }
+        const int after = kenshi::OpenInventoryWindows();
+        return std::string(called ? "ok " : "err select faulted ") + kc::Session::MachineKey(st.sid, st.pos) + " ours=" + (w.IsPlayerBuilding(b) ? "1" : "0") +
+               " windows=" + std::to_string(before) + "->" + std::to_string(after) + " panel=" + (kenshi::InventoryWindowShows(b) ? "1" : "0");
     }
     if (cmd == "machine" || cmd == "machineinv" || cmd == "machinereq") {
         std::string part;

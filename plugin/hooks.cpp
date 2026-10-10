@@ -816,6 +816,24 @@ void* hk_showInvBuilding(void* gui, const void* owner) {
     return r;
 }
 
+// A recruitment in a client's conversation (the dialogue's "join" action): the host's game must not
+// show the character editor some recruits ask for (a "join with edit" line), on the host's screen,
+// for a character that is the client's. Recruited without it here; the session gives the newcomer
+// to that player and opens the editor on their screen (EditCharacter).
+using RecruitFn = bool (*)(void* pi, void* c, bool editor);
+RecruitFn o_recruit = nullptr;
+bool hk_recruit(void* pi, void* c, bool editor) {
+    auto v = KenshiWorld::View();
+    KenshiWorld* w = TheWorld();
+    kc::Handle pc, before;
+    if (g_hostCall || !v->active || v->client || !w || !kenshi::IsCharacter(c) || !w->RemoteRecruitOf(c, pc)) return o_recruit(pi, c, editor);
+    kenshi::GetHandle(static_cast<kenshi::Character*>(c), before);
+    const bool r = o_recruit(pi, c, false);
+    w->NoteRecruit(before, reinterpret_cast<uint64_t>(c), pc, editor);
+    Log("recruitment in another player's conversation%s: theirs", editor ? " (its character editor goes to them, not shown here)" : "");
+    return r;
+}
+
 // Picking a body up on a client happens only when the host's character does (see ApplyCarry).
 using PickFn = void (*)(void* c, void* who);
 PickFn o_pickChar = nullptr;
@@ -1608,6 +1626,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnPickupCharacter, reinterpret_cast<void*>(&hk_pickChar), reinterpret_cast<void**>(&o_pickChar)},
         {kenshi::FnShowTradeWindow, reinterpret_cast<void*>(&hk_showTrade), reinterpret_cast<void**>(&o_showTrade)},
         {kenshi::FnShowInventoryBuilding, reinterpret_cast<void*>(&hk_showInvBuilding), reinterpret_cast<void**>(&o_showInvBuilding)},
+        {kenshi::FnRecruit, reinterpret_cast<void*>(&hk_recruit), reinterpret_cast<void**>(&o_recruit)},
         // ---- fix G5
         {kenshi::FnCharRemovePermajob, reinterpret_cast<void*>(&hk_removePermajob), reinterpret_cast<void**>(&o_removePermajob)},
         {kenshi::FnCharMovePermajob, reinterpret_cast<void*>(&hk_movePermajob), reinterpret_cast<void**>(&o_movePermajob)},

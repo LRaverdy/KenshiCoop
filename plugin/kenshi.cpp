@@ -1897,6 +1897,11 @@ Character* CreateRecruit(Character* model, const std::string& name, const kc::Ve
     return c;
 }
 
+bool RecruitCharacter(Character* c) {
+    PlayerInterface* pi = Player();
+    return pi && IsCharacter(c) && CallRecruit(FnAddr(FnRecruit), pi, c);
+}
+
 namespace {
 void* CombatOf(const Character* c) {
     void* body = nullptr;

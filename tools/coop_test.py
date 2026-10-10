@@ -1003,6 +1003,7 @@ def exp_dialogue(host, cli):
 
     # 1. the client's character talks to it (the copy may have nothing to say: then the next nearest NPCs)
     d = dialog()
+    talked = None
     for k in range(4):
         r = cmd(cli, f"talkto {own} {k}")
         log(f"client: talk to the NPC nearest #{k}", r)
@@ -1010,6 +1011,7 @@ def exp_dialogue(host, cli):
             continue
         d = wait_open(True, 15)
         if d.get("open") == "1":
+            talked = k
             break
     how = "le client parle"
     if d.get("open") != "1":
@@ -1033,6 +1035,20 @@ def exp_dialogue(host, cli):
             if d2.get("turn") != turn0 or d2.get("open") != "1":
                 break
         check("dialogue : la reponse du client arrive a l'hote", "] answers: \"" in host_log()[-30000:], dialog()["raw"])
+    chat = cmd(cli, "chatlast 8")[1]
+    check("dialogue : le client est prevenu que son perso va parler au PNJ", talked is None or "va parler" in chat, chat)
+
+    # 1b. the same character asks to talk to the same NPC again while its conversation is open (the
+    #     10 oct. session: "Marchand Ruche is busy talking with rob"): never busy for the player
+    #     themselves, the conversation is shown again
+    if talked is not None and dialog().get("open") == "1":
+        busy0 = host_log().count("is busy talking with")
+        log("client: talk again to the same NPC", cmd(cli, f"talkto {own} {talked}"))
+        time.sleep(4)
+        hl = host_log()
+        check("dialogue : reparler au meme PNJ n'est jamais 'occupe' pour soi-meme", hl.count("is busy talking with") == busy0,
+              hl[-2000:].splitlines()[-5:])
+        check("dialogue : la conversation reste ouverte (reprise)", dialog().get("open") == "1" or "is shown again" in hl[-20000:], dialog()["raw"])
 
     # 2. one conversation per NPC: the host's own character asking the same NPC
     d = dialog()
@@ -1659,6 +1675,9 @@ def exp_mine(host, cli):
     clog = open(os.path.join(KENSHI, f"KenshiCoop-{cli}.log"), encoding="utf-8", errors="replace").read()
     held = [l for l in clog.splitlines() if "tool:" in l]
     check("mine : la pioche est dans la main chez le client", any("holds" in l and "failed" not in l for l in held), held[-3:])
+    sel = cmd(cli, "machineselect Ressource_Fer")[1]
+    log("client clicks the node:", sel)
+    check("mine : la fenetre de sortie du minerai s'ouvre chez le client (clic)", " ours=1" in sel and "panel=1" in sel, sel)
     r = cmd(cli, f"containerreq {own} Ressource_Fer")
     log("client opens the node:", r)
     opened = False
@@ -5415,6 +5434,12 @@ def exp_research(host, cli):
     ic = cmd(cli, f"machineinv {IRON_NODE}")[1]
     ih2 = cmd(host, f"machineinv {IRON_NODE}")[1]
     check("mine : meme minerai produit partout", ic in (ih, ih2), f"{ih} / {ic}")
+    # the node is the player faction's once worked (the game's Task_OperateMachine): on the client too,
+    # else the game never opens its output window there (Building::select: player buildings only)
+    sel = cmd(cli, f"machineselect {IRON_NODE}")[1]
+    log("client clicks the iron node:", sel)
+    check("mine : le noeud de fer est au joueur chez le client aussi", " ours=1" in sel, sel)
+    check("mine : la fenetre de sortie du noeud s'ouvre chez le client", "panel=1" in sel, sel)
     if others:
         log("host's character", others[-1], "stops working", cmd(host, f"moverel {others[-1]} 200 0"))
         time.sleep(8)

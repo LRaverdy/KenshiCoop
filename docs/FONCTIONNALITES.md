@@ -349,7 +349,7 @@ que là), puis répliqué par les synchronisations existantes :
 
 | Issue | Comment elle arrive chez les joueurs | État |
 |---|---|---|
-| recrutement | le PNJ entre dans la faction du joueur : l'hôte en fait un perso d'escouade (il était suivi comme PNJ : il ne le devenait jamais avant) et le donne au joueur **qui lui parlait** (par identité), même si un autre joueur répondait à une conversation au même moment ; sinon la règle « un seul joueur venait de répondre » | 🟡 tests unitaires |
+| recrutement | le PNJ entre dans la faction du joueur : l'hôte en fait un perso d'escouade et le donne au joueur **qui lui parlait** (crochet de `PlayerInterface::recruit` : connu au moment même ; sinon par identité, sinon « un seul joueur venait de répondre »). L'éditeur de perso que demandent certaines recrues ne s'ouvre jamais chez l'hôte : chez ce joueur. Les clients savent quel PNJ c'était (`Bind` avec son ancien handle) et leur copie entre dans la faction du joueur | 🟡 tests unitaires |
 | commerce | « commerçons » : fenêtre de commerce chez le joueur (déjà là, voir Commerce) | ✅ |
 | quêtes, états du monde | `Diplomacy` (états du monde, personnages uniques) | 🟡 |
 | relations, primes | `Factions` (relations de la faction du joueur, primes) | ✅ |
@@ -454,6 +454,11 @@ la fenêtre du client.
   l'hôte sur son perso ; l'hôte envoie les listes de tâches avec leurs cibles (`JobState`) et chaque
   client fait la même liste (retire, ajoute, réordonne).
   Expérience `jobs`.
+- **Toutes les tâches de l'interface** sont permises sur la bonne cible (liste revue le 11/10 contre
+  le désassemblage et la numérotation du jeu, `fcs_enums.def`) : voir docs/MOTEUR.md « Tâches ».
+- **Parler** : jamais « occupé » pour le joueur lui-même (même perso : la conversation revient sur son
+  écran ; autre perso à lui : l'ancienne se termine) ; le client lit « X va parler à Y » pendant que
+  son perso marche jusqu'au PNJ.
 - **Refusés côté client** : recruter au centre d'emploi (55), commerce (118, 119), et les tâches de
   stockage des PNJ (124, 284). Le joueur voit le message « Commercer et ouvrir un coffre ne sont
   pas encore synchronises. » (texte à mettre à jour : les coffres marchent, voir plus bas).
