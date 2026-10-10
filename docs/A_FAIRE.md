@@ -19,6 +19,10 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
 - **Objet glissé au sol par le client 2 disparu** : il n'est pas apparu au sol, il a disparu (pas
   à chaque fois). Perte d'objet : prioritaire.
 - **Joueur 3 dans une ville voisine : parler aux PNJ ne fait rien** (aucune fenêtre de dialogue).
+- **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
+  étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
+  change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
+  désactivées : `kWriteFloors = false`).
 - **rob (joueur 3) a planté à 22:32** (l'hôte l'a vu partir à 22:32:02). Juste avant, son jeu
   perdait et recréait en boucle une escouade de 17 PNJ de l'hôte (`1:96:522216800:*`), toutes les
   ~3 s (« stand-in … is gone here: it can be recreated », 467 lignes de ce genre pour lui dans la
