@@ -16,6 +16,11 @@ float Dist(const kc::Vec3& a, const kc::Vec3& b) {
     const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
+std::string KeyOf(const kc::Handle& h) {
+    char b[80];
+    snprintf(b, sizeof(b), "%u:%u:%u:%u:%u", h.type, h.container, h.containerSerial, h.index, h.serial);
+    return b;
+}
 // Save slot names (<= 15 chars: passed to the game as inline VS2010 strings).
 constexpr const char* kExportSlot = "KenshiCoopHost";
 constexpr const char* kImportSlot = "KenshiCoopJoin";
@@ -41,6 +46,11 @@ KenshiWorld::KenshiWorld(const Config& cfg) : cfg_(cfg) {}
 
 void KenshiWorld::BeginFrame(bool live) {
     live_ = live;
+    {
+        const double now = NowSeconds();
+        if (frameAt_ > 0) frameDt_ = std::clamp(now - frameAt_, 0.0, 0.1);
+        frameAt_ = now;
+    }
     squad_.clear();
     resolved_.clear();
     bySerial_.clear();
@@ -146,8 +156,10 @@ void KenshiWorld::ResetWorldBound() {
     lastTarget_.clear();
     fallPrep_.clear();
     fellAt_.clear();
-    relaidAt_.clear();
-    relaidCount_.clear();
+    postureBook_.clear();
+    hostKnockedOut_.clear();
+    hostCaptive_.clear();
+    destCheckAt_.clear();
     fallFrom_.clear();
     fallShift_.clear();
     lastDest_.clear();
@@ -429,20 +441,32 @@ bool KenshiWorld::Spawn(const kc::Handle& h, const kc::SpawnInfo& info, const kc
     alias_[h] = local;
     spawned_.insert(local);
     resolved_.erase(h);
+    // The factory makes a living, standing character. A body dead on the host (its stand-in
+    // recreated after its zone unloaded and loaded again here) comes back dead and lying at once,
+    // where it was made (the host's spot: no teleport before the ragdoll, which would throw it).
+    if (kc::motion::SpawnsDead(at)) {
+        kenshi::CallDeclareDead(c);
+        kenshi::SetRagdoll(c, true);
+        fellAt_[h] = NowSeconds();
+        Log("stand-in for the host's dead %s made dead and lying (dead=%d)", KeyOf(h).c_str(), int(kenshi::IsDead(c)));
+    }
     return true;
+}
+
+// Carried, shackled, caged, in a bed, a prisoner or a slave (here or on the host): its pose belongs
+// to the game's captivity code (a shackled captive sits, a carried body hangs on a shoulder), and
+// the posture code never stands it up or lays it down.
+bool KenshiWorld::PostureHeld(const kc::Handle& h, kenshi::Character* c) {
+    if (carriedHere_.count(h) || hostCaptive_.count(h)) return true;
+    kenshi::Captivity k;
+    if (!kenshi::ReadCaptivity(c, k)) return false;
+    return k.chained || k.inSomething != 0 || k.slaveState != 0 || k.kidnapped || k.sentence > 0;
 }
 
 // A character must fall where the host's fell, so it is moved there first. The ragdoll takes its
 // velocity from the last poses of the skeleton: falling right after a teleport would throw the
 // body far away, so the pose gets a moment to settle at the new place. False while it is being
 // prepared (under a second: a body still sliding on the host is not chased forever).
-namespace {
-std::string KeyOf(const kc::Handle& h) {
-    char b[80];
-    snprintf(b, sizeof(b), "%u:%u:%u:%u:%u", h.type, h.container, h.containerSerial, h.index, h.serial);
-    return b;
-}
-} // namespace
 
 bool KenshiWorld::ReadyToFall(const kc::Handle& h, kenshi::Character* c, const kc::EntityState& at, double now) {
     constexpr double kSettle = 0.25, kChase = 0.6;
@@ -725,34 +749,75 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     last.flags = latest.flags;
     const double now = NowSeconds();
     if (CaptiveHold(h, c)) { lastDest_.erase(h); return; }   // lot D: the host keeps it in a cage
-    // A ragdoll that is being set up must not be touched: moving the character then throws the
-    // body across the map. Leave it alone while it falls.
-    if (auto fell = fellAt_.find(h); fell != fellAt_.end()) {
-        if (now - fell->second < 2.0) { lastDest_.erase(h); return; }
-        fellAt_.erase(fell);
-    }
     // Posture: lying on the ground (knocked out, knocked down) or standing must match the host.
     // Deaths come through vitals; getting up is normally decided by the AI, which clients do not run.
     const bool hostDead = (latest.flags & kc::kFlagDead) != 0;
     const bool hostDown = (latest.flags & kc::kFlagDown) != 0;
-    const bool localDown = kenshi::IsRagdoll(c) || kenshi::IsDead(c);
-    if (hostDown != localDown && !hostDead) {
+    kc::motion::PostureFacts pf;
+    pf.hostDown = hostDown;
+    pf.hostDead = hostDead;
+    pf.localDead = kenshi::IsDead(c);
+    pf.localDown = kenshi::IsRagdoll(c) || pf.localDead;
+    // Carried, shackled, caged, in a bed, a prisoner or a slave: the game's captivity code owns its
+    // pose (a shackled captive sits). Forcing falls on them made nass4's captives fall, sit up and
+    // fall again every 2 s (10/10 session): the posture code leaves them alone.
+    pf.held = (hostDown || hostDead || pf.localDown) && PostureHeld(h, c);   // read only when posture matters
+    kc::motion::PostureBook& book = postureBook_[h];
+    // A ragdoll that is being set up must not be touched: moving the character then throws the
+    // body across the map. Leave it alone while it falls; then see whether the fall took.
+    if (auto fell = fellAt_.find(h); fell != fellAt_.end()) {
+        if (now - fell->second < 2.0) { lastDest_.erase(h); return; }
+        fellAt_.erase(fell);
+        kc::motion::NoteFallSettled(book, pf.localDown, hostDown);
+        if (book.gaveUp) Log("posture: %s does not stay down here after %d falls: left as it is for a minute", KeyOf(h).c_str(), book.falls);
+    }
+    // Dead on the host: dead and lying here too, forever (kc::motion::DeadBodyStep). A stand-in alive
+    // here (recreated, death not replayed yet) dies at the host's spot; a corpse standing here while
+    // the host's lies is laid down again (the per-body budget keeps a refused ragdoll from looping).
+    // Nothing below ever stands a dead body up.
+    if (hostDead) {
+        const bool localRagdoll = kenshi::IsRagdoll(c);
+        const kc::motion::DeadStep step = kc::motion::DeadBodyStep(true, hostDown, pf.localDead, localRagdoll, pf.held);
+        double& fixed = postureFixed_[h];
+        if (step != kc::motion::DeadStep::None && now - fixed > 1.0 && kc::motion::MayLayDead(book, now)) {
+            const bool kill = step == kc::motion::DeadStep::Kill;
+            if (!kill || localRagdoll || ReadyToFall(h, c, target, now)) {
+                HostCallScope scope;
+                if (kill) kenshi::CallDeclareDead(c);
+                const bool ok = kenshi::SetRagdoll(c, true);
+                kc::motion::NoteFall(book, now);
+                fixed = now;
+                fellAt_[h] = now;
+                Log("posture: %s %s as on the host (%s, dead=%d)", KeyOf(h).c_str(), kill ? "dies and falls" : "dead body lies down again",
+                    ok ? "ok" : "call failed", int(kenshi::IsDead(c)));
+            }
+        }
+    }
+    const bool localDown = pf.localDown;
+    if (hostDown != localDown && !hostDead && !pf.held) {
         double& since = postureSince_[h];
         if (since == 0) since = now;
         double& fixed = postureFixed_[h];
         if (now - since > 0.3 && now - fixed > 1.0) {   // not a one-frame flicker, and not every frame
             if (!hostDown) {
-                HostCallScope scope;
-                kenshi::StandUp(c);
+                if (kc::motion::MayStand(pf)) {
+                    HostCallScope scope;
+                    kenshi::StandUp(c);
+                }
                 fixed = now;
-            } else if (ReadyToFall(h, c, FallSpot(h, target), now)) {
+            } else if (kc::motion::MayFall(book, pf, now) && ReadyToFall(h, c, FallSpot(h, target), now)) {
                 HostCallScope scope;
                 kc::Vec3 from;
                 if (kenshi::GetPosition(c, from)) fallFrom_[h] = from;
+                // knocked out on the host: unconscious here too, or the local game stands it up again
+                // (knocked-out NPCs seen standing by a client who could loot them)
+                if (hostKnockedOut_.count(h) && !kenshi::IsUnconscious(c)) kenshi::SetUnconscious(c, true);
                 const bool ok = kenshi::SetRagdoll(c, true);
+                kc::motion::NoteFall(book, now);
                 fixed = now;
                 fellAt_[h] = now;
-                Log("posture: %s falls as on the host (%s, ragdoll now %d)", KeyOf(h).c_str(), ok ? "ok" : "call failed", int(kenshi::IsRagdoll(c)));
+                Log("posture: %s falls as on the host (%s, fall %d/%d this minute)", KeyOf(h).c_str(), ok ? "ok" : "call failed", book.falls,
+                    kc::motion::kMaxFalls);
             }
         }
     } else {
@@ -769,20 +834,19 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         // game ignored the positions written to it, far from every player: one lay 87 units off for
         // minutes in the far-zone test): once a player comes near, it is stood up, and the posture
         // code above puts it on the host's spot (ReadyToFall) and lays it down again. Never a dead
-        // body, never more than once every 5 s.
-        // 5 units, not 25: squad members knocked out in a fight lay 11 and 17 units from the host's
-        // bodies for the rest of the 20-minute soak (they fell where our copy was, mid-blow, before
-        // the move to the host's spot took), and died there, where nothing can move them any more.
-        // At most 3 times while it stays down: a body that keeps landing off is not stood up forever.
-        constexpr float kBodyOff = 5.0f, kBodySeen = 300.0f;
-        constexpr int kMaxRelays = 3;
+        // body, never a held one (carried, shackled, caged...), at most twice a minute, 10 s apart,
+        // and only when a fall is left to lay it down again (kc::motion::MayRelay).
+        // 20 units, not 5: a collapsing body ends 7-12 units from where its feet were, so a 5-unit
+        // threshold stood up nearly every body after every fall (441 times on one client in the
+        // 10/10 session, the counter reset by each change of posture).
+        constexpr float kBodySeen = 300.0f;
         // Where the body came to rest, against where our copy stood when it fell (the fellAt_ wait
         // above: 2 s): a collapsing body does not lie where its feet were. The host's body position
         // is its fallen one already, so standing our copy there and letting it fall laid it one
         // more such offset away, every time: humans 7-12 units, a land bat 47-76, a spider 70-79
         // (stress4 logs, "lies N units from the host's body", the same N relay after relay). The
         // next fall starts that much short of the host's spot (FallSpot), so it ends on it.
-        if (auto f = fallFrom_.find(h); f != fallFrom_.end() && localDown && !kenshi::IsDead(c)) {
+        if (auto f = fallFrom_.find(h); f != fallFrom_.end() && localDown && !pf.localDead) {
             constexpr float kMaxShift = 150.0f;   // never more than a large animal's length
             kc::Vec3 shift{local.x - f->second.x, 0.0f, local.z - f->second.z};
             const float len = std::sqrt(shift.x * shift.x + shift.z * shift.z);
@@ -790,21 +854,17 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
             fallShift_[h] = shift;   // measured from where it really stood: already short of the host's spot or not
             fallFrom_.erase(f);
         }
-        if (hostDown && localDown && !hostDead && !kenshi::IsDead(c) && kenshi::IsRagdoll(c) && Dist(local, target.pos) > kBodyOff &&
-            NearestSquadDistance(local) < kBodySeen && relaidCount_[h] < kMaxRelays) {
-            double& at = relaidAt_[h];
-            if (now - at > 5.0) {
-                at = now;
-                ++relaidCount_[h];
-                HostCallScope scope;
-                kenshi::SetRagdoll(c, false);
-                postureFixed_[h] = 0;
-                Log("posture: %s lies %.0f units from the host's body: stood up to fall where the host's lies", KeyOf(h).c_str(), Dist(local, target.pos));
-            }
+        const float off = Dist(local, target.pos);
+        if (kenshi::IsRagdoll(c) && kc::motion::MayRelay(book, pf, off, NearestSquadDistance(local) < kBodySeen, now)) {
+            kc::motion::NoteRelay(book, now);
+            HostCallScope scope;
+            kenshi::SetRagdoll(c, false);
+            postureFixed_[h] = 0;
+            Log("posture: %s lies %.0f units from the host's body: stood up to fall where the host's lies (%d/%d this minute)", KeyOf(h).c_str(),
+                off, book.relays, kc::motion::kMaxRelays);
         }
         return;
     }
-    relaidCount_.erase(h);   // standing again: a next fall may be put right again
     fallFrom_.erase(h);
     fallShift_.erase(h);
 
@@ -872,20 +932,35 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     kenshi::WritePace(c, latest.gait, latest.pace >= 6553.0f ? 999.0f : latest.pace);
     auto it = lastDest_.find(h);
     if (hostMoving) {
-        if (it == lastDest_.end() || Dist(it->second, latest.dest) > cfg_.destEpsilon) {
-            if (kenshi::SetDestination(c, latest.dest)) lastDest_[h] = latest.dest;
+        bool reissue = it == lastDest_.end() || Dist(it->second, latest.dest) > cfg_.destEpsilon;
+        // Twice a second: is our copy really walking to the host's destination? Its own path may
+        // have ended or gone elsewhere (a destination the game dropped) while the one we issued
+        // still matches: it then walked one way while the pull dragged it the other (walking
+        // backwards, up to 180 degrees off in the speed 3 test).
+        if (!reissue && now - destCheckAt_[h] > 0.5 && NearestSquadDistance(local) < kSeenRange) {
+            destCheckAt_[h] = now;
+            kc::Vec3 mineDest;
+            bool mineMoving = false;
+            float mineSpeed = 0;
+            if (kenshi::GetMovement(c, mineDest, mineMoving, mineSpeed) && Dist(local, latest.dest) > 2.0f &&
+                (!mineMoving || Dist(mineDest, latest.dest) > 2.0f * cfg_.destEpsilon))
+                reissue = true;
         }
+        if (reissue && kenshi::SetDestination(c, latest.dest)) lastDest_[h] = latest.dest;
     } else if (it != lastDest_.end() || kenshi::IsMoving(c)) {
         kenshi::Halt(c);   // the host stopped: stop walking, the correction below settles it exactly
         lastDest_.erase(h);
     }
-    // It faces where the host's does: exactly when standing (in combat the combat movement hook
-    // imposes it too); walking, our own path turns it, unless that path goes another way than the
-    // host's (more than ~25 degrees off).
+    // Where the host's character really goes (kc::motion::TravelDir) and where ours must face:
+    // exactly the host's facing when standing or fighting (in combat the combat movement hook imposes
+    // it too); walking, the host's facing while it agrees with the way it goes, else the way it goes:
+    // never a walk played facing away from where the body moves (kc::motion::WantFacing).
+    const bool fighting = latest.combatTarget != 0;
+    const kc::Vec3 travel = kc::motion::TravelDir(target, latest);
     {
         kc::Vec3 mine;
-        const kc::Vec3 want = kenshi::ForwardOf(target.rot);
-        const float limit = (!hostMoving || latest.combatTarget != 0) ? 0.999f : 0.9f;
+        const kc::Vec3 want = kc::motion::WantFacing(kenshi::ForwardOf(target.rot), travel, hostMoving, fighting);
+        const float limit = (!hostMoving || fighting) ? 0.999f : 0.9f;
         if (kenshi::GetFacing(c, mine) && mine.x * want.x + mine.z * want.z < limit) kenshi::FaceDirection(c, want);
     }
     // The host paused: its characters stopped mid-stride. Put them exactly there while the game still
@@ -896,23 +971,19 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         lastDest_.erase(h);
         return;
     }
-    // ...while its position is continuously pulled onto the host's: no drift.
+    // ...while its position is continuously pulled onto the host's: no drift. Frame-rate independent
+    // (a client at 150 images per second pulled three times harder than one at 50: stiff, jerky
+    // fights), and while it walks never backwards against the way it really goes: a copy a little
+    // ahead of a late host position is held back gently, so it keeps moving forwards (the old rule
+    // only did so within 0.8 units and along the host's facing, which a far NPC's sparse updates
+    // and stale facing both defeated: NPCs sliding backwards in a crowded village).
     if (err > 0.01f) {
-        const float k = err > 2.0f ? 0.5f : 0.25f;
-        kc::Vec3 d{target.pos.x - local.x, target.pos.y - local.y, target.pos.z - local.z};
-        // Walking a little ahead of the host's point is normal (the game walks it at its own pace): pulling
-        // it straight back would slide it backwards while it walks forwards (a "moonwalk"). Behind it,
-        // only the sideways part is pulled at once; the part along the walk is caught up gently.
-        if (hostMoving && !latest.combatTarget && err < 0.8f) {
-            const kc::Vec3 f = kenshi::ForwardOf(target.rot);
-            const float along = d.x * f.x + d.z * f.z;
-            if (along < 0) {
-                d.x -= f.x * along * 0.9f;
-                d.z -= f.z * along * 0.9f;
-            }
-        }
-        const kc::Vec3 p{local.x + d.x * k, local.y + d.y * k, local.z + d.z * k};
-        kenshi::SetPositionSimple(c, err < 0.05f ? target.pos : p);
+        kc::motion::PullParams pp;
+        pp.dt = float(frameDt_);
+        pp.gameSpeed = haveHostTime_ ? std::max(1.0f, hostTime_.speed) : 1.0f;
+        pp.moving = hostMoving;
+        pp.combat = fighting;
+        kenshi::SetPositionSimple(c, kc::motion::Pull(local, target.pos, travel, pp));
     }
     if (traceFrames > 0 && h == traceHandle && (--traceFrames % 15 == 0 || err > 1.0f || (haveHostTime_ && hostTime_.paused))) {
         kc::Vec3 after;
@@ -1223,15 +1294,16 @@ void KenshiWorld::ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& 
         // (ReadyToFall): a teleport while a ragdoll sets up is what threw bodies away.
         const kc::Handle dropped = HostHandleOf(local);
         kenshi::Character* body = kenshi::Resolve(local);
-        kenshi::DropCarried(c, false);
-        if (body && kenshi::IsRagdoll(body)) kenshi::SetRagdoll(body, false);   // the attach step left its flag on
+        // A dead body is put down in ragdoll at once: a corpse is never stood up, even for a moment.
+        const bool deadBody = body && kenshi::IsDead(body);
+        kenshi::DropCarried(c, deadBody);
+        if (!deadBody && body && kenshi::IsRagdoll(body)) kenshi::SetRagdoll(body, false);   // the attach step left its flag on
         carriedHere_.erase(dropped);
         fellAt_.erase(dropped);
         fallPrep_.erase(dropped);
         lastDest_.erase(dropped);
         postureFixed_.erase(dropped);
-        relaidAt_.erase(dropped);
-        relaidCount_.erase(dropped);
+        postureBook_.erase(dropped);   // put down by the host: a new fall, whatever happened before
         fallFrom_.erase(dropped);
         fallShift_.erase(dropped);
         Log("carry: %sputs a body down as on the host; it falls where the host's lies (ragdoll %d)", carry ? "swaps and " : "", body ? int(kenshi::IsRagdoll(body)) : -1);
@@ -1450,10 +1522,16 @@ void KenshiWorld::ApplyProgress(const kc::Handle& h, const std::vector<float>& s
     if (localStyle != style && style <= 2) kenshi::SetStandingOrder(c, 5 + style, true);   // AGG, DEF, EVADE
 }
 
-void KenshiWorld::ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) {
+void KenshiWorld::ApplyVitals(const kc::Handle& h, const kc::EntityVitals& hostVitals) {
     kenshi::Character* c = Find(h);
     if (!c) return;
+    // never revived: a body the host's state says is dead stays dead, whatever these values say
+    kc::EntityVitals v = hostVitals;
+    if (auto st = lastTarget_.find(h); st != lastTarget_.end()) v.flags = kc::motion::VitalsFlagsFor(v.flags, st->second.flags);
     kenshi::WriteVitals(c, v);   // values only: clients never fall over on their own (see hk_ragdollMode)
+    // the posture code lays a knocked-out body down unconscious, or the local game stands it up again
+    if ((v.flags & kc::kVitUnconscious) && !(v.flags & kc::kVitDead)) hostKnockedOut_.insert(h);
+    else hostKnockedOut_.erase(h);
     // Death and knockout are transitions, not values: replay them exactly when the host has them,
     // where the host's character collapsed.
     const bool dies = (v.flags & kc::kVitDead) && !kenshi::IsDead(c);

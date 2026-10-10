@@ -226,7 +226,7 @@ Ordre dans `Tick()` (`main.cpp`) :
 
 | Quoi | Cadence |
 |---|---|
-| Positions | chaque image, vers l'état interpolé à 50 ms en arrière, avec 1 s d'historique |
+| Positions | chaque image, vers l'état interpolé avec un retard propre à chaque perso (50 ms + l'intervalle moyen entre deux positions différentes, 0,45 s au plus), avec 1 s d'historique |
 | Santé | réimposée toutes les 0,25 s |
 | Compétences et ordres permanents | à l'arrivée, et toutes les 3 s |
 | Argent | à l'arrivée, et toutes les 3 s |
@@ -436,17 +436,48 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
   pendant son chargement.
 
 ### Positions (`SendSnapshots`, `KenshiWorld::Apply`)
-- Le client garde 1 s d'instantanés par entité et rend l'état à `heure de l'hôte − 50 ms`. Il
-  interpole entre deux instantanés, sans extrapoler ; au-delà de `snap_distance`, il saute.
+- Règles pures dans `common/include/kc/motion.h` (tests `TestMotion`).
+- Le client garde 1 s d'instantanés par entité (`motion::PushSample`) :
+  - un perso qui marche renvoyé à la même position (le jeu de l'hôte ne bouge les persos loin de
+    son escouade que quelques fois par seconde) est fusionné avec l'instantané précédent : la
+    position suivante est interpolée sur tout l'intervalle au lieu d'un arrêt puis d'un saut ;
+  - un perso que l'hôte n'envoyait plus (immobile) est resté sur place jusqu'au nouvel instantané ;
+    un marcheur dont des instantanés se sont perdus a marché entre les deux.
+- Il rend l'état à `heure de l'hôte − retard`, un retard **par perso** (`motion::Cadence`) :
+  50 ms + l'intervalle moyen entre deux positions différentes, 0,45 s au plus. Le retard utilisé
+  suit ce but à ±25 % de la vitesse du temps (`StepDelay`) : le rendu ne recule jamais.
+- Il interpole entre deux instantanés ; après le dernier, un marcheur continue sur sa vitesse
+  0,25 s au plus, jamais au-delà de sa destination ; au-delà de `snap_distance`, il saute.
 - `Apply` fait, dans l'ordre :
   1. abandonne les tâches que le personnage avait dans la sauvegarde (`reThinkCurrentAIAction`,
      au plus toutes les 2 s) ;
   2. aligne la posture (à terre ou debout) après 0,3 s de différence ; une chute est d'abord
-     amenée à l'endroit de l'hôte (`ReadyToFall`) ;
+     amenée à l'endroit de l'hôte (`ReadyToFall`). Jamais sur un perso tenu (`PostureHeld` :
+     porté, enchaîné, en cage, dans un lit, prisonnier, esclave, ici ou chez l'hôte), dont la
+     pose appartient au code de captivité du jeu. Par corps (`motion::PostureBook`) : 4 chutes et
+     2 relevages par minute au plus ; deux chutes de suite qui ne tiennent pas (pas à terre 2 s
+     après) : plus rien pendant la minute. Un corps est relevé pour retomber à la place de
+     l'hôte seulement à plus de 20 unités, 10 s d'écart au moins. Un K.-O. de l'hôte tombe
+     inconscient (sinon le jeu local le relève). **Mort chez l'hôte** (`motion::DeadBodyStep`) :
+     vivant ici (doublure recréée) il meurt et tombe ; mort mais debout alors que celui de l'hôte
+     est en ragdoll, il est recouché ; jamais relevé ni ranimé ;
   3. impose l'allure de l'hôte ;
-  4. donne la destination de l'hôte à la locomotion du jeu ;
-  5. impose la direction ;
-  6. tire la position vers celle de l'hôte : 25 % de l'écart par image, 50 % au-delà de 2 unités.
+  4. donne la destination de l'hôte à la locomotion du jeu, et vérifie toutes les 0,5 s (persos à
+     moins de 300 unités de l'escouade) que la copie marche bien vers elle, sinon la redonne ;
+  5. impose la direction (`motion::WantFacing`) : celle de l'hôte à l'arrêt et en combat ; en
+     marchant, celle de l'hôte tant qu'elle s'accorde à 45° près avec le sens où il va vraiment
+     (`motion::TravelDir` : de l'état rendu vers le plus récent), sinon ce sens ;
+  6. tire la position vers celle de l'hôte (`motion::Pull`), indépendamment des images par
+     seconde (50 % de l'écart par image à 60 images/s au-delà de 2 unités, 25 % en deçà) ; en
+     marchant hors combat, une copie un peu en avance (5 unités × vitesse du jeu au plus) n'est
+     retenue qu'à 2 unités/s × vitesse du jeu : elle avance toujours, jamais tirée en arrière
+     pendant que ses jambes marchent en avant.
+- Corps morts : une doublure recréée pour un corps mort chez l'hôte (zone déchargée puis
+  rechargée chez le client) est tuée et mise en ragdoll dès sa création (`Spawn`) ; un corps mort
+  posé par son porteur tombe en ragdoll directement ; la santé de l'hôte n'efface jamais la mort
+  d'un corps que son état dit mort (`motion::VitalsFlagsFor`) ; `hk_ragdollMode` laisse le jeu
+  remettre en ragdoll un perso mort ou inconscient chez le client (avant, ses appels étaient
+  refusés et les cadavres finissaient debout).
 - Quand l'hôte se met en pause, le client tourne 0,3 s à vitesse 0,01 (`EndFrame`), pose chaque
   personnage exactement, puis se met en pause et réessaie toutes les 0,5 s si le jeu refuse.
 
