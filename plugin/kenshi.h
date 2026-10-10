@@ -297,6 +297,15 @@ inline constexpr uintptr_t Sky_hourOfDay = 0x1C;       // float 0..24 in the sky
 // PlayerInterface
 inline constexpr uintptr_t PI_selectedCharacters = 0x208;  // boost::unordered_set<hand>
 inline constexpr uintptr_t PI_playerCharacters = 0x2B0;    // lektor<Character*>
+// The floor view follows a focus character, not the selection: PlayerInterface's update (0x801630)
+// reads its floor (vt 0x60, RootObject+0xA4) each frame and, when it differs from +0x290, shows that
+// floor (+0x1E4, what setViewFloor 0x7F3530 / the floor buttons write). Only 0x7F5400 sets the focus
+// (double-tap on a squad key, a portrait, the end of the character editor); it also retargets the
+// camera, which keeps its own copy of the hand (Camera+0x28, Camera::setTarget 0x6AE520).
+inline constexpr uintptr_t PI_viewFloor = 0x1E4;      // int 0..3: the floor shown
+inline constexpr uintptr_t PI_focusHand = 0x270;      // hand: the character the floor view follows (type 0xB: none)
+inline constexpr uintptr_t PI_focusFloor = 0x290;     // int: that character's floor as last seen by 0x801630
+inline constexpr uintptr_t RO_currentFloor = 0xA4;    // int: RootObject::getCurrentFloor (0xD1F80), set every frame from CharMovement
 
 // boost::unordered_set (relative to the set)
 inline constexpr uintptr_t US_bucketCount = 0x18;
@@ -419,6 +428,13 @@ bool ShopCounters(Character* trader, std::vector<void*>& out);
 // A merchant without a home building (a travelling trader, a caravan): the game then sells from the
 // backpacks of its squad, which the mod does not sync as trade counters (the trade is refused).
 bool HasHomeBuilding(Character* trader);
+// Makes `trader`'s trade window sell from these counters (local objects): 0 it already does, 1 its
+// home was set to the building they belong to (a client's stand-in merchant has none), -1 cannot.
+int GiveShopHome(Character* trader, const std::vector<void*>& counters);
+// The character the floor view follows (PlayerInterface+0x270), and pointing it at another one
+// without moving the camera (a client keeps the save's focus: the host's character).
+bool FloorFocus(kc::Handle& out);
+bool SetFloorFocus(Character* c);
 bool IsAnimal(const void* obj);   // a CharacterAnimal (pack beast, dog, goat...)
 void* WornBackpack(Character* c);   // the backpack it wears (an Item with an inventory), or null
 bool HasInventory(const void* obj);

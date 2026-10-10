@@ -98,7 +98,7 @@ public:
     bool JoinSquadOf(const kc::Handle& who, const kc::Handle& leader) override;
     bool PayTrade(const kc::Handle& buyer, const kc::Handle& trader, int32_t price) override;
     void RefreshTradeWindow(const kc::Handle& trader) override;
-    bool OpenTradeWindow(const kc::Handle& looter, const kc::Handle& trader) override;
+    bool OpenTradeWindow(const kc::Handle& looter, const kc::Handle& trader, const std::vector<kc::Handle>& counters) override;
     bool TradeWindowBusy() override { return kenshi::MouseHoldsItem(); }
     int TradeWindowStock() override;
     void SetMoneyOf(const kc::Handle& who, int32_t money) override;
@@ -168,6 +168,8 @@ public:
     bool BuildingIdentity(const kc::Handle& h, std::string& sid, kc::Vec3& pos) override;
     bool ReadBuildState(const kc::Handle& h, float& progress, uint8_t& flags) override;
     void ApplyBuildState(const kc::Handle& h, float progress, uint8_t flags) override;
+    bool ReadBuildMaterials(const kc::Handle& h, std::vector<float>& delivered) override;
+    void ApplyBuildMaterials(const kc::Handle& h, const std::vector<float>& delivered) override;
     void ConstructionSitesNear(const std::vector<kc::Vec3>& centers, float radius, std::vector<kc::Handle>& out) override;
     void TrackBuilding(const kc::Handle& h) override;
     void TakeBuildingRemovals(std::vector<kc::Handle>& out) override;
@@ -555,6 +557,8 @@ private:
     struct ReRagdoll { kc::Handle h; double at; kc::Vec3 to; kc::Quat rot; bool body; int tries; const void* chr; };   // fix G7: checked, retried
     std::vector<ReRagdoll> reRagdoll_;                                     // host: teleported bodies to lay down again
     void UpdateReRagdolls();
+    void UpdateFloorFocus();      // client: the floor view follows one of our characters
+    double nextFocusCheck_ = 0;
     std::unordered_map<kc::Handle, float, kc::HandleHash> syncErr_;   // client: last error per standing character
     double nextPauseTry_ = 0;
     bool pauseRefusedLogged_ = false;

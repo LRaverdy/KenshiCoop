@@ -2634,6 +2634,68 @@ bool HasHomeBuilding(Character* trader) {
     return own && ReadHandle(reinterpret_cast<uint8_t*>(own) + OW_home, home) && home.type != 0xB && home.valid() && ResolveObject(home);
 }
 
+// ShopTrader's constructor (0x953850) reads the merchant's home from getOwnerships(merchant)+0x38
+// (an NPC's ownerships are its squad's) and builds the window from that building's interior. A
+// client's merchant can be a stand-in the mod made for the host's (its own was generated apart and
+// had another handle): it has no home, and the window showed nothing while the counters held the
+// host's stock. It is given the building the counters belong to, which also covers a home that
+// differs here.
+int GiveShopHome(Character* trader, const std::vector<void*>& counters) {
+    if (!IsCharacter(trader) || counters.empty()) return -1;
+    auto covered = [&](const std::vector<void*>& have) {
+        size_t n = 0;
+        for (void* c : counters) n += std::find(have.begin(), have.end(), c) != have.end();
+        return n;
+    };
+    std::vector<void*> now;
+    if (ShopCounters(trader, now) && covered(now) == counters.size()) return 0;
+    // the buildings the counters are furniture of; the one whose shop furniture holds most of them
+    std::vector<void*> parents;
+    for (void* c : counters)
+        if (void* p = FurnitureParent(c); p && std::find(parents.begin(), parents.end(), p) == parents.end()) parents.push_back(p);
+    void* best = nullptr;
+    size_t bestN = 0;
+    constexpr uint32_t kCap = 256;
+    for (void* b : parents) {
+        void* interior = nullptr;
+        if (!Rd(b, BU_interior, interior) || !interior) continue;
+        ShopLektor l{Addr(rva::VtLektor), 0, kCap, static_cast<void**>(GameNewSeh(kCap * sizeof(void*)))};
+        if (!l.data) continue;
+        std::vector<void*> got;
+        if (CollectSeh(interior, &l))
+            for (uint32_t i = 0; i < l.count && i < 1024; ++i)
+                if (void* f = nullptr; Rd(l.data, i * sizeof(void*), f) && f) got.push_back(f);
+        GameDeleteSeh(l.data);
+        if (const size_t n = covered(got); n > bestN) { best = b; bestN = n; }
+    }
+    kc::Handle home;
+    void* own = OwnershipsSeh(trader);
+    if (!best || !own || !ObjectHandle(best, home) || home.type != 0) return -1;
+    // the hand's fields only (its vtable stays)
+    auto* hand = reinterpret_cast<uint8_t*>(own) + OW_home;
+    if (!Wr(hand, off::H_type, home.type) || !Wr(hand, off::H_container, home.container) ||
+        !Wr(hand, off::H_containerSerial, home.containerSerial) || !Wr(hand, off::H_index, home.index) || !Wr(hand, off::H_serial, home.serial))
+        return -1;
+    return ShopCounters(trader, now) && covered(now) > 0 ? 1 : -1;
+}
+
+bool FloorFocus(kc::Handle& out) {
+    PlayerInterface* pi = Player();
+    return pi && ReadHandle(reinterpret_cast<const uint8_t*>(pi) + off::PI_focusHand, out) && out.type != 0xB && out.valid();
+}
+
+bool SetFloorFocus(Character* c) {
+    PlayerInterface* pi = Player();
+    kc::Handle want, cur;
+    if (!pi || !IsCharacter(c) || !GetHandle(c, want)) return false;
+    auto* hand = reinterpret_cast<uint8_t*>(pi) + off::PI_focusHand;
+    if (ReadHandle(hand, cur) && cur == want) return true;
+    // the hand's fields as 0x7F5400 copies them (its vtable stays); the last floor seen set to none,
+    // so the next update shows the floor this character is on, as 0x7F5400 does
+    return Wr(hand, off::H_type, want.type) && Wr(hand, off::H_container, want.container) && Wr(hand, off::H_containerSerial, want.containerSerial) &&
+           Wr(hand, off::H_index, want.index) && Wr(hand, off::H_serial, want.serial) && Wr(pi, off::PI_focusFloor, int32_t(-1));
+}
+
 namespace {
 constexpr uintptr_t SEC_type = 0xB8;      // InventorySection: its kind (Inventory::getSection(type) 0x745EF0 compares it)
 constexpr int kSectionBackpack = 12;      // the worn backpack's attach section

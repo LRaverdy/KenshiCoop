@@ -217,10 +217,16 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   - un remplaçant que le jeu du client a supprimé (mort, zone déchargée) est recréé (fix G6).
 
 ### Étages dans les bâtiments 🟡 implémenté, à vérifier en jeu
-- **Le joueur** voit l'étage affiché suivre un perso qui monte ou descend, comme en solo.
-- **Fonctionnement** : l'hôte envoie l'étage de chaque perso (`CharMovement::floorGroup`, message
-  71). Le client l'écrit sur sa copie, qui sinon garde l'étage d'avant puisqu'elle est seulement
-  placée. Expérience `floor`.
+- **Le joueur** voit l'étage affiché (toits, étages cachés) suivre son perso qui entre dans un
+  bâtiment, monte ou descend, comme en solo, sans forcer la vue à la main.
+- **Fonctionnement** (0.3.1) : la vue suit le perso « suivi » du jeu (`PlayerInterface+0x270`),
+  pas la sélection ; chaque image le jeu compare l'étage de ce perso (calculé par le jeu depuis
+  la surface sous ses pieds) au dernier vu et affiche le nouveau. Le jeu d'un client gardait le
+  perso suivi de la partie chargée (celui de l'hôte) : le client le pointe sur un des siens (le
+  sélectionné d'abord), sans bouger la caméra ; un double appui sur la touche d'escouade ou un
+  portrait reste le choix du joueur. L'hôte envoie toujours l'étage de chaque perso (message 71)
+  mais le client ne l'écrit plus (écriture désactivée : le jeu remettait sa valeur et un client a
+  planté après une rafale d'écritures). Expérience `floor`.
 
 ---
 
@@ -646,6 +652,11 @@ la fenêtre du client.
   sous une fenêtre ouverte, elle se ferme un instant, les comptoirs prennent le stock de l'hôte,
   puis elle se rouvre. Un personnage montré par une fenêtre n'est jamais supprimé sous elle. Ces
   deux cas faisaient planter le client.
+- **Marchand remplacé chez le client** (0.3.1) : quand le client a une doublure du marchand
+  (sa ville générée à part chez lui, avec d'autres identifiants), cette doublure n'avait pas de
+  bâtiment domicile et la fenêtre restait vide (puis clignotait, rouverte 3 fois). Le client lui
+  donne maintenant le bâtiment des comptoirs envoyés par l'hôte avant d'ouvrir la fenêtre ; plus
+  de réouverture.
 - **Limites** :
   - la détection des objets volés à la revente n'est tirée que par le jeu du client.
 
@@ -723,6 +734,13 @@ la fenêtre du client.
   reçoit « Impossible de construire X ici : dans l'eau ou l'acide. ». La commande de test
   `buildplace` passe par la même vérification. Pas refaits par l'hôte (il faudrait l'aperçu du
   jeu) : collision exacte des empreintes, personnages dans le passage, nœuds d'usage, étage.
+- **Jauge des matériaux** (0.3.1) : les matériaux apportés au chantier (chez l'hôte) sont envoyés
+  aux clients (message 87) : la jauge du chantier les montre chez tout le monde.
+- **Collision** (0.3.1) : un bâtiment fini en cours de partie n'avait pas de collision (on le
+  traversait) tant que sa zone n'était pas rechargée : le jeu crée ses corps physiques éteints et
+  ne les allume qu'à sa mise à jour d'état (vt 0xE0), que la fin du chantier n'appelle pas. Le mod
+  l'appelle une fois le bâtiment fini, chez le client comme chez l'hôte (rien si le jeu l'a déjà
+  fait). Les bâtiments de la sauvegarde en ont dès leur chargement.
 - **Arrivée en cours de partie** : les bâtiments posés avant sont dans la sauvegarde envoyée ;
   l'hôte envoie aussitôt l'état de tous ceux qu'il suit.
 - **Limites, à vérifier en jeu** :

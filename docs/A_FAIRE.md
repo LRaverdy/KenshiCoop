@@ -23,12 +23,23 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   disparu ») : un objet ramassé disparaît du sol mais n'arrive pas dans son inventaire ; une autre
   fois il est bien arrivé puis a disparu de l'inventaire au bout d'un moment (inventaire réécrit
   par celui de l'hôte, où l'objet n'est jamais arrivé ?).
-- **Construction par le client 3** : la construction s'est bien passée, mais (1) la jauge des
-  matériaux de construction du chantier ne montrait pas les matériaux apportés (chez le client) ;
-  (2) une fois fini, le bâtiment n'a pas de collision chez le client (on le traverse), alors qu'un
-  bâtiment normal en a. Probable : le bâtiment est créé ou fini par la synchro sans passer par ce
-  qui crée sa physique (finishConstruction / l'état « fini » du jeu), à vérifier aussi pour les
-  bâtiments posés par l'hôte.
+- ~~**Construction par le client 3**~~ (corrigé en 0.3.1, à vérifier en jeu) : la construction s'est
+  bien passée, mais (1) la jauge des matériaux de construction du chantier ne montrait pas les
+  matériaux apportés (chez le client) ; (2) une fois fini, le bâtiment n'a pas de collision chez le
+  client (on le traverse), alors qu'un bâtiment normal en a.
+  **Causes (désassemblé, docs/MOTEUR.md section 10)** : (1) la jauge lit la quantité apportée de
+  chaque matériau (`ConstructionState`+0x20, entrée +0xC), remplie seulement par les livraisons,
+  qui n'ont lieu que chez l'hôte ; `BuildState` n'envoyait que l'avancement. (2) Le jeu crée les
+  corps physiques d'un bâtiment éteints et seule sa mise à jour d'état (vt 0xE0) les allume ;
+  `notifyConstructionComplete` ne l'appelle pas (son `setVisible(1)` ne fait rien sur un chantier
+  déjà visible), et les bâtiments ne sont pas mis à jour à chaque image : un bâtiment fini en
+  cours de partie reste sans collision jusqu'au rechargement de sa zone (chez l'hôte aussi selon
+  le désassemblage, non vu en jeu). Les bâtiments de la sauvegarde sont créés finis et l'ont.
+  **Corrections** : message 87 `BuildMaterials` (H→C, ignoré par un 0.3.0, pas de changement de
+  version) avec les quantités apportées, écrites chez le client ; vt 0xE0 appelée une fois un
+  bâtiment fini sans collision (client après chaque état, hôte pour les bâtiments suivis).
+  À vérifier : jauge chez un client pendant les livraisons ; on ne traverse plus un bâtiment fini
+  (client et hôte) ; « collision switched on » dans les journaux.
 - **Bâtiment construit par le joueur 3 : impossible à démanteler** (à préciser : chez lui, chez
   l'hôte, ou chez tous). Sans doute le même fond que la collision : le bâtiment fini n'est pas
   un vrai bâtiment fini pour le jeu (état, propriétaire ou faction), donc l'ordre « démanteler »
@@ -39,7 +50,8 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   pas dans la liste des tâches qu'un client peut envoyer (`kc::TaskTargetAllowed`, protocol.cpp) :
   l'ajouter, cible = bâtiment du joueur (fini ou en chantier). Revoir toute la liste pour
   d'autres tâches légitimes manquantes (réparer, etc.).
-- **Commerce du joueur 3 (rob) : fenêtre qui clignote et vide** (23:07). Journal de l'hôte :
+- ~~**Commerce du joueur 3 (rob) : fenêtre qui clignote et vide**~~ (corrigé en 0.3.1, à vérifier en
+  jeu ; cause ci-dessous) (23:07). Journal de l'hôte :
   « trade window open: 31 shop counters holding 136 stacks », puis « trade window shows none of
   the shop's 136 stacks: opened again (1..3) » et « still shows none … after 3 tries ». Le
   clignotement vient du contournement (réouverture 3 fois) ; le vrai bug est la fenêtre du jeu
@@ -48,6 +60,20 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   (comptoirs du client pas encore reliés au bâtiment quand la fenêtre se construit ? bâtiment
   du marchand différent chez le client ?). Supprimer la réouverture qui clignote une fois la
   cause corrigée.
+  **Cause trouvée** : le marchand du client était une **doublure** créée par le mod. La ville de la
+  Ruche a été générée à part chez l'hôte et chez rob (zone chargée après l'arrivée), avec d'autres
+  handles : à 23:05:01 le jeu de rob a eu son propre « Marchand Ruche », retiré par le mod (« removed
+  the local character 'Marchand Ruche': the host does not have it ») au profit d'une doublure
+  (`createRandomCharacter`). Le constructeur de `ShopTrader` (`0x953850`) prend le domicile dans
+  `getOwnerships(marchand)+0x38` (pour un PNJ : son escouade) ; la doublure n'en a pas, donc il vend
+  depuis les sacs de son escouade : fenêtre vide. Après la reconnexion de 23:17 (sauvegarde où la
+  ville existe), le même marchand marchait (23:24, 162 objets). Même chose pour nass4 (« Produits
+  Commerciaux », « Marchand Construction Ronin »).
+  **Correction** : avant d'ouvrir la fenêtre, le client donne au marchand le bâtiment des comptoirs
+  envoyés par l'hôte quand il ne vend pas déjà depuis eux (`kenshi::GiveShopHome`, journal « trade:
+  the merchant here did not sell from the host's N counter(s) … given the shop's building ») ; la
+  réouverture (3 fois) est supprimée, une fenêtre vide est seulement notée au journal.
+  À vérifier en jeu : commercer dans une ville chargée après l'arrivée du client.
 - **PNJ saccadés et « moonwalk » chez le joueur 3 dans un village de la Ruche** (beaucoup de
   monde), quand il était à ~900 m de l'hôte : mouvements très saccadés, PNJ qui glissent à
   reculons. Pistes : débit par client trop faible pour une zone dense loin de l'hôte (priorité /
@@ -128,10 +154,17 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   fréquence des positions et des animations de combat envoyées pour les persos de l'escouade
   non-joueurs, interpolation pendant les attaques (comme le test « vitesse 3 : orientation en
   marchant » qui échoue parfois).
-- **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
-  étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
-  change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
-  désactivées : `kWriteFloors = false`).
+- ~~**Vue des étages chez le client**~~ (corrigé en 0.3.1, à vérifier en jeu) : le client doit
+  forcer lui-même la vue des étages (toit / étages cachés) ; elle ne suit pas automatiquement quand
+  son perso entre dans un bâtiment ou change d'étage, comme en solo.
+  **Cause (désassemblé)** : la vue suit le perso « suivi » du `PlayerInterface` (+0x270), pas la
+  sélection (`0x801630` compare son étage au dernier vu et affiche le nouveau). Il n'est changé que
+  par `0x7F5400` (double appui sur la touche d'escouade, portrait, fin de l'éditeur). Chez un client
+  il restait celui de la sauvegarde chargée (le perso de l'hôte). Le `floorGroup` n'y est pour rien
+  (le jeu du client le calcule lui-même) : les écritures restent désactivées.
+  **Correction** : `KenshiWorld::UpdateFloorFocus` pointe ce perso suivi sur un perso du client (le
+  sélectionné d'abord), sans toucher à la caméra, quand il n'est pas déjà un des siens (journal
+  « floor view: follows our … »).
 - **rob (joueur 3) a planté à 22:32** (l'hôte l'a vu partir à 22:32:02). Juste avant, son jeu
   perdait et recréait en boucle une escouade de 17 PNJ de l'hôte (`1:96:522216800:*`), toutes les
   ~3 s (« stand-in … is gone here: it can be recreated », 467 lignes de ce genre pour lui dans la

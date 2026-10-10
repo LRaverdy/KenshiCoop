@@ -227,6 +227,7 @@ void KenshiWorld::EndFrame() {
     if (active_ && !client_ && live_ && !pickups_.empty()) UpdatePendingPickups();
     if (active_ && !client_ && live_ && !reRagdoll_.empty()) UpdateReRagdolls();
     if (active_ && client_ && live_) GroundReconcile();
+    if (active_ && client_ && live_) UpdateFloorFocus();
     auto v = std::make_shared<HookView>();
     v->active = active_;
     v->client = client_;
@@ -1116,8 +1117,20 @@ void KenshiWorld::RefreshTradeWindow(const kc::Handle& trader) {
     if (me && kenshi::OpenTradeWindow(me, t)) Log("trade: our own window on that merchant shows its new stock");
 }
 
-bool KenshiWorld::OpenTradeWindow(const kc::Handle& looter, const kc::Handle& trader) {
-    return kenshi::OpenTradeWindow(Find(looter), Find(trader));
+bool KenshiWorld::OpenTradeWindow(const kc::Handle& looter, const kc::Handle& trader, const std::vector<kc::Handle>& counters) {
+    kenshi::Character* t = Find(trader);
+    // The game builds the window from the merchant's home building. Ours may be a stand-in made for
+    // the host's merchant (its town was generated apart here: other handles), without a home: the
+    // window stayed empty. It gets the building of the counters the host sells from.
+    std::vector<void*> local;
+    for (const kc::Handle& h : counters)
+        if (void* c = kenshi::ResolveObject(h)) local.push_back(c);
+    if (t && !local.empty()) {
+        const int r = kenshi::GiveShopHome(t, local);
+        if (r > 0) Log("trade: the merchant here did not sell from the host's %zu counter(s) (a stand-in without that shop as its home): given the shop's building", local.size());
+        else if (r < 0) Log("trade: the merchant here does not sell from the host's %zu counter(s) and could not be given their building: the window may stay empty", local.size());
+    }
+    return kenshi::OpenTradeWindow(Find(looter), t);
 }
 
 int KenshiWorld::TradeWindowStock() {
@@ -1282,8 +1295,9 @@ bool KenshiWorld::ReadFloor(const kc::Handle& h, uint8_t& group) {
 
 void KenshiWorld::ApplyFloor(const kc::Handle& h, uint8_t group) {
     // Disabled: the game puts its own value back every frame, and a client crashed (kenshi_x64+0x95484b,
-    // read of -1) right after a burst of these writes inside a building. The floor needs the game's own
-    // path (stairs / _setPositionAndTeleport with a floor), not a raw write.
+    // read of -1) right after a burst of these writes inside a building. Not needed for the floor
+    // view: the game computes each character's floor from where it stands, and the view follows the
+    // focus character (UpdateFloorFocus).
     static bool kWriteFloors = false;
     if (!kWriteFloors) { (void)h; (void)group; return; }
     kenshi::Character* c = Find(h);
@@ -1305,6 +1319,36 @@ void KenshiWorld::ApplyFloor(const kc::Handle& h, uint8_t group) {
     kenshi::ReadFloorGroup(c, after);
     Log("floor: %s placed on floor group %d as on the host (was %d, now %d%s)%s", KeyOf(h).c_str(), int(group), int(g), int(after),
         ok ? "" : ", call failed", t.tries >= 3 && after != group ? ": the game keeps its own floor, giving up" : "");
+}
+
+// The floor view (which floors and roofs show) follows the PlayerInterface's focus character as it
+// takes stairs or enters a building, as in solo. A client's game keeps the focus of the save it
+// loaded (the host's character, or nothing): it is pointed at one of ours, the selected one first.
+// A focus already on one of ours is the player's own choice (double-tap on a squad key, a portrait).
+void KenshiWorld::UpdateFloorFocus() {
+    const double now = NowSeconds();
+    if (now < nextFocusCheck_) return;
+    nextFocusCheck_ = now + 0.5;
+    std::vector<std::pair<kc::Handle, kenshi::Character*>> mine;   // local handles
+    for (const kc::Handle& h : controllable_) {
+        kc::Handle local;
+        if (kenshi::Character* c = Find(h); c && kenshi::GetHandle(c, local)) mine.emplace_back(local, c);
+    }
+    if (mine.empty()) return;
+    kc::Handle focus;
+    const bool hasFocus = kenshi::FloorFocus(focus);
+    for (const auto& [l, c] : mine)
+        if (hasFocus && l == focus) return;
+    std::vector<kc::Handle> selected;
+    kenshi::SelectedHandles(selected);
+    kenshi::Character* pick = mine.front().second;
+    for (const auto& [l, c] : mine)
+        if (std::find(selected.begin(), selected.end(), l) != selected.end()) { pick = c; break; }
+    if (kenshi::SetFloorFocus(pick)) {
+        std::string name;
+        kenshi::CharacterName(pick, name);
+        Log("floor view: follows our '%s' (it followed %s)", name.c_str(), hasFocus ? KeyOf(focus).c_str() : "nobody");
+    }
 }
 
 // ---- fix G5: job lists
