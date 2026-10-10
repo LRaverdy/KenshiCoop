@@ -90,7 +90,7 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `build` (lot E) | une pose du client bâtie par l'hôte puis par tous au même endroit, celle de l'hôte aussi ; avancement et fin du chantier ; démontage demandé par le client ; achat d'un bâtiment à vendre (avec `--save kctest_town`) |
 | `construct` (`--material`, `--task`) | vraie construction : argent et matériaux donnés aux deux joueurs ; le client pose un chantier et ordonne à son perso de le bâtir (clic droit : `newPlayerTaskSelectedCharacters`), puis l'hôte, puis les deux en même temps ; avancement des deux côtés, matériaux qui baissent pareil, chantier terminé identique. Le numéro de tâche « construire » n'est pas connu : sans `--task`, le test essaie 1 à 99 jusqu'à ce que l'avancement bouge chez l'hôte |
 | `buyhouse` (`kctest_town`) | achat d'un bâtiment à vendre par le client (`buildbuy` = le bouton de confirmation de la fenêtre d'achat) puis par l'hôte : même prix débité partout, bâtiment à nous partout, porte et conteneur utilisables ; refus sans argent ; achat simultané du même bâtiment : un seul paiement. ÉCHEC explicite s'il n'y a aucun bâtiment à vendre à 3 km |
-| `farlong` (`--seconds 300`) | le perso du client à plus de 30000 unités pendant 5 min : zone comparée toutes les 30 s (PNJ, santé, inventaires), combat lancé et bâtiment posé là-bas, l'escouade de l'hôte bouge ; pas de désync qui s'accumule, l'hôte simule la zone, pas de plantage, aller-retour d'une commande < 1 s ; retour (TP admin) et comparaison |
+| `farlong` (`--seconds 300`) | le perso du client à plus de 30000 unités pendant 5 min : zone comparée toutes les 30 s (PNJ, santé, inventaires), combat lancé et bâtiment posé là-bas, l'escouade de l'hôte bouge ; pas de PNJ manquant ni d'écart de position qui dure (le même perso sur deux relevés de suite) près du perso du client (1000 unités pour les absents, 300 pour les positions ; les chiffres de toute la zone vont seulement dans le journal : PNJ autour de l'escouade de l'hôte que le client n'a pas chargés, trafic), l'hôte simule la zone, pas de plantage, aller-retour d'une commande < 1 s ; retour (TP admin) et comparaison |
 | `progress` | compétences, argent, bulles et ordres : l'hôte décide, le client suit |
 | `ground` / `clientpickup` | objets posés et ramassés ; ramassage demandé par un client |
 | `anim` / `animframe` / `gait` | animations de combat et d'action ; tout ce qui est à l'écran ; allure |
@@ -324,7 +324,7 @@ l'escouade triée par handle.
 | `buildreq <membre> <tâche> [nom]` | ce membre seul reçoit l'ordre de travailler sur le chantier à nous le plus proche, comme un clic droit (`newPlayerTaskSelectedCharacters`) |
 | `givemoney <n>` | (hôte) n cats de plus pour la faction du joueur |
 | `itemtypes <nom>` | modèles d'objets (hors bâtiments) dont le nom contient ce texte |
-| `giveitem <sid|nom> <n> <membre>` | (hôte) n objets neufs (fabrique du jeu) dans l'inventaire de ce membre |
+| `giveitem <sid|nom> <n> <membre>` | (hôte) n objets neufs (fabrique du jeu) dans l'inventaire de ce membre ; par nom : les objets (types 2-4) d'abord, chaque candidat essayé jusqu'à ce que la fabrique en fasse un |
 | `invcount <membre|all> <sid|nom>` | combien de ces objets ce membre (ou toute l'escouade) porte |
 
 **Météo**

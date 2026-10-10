@@ -292,6 +292,7 @@ private:
     struct FallPrep { double start, lastMove; };
     std::unordered_map<kc::Handle, FallPrep, HandleHash> fallPrep_;   // client: moving into place before a fall
     std::unordered_map<kc::Handle, double, HandleHash> fellAt_;      // client: when we made it fall
+    std::unordered_map<kc::Handle, double, HandleHash> relaidAt_;    // client: when a body lying away from the host's was stood up to fall again
     std::unordered_set<kc::Handle, HandleHash> carriedHere_;
     std::unordered_map<kc::Handle, kc::CharBounties, HandleHash> hostBounties_;   // client: the host's, shown, not written
     struct HandTool { std::string sid; void* item = nullptr; kenshi::Character* who = nullptr; };
