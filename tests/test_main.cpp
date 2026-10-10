@@ -67,6 +67,16 @@ struct FakeWorld : IWorld {
     std::vector<Handle> controllable;
     float speed = 50.0f;  // units per second
     // world transfer simulation
+    // character editor (client): off unless a test turns it on; it stays open until the test closes it
+    bool editorSupported = false, editorOpen = false;
+    int editorOpened = 0;
+    bool OpenCharacterEditor(const Handle&) override {
+        if (!editorSupported) return false;
+        editorOpen = true;
+        ++editorOpened;
+        return true;
+    }
+    bool CharacterEditorOpen() override { return editorOpen; }
     int exportFrames = 3, exportCountdown = -1;
     int importFrames = 5, importCountdown = 0;
     std::vector<WorldFile> pendingImport;
@@ -712,6 +722,7 @@ static void SetupHost(FakeWorld& host) {
 static void AtMenu(FakeWorld& cli) { cli.ready = false; cli.chars.clear(); cli.fp = 0; }
 
 static Session::LogFn Quiet(const char* tag, bool verbose = false) {
+    if (std::getenv("KC_VERBOSE")) verbose = true;
     return [tag, verbose](const std::string& s) { if (verbose) std::printf("    [%s] %s\n", tag, s.c_str()); };
 }
 
@@ -748,6 +759,13 @@ static void TestWire() {
         Reader sr(sw.data(), sw.size());
         CHECK(PeekType(sr) == Msg::Stall);
         StallMsg s2; CHECK(Decode(sr, s2)); CHECK(s2.seconds == 90);
+        Writer qw; Encode(qw, JoinQueueMsg{2, 3, JoinPhase::Editor, "Joueur2"});   // join queue
+        Reader qr(qw.data(), qw.size());
+        CHECK(PeekType(qr) == Msg::JoinQueue);
+        JoinQueueMsg q2; CHECK(Decode(qr, q2)); CHECK(q2.position == 2 && q2.total == 3 && q2.phase == JoinPhase::Editor && q2.current == "Joueur2");
+        Writer bad; Encode(bad, JoinQueueMsg{4, 3, JoinPhase::Saving, "x"});   // a place beyond the queue: refused
+        Reader br(bad.data(), bad.size()); PeekType(br);
+        JoinQueueMsg q3; CHECK(!Decode(br, q3));
         FloorsMsg f; f.entries = {{3, 10}, {70000, 9}};
         Writer fw; Encode(fw, f);
         Reader fr(fw.data(), fw.size());
@@ -1136,6 +1154,7 @@ static void TestFuzz() {
     add([](Writer& w) { Encode(w, BuildRemove{4, "hut", {}}); });
     add([](Writer& w) { BuildAction m; m.sid = "shop"; Encode(w, m); });
     add([](Writer& w) { Encode(w, StallMsg{90}); });   // fix G6
+    add([](Writer& w) { Encode(w, JoinQueueMsg{2, 3, JoinPhase::Editor, "Joueur2"}); });
     add([](Writer& w) { FloorsMsg m; m.entries = {{3, 10}, {9, 9}}; Encode(w, m); });
     add([](Writer& w) {   // lot B
         FactionsMsg m; FactionRelationEntry e; e.factionSid = "f"; e.hasOurs = true; e.ours.relation = 5; m.factions = {e, e}; Encode(w, m);
@@ -1192,6 +1211,7 @@ static void TestFuzz() {
         case Msg::BuildRemove: { BuildRemove m; Decode(r, m); break; }
         case Msg::BuildAction: { BuildAction m; Decode(r, m); break; }
         case Msg::Stall: { StallMsg m; Decode(r, m); break; }
+        case Msg::JoinQueue: { JoinQueueMsg m; if (Decode(r, m) && (m.position < 1 || m.position > m.total)) std::abort(); break; }
         case Msg::Floors: { FloorsMsg m; Decode(r, m); break; }
         case Msg::Shots: { ShotsMsg m; Decode(r, m); break; }      // lot C
         case Msg::Ranged: { RangedMsg m; Decode(r, m); break; }
@@ -2625,6 +2645,182 @@ static void TestActorSafety() {
     CHECK(host.state() == SessionState::Hosting && cli.state() == SessionState::Connected);   // everyone alive
 }
 
+// Players join one at a time; the others wait in a queue and are told their place.
+static void TestJoinQueue() {
+    std::printf("session: join queue: 3 near-simultaneous joins (mid-save, mid-transfer), one at a time through the editor\n");
+    {
+        FakeWorld hw;
+        SetupHost(hw);
+        hw.exportFrames = 30;   // a save that takes a while: the second player arrives during it
+        SessionConfig hc; hc.name = "Host"; hc.port = ++g_port;
+        Session host(hw, hc, Now, Quiet("host"));
+        std::string err;
+        CHECK(host.Host(&err));
+        const char* names[3] = {"Alpha", "Bravo", "Charlie"};
+        std::vector<std::unique_ptr<FakeWorld>> ws;
+        std::vector<std::unique_ptr<Session>> cs;
+        for (int k = 0; k < 3; ++k) {
+            ws.push_back(std::make_unique<FakeWorld>());
+            AtMenu(*ws.back());
+            ws.back()->editorSupported = true;
+            SessionConfig cc; cc.name = names[k]; cc.port = hc.port;
+            cs.push_back(std::make_unique<Session>(*ws.back(), cc, Now, Quiet(names[k])));
+        }
+        auto all = [&] {
+            std::vector<std::pair<Session*, FakeWorld*>> v{{&host, &hw}};
+            for (size_t k = 0; k < cs.size(); ++k) if (cs[k]) v.push_back({cs[k].get(), ws[k].get()});
+            return v;
+        };
+        CHECK(cs[0]->Join("127.0.0.1", hc.port, &err));
+        Run(all(), 2.0, [&] { return host.joinQueue().size() == 1; });
+        CHECK(cs[1]->Join("127.0.0.1", hc.port, &err));   // the host is saving its world for Alpha
+        Run(all(), 10.0, [&] { return cs[0]->state() == SessionState::Loading; });
+        CHECK(cs[0]->state() == SessionState::Loading);
+        CHECK(cs[2]->Join("127.0.0.1", hc.port, &err));   // Alpha is loading the world
+        Run(all(), 10.0, [&] { return ws[0]->editorOpen && cs[2]->queueStatus(); });
+        // Alpha is in the world, making their character; Bravo and Charlie wait their turn
+        CHECK(cs[0]->state() == SessionState::Connected && ws[0]->editorOpen);
+        Run(all(), 3.0, [&] { auto q = cs[2]->queueStatus(); return q && q->phase == JoinPhase::Editor; });
+        for (int k = 1; k < 3; ++k) {
+            const JoinQueueMsg* q = cs[k]->queueStatus();
+            CHECK(q != nullptr);
+            if (!q) continue;
+            CHECK(q->position == k + 1 && q->total == 3 && q->current == "Alpha" && q->phase == JoinPhase::Editor);
+            CHECK(cs[k]->state() == SessionState::Downloading && ws[k]->imports == 0);
+        }
+        auto list = host.joinQueue();
+        CHECK(list.size() == 3);
+        if (list.size() == 3) {
+            CHECK(list[0].name == "Alpha" && !list[0].waiting && list[0].phase == JoinPhase::Editor);
+            CHECK(list[1].name == "Bravo" && list[1].waiting && list[2].name == "Charlie" && list[2].waiting);
+        }
+        CHECK(hw.holding);                              // the game waits for Alpha's editor
+        CHECK(hw.named.size() == 1);                    // only Alpha's character so far
+        // nobody is dropped while waiting, however long the turn ahead lasts
+        Run(all(), 3.0);
+        CHECK(cs[1]->state() == SessionState::Downloading && cs[2]->state() == SessionState::Downloading);
+        // Alpha closes the editor: Bravo's turn
+        ws[0]->editorOpen = false;
+        Run(all(), 10.0, [&] { return ws[1]->editorOpen; });
+        CHECK(cs[1]->state() == SessionState::Connected && ws[1]->editorOpen);
+        Run(all(), 3.0, [&] { auto q = cs[2]->queueStatus(); return q && q->current == "Bravo" && q->phase == JoinPhase::Editor; });
+        {
+            const JoinQueueMsg* q = cs[2]->queueStatus();
+            CHECK(q && q->position == 2 && q->total == 2 && q->current == "Bravo");
+        }
+        // Bravo's save had Alpha's character in it
+        CHECK(hw.named.count("Alpha") && ws[1]->chars.count(hw.named["Alpha"]) == 1);
+        ws[1]->editorOpen = false;
+        Run(all(), 10.0, [&] { return ws[2]->editorOpen; });
+        CHECK(cs[2]->state() == SessionState::Connected && !cs[2]->queueStatus());
+        ws[2]->editorOpen = false;
+        Run(all(), 5.0, [&] { return !hw.holding && host.joinQueue().empty(); });
+        CHECK(!hw.holding && host.joinQueue().empty() && host.joiningPlayers() == 0);
+        CHECK(hw.named.size() == 3);
+        // the ones who came earlier get a stand-in for the later ones' characters
+        Run(all(), 10.0, [&] {
+            for (auto& w : ws) for (auto& [n, serial] : hw.named) if (!w->chars.count(serial)) return false;
+            return true;
+        });
+        for (int k = 0; k < 3; ++k) {
+            CHECK(cs[k]->state() == SessionState::Connected);
+            CHECK(ws[k]->imports == 1 && ws[k]->editorOpened == 1);
+            for (auto& [n, serial] : hw.named) CHECK(ws[k]->chars.count(serial) == 1);   // everyone's character, everywhere
+        }
+        CHECK(ws[2]->fp == hw.fp);   // the last save is the host's current world
+    }
+    std::printf("session: join queue: the player in the editor crashes, a queued player leaves: the queue moves on, renumbered\n");
+    {
+        FakeWorld hw;
+        SetupHost(hw);
+        SessionConfig hc; hc.name = "Host"; hc.port = ++g_port;
+        Session host(hw, hc, Now, Quiet("host"));
+        std::string err;
+        CHECK(host.Host(&err));
+        const char* names[4] = {"Alpha", "Bravo", "Charlie", "Delta"};
+        std::vector<std::unique_ptr<FakeWorld>> ws;
+        std::vector<std::unique_ptr<Session>> cs;
+        for (int k = 0; k < 4; ++k) {
+            ws.push_back(std::make_unique<FakeWorld>());
+            AtMenu(*ws.back());
+            ws.back()->editorSupported = true;
+            SessionConfig cc; cc.name = names[k]; cc.port = hc.port;
+            cs.push_back(std::make_unique<Session>(*ws.back(), cc, Now, Quiet(names[k])));
+        }
+        auto all = [&] {
+            std::vector<std::pair<Session*, FakeWorld*>> v{{&host, &hw}};
+            for (size_t k = 0; k < cs.size(); ++k) if (cs[k]) v.push_back({cs[k].get(), ws[k].get()});
+            return v;
+        };
+        CHECK(cs[0]->Join("127.0.0.1", hc.port, &err));
+        Run(all(), 2.0, [&] { return host.joinQueue().size() == 1; });
+        for (int k = 1; k < 4; ++k) CHECK(cs[k]->Join("127.0.0.1", hc.port, &err));
+        Run(all(), 10.0, [&] { auto q = cs[3]->queueStatus(); return ws[0]->editorOpen && q && q->phase == JoinPhase::Editor; });
+        CHECK(ws[0]->editorOpen && host.joinQueue().size() == 4);
+        // Alpha's game dies with the editor open: Bravo's turn, with a save made after that
+        cs[0].reset();
+        Run(all(), 10.0, [&] { return ws[1]->editorOpen; });
+        CHECK(cs[1]->state() == SessionState::Connected && ws[1]->editorOpen);
+        CHECK(host.players().size() == 3);
+        Run(all(), 3.0, [&] { auto q = cs[3]->queueStatus(); return q && q->position == 3 && q->current == "Bravo" && q->phase == JoinPhase::Editor; });
+        {
+            const JoinQueueMsg* q = cs[2]->queueStatus();
+            CHECK(q && q->position == 2 && q->total == 3 && q->current == "Bravo");
+            q = cs[3]->queueStatus();
+            CHECK(q && q->position == 3 && q->total == 3);
+        }
+        // Charlie gives up while queued: Delta moves up
+        cs[2]->Leave();
+        Run(all(), 3.0, [&] { auto q = cs[3]->queueStatus(); return q && q->position == 2; });
+        {
+            const JoinQueueMsg* q = cs[3]->queueStatus();
+            CHECK(q && q->position == 2 && q->total == 2 && q->current == "Bravo");
+            auto list = host.joinQueue();
+            CHECK(list.size() == 2 && list[0].name == "Bravo" && list[1].name == "Delta");
+        }
+        ws[1]->editorOpen = false;
+        Run(all(), 10.0, [&] { return ws[3]->editorOpen; });
+        CHECK(cs[3]->state() == SessionState::Connected);
+        ws[3]->editorOpen = false;
+        Run(all(), 5.0, [&] { return !hw.holding && host.joinQueue().empty(); });
+        CHECK(!hw.holding && host.joinQueue().empty());
+        CHECK(cs[1]->state() == SessionState::Connected && cs[3]->state() == SessionState::Connected);
+        CHECK(ws[3]->fp == hw.fp && ws[3]->chars.count(hw.named["Bravo"]) == 1);
+    }
+    std::printf("session: several players in the character editor at once: the game waits for the last one\n");
+    {
+        FakeWorld hw, aw, bw;
+        SetupHost(hw);
+        AtMenu(aw); AtMenu(bw);
+        SessionConfig hc; hc.name = "Host"; hc.port = ++g_port;
+        SessionConfig ac; ac.name = "Alpha"; ac.port = hc.port;
+        SessionConfig bc; bc.name = "Bravo"; bc.port = hc.port;
+        Session host(hw, hc, Now, Quiet("host"));
+        Session a(aw, ac, Now, Quiet("a")), b(bw, bc, Now, Quiet("b"));
+        std::string err;
+        CHECK(host.Host(&err));
+        aw.editorSupported = bw.editorSupported = true;
+        CHECK(a.Join("127.0.0.1", hc.port, &err));
+        Run({{&host, &hw}, {&a, &aw}, {&b, &bw}}, 10.0, [&] { return aw.editorOpen; });
+        aw.editorOpen = false;   // Alpha's join turn ends
+        CHECK(b.Join("127.0.0.1", hc.port, &err));
+        Run({{&host, &hw}, {&a, &aw}, {&b, &bw}}, 10.0, [&] { return bw.editorOpen; });
+        bw.editorOpen = false;
+        Run({{&host, &hw}, {&a, &aw}, {&b, &bw}}, 3.0, [&] { return !hw.holding; });
+        CHECK(a.state() == SessionState::Connected && b.state() == SessionState::Connected && !hw.holding);
+        // both reopen their editor (Multijoueur window, "edit my character")
+        CHECK(a.EditOwnCharacter() && b.EditOwnCharacter());
+        Run({{&host, &hw}, {&a, &aw}, {&b, &bw}}, 3.0, [&] { return hw.holding && host.joinQueue().empty(); });
+        CHECK(hw.holding && host.joinQueue().empty());
+        aw.editorOpen = false;   // one closes: still paused for the other
+        Run({{&host, &hw}, {&a, &aw}, {&b, &bw}}, 1.0);
+        CHECK(hw.holding);
+        bw.editorOpen = false;
+        Run({{&host, &hw}, {&a, &aw}, {&b, &bw}}, 3.0, [&] { return !hw.holding; });
+        CHECK(!hw.holding);
+    }
+}
+
 static void TestManyPlayers() {
     std::printf("session: 1 host + 4 clients joining at once, 120 characters\n");
     FakeWorld hw;
@@ -2743,6 +2939,7 @@ int main() {
     TestTaskTargets();   // actor safety
     TestActorSafety();
     TestManyPlayers();
+    TestJoinQueue();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

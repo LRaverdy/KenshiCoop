@@ -42,10 +42,14 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   - place libre (8 joueurs au plus, hôte compris).
 - **Garde-fous** :
   - l'hôte reste en pause même si quelqu'un appuie sur lecture pendant une arrivée ;
-  - un joueur qui arrive pendant la sauvegarde pour un autre déclenche une nouvelle sauvegarde,
-    qui contient son personnage ;
+  - **file d'attente** : les joueurs arrivent un par un (sauvegarde, téléchargement, chargement,
+    éditeur de personnage). Les autres attendent, connectés, et voient leur place, le joueur en
+    cours et son étape (« File d'attente : position 2/3 — en attente de Joueur2 (création du
+    personnage)… »), mise à jour en direct. L'hôte voit la file dans son panneau. Au tour suivant,
+    une sauvegarde neuve contient tous ceux arrivés avant. Un joueur qui part ou plante pendant
+    son tour passe la main ; un joueur qui quitte la file la fait avancer ;
   - délais : 120 s pour la sauvegarde de l'hôte, 300 s pour le téléchargement et le chargement
-    côté client.
+    côté client, comptés à partir du tour du joueur (l'attente dans la file ne compte pas).
 - **Limites** : tous les joueurs doivent avoir la même version de Kenshi (1.0.68 Steam) et les
   mêmes mods.
 

@@ -145,6 +145,10 @@ void Session::Leave() {
     exportFiles_.clear();
     exportFiles_.shrink_to_fit();
     exporting_ = exportReady_ = false;
+    joinQueue_.clear();
+    joinTurn_ = 0;
+    queueSig_.clear();
+    queued_ = false;
     dlFiles_.clear();
     dlFiles_.shrink_to_fit();
     dlComplete_ = importStarted_ = false;
@@ -391,20 +395,113 @@ void Session::HostTick(double now, bool live) {
     }
 }
 
-void Session::HostJoinFlow(double now, bool live) {
-    std::vector<uint8_t> joining;
-    for (auto& [pid, p] : players_) if (!p.inGame && !sync_[pid].kicked) joining.push_back(pid);
+// Joins go one at a time: the player whose turn it is gets a save made for them alone (with their
+// own character in it), loads it, then makes their character in the editor; the others wait in a
+// queue, first come first served, and are told where they stand. When the turn ends (in the world
+// with the editor closed, or gone), the next player's save is made: it has everyone who came
+// before. Several joins sharing one save cannot work: each newcomer's character changes the world
+// (its fingerprint), so a save streamed before that no longer matches the host's world.
+JoinPhase Session::TurnPhase() const {
+    auto it = players_.find(joinTurn_);
+    if (it == players_.end()) return JoinPhase::Saving;
+    if (it->second.inGame) return JoinPhase::Editor;
+    auto s = sync_.find(joinTurn_);
+    return s != sync_.end() && s->second.worldSent ? JoinPhase::Loading : JoinPhase::Saving;
+}
 
-    // A player in the character editor: everyone waits for them (10 minutes at most).
-    bool editing = false;
-    for (auto& [pid, p] : players_) editing |= p.inGame && p.editing && now - p.editingSince < 600.0;
-    if (joining.empty() && editing) {
-        if (live && !holding_) { world_.HoldForJoin(true); holding_ = true; }
-        holdForEditor_ = true;
-        return;
+void Session::AdvanceJoinQueue(double now) {
+    // forget whoever left the queue (gone, removed)
+    joinQueue_.erase(std::remove_if(joinQueue_.begin(), joinQueue_.end(),
+                                    [&](uint8_t id) { auto s = sync_.find(id); return !players_.count(id) || s == sync_.end() || s->second.kicked; }),
+                     joinQueue_.end());
+    if (joinTurn_) {
+        auto pit = players_.find(joinTurn_);
+        auto sit = sync_.find(joinTurn_);
+        std::string over;   // why the turn ends (empty: it goes on)
+        if (pit == players_.end() || sit == sync_.end()) over = "they left";
+        else if (sit->second.kicked) over = "they were removed";
+        else if (pit->second.inGame) {
+            const RemotePlayer& p = pit->second;
+            PlayerSync& s = sit->second;
+            if (p.editing) s.editorSeen = true;
+            if (!s.editorExpected) over = "they are in the world";
+            else if (p.editing && now - p.editingSince >= 600.0) over = "they spent 10 minutes in the character editor";
+            else if (!p.editing && s.editorSeen) over = "they are in the world and closed the character editor";
+            else if (!p.editing && now - s.inGameAt > 30.0) over = "their character editor never opened";
+        }
+        if (!over.empty()) {
+            const std::string name = pit != players_.end() ? pit->second.name : "player " + std::to_string(joinTurn_);
+            log_("join queue: " + name + "'s turn is over (" + over + ")" +
+                 (joinQueue_.empty() ? "" : ", " + std::to_string(joinQueue_.size()) + " still waiting"));
+            joinTurn_ = 0;
+            queueSig_.clear();   // everyone waiting hears it now
+        }
     }
-    holdForEditor_ = false;
-    if (joining.empty()) {
+    if (joinTurn_ || joinQueue_.empty()) return;
+    joinTurn_ = joinQueue_.front();
+    joinQueue_.pop_front();
+    PlayerSync& s = sync_[joinTurn_];
+    s.turnStartedAt = now;
+    log_("join queue: " + players_[joinTurn_].name + "'s turn to join" +
+         (joinQueue_.empty() ? "" : " (" + std::to_string(joinQueue_.size()) + " waiting after them)"));
+    queueSig_.clear();
+}
+
+// Every queued player hears their place, who is joining and what they are doing: when anything
+// changes, and every 2 s (it also keeps their own join deadline from running out).
+void Session::SendJoinQueue(double now) {
+    if (!joinTurn_ && joinQueue_.empty()) return;
+    const uint8_t total = uint8_t(std::min<size_t>(kMaxPlayers, joinQueue_.size() + (joinTurn_ ? 1 : 0)));
+    const std::string current = joinTurn_ && players_.count(joinTurn_) ? players_[joinTurn_].name : std::string();
+    const JoinPhase phase = TurnPhase();
+    std::string sig = std::to_string(joinTurn_) + "/" + std::to_string(int(phase));
+    for (uint8_t id : joinQueue_) sig += "," + std::to_string(id);
+    if (sig == queueSig_ && now - queueSentAt_ < 2.0) return;
+    const bool changed = sig != queueSig_;
+    queueSig_ = sig;
+    queueSentAt_ = now;
+    auto send = [&](uint8_t id, uint8_t position) {
+        auto it = players_.find(id);
+        if (it == players_.end()) return;
+        JoinQueueMsg m;
+        m.position = std::min(position, total);
+        m.total = total;
+        m.phase = phase;
+        m.current = current;
+        Writer w;
+        Encode(w, m);
+        SendReliable(it->second.peer, w);
+    };
+    if (joinTurn_ && changed && players_.count(joinTurn_) && !players_[joinTurn_].inGame) send(joinTurn_, 1);   // your turn
+    uint8_t pos = joinTurn_ ? 2 : 1;
+    for (uint8_t id : joinQueue_) send(id, pos++);
+    if (changed && !joinQueue_.empty()) {
+        std::string line = "join queue: " + (current.empty() ? std::string("nobody") : current) + " (" +
+                           (phase == JoinPhase::Saving ? "save being made" : phase == JoinPhase::Loading ? "loading" : "character editor") + ")";
+        for (uint8_t id : joinQueue_) line += ", then " + players_[id].name;
+        log_(line);
+    }
+}
+
+std::vector<Session::QueueEntry> Session::joinQueue() const {
+    std::vector<QueueEntry> out;
+    if (auto it = players_.find(joinTurn_); joinTurn_ && it != players_.end()) out.push_back({joinTurn_, it->second.name, false, TurnPhase()});
+    for (uint8_t id : joinQueue_)
+        if (auto it = players_.find(id); it != players_.end()) out.push_back({id, it->second.name, true, JoinPhase::Saving});
+    return out;
+}
+
+void Session::HostJoinFlow(double now, bool live) {
+    AdvanceJoinQueue(now);
+
+    // Players in the character editor (the one whose turn it is, or anyone who reopened theirs):
+    // everyone waits for them, until the last one closes it (10 minutes at most each).
+    size_t editors = 0;
+    for (auto& [pid, p] : players_) editors += p.inGame && p.editing && now - p.editingSince < 600.0;
+    const bool joining = joinTurn_ != 0;
+    if (!joining && !editors) {
+        if (holdForEditor_) log_("nobody is in the character editor any more: the game resumes");
+        holdForEditor_ = false;
         if (holding_ && live) { world_.HoldForJoin(false); holding_ = false; }
         if (exportReady_ || exporting_) {  // the next joiner gets a fresh save
             exportFiles_.clear();
@@ -413,103 +510,87 @@ void Session::HostJoinFlow(double now, bool live) {
         }
         return;
     }
+    holdForEditor_ = editors != 0;
     // Hold the world still: what is saved must be exactly what the joiner will see.
     if (live && !holding_) { world_.HoldForJoin(true); holding_ = true; }
+    SendJoinQueue(now);
+    if (!joining) return;
+    RemotePlayer& p = players_[joinTurn_];
+    PlayerSync& s = sync_[joinTurn_];
+    if (p.inGame) return;   // making their character: the turn ends when the editor closes
 
-    for (uint8_t id : joining) {
-        if (now - sync_[id].joinedAt > cfg_.loadTimeout) Kick(players_[id], RejectReason::Timeout);
-    }
+    // Deadlines: the save must reach the player within loadTimeout of their turn starting, and they
+    // must load it within loadTimeout of receiving it (the wait in the queue does not count).
+    if (now - (s.worldSent ? s.worldSentAt : s.turnStartedAt) > cfg_.loadTimeout) { Kick(p, RejectReason::Timeout); return; }
 
-    bool needWorld = false;
-    for (uint8_t id : joining) needWorld |= !sync_[id].worldSent;
-    if (needWorld && !exportReady_) {
-        if (!exporting_ && live && holding_) {
-            // Each newcomer's own character goes into the world before it is saved for them.
-            if (cfg_.characterPerPlayer) {
-                for (uint8_t id : joining) {
-                    PlayerSync& s = sync_[id];
-                    if (s.ownChecked || s.worldSent) continue;
+    if (!s.worldSent) {
+        if (!exportReady_) {
+            if (!exporting_ && live && holding_) {
+                // The newcomer's own character goes into the world before it is saved for them.
+                if (cfg_.characterPerPlayer && !s.ownChecked) {
                     s.ownChecked = true;
                     bool created = false;
-                    if (world_.EnsurePlayerCharacter(players_[id].name, players_[id].steamId, s.own, created)) {
-                        Assign(s.own, id);
+                    if (world_.EnsurePlayerCharacter(p.name, p.steamId, s.own, created)) {
+                        Assign(s.own, p.id);
                         s.ownCreated = created;
                     }
-                    else log_("no character of their own for " + players_[id].name);
+                    else log_("no character of their own for " + p.name);
+                }
+                // a player coming back (after a crash, a lost connection): the characters they
+                // commanded when they went, if the host has not given them to someone else since
+                if (auto lo = leftOwned_.find(PlayerKey(p)); lo != leftOwned_.end()) {
+                    size_t back = 0;
+                    for (const Handle& h : lo->second) {
+                        Entity* e = entityByHandle(h);
+                        if (!e || !e->squad || e->owner != hostId_) continue;
+                        Assign(h, p.id);
+                        ++back;
+                    }
+                    leftOwned_.erase(lo);
+                    log_(p.name + " is back: " + std::to_string(back) + " character(s) they had are theirs again");
+                }
+                std::string err;
+                if (world_.BeginWorldExport(&err)) {
+                    exporting_ = true;
+                    exportStarted_ = now;
+                    log_("saving the world for " + p.name);
+                } else {
+                    log_("cannot save the world for " + p.name + ": " + err);
+                    Kick(p, RejectReason::HostSaveFailed);
+                    return;
                 }
             }
-            // a player coming back (after a crash, a lost connection): the characters they
-            // commanded when they went, if the host has not given them to someone else since
-            for (uint8_t id : joining) {
-                auto lo = leftOwned_.find(PlayerKey(players_[id]));
-                if (lo == leftOwned_.end()) continue;
-                size_t back = 0;
-                for (const Handle& h : lo->second) {
-                    Entity* e = entityByHandle(h);
-                    if (!e || !e->squad || e->owner != hostId_) continue;
-                    Assign(h, id);
-                    ++back;
+            if (exporting_) {
+                std::string err;
+                const ExportStatus st = world_.PollWorldExport(exportFiles_, &err);
+                if (st == ExportStatus::Done && live) {
+                    exporting_ = false;
+                    exportReady_ = true;
+                    exportHash_ = world_.Fingerprint();
+                    uint64_t bytes = 0;
+                    for (auto& f : exportFiles_) bytes += f.data.size();
+                    log_("world saved: " + std::to_string(exportFiles_.size()) + " files, " + std::to_string(bytes / 1024) + " KB");
+                } else if (st == ExportStatus::Failed || now - exportStarted_ > cfg_.exportTimeout) {
+                    exporting_ = false;
+                    log_("saving the world failed: " + (err.empty() ? std::string("timeout") : err));
+                    Kick(p, RejectReason::HostSaveFailed);
+                    return;
                 }
-                leftOwned_.erase(lo);
-                log_(players_[id].name + " is back: " + std::to_string(back) + " character(s) they had are theirs again");
-            }
-            std::string err;
-            if (world_.BeginWorldExport(&err)) {
-                exporting_ = true;
-                exportStarted_ = now;
-                log_("saving the world for joining players");
-            } else {
-                log_("cannot save the world for joining players: " + err);
-                for (auto& [pid, p] : players_) if (!p.inGame) Kick(p, RejectReason::HostSaveFailed);
-                return;
             }
         }
-        if (exporting_) {
-            std::string err;
-            const ExportStatus st = world_.PollWorldExport(exportFiles_, &err);
-            if (st == ExportStatus::Done && live) {
-                exporting_ = false;
-                exportReady_ = true;
-                exportHash_ = world_.Fingerprint();
-                uint64_t bytes = 0;
-                for (auto& f : exportFiles_) bytes += f.data.size();
-                log_("world saved: " + std::to_string(exportFiles_.size()) + " files, " + std::to_string(bytes / 1024) + " KB");
-            } else if (st == ExportStatus::Failed || now - exportStarted_ > cfg_.exportTimeout) {
-                exporting_ = false;
-                log_("saving the world failed: " + (err.empty() ? std::string("timeout") : err));
-                for (auto& [pid, p] : players_) if (!p.inGame) Kick(p, RejectReason::HostSaveFailed);
-                return;
-            }
-        }
-    }
-    // Someone arrived while that save was being made: it has no character of theirs. Save again
-    // (the ones already receiving the first save keep it).
-    if (exportReady_ && cfg_.characterPerPlayer && live && holding_) {
-        bool lateJoiner = false;
-        for (uint8_t id : joining) lateJoiner |= !sync_[id].worldSent && !sync_[id].ownChecked;
-        if (lateJoiner) {
-            log_("a player arrived while the world was being saved: saving it again with their character");
+        if (exportReady_) {   // made for this player alone: dropped once streamed
+            StreamWorld(p);
+            s.worldSent = true;
+            s.worldSentAt = now;
             exportFiles_.clear();
             exportFiles_.shrink_to_fit();
             exportReady_ = false;
-            return;
         }
     }
-    if (exportReady_) {
-        for (auto& [pid, p] : players_) {
-            if (p.inGame || sync_[pid].worldSent) continue;
-            StreamWorld(p);
-            sync_[pid].worldSent = true;
-        }
-    }
-    if (!live) return;
-    for (auto& [pid, p] : players_) {
-        PlayerSync& s = sync_[pid];
-        if (p.inGame || !s.readyPending) continue;
-        s.readyPending = false;
-        if (s.readyHash != world_.Fingerprint()) { Kick(p, RejectReason::WorldMismatch); continue; }
-        FinishJoin(p);
-    }
+    if (!live || !s.readyPending) return;
+    s.readyPending = false;
+    if (s.readyHash != world_.Fingerprint()) { Kick(p, RejectReason::WorldMismatch); return; }
+    FinishJoin(p);
 }
 
 void Session::StreamWorld(const RemotePlayer& p) {
@@ -568,9 +649,11 @@ void Session::FinishJoin(RemotePlayer& p) {
             Writer w;
             Encode(w, EditCharacter{it->second});
             SendReliable(p.peer, w);
+            s.editorExpected = true;   // their turn in the join queue lasts until they close the editor
         }
         s.ownCreated = false;
     }
+    s.inGameAt = clock_();
 }
 
 bool Session::Configure(const std::string& name, uint16_t port) {
@@ -1634,6 +1717,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         PlayerSync s;
         s.joinedAt = clock_();
         sync_[id] = std::move(s);
+        joinQueue_.push_back(id);   // their turn comes in HostJoinFlow
         AddChat("* " + h.name + " rejoint la partie...", "* " + h.name + " is joining...");
         return;
     }
@@ -1705,6 +1789,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         if (m.editing != pl->editing) {
             pl->editing = m.editing;
             pl->editingSince = clock_();
+            if (m.editing) sync_[pl->id].editorSeen = true;   // (open and closed within one poll: still seen)
             log_(pl->name + (m.editing ? " opened the character editor: the game waits for them" : " closed the character editor"));
             if (m.editing) AddChat("* " + pl->name + " crée son personnage : partie en pause.", "* " + pl->name + " is making their character: game paused");
         }
@@ -2484,19 +2569,20 @@ void Session::ClientTick(double now, bool live) {
         Encode(w, rep);
         SendReliable(net_.serverPeer(), w);
     }
-    // Tell the host whether our character editor is open: it holds the game meanwhile.
-    if (const bool open = world_.CharacterEditorOpen(); open != editingSent_) {
-        editingSent_ = open;
-        Writer w;
-        Encode(w, EditState{open});
-        SendReliable(net_.serverPeer(), w);
-    }
     if (editRequest_) {
         auto it = entities_.find(editRequest_);
         if (it != entities_.end() && it->second.present && world_.OpenCharacterEditor(it->second.handle)) {
             editRequest_ = 0;
             AddChat("* Crée ton personnage, puis valide : tout le monde le verra ainsi.", "the host asks us to make our character (editor open)");
         }
+    }
+    // Tell the host whether our character editor is open (the same tick it opens): it holds the
+    // game meanwhile, and the join queue waits for it.
+    if (const bool open = world_.CharacterEditorOpen(); open != editingSent_) {
+        editingSent_ = open;
+        Writer w;
+        Encode(w, EditState{open});
+        SendReliable(net_.serverPeer(), w);
     }
     SendEditedAppearances();
     ClientContainers(now);
@@ -2574,6 +2660,8 @@ void Session::ClientPacket(Msg type, Reader& r) {
         WorldBegin m;
         if (state_ != SessionState::Downloading || !Decode(r, m)) { Fail("bad world transfer from host"); break; }
         dlInfo_ = m;
+        queued_ = false;   // our turn: the world comes
+        connectStarted_ = clock_();
         dlFiles_.assign(m.fileCount, WorldFile{});
         dlBytes_ = 0;
         break;
@@ -2614,6 +2702,23 @@ void Session::ClientPacket(Msg type, Reader& r) {
         FloorsMsg m;
         if (!Decode(r, m)) break;
         for (const auto& e : m.entries) floors_[e.netId] = e.group;
+        break;
+    }
+    case Msg::JoinQueue: {
+        JoinQueueMsg m;
+        if (state_ != SessionState::Downloading || importStarted_ || !Decode(r, m)) break;
+        connectStarted_ = clock_();   // waiting in the queue never times out: the deadline starts with our turn
+        const bool wasQueued = queued_;
+        if (m.position <= 1) {
+            if (wasQueued) log_("join queue: our turn, the host is saving its world for us");
+            queued_ = false;
+            break;
+        }
+        if (!wasQueued || m.position != queue_.position || m.total != queue_.total || m.current != queue_.current || m.phase != queue_.phase)
+            log_("join queue: position " + std::to_string(m.position) + "/" + std::to_string(m.total) + ", waiting for " + m.current + " (" +
+                 (m.phase == JoinPhase::Saving ? "save being made" : m.phase == JoinPhase::Loading ? "loading" : "character editor") + ")");
+        queue_ = m;
+        queued_ = true;
         break;
     }
     case Msg::Stall: {   // fix G6
@@ -3015,11 +3120,20 @@ void Session::ForgetPlayer(uint8_t id) {
     auto pit = players_.find(id);
     if (pit == players_.end()) return;
     const std::string key = PlayerKey(pit->second);
+    const std::string leaverName = pit->second.name;
     const bool wasInGame = pit->second.inGame;
     const bool wasEditing = pit->second.editing;
     const PeerId peer = pit->second.peer;
     players_.erase(pit);
     sync_.erase(id);
+    // out of the join queue now (their id may be given to a newcomer at once); a turn that was
+    // theirs ends, and the next player's begins
+    joinQueue_.erase(std::remove(joinQueue_.begin(), joinQueue_.end(), id), joinQueue_.end());
+    if (joinTurn_ == id) {
+        log_("join queue: " + leaverName + " left during their turn");
+        joinTurn_ = 0;
+        queueSig_.clear();
+    }
     // the leaver's characters go back to the host so they are never left uncontrolled; they stop
     // where they are (next live tick) and go back to the player if they come back
     std::vector<Handle> owned;

@@ -117,9 +117,14 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 | `hosting on UDP port 27960` / `steam: hosting through Steam (id …)` | partie hébergée |
 | `* X is joining...` | quelqu'un se connecte |
 | `X is back with their character` / `created X's own character` | personnage retrouvé (compte Steam ou nom) / nouveau personnage |
-| `saving the world for joining players` → `world saved: N files, N KB` → `world sent to X` | sauvegarde puis envoi du monde |
+| `saving the world for X` → `world saved: N files, N KB` → `world sent to X` | sauvegarde pour le joueur dont c'est le tour, puis envoi du monde |
+| `join queue: X's turn to join (N waiting after them)` / `join queue: X's turn is over (raison), N still waiting` | file d'attente des arrivées : début et fin d'un tour (raisons : dans le monde, éditeur fermé, parti, retiré, éditeur jamais ouvert, 10 min d'éditeur) |
+| `join queue: X (save being made / loading / character editor), then Y, then Z` | la file à chaque changement |
+| `join queue: X left during their turn` | le joueur en cours est parti ou a planté : le suivant commence |
+| client : `join queue: position 2/3, waiting for X (étape)` / `join queue: our turn, the host is saving its world for us` | ce que voit un joueur qui attend |
 | `* X is in the world` | le joueur a chargé le monde |
 | `X opened the character editor: the game waits for them` / `X closed the character editor` | éditeur ouvert (partie en pause) / fermé |
+| `nobody is in the character editor any more: the game resumes` | le dernier éditeur ouvert s'est fermé : la partie reprend |
 | `new looks for X` | nouvelle apparence appliquée et envoyée aux autres |
 | `X reconnected: the old connection is closed` | même compte Steam reconnecté |
 | `removed X: <raison>` / `rejected a player: <raison>` | joueur exclu / refusé (version, mods, partie pleine…) |

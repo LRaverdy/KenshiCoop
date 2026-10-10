@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 33;   // 33: BagBind (travelling merchants), Result (actor safety)
+constexpr uint16_t kProtocolVersion = 33;   // 33: BagBind (travelling merchants), Result (actor safety), JoinQueue
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -93,6 +93,8 @@ enum class Msg : uint8_t {
     Floors = 71,          // S->C  the floor characters are on inside buildings (it drives the floor shown)
     // ---- fix G5
     JobList = 68,         // S->C  the job list (Tâches panel) of the players' characters, as the host has it
+    // ---- join queue
+    JoinQueue = 72,       // S->C  your place in the join queue, who is joining now and what they are doing
     // ---- travelling merchants: worn backpacks
     BagBind = 80,         // S->C  a character's worn backpack: its netId (its items follow as an Inventory)
     // ---- actor safety
@@ -162,6 +164,18 @@ struct Reject {
 };
 struct PlayerLeft {
     uint8_t id = 0;
+};
+// Players join one at a time; the others wait their turn in a queue (FIFO).
+enum class JoinPhase : uint8_t {
+    Saving = 0,    // the host saves its world for the player whose turn it is
+    Loading = 1,   // that player downloads and loads it
+    Editor = 2,    // that player is in the world, making their character
+};
+struct JoinQueueMsg {
+    uint8_t position = 0;   // 1: your turn; 2..: players ahead of you + 1
+    uint8_t total = 0;      // players joining, the one whose turn it is included
+    JoinPhase phase = JoinPhase::Saving;   // what the player whose turn it is is doing
+    std::string current;    // the player whose turn it is
 };
 struct StallMsg {   // fix G6
     uint16_t seconds = 0;   // how long the connection may stay silent
@@ -607,6 +621,7 @@ void Encode(Writer& w, const Reject& m);
 void Encode(Writer& w, const PlayerInfo& m);  // PlayerJoined
 void Encode(Writer& w, const PlayerLeft& m);
 void Encode(Writer& w, const StallMsg& m);
+void Encode(Writer& w, const JoinQueueMsg& m);
 void Encode(Writer& w, const FloorsMsg& m);
 void Encode(Writer& w, const Chat& m);
 void Encode(Writer& w, const Bind& m);
@@ -912,6 +927,7 @@ bool Decode(Reader& r, Reject& m);
 bool Decode(Reader& r, PlayerInfo& m);
 bool Decode(Reader& r, PlayerLeft& m);
 bool Decode(Reader& r, StallMsg& m);
+bool Decode(Reader& r, JoinQueueMsg& m);
 bool Decode(Reader& r, FloorsMsg& m);
 bool Decode(Reader& r, Chat& m);
 bool Decode(Reader& r, Bind& m);

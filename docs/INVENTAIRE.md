@@ -1,7 +1,7 @@
 # Inventaire du code
 
 Carte de tout ce qui existe dans le code, établie en relisant master `1e2d48c` (10 octobre 2026,
-protocole 32, environ 25 500 lignes). L'état de chaque fonctionnalité au sens joueur est dans
+protocole 33, environ 25 500 lignes). L'état de chaque fonctionnalité au sens joueur est dans
 [FONCTIONNALITES.md](FONCTIONNALITES.md), les bugs ouverts dans [A_FAIRE.md](A_FAIRE.md).
 
 États utilisés : **vérifié en jeu** (vu en partie ou par le harnais en jeu), **testé unitairement**
