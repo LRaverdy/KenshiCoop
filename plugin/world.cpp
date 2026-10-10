@@ -575,12 +575,21 @@ void KenshiWorld::Reconcile(const std::vector<kc::Handle>& known, const std::vec
     int removed = 0;
     for (Stranger& s : strangers) {
         if (s.used || now - s.since < kLinger || !inHostArea(s.c)) continue;
+        if (kenshi::InPlayerSquad(s.c)) {   // its portrait is in the squad bar: never deleted (kenshi::DestroyObject refuses it too)
+            std::string name;
+            kenshi::CharacterName(s.c, name);
+            Log("not removed: the local character '%s' the host does not have is in one of the player's squads", name.c_str());
+            strangerSince_[s.h] = now + 60.0;   // asked again in a minute, not every tick
+            continue;
+        }
         HostCallScope scope;
         if (kenshi::InventoryWindowShows(s.c)) {
             kenshi::CloseInventoryWindows();
             Log("closed the inventory windows: the character they show is being removed");
         }
-        if (kenshi::DestroyObject(s.c)) ++removed;
+        std::string name;
+        kenshi::CharacterName(s.c, name);
+        if (kenshi::DestroyObject(s.c)) { ++removed; Log("removed the local character '%s': the host does not have it", name.c_str()); }
         strangerSince_.erase(s.h);
     }
     if (removed) {

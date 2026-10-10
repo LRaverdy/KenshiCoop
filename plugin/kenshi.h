@@ -228,6 +228,7 @@ enum Fn : int {
     FnWarCurrentCampaign,       // CampaignInstance* FactionWarMgr::getCurrentCampaign(Platoon*)   (the raid or attack wave a squad belongs to, or null)
     FnPortraitCellUpdate,       // void PortraitMainCellView::update(const IBDrawItemInfo&, PortraitData*)   (a squad bar portrait is (re)drawn)
     FnPortraitCellDtor,         // PortraitMainCellView::~PortraitMainCellView()
+    FnMainBarUpdateCurrent,     // void MainBarGUI::updateCurrentPlatoon()   (the shown squad's tab: one PortraitData per member, set into its ItemBox)
     // ---- ground drops
     FnInventoryDropItem,        // void Inventory::dropItem(Item*)   (inventory window drag to the world: callbackObject->dropItem, then removeItemDontDestroy)
     FnDropItemAnimal,           // void CharacterAnimal::dropItem(RootObject*)   (pack animals)
@@ -518,6 +519,24 @@ void* NewSquad();                                              // what the "new 
 // The player faction's squads in the faction's order (the squad window's), empty ones too, the dead
 // squad left out; a squad's handle (its Platoon's); the squad window's swap, reorder and cross.
 void PlayerSquads(std::vector<void*>& out);
+// The game's squad of the player's dead (the game's own hand test, its name as a fallback): the mod
+// never moves anyone into it or out of it, never renames, reorders or removes it.
+bool IsDeadSquad(void* squad);
+// The character is in a squad of the player faction (the dead squad included): it may have a
+// portrait in the squad bar, so the mod never deletes it (GameWorld::destroy).
+bool InPlayerSquad(Character* c);
+// The squad bar's tabs checked against the game's portraits: every item of every tab must hold a
+// PortraitData the PortraitManager has (else the next rebuild of the tabs reads freed memory:
+// kenshi_x64+0x412D96). repair: the items of a bad tab are taken out (the game refills the shown
+// squad's tab at once, another one when shown). False: the bar or the manager could not be read.
+struct SquadBarReport {
+    int tabs = 0, items = 0, staleTabs = 0, badTabs = 0, badItems = 0, repairedTabs = 0;
+    std::string firstBad;   // the first bad item, for the log
+};
+bool CheckSquadBar(SquadBarReport& out, bool repair);
+// One of the PortraitManager's PortraitData (compares the pointer only, never reads it; true when the
+// manager cannot be read).
+bool IsGamePortrait(const void* portraitData);
 inline constexpr uint32_t kSquadIdType = 0x5153;            // the type of a squad id (not a game handle type)
 bool SquadHandle(void* squad, kc::Handle& out);            // its id: from the Platoon's address
 bool SwapInSquad(void* squad, int a, int b);

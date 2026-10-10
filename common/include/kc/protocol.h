@@ -1376,6 +1376,10 @@ void Encode(Writer& w, const SquadRequest& m);
 bool Decode(Reader& r, SquadRequest& m);
 // Squad and character names a player may give: printable, at most kMaxSquadName bytes, trimmed.
 std::string CleanSquadName(const std::string& s);
+// The game's squad of the player's dead (PlayerInterface::deadPlayerSquad): never sent in SquadState,
+// never matched to a client squad, never renamed, reordered, filled or removed by the mod.
+inline constexpr const char* kDeadSquadName = "__DEAD_SQUAD__";
+bool IsDeadSquadName(const std::string& name);
 
 // A character's job list with targets (fix G5's JobList only had kinds, so jobs added elsewhere never
 // showed on a client).

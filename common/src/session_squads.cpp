@@ -123,7 +123,9 @@ void Session::SendSquadState(double now) {
     world_.ReadSquadViews(views);
     SquadStateMsg m;
     for (const auto& v : views) {
-        if (!v.id.valid() || m.squads.size() >= kMaxSquads) continue;
+        // the game's dead squad is never a squad of the squad window (IWorld leaves it out; this is the
+        // net under it: a client made a regular squad of it and filled it with the dead)
+        if (!v.id.valid() || IsDeadSquadName(v.name) || m.squads.size() >= kMaxSquads) continue;
         SquadEntry s;
         s.id = v.id;
         s.name = v.name.substr(0, kMaxSquadName * 2);
@@ -182,6 +184,10 @@ void Session::HostSquadRequest(uint8_t from, const SquadRequest& r) {
         return;
     }
     const std::string name = CleanSquadName(r.name);
+    if (IsDeadSquadName(name) && r.op != SquadOp::RenameCharacter) {   // the game's name for its squad of the dead
+        refuse(ResultReason::NotAllowed, "not the dead squad's name", "name '" + name + "'", "Action refusée : ce nom est réservé par le jeu.");
+        return;
+    }
     bool ok = false;
     std::string what;
     switch (r.op) {
@@ -288,6 +294,8 @@ void Session::OnSquadResult(const Result& m) {
 void Session::ClientSquadStatePacket(Reader& r) {
     SquadStateMsg m;
     if (state_ != SessionState::Connected || !Decode(r, m)) return;
+    // a host of an earlier build sends its dead squad: never matched to (nor made into) a squad here
+    m.squads.erase(std::remove_if(m.squads.begin(), m.squads.end(), [](const SquadEntry& s) { return IsDeadSquadName(s.name); }), m.squads.end());
     squadState_ = std::move(m);
     haveSquadState_ = squadStateDirty_ = true;
     std::unordered_set<uint32_t> shared;
@@ -359,6 +367,8 @@ void Session::ClientSquads(double now) {
 
     std::vector<IWorld::SquadView> local;
     world_.ReadLocalSquads(local);
+    // the game's dead squad (or a regular one an earlier build made under its name) is never asked of the host
+    local.erase(std::remove_if(local.begin(), local.end(), [](const IWorld::SquadView& v) { return IsDeadSquadName(v.name); }), local.end());
     // 1. squad names typed here
     for (const auto& lv : local) {
         if (!lv.id.valid()) continue;

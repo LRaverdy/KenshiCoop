@@ -29,6 +29,8 @@ std::string Clip(const std::string& s, size_t n) { return s.size() > n ? s.subst
 
 } // namespace
 
+bool IsDeadSquadName(const std::string& name) { return name == kDeadSquadName; }
+
 std::string CleanSquadName(const std::string& s) {
     std::string out;
     for (unsigned char c : s) {

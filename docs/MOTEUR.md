@@ -193,6 +193,7 @@ Les signatures sont celles du commentaire du code.
 | carte | `FnWarCurrentCampaign` | `FactionWarMgr::getCurrentCampaign(Platoon*)` | `0x283500` | — | la campagne (raid, vague d'attaque, visite) d'une escouade, ou nul ; recherche dans `forces` (+0x28), sans insertion |
 | carte | `FnPortraitCellUpdate` | `PortraitMainCellView::update(const IBDrawItemInfo&, PortraitData*)` | `0x415150` | oui | un portrait de la barre d'escouade est (re)dessiné : le mod retient la cellule |
 | carte | `FnPortraitCellDtor` | `PortraitMainCellView::~PortraitMainCellView()` | `0x426450` | oui | destructeur complet (le destructeur virtuel `0x4264E0` l'appelle) : le mod oublie la cellule |
+| barre | `FnMainBarUpdateCurrent` | `MainBarGUI::updateCurrentPlatoon()` | `0x415880` | non | remplit à nouveau l'onglet de l'escouade affichée, après qu'un onglet fautif a été vidé (`CheckSquadBar`) |
 | sol | `FnInventoryDropItem` | `Inventory::dropItem(Item*)` | `0x745D90` | oui | ce que fait une fenêtre d'inventaire d'un objet lâché sur le monde ; vt 0x38 de `Inventory` et `ShopTraderInventory` |
 | sol | `FnDropItemAnimal` | `CharacterAnimal::dropItem(RootObject*)` | `0x5CA4A0` | oui | même code que `CharacterHuman::dropItem`, pour les bêtes de somme |
 | dialogue (162) | `FnDialogueEndDialogue` | `Dialogue::endDialogue(bool definitelyTheEnd)` | `0x674830` | — | termine la conversation (voir « Dialogue ») ; le mod l'appelle quand le joueur part, quitte la partie, ou que la conversation est finie sans fermeture (combat, TP, K.-O.) |
@@ -1541,6 +1542,42 @@ KenshiLib (`InventoryGUI::playSound(eventId, Item*)` dépend d'un objet) : les p
   `requestDrawItem` `0x426C10` → `0x415150` → `0x412D90` (hand → `Character*` : type 1 ou 0x5B,
   par la table des handles `0x2133F98`). Les infobulles médicales des portraits (« Votre Poitrine
   est en train de guérir. ») sont des chaînes du même tas.
+- **Mise à jour de la barre** [D, 1.0.68] : `MainBarGUI+0x210` tableau des onglets (0x40 octets :
+  +0x0 `PortraitMainItemBox*`, +0x8 `ActivePlatoon*`, +0x10 `TabItem*`, +0x18 indice), +0x218 leur
+  nombre ; `PortraitMainItemBox+0xF0` → `MyGUI::ItemBox`, dont les cases (`MyGUI::Any`, 8 octets :
+  le `Holder*`) sont à +0x6A8 / +0x6B0 (début / fin). `Holder<PortraitData*>` : vtable `0x16D1FB0`,
+  +0x8 la `PortraitData*` ; `getItemDataAt` (`0x424290`) vérifie le type par la vtable avant.
+  - `ActivePlatoon` ajoute / retire un membre (`0x796620`, `0x797240`, `swapCharacters`) : le
+    portrait suit le nouveau `hand` (`PortraitManager` `0x413620`), puis un événement « escouade
+    changée » va dans la file d'interface de `GameWorld` (+0x5C8, traitée par `0x7B65B0` pendant la
+    frame du jeu : le `Platoon` est retrouvé par son `hand`, rien s'il n'existe plus, rien pour
+    l'escouade des morts) → `MainBarGUI::platoonChanged(ActivePlatoon*, bool ajout)` (`0x4167B0`).
+  - `platoonChanged` : escouade vidée (retrait, 0 membre) ou remplie (ajout, 1 membre) →
+    reconstruction des onglets (`0x416140`) ; sinon, si c'est l'escouade affichée,
+    `updateCurrentPlatoon` (`0x415880`) ; sinon **rien** : les autres onglets gardent leurs cases.
+    `destroyPlatoon`, `changePlatoonIndex`, le renommage (`0x48DF00`), `0x7F3FB0`, `0x7F88C0` et
+    `0x72D3B0` appellent aussi `0x416140`.
+  - `0x416140` : garde les onglets dont l'`ActivePlatoon` (+0x78 → `Platoon`) est encore dans
+    `Faction::activePlatoons`, détruit les autres, vide le `TabControl` et refait un onglet par
+    escouade non vide hors escouade des morts (`0x415E00`) ; pour un onglet gardé, `0x415E00`
+    redimensionne son `ItemBox` (`setRealSize`), ce qui **redessine toutes ses cases** avec leurs
+    `PortraitData` d'avant : c'est là qu'ont planté les soaks de 14:54 et 20:20.
+  - `updateCurrentPlatoon` (`0x415880`) : pour chaque membre de l'escouade affichée, sa
+    `PortraitData` (`PortraitManager::get(hand)` `0x4139B0`, créée au besoin) ; `setItemDataAt`
+    sur les cases existantes, `addItem` pour les nouvelles, `removeItemAt` pour le surplus.
+  - **`PortraitManager`** (`*0x212EBE8`, construit une fois : bit 0 de `0x212EBF4`, 0xA8 octets) :
+    `std::map<hand, (PortraitData*, case de texture)>` à +0x70 (tête +0x78 ; nœud : +0x0 gauche,
+    +0x8 parent, +0x10 droit, +0x38 `PortraitData*`, +0x49 « nil »). `PortraitData` : 0x60 octets
+    (allocateur d'Ogre), +0x0 `std::string`, +0x38 le `hand`. Elles ne sont **jamais** libérées une à
+    une : `0x414850` les supprime toutes, appelée seulement par la remise à zéro du monde
+    (`0x36CB80`, au chargement). Le mod vérifie donc une case en cherchant son pointeur parmi celles
+    du gestionnaire (`kenshi::IsGamePortrait` dans le crochet de `0x415150`, `kenshi::CheckSquadBar`
+    à chaque image : un onglet fautif est vidé par `ItemBox::removeAllItems`, puis `0x415880`).
+- **Escouade des morts** [D] : le jeu la reconnaît en comparant le `hand` du `Platoon` (+0x58) à
+  `PlayerInterface+0x2C8` par `hand::operator==` (vtable du `hand` `0x16852D0`, case 1 : `0xCD060`,
+  champs +0x8 type, +0xC, +0x10, +0x14, +0x18 ; deux `hand` de type 0xB sont égaux). Les `Platoon`
+  du joueur ont index et serial à 0 : un test par `kc::Handle::valid()` ne la trouve jamais (le mod
+  l'envoyait comme une escouade ordinaire jusqu'au 10/10 au soir). `kenshi::IsDeadSquad`.
 - **Boutons de vitesse** (`0x724880`) : chaque bouton porte sa vitesse en float, allumé si elle est
   `==` à la vitesse courante ; une vitesse non entière (ClockSync, 0,01 avant une pause) n'en
   allume aucun, sans autre effet. `GameWorld::setFrameSpeedMultiplier` (`0x787CB0`) range la
