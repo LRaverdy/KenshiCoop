@@ -23,19 +23,7 @@ float Dist(const Vec3& a, const Vec3& b) {
     const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
-Vec3 Lerp(const Vec3& a, const Vec3& b, float t) {
-    return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t};
-}
 float QuatDot(const Quat& a, const Quat& b) { return std::fabs(a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z); }
-Quat Nlerp(Quat a, const Quat& b, float t) {
-    // take the short way round
-    if (a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z < 0) { a.w = -a.w; a.x = -a.x; a.y = -a.y; a.z = -a.z; }
-    Quat q{a.w + (b.w - a.w) * t, a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t};
-    const float len = std::sqrt(q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z);
-    if (len > 1e-6f) { q.w /= len; q.x /= len; q.y /= len; q.z /= len; } else q = b;
-    return q;
-}
-
 bool StateChanged(const EntityState& a, const EntityState& b) {
     return Dist(a.pos, b.pos) > 0.02f || Dist(a.dest, b.dest) > 0.25f || a.flags != b.flags || QuatDot(a.rot, b.rot) < 0.99995f ||
            a.combatTarget != b.combatTarget || a.gait != b.gait || std::fabs(a.pace - b.pace) > 0.1f || a.carrying != b.carrying;
@@ -2748,9 +2736,10 @@ void Session::ClientTick(double now, bool live) {
     }
 
     if (offsetValid_) {
-        const double renderTime = now + offset_ - cfg_.interpDelay;
         for (auto& [id, e] : entities_) {
             if (!e.present || e.buf.empty()) continue;
+            // each one rendered late enough for its own cadence (sparse updates: later, see kc::motion)
+            const double renderTime = now + offset_ - motion::StepDelay(e.cadence, cfg_.interpDelay, now);
             world_.Apply(e.handle, Interpolate(e, renderTime), e.buf.back().s);
             // Melee: fight the same target as on the host (the swings are animated locally, the
             // outcome comes from the host's vitals). Re-imposed now and then in case it lapsed.
@@ -2896,24 +2885,9 @@ void Session::ClientTick(double now, bool live) {
     }
 }
 
-EntityState Session::Interpolate(const Entity& e, double rt) const {
-    const auto& b = e.buf;
-    if (rt <= b.front().t) return b.front().s;
-    if (rt >= b.back().t) return b.back().s;  // no extrapolation: hold the newest known state
-    for (size_t i = 1; i < b.size(); ++i) {
-        if (b[i].t < rt) continue;
-        const Sample& a = b[i - 1];
-        const Sample& c = b[i];
-        if (Dist(a.s.pos, c.s.pos) > cfg_.snapDistance) return c.s;  // teleport: don't sweep across
-        const float t = float((rt - a.t) / std::max(1e-6, c.t - a.t));
-        EntityState out = c.s;
-        out.pos = Lerp(a.s.pos, c.s.pos, t);
-        out.rot = Nlerp(a.s.rot, c.s.rot, t);
-        out.flags = t < 0.5f ? a.s.flags : c.s.flags;
-        return out;
-    }
-    return b.back().s;
-}
+// See kc::motion::StateAt: interpolated between the samples around `rt`; past the newest one a
+// walker carries on for a moment along its last velocity.
+EntityState Session::Interpolate(const Entity& e, double rt) const { return motion::StateAt(e.buf, rt, cfg_.snapDistance); }
 
 void Session::ClientPacket(Msg type, Reader& r) {
     if (ClientFactionsPacket(type, r)) return;   // lot B
@@ -3097,14 +3071,10 @@ void Session::ClientPacket(Msg type, Reader& r) {
         for (const EntityState& st : s.entities) {
             auto it = entities_.find(st.netId);
             if (it == entities_.end()) continue;  // snapshot raced ahead of its Bind
-            auto& buf = it->second.buf;
-            if (!buf.empty() && buf.back().t >= s.hostTime) continue;  // stale or duplicate
-            // Unchanged entities are only refreshed now and then: after such a gap, assume the
-            // entity stood still until just before this sample instead of sliding across the gap.
-            const double step = 1.0 / cfg_.snapshotRate;
-            if (!buf.empty() && s.hostTime - buf.back().t > 1.5 * step) buf.push_back({s.hostTime - step, buf.back().s});
-            buf.push_back({s.hostTime, st});
-            while (buf.size() > 2 && buf.front().t < s.hostTime - kBufferSeconds) buf.pop_front();
+            // Unchanged entities are only refreshed now and then: after such a gap, it stood still
+            // until just before this sample. A walker sent again at the same place (the host's game
+            // moves far characters a few times a second) is merged, not held then jumped.
+            motion::PushSample(it->second.buf, it->second.cadence, s.hostTime, st, 1.0 / cfg_.snapshotRate, kBufferSeconds);
         }
         break;
     }
@@ -3602,7 +3572,7 @@ bool Session::TargetOf(const Handle& h, EntityState& latest, EntityState& render
     auto e = entities_.find(it->second);
     if (e == entities_.end() || e->second.buf.empty()) return false;
     latest = e->second.buf.back().s;
-    rendered = Interpolate(e->second, clock_() + offset_ - cfg_.interpDelay);
+    rendered = Interpolate(e->second, clock_() + offset_ - motion::CurrentDelay(e->second.cadence, cfg_.interpDelay));
     return true;
 }
 

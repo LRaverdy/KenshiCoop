@@ -991,7 +991,13 @@ void* hk_createRandomCharacter(void* factory, void* faction, const float* pos, v
 }
 
 void hk_ragdollMode(void* chr, bool on, int part) {
-    if (on && KenshiWorld::ClientActive() && !g_hostCall && KenshiWorld::View()->replicated.count(chr)) return;
+    // A body that is dead or unconscious here (only ever because the host's is: deaths and knockouts
+    // are replayed in a HostCallScope) may go back into ragdoll whenever the game asks: refusing it
+    // left the game's own later ragdoll calls on corpses (a zone or physics reload, a body back in
+    // range) without effect, and every corpse stood up on the clients after a while.
+    if (on && KenshiWorld::ClientActive() && !g_hostCall && KenshiWorld::View()->replicated.count(chr) &&
+        !kenshi::IsDead(static_cast<kenshi::Character*>(chr)) && !kenshi::IsUnconscious(static_cast<kenshi::Character*>(chr)))
+        return;
     // host: a body the admin TP is moving gets up until it got there (fix G7)
     if (on && !g_hostCall)
         if (KenshiWorld* w = TheWorld(); w && w->HoldsUpright(chr)) return;

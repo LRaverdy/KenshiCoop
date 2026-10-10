@@ -105,6 +105,11 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   le PNJ est déplacé vers l'arrière de sa direction). Mesurer : fréquence des positions reçues
   par PNJ chez ce client, écart d'orientation.
 - ~~**Client 2 (nass4) : armes jetées / échangées sur un perso de son escouade**~~ : changé chez lui,
+  **Corrigé côté client (0.3.1, non revérifié en jeu)** : positions répétées fusionnées, retard de
+  rendu par perso selon sa cadence, courte extrapolation, rappel jamais en arrière contre la
+  marche, direction qui suit le sens réel du déplacement, destination vérifiée. Reste à voir :
+  débit par client dans une zone dense loin de l'hôte (priorité par distance au joueur concerné).
+- **Client 2 (nass4) : armes jetées / échangées sur un perso de son escouade** : changé chez lui,
   pas chez les autres ni chez l'hôte. Journal de l'hôte, plusieurs fois entre 23:08 et 23:11 :
   « [nass4] drop to the ground not sent: the host does not know that inventory
   (52295-rebirth.mod) » (et 1020-gamedata.base). Le client fait le geste dans son jeu, ne
@@ -161,6 +166,12 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   (relever un corps à plus de 5 unités et le refaire tomber, censée se limiter à 3 fois) : elle
   boucle, et elle s'applique aux persos portés ou prisonniers. À corriger : ne jamais l'appliquer
   à un perso porté, attaché, en cage ou assis ; limite réelle par corps ; seuil plus large.
+  **Corrigé (0.3.1, non revérifié en jeu)** : la boucle principale était la chute elle-même (1859
+  « falls as on the host » chez nass4 sur des captifs enchaînés que son jeu rasseyait, une toutes
+  les 2 s, sans aucune limite), plus le relevage à 5 unités. Captifs (porté, enchaîné, cage, lit,
+  prisonnier, esclave) jamais touchés ; 4 chutes et 2 relevages par corps et par minute, abandon
+  pour la minute après deux chutes qui ne tiennent pas ; relevage à plus de 20 unités. Voir
+  CHANGELOG (En cours).
 - **Geoffrey bloqué avant la création de son perso** (23:36-23:37). 1er essai : son jeu a quitté
   ou planté pendant le chargement (« left while joining (connection lost …) »). 2e essai : l'hôte
   dit « Geoffrey is back with their character » puis « 0 character(s) they had are theirs again » :
@@ -186,6 +197,14 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   terre), mais chez lui ils restent debout. La posture « à terre » n'est pas appliquée chez lui
   (ou relevée aussitôt : voir la boucle « stood up to fall where the host's lies » des prisonniers,
   même mécanisme). À vérifier avec la correction de cette boucle.
+  **Corrigé (0.3.1, non revérifié en jeu)** : le corps tombe maintenant inconscient chez le client
+  quand l'hôte le dit K.-O., et le jeu du client peut remettre en ragdoll un perso inconscient ou
+  mort (`hk_ragdollMode` le refusait).
+- **Cadavres qui finissent tous debout chez les clients** (signalé après la session). **Corrigé
+  (0.3.1, non revérifié en jeu)** : `hk_ragdollMode` refusait au jeu du client de remettre un
+  cadavre en ragdoll ; une doublure recréée pour un corps mort naissait vivante et debout ; un
+  corps posé par son porteur était posé debout. Doublure tuée et couchée dès sa création, ragdoll
+  permis aux morts, jamais ranimé par la santé, jamais relevé. Test « cadavre recréé ».
 - **Combats de « Hep » pas fluides chez les clients** (perso de l'escouade qui n'est à aucun
   joueur, se bat beaucoup). Attaques, esquives et déplacements de combat saccadés. À mesurer :
   fréquence des positions et des animations de combat envoyées pour les persos de l'escouade
@@ -202,6 +221,14 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   **Correction** : `KenshiWorld::UpdateFloorFocus` pointe ce perso suivi sur un perso du client (le
   sélectionné d'abord), sans toucher à la caméra, quand il n'est pas déjà un des siens (journal
   « floor view: follows our … »).
+  **En partie corrigé (0.3.1, non revérifié en jeu)** : retard de rendu adaptatif (plus d'arrêt
+  puis saut à la moindre gigue) et rappel de position indépendant des images par seconde. Rien de
+  propre à Hep trouvé dans le journal : à revoir en jeu ; si c'est encore saccadé, mesurer la
+  cadence des positions reçues pour lui (trace `trace` du client).
+- **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
+  étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
+  change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
+  désactivées : `kWriteFloors = false`).
 - **rob (joueur 3) a planté à 22:32** (l'hôte l'a vu partir à 22:32:02). Juste avant, son jeu
   perdait et recréait en boucle une escouade de 17 PNJ de l'hôte (`1:96:522216800:*`), toutes les
   ~3 s (« stand-in … is gone here: it can be recreated », 467 lignes de ce genre pour lui dans la

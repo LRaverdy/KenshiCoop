@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "kc/clock.h"
+#include "kc/motion.h"
 #include "kc/net.h"
 #include "kc/protocol.h"
 
@@ -627,7 +628,7 @@ public:
     static constexpr size_t kPingsPerPlayer = 5;
 
 private:
-    struct Sample { double t; EntityState s; };
+    using Sample = motion::Sample;
     struct Entity {
         uint32_t netId = 0;
         Handle handle;
@@ -637,6 +638,7 @@ private:
         bool present = false;                // handle resolved in the local world
         bool checked = false;                // presence evaluated at least once
         std::deque<Sample> buf;              // interpolation buffer, oldest first
+        motion::Cadence cadence;             // client: how often its position really changes (render delay)
         bool haveVitals = false;
         bool vitalsDirty = false;
         EntityVitals vitals;

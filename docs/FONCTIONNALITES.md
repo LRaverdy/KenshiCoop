@@ -124,9 +124,13 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   chez l'hôte.
 - **Fonctionnement** :
   - instantanés (snapshots) 20 fois par seconde ;
-  - le client garde 50 ms de retard et interpole entre deux instantanés, sans extrapolation ;
-  - la locomotion du jeu anime le personnage vers la destination de l'hôte, et sa position est
-    tirée en continu vers celle de l'hôte ;
+  - le client rend chaque perso avec son propre retard (50 ms + l'intervalle moyen entre deux
+    positions différentes reçues, 0,45 s au plus) : un PNJ que l'hôte ne bouge que quelques fois
+    par seconde (loin de l'escouade de l'hôte) glisse en continu au lieu de s'arrêter puis sauter ;
+    après le dernier instantané, un marcheur continue 0,25 s au plus sur sa lancée ;
+  - la locomotion du jeu anime le personnage vers la destination de l'hôte (redonnée si la copie
+    va ailleurs), et sa position est tirée en continu vers celle de l'hôte, sans dépendre des
+    images par seconde ; en marchant, jamais en arrière contre sa marche (plus de « moonwalk ») ;
   - au-delà de `snap_distance` (15 unités par défaut), téléportation directe.
 - **Mesuré** : personnages immobiles exacts à 0,01 unité près (1 unité ≈ 10 cm).
 
@@ -139,12 +143,18 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   bug, signalé par les amis, est corrigé.
 - **Fonctionnement** : le client impose la direction de l'hôte :
   - exactement à l'arrêt et en combat ;
-  - en marchant, dès que l'écart dépasse environ 25° ;
+  - en marchant, dès que l'écart dépasse environ 25°, mais seulement si cette direction s'accorde
+    (à 45° près) avec le sens où le perso de l'hôte va vraiment ; sinon il fait face à ce sens :
+    une marche n'est jamais jouée de dos (correctif 0.3.1, non revérifié en jeu) ;
   - en combat, le hook `combatMovementUpdate` remplace en plus la direction que le jeu du client
     calcule.
 - **Mesures de la suite** :
   - vitesse 1 : pire écart 2° (19 h 05) et 13° (19 h 34) ;
   - vitesse 3 : 6° à 19 h 05 ; échec à 178° à 19 h 34, pendant l'attaque de pillards. À relancer.
+  - échecs intermittents jusqu'à 180° hors combat : la copie pouvait marcher vers une autre
+    destination que celle de l'hôte (destination redonnée seulement quand celle de l'hôte
+    changeait) pendant que le rappel la tirait dans l'autre sens. Correctif 0.3.1 (vérification
+    de la destination toutes les 0,5 s, direction du déplacement réel) non revérifié en jeu.
 
 ### Animations ✅
 - **Le joueur** voit les mêmes coups, parades, esquives, actions (s'asseoir, soigner…), trébuchés,
@@ -184,10 +194,22 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
 - Un personnage dans un lit ou une cage (le sommeil est un K.-O.) reçoit seulement l'état
   inconscient chez le client, jamais la chute qui le sortirait de là ; idem s'il est porté.
 - **Le joueur** voit chaque blessure de membre, saignement, faim, K.-O. et mort comme chez l'hôte.
-  Un personnage tombe là où celui de l'hôte est tombé. Un corps couché trop loin de celui de
-  l'hôte est relevé et recouché (3 fois au plus) : il est remis debout d'autant en deçà du corps de
-  l'hôte que sa chute précédente l'avait porté loin de ses pieds (sinon il retombait chaque fois au
-  même écart, 7 à 12 unités pour un humain, ~75 pour une grosse bête). Non revérifié en jeu.
+  Un personnage tombe là où celui de l'hôte est tombé. Un corps couché à plus de 20 unités de
+  celui de l'hôte est relevé et recouché (2 fois par minute au plus, 10 s d'écart) : il est remis
+  debout d'autant en deçà du corps de l'hôte que sa chute précédente l'avait porté loin de ses
+  pieds (sinon il retombait chaque fois au même écart, 7 à 12 unités pour un humain, ~75 pour une
+  grosse bête). Non revérifié en jeu.
+- **Captifs (0.3.1)** : un perso porté, enchaîné, en cage, dans un lit, prisonnier ou esclave
+  (chez le client ou chez l'hôte) garde la pose que lui donne le jeu : la synchro de posture ne
+  le fait plus ni tomber ni relever. Avant, les captifs de nass4 tombaient, se rasseyaient et
+  retombaient toutes les 2 s (session du 10/10). Par corps : 4 chutes par minute au plus, et
+  plus rien pendant la minute après deux chutes de suite qui ne tiennent pas. Un PNJ K.-O. chez
+  l'hôte tombe inconscient chez le client (le jeu local ne le relève plus). Non revérifié en jeu.
+- **Cadavres (0.3.1)** : un corps mort chez l'hôte reste mort et couché chez les clients, pour
+  toujours : jamais relevé, jamais ranimé par la synchro de santé ; sa doublure recréée (zone
+  déchargée puis rechargée) revient morte et couchée ; posé par son porteur, il tombe directement.
+  Avant, tous les cadavres finissaient debout chez les clients au bout d'un moment. Non revérifié
+  en jeu.
 - **Fonctionnement** :
   - les valeurs de santé partent 5 fois par seconde ;
   - le client les réimpose toutes les 0,25 s, parce que sa simulation locale (saignement,

@@ -18,6 +18,7 @@
 #include <process.h>
 
 #include "kc/admin.h"
+#include "kc/motion.h"
 #include "kc/call_scopes.h"
 #include "kc/protocol.h"
 #include "kc/session.h"
@@ -154,6 +155,7 @@ struct FakeWorld : IWorld {
         if (it == chars.end()) return false;
         out.pos = it->second.pos; out.rot = it->second.rot; out.dest = it->second.dest; out.flags = 0;
         if (Dist(it->second.pos, it->second.dest) > 1e-3f) out.flags |= kFlagMoving;
+        if (it->second.vit.flags & kVitDead) out.flags |= kFlagDead | kFlagDown;   // a corpse lies
         return true;
     }
     bool ReadVitals(const Handle& h, EntityVitals& out) override {
@@ -196,13 +198,16 @@ struct FakeWorld : IWorld {
         c.squad = false;
         c.pos = at.pos;
         c.dest = at.pos;
+        if (motion::SpawnsDead(at)) c.vit.flags = kVitDead;   // as KenshiWorld::Spawn: dead and lying at once
         chars[h.serial] = c;
+        spawnFlags[h.serial] = at.flags;
         ++spawns;
         return true;
     }
     void Despawn(const Handle& h) override {
         if (chars.erase(h.serial)) ++despawns;
     }
+    std::map<uint32_t, uint8_t> spawnFlags;   // the host state each stand-in was recreated from
     std::map<std::string, uint32_t> named;   // player characters by name
     bool EnsurePlayerCharacter(const std::string& name, uint64_t steamId, Handle& out, bool& created) override {
         (void)steamId;
@@ -2239,6 +2244,26 @@ static void TestSpawnReplication() {
     if (cw.chars.count(60)) CHECK(Dist(cw.chars[60].pos, hw.chars[60].pos) < 1e-3f);
     CHECK(!cw.chars.count(901) && cw.culled == 1);
     CHECK(cli.missingNpcs() == 0);
+
+    std::printf("session: a dead body recreated here comes back dead and lying\n");
+    // the user's session: after a while every corpse stood up on the clients. A body dead on the
+    // host whose stand-in is gone here (its zone unloaded, then loaded again) is recreated dead.
+    FakeChar corpse;
+    corpse.squad = false;
+    corpse.pos = corpse.dest = {150, 0, 70};
+    corpse.vit.flags = kVitDead;
+    hw.chars[70] = corpse;
+    Run({{&host, &hw}, {&cli, &cw}}, 8.0, [&] { return cw.chars.count(70) == 1; });
+    CHECK(cw.chars.count(70) == 1);
+    cw.chars.erase(70);   // its zone unloads here
+    cw.spawnFlags.erase(70);
+    Run({{&host, &hw}, {&cli, &cw}}, 8.0, [&] { return cw.chars.count(70) == 1 && (cw.chars[70].vit.flags & kVitDead); });
+    CHECK(cw.chars.count(70) == 1);
+    CHECK(cw.spawnFlags.count(70) && (cw.spawnFlags[70] & kFlagDead));   // recreated from a dead state
+    if (cw.chars.count(70)) {
+        CHECK((cw.chars[70].vit.flags & kVitDead) != 0);
+        CHECK(Dist(cw.chars[70].pos, corpse.pos) < 1e-3f);
+    }
 }
 
 static void TestInventories() {
@@ -4625,6 +4650,235 @@ static void TestClockSync() {
     std::puts("clock sync ok");
 }
 
+// ---------------------------------------------------------------- motion and posture (kc::motion)
+// The 10/10 session: captives convulsing on a client (a fall every 2 s that never took), NPCs far
+// from the host jerky and sliding backwards (sparse positions, a fixed 0.05 s render delay, a pull
+// straight back against the walk), walking characters facing away from where they go.
+static void TestMotion() {
+    std::printf("motion and posture\n");
+    using namespace kc::motion;
+    auto walker = [](float x, float destX) {
+        EntityState s;
+        s.pos = {x, 0, 0};
+        s.dest = {destX, 0, 0};
+        s.flags = kFlagMoving;
+        return s;
+    };
+    // 1. a walker the host's game moves only 4 times a second (sent at 20 Hz): the rendered position
+    // moves forwards smoothly, never back, never by a jump
+    {
+        std::deque<Sample> buf;
+        Cadence cad;
+        const double step = 0.05;
+        double nextSnap = 0;
+        float prevX = -1, maxStep = 0;
+        bool backwards = false;
+        for (int f = 0; f < 6 * 60; ++f) {
+            const double now = f / 60.0;
+            while (nextSnap <= now) {
+                const float hostX = 14.0f * float(std::floor(nextSnap / 0.25) * 0.25);   // moved every 0.25 s
+                PushSample(buf, cad, nextSnap, walker(hostX, 1000), step, 1.0);
+                nextSnap += step;
+            }
+            const EntityState r = StateAt(buf, now - StepDelay(cad, 0.05, now), 50.0f);
+            if (now > 1.5) {
+                if (r.pos.x < prevX - 1e-4f) backwards = true;
+                maxStep = std::max(maxStep, r.pos.x - prevX);
+            }
+            prevX = r.pos.x;
+        }
+        CHECK(!backwards);
+        CHECK(maxStep < 0.6f);   // 14 u/s at 60 fps = 0.23 per frame; holding then jumping was 3.5
+        CHECK(cad.gap > 0.2 && cad.gap < 0.3);
+        CHECK(RenderDelay(cad, 0.05) > 0.25 && RenderDelay(cad, 0.05) <= kMaxDelay);
+        // a character updated at the full rate keeps a short delay
+        Cadence fast;
+        std::deque<Sample> b2;
+        for (int i = 0; i < 100; ++i) PushSample(b2, fast, i * step, walker(0.7f * float(i), 1000), step, 1.0);
+        CHECK(RenderDelay(fast, 0.05) < 0.11);
+    }
+    // 2. the same position again while walking: merged (time kept, the rest updated)
+    {
+        std::deque<Sample> buf;
+        Cadence cad;
+        PushSample(buf, cad, 1.0, walker(5, 100), 0.05, 1.0);
+        EntityState again = walker(5, 120);
+        again.combatTarget = 7;
+        CHECK(PushSample(buf, cad, 1.05, again, 0.05, 1.0));
+        CHECK(buf.size() == 1 && buf.back().t == 1.0 && buf.back().s.dest.x == 120 && buf.back().s.combatTarget == 7);
+        CHECK(!PushSample(buf, cad, 0.9, walker(6, 100), 0.05, 1.0));   // stale
+        // standing still for long: never merged; after a gap it stood until just before the new sample
+        std::deque<Sample> st;
+        EntityState idle;
+        idle.pos = {1, 0, 1};
+        PushSample(st, cad, 1.0, idle, 0.05, 1.0);
+        EntityState moved = idle;
+        moved.pos = {3, 0, 1};
+        PushSample(st, cad, 2.0, moved, 0.05, 1.0);
+        CHECK(st.size() == 3 && std::fabs(st[1].t - 1.95) < 1e-9 && st[1].s.pos.x == 1);
+        // a walker whose samples were lost is not held: it walked across the gap
+        std::deque<Sample> w;
+        PushSample(w, cad, 1.0, walker(0, 100), 0.05, 1.0);
+        PushSample(w, cad, 1.5, walker(7, 100), 0.05, 1.0);
+        CHECK(w.size() == 2);
+        CHECK(std::fabs(StateAt(w, 1.25, 50.0f).pos.x - 3.5f) < 0.01f);
+    }
+    // 3. past the newest sample: a walker carries on along its velocity, briefly, never past its destination
+    {
+        std::deque<Sample> buf;
+        Cadence cad;
+        PushSample(buf, cad, 1.0, walker(0, 100), 0.05, 1.0);
+        PushSample(buf, cad, 1.1, walker(1.4f, 100), 0.05, 1.0);
+        CHECK(std::fabs(StateAt(buf, 1.2, 50.0f).pos.x - 2.8f) < 0.01f);
+        CHECK(std::fabs(StateAt(buf, 3.0, 50.0f).pos.x - (1.4f + 14.0f * float(kMaxExtrapolate))) < 0.01f);
+        std::deque<Sample> near;
+        PushSample(near, cad, 1.0, walker(0, 2), 0.05, 1.0);
+        PushSample(near, cad, 1.1, walker(1.4f, 2), 0.05, 1.0);
+        CHECK(StateAt(near, 1.3, 50.0f).pos.x <= 2.0f + 1e-4f);
+        std::deque<Sample> stop;
+        PushSample(stop, cad, 1.0, walker(0, 100), 0.05, 1.0);
+        EntityState halted = walker(1.4f, 100);
+        halted.flags = 0;
+        PushSample(stop, cad, 1.1, halted, 0.05, 1.0);
+        CHECK(StateAt(stop, 1.3, 50.0f).pos.x == 1.4f);   // stopped: held
+    }
+    // 4. facing: the way it goes when the host's facing disagrees; the host's when standing or fighting
+    {
+        EntityState rendered = walker(0, 100), latest = walker(1, 100);
+        const Vec3 travel = TravelDir(rendered, latest);
+        CHECK(std::fabs(travel.x - 1) < 1e-4f && travel.z == 0);
+        const Vec3 backwards{-1, 0, 0}, ahead{0.9f, 0, 0.3f};
+        CHECK(WantFacing(backwards, travel, true, false).x > 0.99f);    // never walks facing back
+        CHECK(std::fabs(WantFacing(ahead, travel, true, false).z - Flat(ahead).z) < 1e-4f);   // agrees: the host's
+        CHECK(WantFacing(backwards, travel, true, true).x < -0.99f);    // fighting: steps back on purpose
+        CHECK(WantFacing(backwards, travel, false, false).x < -0.99f);  // standing: the host's
+        EntityState still = walker(0, 0.2f);
+        CHECK(IsZero2(TravelDir(still, still)));
+        CHECK(TravelDir(still, walker(0, 30)).x > 0.99f);   // not moved yet: toward its destination
+    }
+    // 5. the pull: never backwards against the walk (a little ahead: held back gently, still going
+    // forwards), sideways and standing errors corrected, the same at any frame rate
+    {
+        PullParams p;
+        p.dt = 1.0f / 60.0f;
+        p.moving = true;
+        const Vec3 travel{1, 0, 0};
+        const Vec3 local{12, 0, 0.5f}, target{10, 0, 0};
+        const Vec3 out = Pull(local, target, travel, p);
+        CHECK(local.x - out.x <= kBackRate * p.dt + 1e-4f);   // walking 14 u/s, held back by 2 u/s at most
+        CHECK(std::fabs(out.z) < 0.5f);                       // the sideways part is pulled
+        p.combat = true;   // fighting: straight onto the host's position
+        CHECK(Pull(local, target, travel, p).x < 11.0f);
+        p.combat = false;
+        p.moving = false;   // stopped: straight onto it
+        CHECK(Pull(local, target, travel, p).x < 11.0f);
+        p.moving = true;    // far ahead: something else went wrong, pulled normally
+        CHECK(Pull(Vec3{30, 0, 0}, target, travel, p).x < 25.0f);
+        CHECK(Pull(Vec3{9, 0, 0}, target, travel, p).x > 9.0f);   // behind: caught up
+        auto settle = [&](float fps) {
+            PullParams q;
+            q.dt = 1.0f / fps;
+            Vec3 at{0, 0, 3};
+            for (int i = 0; i < int(fps * 0.1f); ++i) at = Pull(at, Vec3{}, Vec3{}, q);
+            return Dist(at, Vec3{});
+        };
+        const float e30 = settle(30), e150 = settle(150);
+        CHECK(std::fabs(e30 - e150) < 0.15f);
+    }
+    // 6. posture: captives are left alone; a fall that does not take is not retried forever; bodies
+    // a few units off are not stood up again; real limits per body
+    {
+        PostureFacts held;
+        held.held = true;
+        held.hostDown = true;
+        PostureBook b;
+        CHECK(!MayFall(b, held, 0));
+        held.localDown = true;
+        CHECK(!MayRelay(b, held, 50, true, 0));
+        PostureFacts heldUp;
+        heldUp.held = true;
+        heldUp.localDown = true;
+        CHECK(!MayStand(heldUp));
+
+        // the 10/10 loop: a body that never stays down, checked every frame for two minutes
+        PostureFacts f;
+        f.hostDown = true;
+        PostureBook loop;
+        int falls = 0;
+        double fellAt = -1;
+        for (double t = 0; t < 120; t += 0.1) {
+            if (fellAt >= 0 && t - fellAt >= 2.0) { NoteFallSettled(loop, false, true); fellAt = -1; }
+            if (fellAt < 0 && MayFall(loop, f, t)) { NoteFall(loop, t); fellAt = t; ++falls; }
+        }
+        CHECK(falls <= 2 * kMaxFailedFalls);   // was one every 2 s (60)
+        CHECK(falls >= 2);                     // still tried, once per minute
+
+        // falls that take: at most kMaxFalls a minute
+        PostureBook ok;
+        int n = 0;
+        for (int i = 0; i < 10; ++i)
+            if (MayFall(ok, f, i * 3.0)) { NoteFall(ok, i * 3.0); NoteFallSettled(ok, true, true); ++n; }
+        CHECK(n == kMaxFalls);
+        CHECK(MayFall(ok, f, 61.0));   // a new minute
+
+        // relays: only well off (bodies land 7-12 units from their feet), 10 s apart, twice a minute,
+        // and only with a fall left to lay it down again
+        PostureFacts lying;
+        lying.hostDown = lying.localDown = true;
+        PostureBook r;
+        CHECK(!MayRelay(r, lying, 11.0f, true, 0));
+        CHECK(!MayRelay(r, lying, 30.0f, false, 0));   // nobody near to see it
+        CHECK(MayRelay(r, lying, 30.0f, true, 0));
+        NoteRelay(r, 0);
+        CHECK(!MayRelay(r, lying, 30.0f, true, 5));
+        CHECK(MayRelay(r, lying, 30.0f, true, 11));
+        NoteRelay(r, 11);
+        CHECK(!MayRelay(r, lying, 30.0f, true, 30));   // twice a minute
+        CHECK(MayRelay(r, lying, 30.0f, true, 72));    // next minute
+        PostureBook spent;
+        for (int i = 0; i < kMaxFalls; ++i) { NoteFall(spent, 1.0); NoteFallSettled(spent, true, true); }
+        CHECK(!MayRelay(spent, lying, 30.0f, true, 2.0));   // no fall left: it would stay standing
+        PostureFacts dead = lying;
+        dead.hostDead = true;
+        CHECK(!MayRelay(r, dead, 30.0f, true, 200));
+        // standing up as on the host: never a dead body, never a held one
+        PostureFacts up;
+        up.localDown = true;
+        CHECK(MayStand(up));
+        up.localDead = true;
+        CHECK(!MayStand(up));
+    }
+    // 7. dead bodies: dead and lying forever. Never stood up, never relaid, never revived; a stand-in
+    // recreated alive is killed and laid down; a corpse on a shoulder is left alone
+    {
+        CHECK(DeadBodyStep(true, true, false, false, false) == DeadStep::Kill);   // recreated: alive here
+        CHECK(DeadBodyStep(true, true, true, false, false) == DeadStep::Lay);     // standing corpse
+        CHECK(DeadBodyStep(true, true, true, true, false) == DeadStep::None);     // lying: left alone
+        CHECK(DeadBodyStep(true, false, true, false, false) == DeadStep::None);   // the host's is not in ragdoll either
+        CHECK(DeadBodyStep(true, true, false, false, true) == DeadStep::None);    // carried
+        CHECK(DeadBodyStep(false, true, false, false, false) == DeadStep::None);
+        PostureFacts dead;
+        dead.hostDead = dead.hostDown = dead.localDead = dead.localDown = true;
+        PostureBook b;
+        CHECK(!MayStand(dead));
+        CHECK(!MayRelay(b, dead, 100.0f, true, 0));
+        CHECK(!MayFall(b, dead, 0));
+        dead.hostDown = false;   // its ragdoll ended on the host: still never stood up here
+        CHECK(!MayStand(dead));
+        CHECK(VitalsFlagsFor(0, kFlagDead) & kVitDead);   // vitals never revive it
+        CHECK(VitalsFlagsFor(kVitUnconscious, 0) == kVitUnconscious);
+        EntityState corpse;
+        corpse.flags = kFlagDead | kFlagDown;
+        CHECK(SpawnsDead(corpse) && !SpawnsDead(EntityState{}));
+        // a corpse the game keeps standing up is laid down a few times a minute, not every 2 s
+        int lays = 0;
+        PostureBook loop;
+        for (double t = 0; t < 60; t += 2.1)
+            if (MayLayDead(loop, t)) { NoteFall(loop, t); NoteFallSettled(loop, false, true); ++lays; }
+        CHECK(lays <= kMaxFailedFalls);
+    }
+}
+
 int main() {
     TestWire();
     TestClockSync();
@@ -4668,6 +4922,7 @@ int main() {
     TestJoinQueue();
     TestWorkshop();   // research, crafting benches, machines, power
     TestMessageRules();   // the authority table covers every message
+    TestMotion();   // smooth motion, facing and posture on clients
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

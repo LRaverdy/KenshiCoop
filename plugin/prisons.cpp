@@ -61,6 +61,9 @@ bool KenshiWorld::ReadCaptive(const kc::Handle& h, kc::CaptiveState& out) {
 // way: position, pose, occupancy), then the flags. Our own game never changes them (hooks).
 void KenshiWorld::ApplyCaptive(const kc::Handle& h, const kc::CaptiveState& s) {
     kenshi::Character* c = Find(h);
+    // the posture code leaves captives alone (KenshiWorld::PostureHeld): known even before our copy is found
+    if (s.caged || s.chained || s.slaveState != 0 || s.kidnapped || s.sentence > 0) hostCaptive_.insert(h);
+    else hostCaptive_.erase(h);
     kenshi::Captivity local;
     if (!c || !kenshi::ReadCaptivity(c, local)) return;
     HostCallScope scope;

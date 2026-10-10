@@ -24,7 +24,7 @@ comment s'en servir pour comprendre un problème.
 - **Les lignes des clients** : chaque client envoie à l'hôte toutes les nouvelles lignes de son
   journal, toutes les 0,5 s. L'hôte les écrit précédées du nom du joueur, avec sa propre heure :
   ```
-  19:33:33.303  [Coucoudz 2] posture: 1:1:2712646400:6:3029174784 falls as on the host (ok, ragdoll now 0)
+  19:33:33.303  [Coucoudz 2] posture: 1:1:2712646400:6:3029174784 falls as on the host (ok, fall 1/4 this minute)
   ```
   - 64 lignes au plus par envoi, 512 en attente au plus.
   - Au-delà, le client signale `(N lignes non transmises)`.
@@ -158,7 +158,10 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 | Ligne | Sens |
 |---|---|
 | `[X] vitals: … faints as on the host (now down=… unconscious=… dead=…)` | K.-O. rejoué chez le client. Répétée toutes les 0,5 s : il ne prend pas (correctif en cours) |
-| `[X] posture: … falls as on the host (…)` | chute rejouée chez le client |
+| `[X] posture: … falls as on the host (ok, fall N/4 this minute)` | chute rejouée chez le client ; jamais sur un perso porté, enchaîné, en cage, au lit, prisonnier ou esclave ; 4 par corps et par minute au plus |
+| `[X] posture: … does not stay down here after N falls: left as it is for a minute` | deux chutes de suite n'ont pas tenu (le jeu du client remet le corps debout ou assis) : plus d'essai pendant la minute, au lieu d'une chute toutes les 2 s |
+| `[X] posture: … dies and falls as on the host` / `… dead body lies down again as on the host` | corps mort chez l'hôte : la copie vivante (doublure recréée) meurt et tombe ; un cadavre debout est recouché |
+| `[X] stand-in for the host's dead K made dead and lying (dead=1)` | doublure recréée pour un corps mort (zone rechargée) : morte et couchée dès sa création |
 | `[X] carry: …` | corps porté ou posé comme chez l'hôte |
 | `refused locally: … for a character this player does not own …` | (client) une demande visait un perso qui n'est pas à ce joueur : elle n'est pas envoyée, le joueur voit « Action refusée » |
 | `auth: [X] <demande> refused: <règle> (…; n recent of this rule)` | (hôte) contrôle central : demande d'un client refusée avant son traitement ; `n` = refus récents de cette règle (décroît, demi-vie 60 s) |
@@ -174,7 +177,7 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 | `[X] ground: drop of sid xN refused here: the host cannot be asked for it (… inventory …); the item stays in it` | (client) dépôt refusé par la fenêtre d'inventaire elle-même : rien n'a bougé, toast « Objet non posé ». `COULD NOT PUT THE ITEM BACK` : l'objet n'a pas pu être remis (l'état de l'hôte le recrée) |
 | `[X] host picked up item A: removed here` / `…: we do not have it` | (client) ramassage annoncé par l'hôte. « we do not have it » : objet pas chargé chez ce client. L'hôte n'annonce plus les objets que le jeu vient de créer (stock d'un marchand, équipement d'un nouveau PNJ), qui donnaient des centaines de lignes |
 | `[X] stand-in A for the host's B is gone here: it can be recreated` | la doublure a vraiment disparu (nettoyée, zone déchargée) : elle sera recréée |
-| `[X] posture: … lies N units from the host's body: stood up to fall where the host's lies` | corps K.-O. couché à plus de 5 unités de celui de l'hôte : relevé puis recouché à sa place (3 fois au plus tant qu'il reste à terre) ; il est remis debout d'autant en deçà du corps de l'hôte que sa chute précédente l'a porté loin de ses pieds |
+| `[X] posture: … lies N units from the host's body: stood up to fall where the host's lies (R/2 this minute)` | corps K.-O. (jamais mort) couché à plus de 20 unités de celui de l'hôte : relevé puis recouché à sa place (2 fois par minute au plus, 10 s d'écart, seulement s'il reste une chute pour le recoucher) ; il est remis debout d'autant en deçà du corps de l'hôte que sa chute précédente l'a porté loin de ses pieds |
 | `[X] clock: N h behind the host's: running +3 %` / `ahead of the host's: running -10 %` / `clock: back on the host's (…): host speed again` | l'horloge du client rattrape celle de l'hôte en tournant un peu plus vite ou plus lentement |
 | `[X] clock: N h behind the host's: set to its H h` / `… (refused)` | écart trop grand (client figé par une zone qui charge, pause arrivée en retard) : heure recalée d'un coup ; « refused » : l'horloge du jeu introuvable |
 | `[X] inventory of K not as on the host: SID xQ at SECTION X,Y here at … / missing` | après une reconstruction, un objet n'est pas là où l'hôte l'a (le premier trouvé) ; 3 essais puis abandon jusqu'au prochain changement |

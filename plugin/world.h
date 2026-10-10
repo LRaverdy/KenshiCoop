@@ -408,8 +408,14 @@ private:
     struct FallPrep { double start, lastMove; };
     std::unordered_map<kc::Handle, FallPrep, HandleHash> fallPrep_;   // client: moving into place before a fall
     std::unordered_map<kc::Handle, double, HandleHash> fellAt_;      // client: when we made it fall
-    std::unordered_map<kc::Handle, double, HandleHash> relaidAt_;    // client: when a body lying away from the host's was stood up to fall again
-    std::unordered_map<kc::Handle, int, HandleHash> relaidCount_;    // client: how often it was, while it stays down
+    // client: what the posture code did to each body (falls, bodies stood up to fall closer to the
+    // host's), limited per body and minute, never reset by a change of posture (kc::motion)
+    std::unordered_map<kc::Handle, kc::motion::PostureBook, HandleHash> postureBook_;
+    std::unordered_set<kc::Handle, HandleHash> hostKnockedOut_;      // client: unconscious in the host's vitals
+    std::unordered_set<kc::Handle, HandleHash> hostCaptive_;         // client: shackled, caged, slave or prisoner on the host
+    std::unordered_map<kc::Handle, double, HandleHash> destCheckAt_; // client: last check that our copy walks to the host's destination
+    double frameAt_ = 0, frameDt_ = 1.0 / 60.0;                     // real time between two frames (position pull)
+    bool PostureHeld(const kc::Handle& h, kenshi::Character* c);
     std::unordered_map<kc::Handle, kc::Vec3, HandleHash> fallFrom_;  // client: where our copy stood when we made it fall
     std::unordered_map<kc::Handle, kc::Vec3, HandleHash> fallShift_; // client: where its body then lay, relative to that (x, z)
     std::unordered_multimap<uint32_t, kc::Handle> bySerial_;          // this frame's characters by handle serial (FindMoved)
