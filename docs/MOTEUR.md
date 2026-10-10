@@ -61,7 +61,7 @@ Les signatures sont celles du commentaire du code.
 | 17 | `FnSaveManagerSave` | `SaveManager::save` | `0x47B920` | — | void SaveManager::save(const std::string& name, bool autosave) (différé) |
 | 18 | `FnSaveManagerLoad` | `SaveManager::load` | `0x47B480` | — | void SaveManager::load(const std::string& name) (différé) |
 | 19 | `FnCreateRandomCharacter` | `RootObjectFactory::createRandomCharacter` | `0x5836E0` | oui | RootObject* RootObjectFactory::createRandomCharacter(Faction*, Vector3, RootObjectContainer*, GameData*, Building*, float age) |
-| 20 | `FnWorldDestroy` | `GameWorld::destroy(RootObject*)` | `0x799AF0` | oui (lot E) | bool GameWorld::destroy(RootObject*, bool justUnloaded, const char* debugInfo) ; détourné chez l'hôte pour voir disparaître les bâtiments suivis |
+| 20 | `FnWorldDestroy` | `GameWorld::destroy(RootObject*)` | `0x799AF0` | oui (lot E) | bool GameWorld::destroy(RootObject*, bool justUnloaded, const char* debugInfo) ; détourné chez l'hôte pour voir disparaître les bâtiments suivis ; et (0.3.1), des deux côtés, pour chaque perso détruit ou déchargé avec sa zone (`justUnloaded`) : son adresse est retirée de tout l'état du mod (`KenshiWorld::PurgeDestroyed`), et le client sait pourquoi une doublure a disparu |
 | 21 | `FnEndCombatMode` | `Character::endCombatMode` | `0x5C91C0` | — | void Character::endCombatMode() |
 | 22 | `FnRagdollMode` | `Character::ragdollMode` | `0x5CBD60` | oui | void Character::ragdollMode(bool on, RagdollPart::Enum part) |
 | 23 | `FnRegionUpdateBT` | `WeatherRegion::updateBT` | `0x9DDE50` | oui | void WeatherRegion::updateBT() (thread d'arrière-plan : fait avancer la météo) |
@@ -202,6 +202,7 @@ Les signatures sont celles du commentaire du code.
 | escouade | `FnDestroyPlatoon` | `Faction::destroyPlatoon(Platoon*)` | `0x6BA9D0` | — | [D, partiel] retire l'escouade de la faction ; `SquadManagementScreen::removeSquad` (`0x491D20`) ne l'appelle que pour une escouade vide et pas la dernière (sinon une boîte de message) |
 | escouade | `FnSquadSetName` | `ActivePlatoon::setName(const std::string&)` | `0x4BE480` | — | [D] affecte `Platoon` (+0x78) +0x18 ; sans appelant direct dans 1.0.68 : la case de nom de la fenêtre (`onNameChanged` `0x48DF00`) écrit le même champ à chaque frappe |
 | tâches | `FnCharGetPermajobData` | `Character::getPermajobData(int slot) const` | `0x5C8F10` | — | [D] `Character::ai` (+0x650) → `orders` (+0x20) → `OrdersReceiver::getPermajobData` : le `Tasker*` de la tâche (sujet `hand` +0x10, lieu +0x58) |
+| dégâts | `FnMedAddWound` | `MedicalSystem::addWound(this, bool, int, ptr, 4 arguments sur la pile)` (signature lue au désassemblage : `dl`, `r8d`, `r9`, `[rsp+0x28..0x40]`, retour `rax`) | `0x6508D0` | hôte | [D, 0.3.1] crée le chiffre de dégâts (`createScreenLabel` en `0x651E46`) seulement si l'option des chiffres (`[0x2133AE0]`), l'interface (`0x7F5710`) et `Character+0x1A9` (vu par la caméra) le permettent. Détour `hk_addWound` : pour un perso près d'un perso d'un joueur client, +0x1A9 mis à 1 le temps de l'appel puis remis à 0 ; rien d'autre de la fonction ne le lit |
 | heure | `FnClockSetHourOfDay` | `GameClock::setHourOfDay(float)` (notre nom) | `0x66CF30` | — | [D] l'objet de `0x21303D0` : écrit l'heure du jour (0..24) dans l'horloge du ciel (+0x20 → +0x1C), appelle sa vt 0x8 (mise à jour, 0 s), recalcule les heures (+0xA0 = jour × 24 + heure du jour) et heure / minute (+0x0 / +0x4). Une nouvelle partie l'appelle avec 0 puis écrit le jour 1 (+0x8, `0x36CFB4`) ; le mod fait de même pour recaler l'horloge d'un client (`kenshi::SetGameHours`) |
 
 | validité | `FnTerrainHeight` | `UtilityT::getTerrainHeight(float x, float z)` | `0x9B3710` | — | le sol sous l'eau éventuelle ; -99 où aucun terrain n'est connu (saut vers `getTerrainHeightFast(x, z, nullptr)` `0x9B32F0`) |
@@ -380,6 +381,7 @@ Vtables (pour reconnaître un objet) :
 | +0x2F8 | `inSomething` : 0 rien, 1 au lit, 2 en prison / cage ; `inWhat` (`hand`) à +0x300 |
 | +0x348 / +0x380 | porte quelqu'un (bool) / `hand` du corps porté |
 | +0x418 | rang dans l'escouade (int) |
+| +0x1A9 | **vu par la caméra** (bool, `kenshi::CH_inView`) : recalculé à chaque image par `0x5C9F60` (distance² à la caméra, `0x7F2A20` = `PlayerInterface+0x30` caméra → position, comparée à un seuil, puis tests de cadrage `0x6AE7B0` / `0x6AE710`) ; lu par l'animation (`0x51E59C`, `0x5B562A`), le rendu, et `addWound` pour le chiffre de dégâts (`0x651DF5`) [D, 0.3.1] |
 | +0x448 | `AnimationClass*` |
 | +0x450 | `CharStats*` (son `me` à +0x10) |
 | +0x458 | `MedicalSystem` (en ligne) |

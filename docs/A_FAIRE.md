@@ -200,6 +200,7 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   du joueur sans fenêtre (cause probable des « -> ok » sans rien) est terminée avant l'ordre ; le
   client affiche « X va parler à Y » pendant que son perso marche.
 - **rob se désynchronise peu à peu** ; un « Resynchroniser tout le monde » de l'hôte l'a remis
+- ~~**rob se désynchronise peu à peu**~~ — **corrigé (0.3.1, à vérifier en jeu)**, voir plus bas ; un « Resynchroniser tout le monde » de l'hôte l'a remis
   d'aplomb. Bilans périodiques de son client (`[rob] sync:`) : jusqu'à 41 puis 69 « NPCs not there
   yet » (PNJ de l'hôte jamais apparus chez lui, 23:13-23:18, ville bondée), 288-315 persos suivis.
   À faire : (1) ces PNJ manquants doivent être demandés / recréés sans attendre (cf. la boucle de
@@ -207,6 +208,14 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   trop longtemps avec des PNJ manquants ou des écarts, resynchroniser sa zone seulement, sans
   attendre l'hôte (idée « empreinte par zone » de docs/INSPIRATION_PZ.md) ; (3) mesurer le débit
   envoyé à un client dans une zone dense.
+  **Fait (0.3.1)** : cause = l'hôte envoyait à chaque client toute la foule active de son jeu
+  (autour de sa caméra et de son escouade), et le client la recréait là où il n'avait rien chargé
+  (9 723 « is gone here » pour rob). Maintenant (1) chaque client ne reçoit que les PNJ à moins de
+  `stream_radius` (3000) de ses propres persos, recrée 2 persos par image au plus, ne compte comme
+  manquants que ceux-là ; (2) resync automatique de **sa** zone après 15 s de PNJ manquants ou de
+  persos décalés (sans pause ni clic, au plus une fois par minute) ; (3) ligne « stream: X is sent N
+  of M characters …, K KB/s, ping, % lost » par joueur et par minute. Détail : CHANGELOG.
+  Les empreintes de zone ne sont pas faites (les rapports suffisent pour décider).
 - **Prisonniers portés / kidnappés qui convulsent chez nass4** : les gens qu'il a kidnappés
   (portés sur l'épaule ou attachés) alternent sans arrêt assis / debout / couchés sur lui chez lui.
   Probable : la posture (porté, à terre, assis) et la position imposées par la synchro se battent
@@ -246,13 +255,19 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   pas un membre **vivant** de l'escouade de ce monde n'est plus rendu (nouveau perso, éditeur) ; le
   journal compte aussi le perso déjà rendu (« (1 of them their own character) »). Reste : un resync
   lancé pendant qu'un joueur est dans l'éditeur le fait toujours recharger (il retrouve l'éditeur).
-- **rob ne voyait plus les dégâts** (sang, chiffres, barres de vie / blessures qui ne bougeaient
+- ~~**rob ne voyait plus les dégâts**~~ (sang, chiffres, barres de vie / blessures qui ne bougeaient
   plus) ; l'hôte l'a « spec » (regardé avec la caméra sur lui) et il les a revus. Comme les autres
   désyncs de rob : quelque chose dans le flux vers ce client s'arrête (vitals / effets de
   combat ?) jusqu'à un événement qui le relance. À chercher dans les bilans `[rob] sync:` et les
   envois de vitals par client : priorité ou zone d'intérêt calculée autour de l'hôte / de sa
   caméra au lieu des persos du joueur concerné ?
-- **Geoffrey : chutes de FPS, l'écran se fige par moments.** Ses bilans : 104-133 images/s avec
+  **Trouvé et corrigé (0.3.1, à vérifier en jeu)** : `MedicalSystem::addWound` ne crée le chiffre de
+  dégâts que si le perso est vu par la caméra (`Character+0x1A9`, test en `0x651DF5`) : sans la
+  caméra de l'hôte sur rob, aucun chiffre pour ses combats. Le détour `hk_addWound` met ce drapeau,
+  le temps de l'appel, pour les persos proches d'un perso d'un joueur client. Et le flux de rob était
+  encombré par la foule de l'hôte (tout lui était envoyé) : il ne reçoit plus que ce qui l'entoure.
+  Reste à voir : le sang (effets visuels) n'est pas répliqué du tout.
+- ~~**Geoffrey : chutes de FPS, l'écran se fige par moments.**~~ Ses bilans : 104-133 images/s avec
   179-195 persos suivis, 65 images/s quand ça monte à 300 persos (23:42). Il recrée beaucoup de
   persos (199 lignes « stand-in … gone » / « cannot recreate host character » en quelques minutes,
   la fabrique échoue en boucle sur des persos uniques comme 'Cat', 'Ruka', 'Kang' : chaque essai
@@ -260,6 +275,11 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   ne plus réessayer sans fin un perso que la fabrique refuse (liste noire par modèle) ; couper les
   journaux par image ; étaler les créations de persos sur plusieurs images (les gels = beaucoup de
   persos créés d'un coup à l'arrivée dans une zone).
+  **Fait (0.3.1, à vérifier en jeu)** : un modèle refusé par la fabrique attend 30 s, 1, 2 … 10 min ;
+  2 créations par image au plus (`[sync] spawns_per_frame`), les plus proches d'abord ; doublure perdue
+  sans cesse : 2 s, 10 s, 30 s, 1 min, 2 min ; journaux « is gone here » (6 / 10 s), « anim in » (20),
+  « anim not blocked » (10) limités ; persos qu'on ne nous envoie plus pilotés 2 fois/s seulement ;
+  et surtout moins de persos suivis (seulement ceux autour de ses persos).
 - **PNJ assommés vus debout chez nass4** : il les a mis K.-O., peut les piller (l'hôte les sait à
   terre), mais chez lui ils restent debout. La posture « à terre » n'est pas appliquée chez lui
   (ou relevée aussitôt : voir la boucle « stood up to fall where the host's lies » des prisonniers,
@@ -296,11 +316,19 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
   désactivées : `kWriteFloors = false`).
-- **rob (joueur 3) a planté à 22:32** (l'hôte l'a vu partir à 22:32:02). Juste avant, son jeu
+- **rob (joueur 3) a planté à 22:32** (et à 00:28:13) (l'hôte l'a vu partir à 22:32:02). Juste avant, son jeu
   perdait et recréait en boucle une escouade de 17 PNJ de l'hôte (`1:96:522216800:*`), toutes les
   ~3 s (« stand-in … is gone here: it can be recreated », 467 lignes de ce genre pour lui dans la
   session). Probable cause ou facteur : cette boucle. Demander à rob son `KenshiCoop.log` et le
   `crashDump*.zip` de son dossier Kenshi (le vrai rapport du plantage est chez lui).
+  **0.3.1 (à vérifier en jeu, sans rapport de plantage)** : les deux fois, une escouade locale entière
+  de doublures disparaît d'un coup ~10 s avant (00:27:50, 00:28:03 : 1:53:… 1 à 10 pour 1:899 à 1:904
+  chez l'hôte), quand il « change de vue » : sa caméra part, son jeu décharge la zone. Le miroir
+  d'animations gardait l'adresse de ces persos jusqu'à 1 s et écrivait dans leurs objets libérés :
+  maintenant chaque perso détruit ou déchargé est retiré de tout notre état (`PurgeDestroyed`, détour
+  `GameWorld::destroy`), et le miroir ne touche qu'aux persos trouvés dans l'image. Plus de boucle de
+  recréation (délais croissants, recréation seulement près de ses persos). Repro en jeu à lancer :
+  `coop_test.py camjump`.
 
 ## 10 octobre 2026
 

@@ -259,6 +259,7 @@ clients locaux, rejoue un scénario par les commandes de debug et vérifie les j
 | player | name | Player | nom affiché |
 | network | join_address, port | — | dernière adresse rejointe (réécrite par `SaveConnection`) |
 | sync | snap_distance, destination_epsilon, interest_radius | — | recalage, précision, rayon d'intérêt (0 : partout) |
+| sync | stream_radius, standin_radius, spawns_per_frame, auto_zone_resync | 3000, 2500, 2, 1 | diffusion par joueur (0.3.1) : rayon autour des persos de chaque joueur, rayon de recréation, créations par image, resync automatique de zone |
 | coop | own_character | 1 | un nouveau perso par joueur |
 | ui | overlay, host_console | 1, 1 | overlay, console de l'hôte |
 | debug | commands, steam_loopback | 0, 0 | commandes de debug, Steam en boucle locale |

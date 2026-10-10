@@ -263,6 +263,22 @@ Ordre dans `Tick()` (`main.cpp`) :
 - **Intérêt** : avec `[sync] interest_radius = 0` (défaut), tous les personnages actifs du jeu de
   l'hôte sont répliqués, ainsi que les cadavres à moins de 1000 unités d'un membre de l'escouade.
   Avec un rayon, un PNJ ne disparaît qu'au-delà de 1,25 fois le rayon (hystérésis).
+- **Diffusion par joueur (0.3.1, `common/src/session_streaming.cpp`)** : tous les joueurs
+  connaissent toutes les entités (`Bind` à tous, inchangé), mais l'**état** d'un PNJ (positions,
+  santé, images et événements d'animation, chiffres de dégâts compris) ne part qu'aux joueurs dont
+  un perso est à moins de `[sync] stream_radius` (3000, hystérésis ×1,25) ; `UpdateStreams` le
+  recalcule toutes les 0,5 s autour des persos **de chaque joueur** (jamais autour de la caméra ou
+  de la zone chargée de l'hôte). Persos des joueurs et conteneurs : à tous. Un perso qui entre dans
+  la diffusion d'un joueur lui est renvoyé en entier.
+  - Client : un perso sans état depuis 4 s est « en sommeil » (piloté 2 fois/s, jamais recréé, jamais
+    compté manquant) ; doublures créées seulement à moins de `[sync] standin_radius` (2500) de nos
+    persos, `spawns_per_frame` (2) par image au plus, les plus proches d'abord ; une doublure perdue
+    revient après 2 s, 10 s, 30 s, 1 min, 2 min ; un modèle refusé par la fabrique attend 30 s à 10 min.
+  - Resync automatique de zone (`kc::ZoneHealth`, `Session::ZoneResync`) : trois rapports de suite
+    (15 s) avec 5 PNJ manquants ou 3 persos décalés : l'hôte relie et renvoie tout ce qu'il envoie à ce
+    joueur seul (sans pause), au plus une fois par minute.
+  - Adresses : le détour `GameWorld::destroy` note chaque perso détruit ou déchargé ;
+    `KenshiWorld::PurgeDestroyed` les retire de tout l'état du mod au début et à la fin de chaque image.
 
 ## Modèle d'autorité
 
@@ -898,6 +914,10 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | `[sync] snap_distance` | 15 | au-delà, un personnage est téléporté au lieu d'être interpolé |
 | `[sync] destination_epsilon` | 2 | une destination n'est redonnée que si elle bouge de plus que ça |
 | `[sync] interest_radius` | 0 | 0 : tous les personnages actifs sont répliqués |
+| `[sync] stream_radius` | 3000 | hôte : un PNJ est envoyé à un joueur à moins de ça d'un de ses persos (0 : tout à tous) |
+| `[sync] standin_radius` | 2500 | client : PNJ de l'hôte recréés seulement à moins de ça de nos persos (0 : partout) |
+| `[sync] spawns_per_frame` | 2 | client : persos créés par image au plus |
+| `[sync] auto_zone_resync` | 1 | hôte : resync automatique de la zone d'un client à qui il manque des PNJ |
 | `[coop] own_character` | 1 | un personnage par joueur qui rejoint |
 | `[ui] overlay` | 1 | panneau d'état en haut à droite |
 | `[ui] map_markers` | 1 | joueurs et ennemis sur la carte du jeu |

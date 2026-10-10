@@ -1002,6 +1002,10 @@ bool Start() {
     sc.port = g_cfg.port;
     sc.snapDistance = g_cfg.snapDistance;
     sc.interestRadius = g_cfg.interestRadius;
+    sc.streamRadius = g_cfg.streamRadius;   // 0.3.1: per-player streaming
+    sc.standInRadius = g_cfg.standInRadius;
+    sc.spawnsPerTick = g_cfg.spawnsPerFrame;
+    sc.autoZoneResync = g_cfg.autoZoneResync;
     sc.characterPerPlayer = g_cfg.characterPerPlayer;
     sc.steamId = steam::MyId();
     // tests: two games on one PC share one Steam account; the harness gives each a fake one

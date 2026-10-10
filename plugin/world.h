@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "kc/session.h"
+#include "kc/streaming.h"
 #include "kc/world_identity.h"
 #include "kenshi.h"
 #include "util.h"
@@ -36,6 +37,9 @@ struct HookView {
     };
     std::unordered_map<const void*, std::shared_ptr<const AnimTarget>> anims;   // client: AnimationClass -> host's animations
     float gameSpeed = 1.0f;
+    // host (0.3.1): characters near a client player's own characters: their damage numbers are made
+    // even when the host's camera does not see them (hk_addWound)
+    std::shared_ptr<const std::unordered_set<const void*>> remoteNear;
 };
 
 class KenshiWorld final : public kc::IWorld {
@@ -67,6 +71,11 @@ public:
                    std::vector<kc::Handle>& adopted) override;
     void Apply(const kc::Handle& h, const kc::EntityState& target, const kc::EntityState& latest) override;
     void ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) override;
+    void SetRemoteInterest(const std::vector<kc::Handle>& handles) override;   // 0.3.1
+    void ResyncCharacter(const kc::Handle& h) override;                        // 0.3.1
+    // Client (GameWorld::destroy hook, any thread): the local game dropped that character with its
+    // zone (justUnloaded) or destroyed it; told when a stand-in of ours is found gone.
+    void NoteCharacterDestroyed(void* chr, bool justUnloaded, const char* info);
     bool ReadProgress(const kc::Handle& h, std::vector<float>& stats, uint16_t& modes, uint8_t& style) override;
     bool ReadCarry(const kc::Handle& h, kc::Handle& carried) override;
     void ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& carried) override;
@@ -406,6 +415,24 @@ private:
     // client: host handle -> handle of the local stand-in we created for it
     std::unordered_map<kc::Handle, kc::Handle, HandleHash> alias_;
     std::unordered_set<std::string> factoryFaulted_;   // client: templates whose factory call faulted (not recreated again)
+    // client (0.3.1): templates the factory refused (unique characters already in this world...):
+    // tried again after 30 s, 1, 2, 4... min (at most 10 min), not every 2 to 15 s
+    kc::Backoff<std::string> factoryRefused_{30.0, 600.0};
+    kc::LogLimiter goneLog_{6, 10.0};                    // client: "stand-in ... is gone here" lines
+    std::mutex destroyedMutex_;
+    std::unordered_map<kc::Handle, std::string, HandleHash> destroyed_;   // client: why the game removed a character (under destroyedMutex_)
+    std::unordered_set<kc::Handle, HandleHash> resyncSnap_;               // client: put exactly on the host's spot at the next Apply
+    std::shared_ptr<const std::unordered_set<const void*>> remoteNear_;   // host: see HookView::remoteNear
+    // Characters the game destroyed or unloaded with their zone since the last frame (any thread,
+    // under destroyedMutex_): every state of ours that holds their address is dropped before it is
+    // used again (PurgeDestroyed, game thread). A client's camera jumping away unloads a whole crowd of
+    // stand-ins at once; the animation mirror kept their addresses for up to a second and wrote into
+    // their freed animation objects (rob's two crashes, a few seconds after such a burst).
+    std::vector<const void*> destroyedPtrs_;
+    void PurgeDestroyed();
+public:
+    uint64_t purgedPointers = 0;   // tests: addresses of destroyed characters dropped from our state
+private:
     std::unordered_map<kc::Handle, double, HandleHash> strangerSince_;   // client: local-only NPCs, first seen
     struct FloorTry { uint8_t group = 0; double at = 0; int tries = 0; };
     std::unordered_map<kc::Handle, FloorTry, HandleHash> floorTry_;   // client: floor placements tried (fix G7)

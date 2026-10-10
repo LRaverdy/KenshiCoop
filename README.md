@@ -118,7 +118,9 @@ recrutement au centre d'emploi, refusés avec un message.
   commandes ;
 - **TP vers moi** (`tp <id>`) : amène les personnages d'un joueur bloqué près de toi ;
 - **Resync** (`resync <id>`) et **Resynchroniser tout le monde** : en cas de désynchro, le joueur
-  recharge ton monde tel qu'il est, en quelques secondes ;
+  recharge ton monde tel qu'il est, en quelques secondes. Depuis la 0.3.1, quand il manque des PNJ
+  à un joueur pendant 15 s, sa zone lui est renvoyée toute seule (sans pause, sans clic) ; chaque
+  joueur ne reçoit que ce qui entoure ses propres persos ;
 - **la console hors du jeu** : une fenêtre Windows avec les joueurs, la qualité de leur synchro et
   le journal en direct de **tout le monde**, clients compris.
 

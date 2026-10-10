@@ -190,6 +190,11 @@ void Session::Leave() {
     holdForEditor_ = false;
     pendingAnswers_.clear();
     missingSquad_ = 0;
+    myCentres_.clear();
+    lastReconcile_ = -1e9;
+    standInsLost_ = 0;
+    zoneHealth_ = ZoneHealth{};
+    nextStreamReport_ = 0;
     localId_ = 0;
     if (holding_) {
         holding_ = false;
@@ -348,11 +353,18 @@ void Session::HostTick(double now, bool live) {
             e.netId = it->second;
             m.events.push_back(std::move(e));
         }
-        if (anyInGame && !m.events.empty()) {
-            Writer out(1024);
-            Encode(out, m);
-            BroadcastReliable(out, true);
-        }
+        // each player gets the events of the characters they are sent (damage numbers included)
+        if (anyInGame && !m.events.empty())
+            for (auto& [pid, p] : players_) {
+                if (!p.inGame) continue;
+                AnimMsg mine;
+                for (const AnimEvent& e : m.events)
+                    if (auto it = entities_.find(e.netId); it == entities_.end() || StreamsTo(it->second, pid)) mine.events.push_back(e);
+                if (mine.events.empty()) continue;
+                Writer out(1024);
+                Encode(out, mine);
+                SendReliable(p.peer, out);
+            }
     }
     // Items dropped and picked up: the tick it happened.
     {
@@ -375,12 +387,16 @@ void Session::HostTick(double now, bool live) {
             f.netId = id;
             m.chars.push_back(std::move(f));
         }
-        if (!m.chars.empty()) {
-            const auto pkts = EncodeAnimFrames(m);
-            for (auto& [pid, p] : players_)
-                if (p.inGame)
-                    for (const auto& pkt : pkts) net_.Send(p.peer, kChanSnapshot, pkt.data(), pkt.size(), false);
-        }
+        if (!m.chars.empty())
+            for (auto& [pid, p] : players_) {
+                if (!p.inGame) continue;
+                AnimFrameMsg mine;
+                mine.hostTime = m.hostTime;
+                for (const AnimFrame& f : m.chars)
+                    if (auto it = entities_.find(f.netId); it == entities_.end() || StreamsTo(it->second, pid)) mine.chars.push_back(f);
+                if (mine.chars.empty()) continue;
+                for (const auto& pkt : EncodeAnimFrames(mine)) net_.Send(p.peer, kChanSnapshot, pkt.data(), pkt.size(), false);
+            }
     }
     // Weather effects: every one the host's game places goes out as soon as it appears; the
     // complete live set every 5 s heals anything missed (and serves newcomers).
@@ -405,6 +421,8 @@ void Session::HostTick(double now, bool live) {
             SendVitals(now);
         }
     }
+
+    if (anyInGame) StreamReport(now);   // 0.3.1: per player, a line a minute
 
     if (now >= nextPing_) {
         nextPing_ = now + kPingInterval;
@@ -1011,6 +1029,7 @@ void Session::UpdateInterest() {
         if (auto bi = byIdentity_.find(it->second.identity); bi != byIdentity_.end() && bi->second == it->first) byIdentity_.erase(bi);
         it = entities_.erase(it);
     }
+    UpdateStreams();   // 0.3.1: who is sent what (session_streaming.cpp)
 }
 
 void Session::SendSnapshots(double now) {
@@ -1038,6 +1057,7 @@ void Session::SendSnapshots(double now) {
         s.tick = ++tick_;
         s.hostTime = now;
         for (const auto& [id, st] : stateCache_) {
+            if (auto e = entities_.find(id); e != entities_.end() && !StreamsTo(e->second, pid)) continue;   // far from their characters
             Sent& last = sent[id];
             const bool moving = (st.flags & kFlagMoving) != 0;
             if (!moving && !StateChanged(st, last.state) && now - last.at < cfg_.refreshInterval) continue;
@@ -1062,6 +1082,7 @@ void Session::SendVitals(double now) {
         VitalsMsg m;
         m.tick = tick_;
         for (const auto& [id, v] : vitalsCache_) {
+            if (auto e = entities_.find(id); e != entities_.end() && !StreamsTo(e->second, pid)) continue;
             Sent& last = sent[id];
             if (!VitalsChanged(v, last.vitals) && now - last.vitalsAt < kVitalsRefresh) continue;
             last.vitals = v;
@@ -2154,6 +2175,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
                      unsigned(m.farOff), double(m.maxErr), unsigned(m.fps));
             log_(b);
         }
+        ZoneHealthReport(*pl, m);   // 0.3.1: their zone sent again when it keeps missing NPCs
         break;
     }
     case Msg::EditState: {
@@ -2937,6 +2959,7 @@ void Session::ClientTick(double now, bool live) {
     // NPCs stream in and out of the local world as zones load: re-resolve them regularly.
     const bool fullCheck = now >= nextPresenceCheck_;
     if (fullCheck) nextPresenceCheck_ = now + kPresenceInterval;
+    UpdateMyCentres();
     uint32_t missing = 0;
     for (auto& [id, e] : entities_) {
         if (e.container) continue;   // furniture: found by kind and place when opened
@@ -2946,6 +2969,16 @@ void Session::ClientTick(double now, bool live) {
             e.checked = true;
             // streamed in, adopted or recreated: a new local object, whose items are not the host's yet
             if (e.present && !was && e.haveInv) { e.invDirty = true; e.invRetry = 0; }
+            if (e.present && !was) e.presentSince = now;
+            // Our stand-in vanished (0.3.1). Once is normal (killed, cleaned up); again and again means
+            // our game does not keep that place loaded: each time it waits longer before coming back
+            // (one host squad was lost and made again every 3 s just before a client crashed).
+            if (was && !e.present && e.spawned) {
+                const bool stayed = e.presentSince >= 0 && now - e.presentSince > 60.0;
+                e.losses = stayed ? 1 : e.losses + 1;
+                e.nextSpawnTry = std::max(e.nextSpawnTry, now + StandInLossDelay(e.losses));
+                ++standInsLost_;
+            }
         }
         if (e.present) e.missingSince = -1;
         else if (e.missingSince < 0) e.missingSince = now;
@@ -2970,11 +3003,19 @@ void Session::ClientTick(double now, bool live) {
         world_.ApplyAppearance(e->second.handle, it->second);
         it = looksWaiting_.erase(it);
     }
+    if (standInsLost_ && lostLog_.Allow(now)) {
+        log_(std::to_string(standInsLost_) + " stand-in(s) vanished here lately (killed, or their place is not loaded by our game): each comes back "
+             "after a growing delay (2 s, 10 s, 30 s, 1 min)");
+        standInsLost_ = 0;
+    }
     // Our own characters are never recreated (a missing one means a different save); another
     // player's can be: it may have been made for a player who joined after we did. A recruit of ours
-    // whose NPC is not in our world either: recreated, then it joins our faction (e.adopt).
+    // whose NPC is not in our world either: recreated, then it joins our faction (e.adopt). An NPC
+    // only near our own characters, while the host still sends it (0.3.1): elsewhere our game has not
+    // loaded the land, and drops what we create there at once.
     auto spawnable = [&](const Entity& e) {
-        return !e.present && (!e.squad || e.owner != localId_ || e.adopt) && e.hasSpawn && !e.buf.empty() && now - e.missingSince >= kSpawnGrace;
+        return !e.present && (!e.squad || e.owner != localId_ || e.adopt) && e.hasSpawn && !e.buf.empty() && now - e.missingSince >= kSpawnGrace &&
+               (e.squad || InMyArea(e, now));
     };
     // Characters the local game made on its own have no place in the host's world: they stand in
     // for missing host characters of the same kind, or go away.
@@ -2988,6 +3029,7 @@ void Session::ClientTick(double now, bool live) {
         }
         std::vector<Handle> adopted;
         world_.Reconcile(known, lacking, now, adopted);
+        lastReconcile_ = now;
         for (const Handle& h : adopted)
             if (Entity* e = entityByHandle(h)) {
                 e->spawned = true;
@@ -2997,17 +3039,38 @@ void Session::ClientTick(double now, bool live) {
             }
     }
     // Still not in our world (the host spawned it after the save): create a stand-in where the
-    // host has it. Only right after Reconcile, which may have found a local character instead.
-    for (auto& [id, e] : entities_) {
-        if (!fullCheck || !spawnable(e) || now < e.nextSpawnTry) continue;
-        ++e.spawnAttempts;
-        e.nextSpawnTry = now + (e.spawnAttempts < 3 ? 2.0 : 15.0);   // keep trying, slowly: things change
-        if (world_.Spawn(e.handle, e.spawn, e.buf.back().s)) {
-            e.spawned = true;
-            e.present = world_.Exists(e.handle);
-            if (e.present) e.missingSince = -1;
-            if (e.present && e.haveInv) { e.invDirty = true; e.invRetry = 0; }
+    // host has it. Only once Reconcile ran since it went missing (it may find a local character
+    // instead). A few per frame (0.3.1): arriving in a town used to create dozens in one frame (the
+    // game froze for a moment); the nearest ones first.
+    {
+        const bool reconciled = cfg_.interestRadius > 0;   // (with a radius Reconcile does not run)
+        std::vector<std::pair<float, uint32_t>> due;
+        for (auto& [id, e] : entities_) {
+            if (!spawnable(e) || now < e.nextSpawnTry || (!reconciled && lastReconcile_ < e.missingSince + kSpawnGrace)) continue;   // offered to Reconcile first
+            float d = 0;
+            const Vec3& p = e.buf.back().s.pos;
+            if (!myCentres_.empty()) {
+                d = 1e30f;
+                for (const Vec3& c : myCentres_) d = std::min(d, (p.x - c.x) * (p.x - c.x) + (p.z - c.z) * (p.z - c.z));
+            }
+            due.emplace_back(d, id);
         }
+        const size_t budget = size_t(std::max(1, cfg_.spawnsPerTick));
+        if (due.size() > budget) std::partial_sort(due.begin(), due.begin() + ptrdiff_t(budget), due.end());
+        int made = 0;
+        for (size_t i = 0; i < due.size() && i < budget; ++i) {
+            Entity& e = entities_[due[i].second];
+            ++e.spawnAttempts;
+            e.nextSpawnTry = now + (e.spawnAttempts < 3 ? 2.0 : 15.0);   // keep trying, slowly: things change
+            ++made;
+            if (world_.Spawn(e.handle, e.spawn, e.buf.back().s)) {
+                e.spawned = true;
+                e.present = world_.Exists(e.handle);
+                if (e.present) { e.missingSince = -1; e.presentSince = now; }
+                if (e.present && e.haveInv) { e.invDirty = true; e.invRetry = 0; }
+            }
+        }
+        spawnPeak_ = std::max(spawnPeak_, made);
     }
     for (auto it = floors_.begin(); it != floors_.end();) {   // fix G6
         auto e = entities_.find(it->first);
@@ -3058,6 +3121,12 @@ void Session::ClientTick(double now, bool live) {
     if (offsetValid_) {
         for (auto& [id, e] : entities_) {
             if (!e.present || e.buf.empty()) continue;
+            // the host no longer sends it (far from our characters): it stays where it was last seen,
+            // driven only now and then (300 characters driven every frame cost a client its FPS)
+            if (!e.squad && Dormant(e, now)) {
+                if (now < e.dormantApplyAt) continue;
+                e.dormantApplyAt = now + 0.5;
+            }
             // each one rendered late enough for its own cadence (sparse updates: later, see kc::motion)
             const double renderTime = now + offset_ - motion::StepDelay(e.cadence, cfg_.interpDelay, now);
             world_.Apply(e.handle, Interpolate(e, renderTime), e.buf.back().s);
@@ -3380,6 +3449,17 @@ void Session::ClientPacket(Msg type, Reader& r) {
             }
             world_.Rehandle(m.previous, m.handle);
             e.checked = false;
+        } else if (e.netId != 0 && !e.container) {
+            // Bound again as it was: the host sends our zone again (a zone resync, 0.3.1). Looked for
+            // at once, recreated at once if missing (no waiting from earlier failures), its items
+            // applied again and our copy put exactly where the host has it.
+            e.checked = false;
+            e.nextSpawnTry = 0;
+            e.spawnAttempts = 0;
+            e.losses = 0;
+            if (e.haveInv) { e.invDirty = true; e.invRetry = 0; e.invFailures = 0; }
+            if (e.present) world_.ResyncCharacter(e.handle);
+            ++resyncedHere_;
         }
         if (m.squad && m.previous.valid() && !e.squad) { e.adopt = true; e.adoptTries = 0; }   // it joined the player faction: ours too
         e.netId = m.netId;
@@ -3437,6 +3517,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
         for (const EntityState& st : s.entities) {
             auto it = entities_.find(st.netId);
             if (it == entities_.end()) continue;  // snapshot raced ahead of its Bind
+            it->second.streamAt = now;            // the host still sends it to us (0.3.1)
             // Unchanged entities are only refreshed now and then: after such a gap, it stood still
             // until just before this sample. A walker sent again at the same place (the host's game
             // moves far characters a few times a second) is merged, not held then jumped.
@@ -3450,6 +3531,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
         for (auto& v : m.entities) {
             auto it = entities_.find(v.netId);
             if (it == entities_.end()) continue;
+            it->second.streamAt = clock_();
             it->second.vitals = std::move(v);
             it->second.haveVitals = true;
             it->second.vitalsDirty = true;
@@ -3782,6 +3864,7 @@ void Session::ForgetPlayer(uint8_t id) {
     const PeerId peer = pit->second.peer;
     players_.erase(pit);
     sync_.erase(id);
+    zoneHealth_.Forget(id);
     // out of the join queue now (their id may be given to a newcomer at once); a turn that was
     // theirs ends, and the next player's begins
     joinQueue_.erase(std::remove(joinQueue_.begin(), joinQueue_.end(), id), joinQueue_.end());
@@ -3914,8 +3997,11 @@ size_t Session::npcCount() const {
 }
 
 uint32_t Session::missingNpcs() const {
+    // only those near our own characters that the host still sends us (0.3.1): elsewhere they are
+    // not expected here (the report used to count the host's whole crowd: 41, then 69 for one player)
+    const double now = clock_();
     uint32_t n = 0;
-    for (auto& [id, e] : entities_) if (!e.squad && !e.container && e.checked && !e.present) ++n;
+    for (auto& [id, e] : entities_) if (!e.squad && !e.container && e.checked && !e.present && InMyArea(e, now)) ++n;
     return n;
 }
 

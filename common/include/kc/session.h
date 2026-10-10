@@ -25,6 +25,7 @@
 #include "kc/motion.h"
 #include "kc/net.h"
 #include "kc/protocol.h"
+#include "kc/streaming.h"
 
 namespace kc {
 
@@ -94,6 +95,12 @@ public:
     // `target` is the interpolated state for "now - delay", `latest` the newest received one.
     virtual void Apply(const Handle& h, const EntityState& target, const EntityState& latest) = 0;
     virtual void ApplyVitals(const Handle& h, const EntityVitals& v) = 0;
+    // Host (0.3.1): the characters near a client player's own characters (every 0.5 s). The game shows
+    // damage numbers only for characters near its camera; these get them anyway, for those players.
+    virtual void SetRemoteInterest(const std::vector<Handle>& handles) { (void)handles; }
+    // Client (0.3.1): the host sent that character again (a zone resync): put it exactly where the
+    // host has it on the next Apply, whatever the offset.
+    virtual void ResyncCharacter(const Handle& h) { (void)h; }
 
     // Host side: execute an order for a character (issued by a client), on exactly that character:
     // never on the host's selection, a fallback or the nearest one (false: refused or failed).
@@ -464,6 +471,14 @@ struct SessionConfig {
     double worldLostTimeout = 5.0;     // seconds without a live world before the session ends
     float snapDistance = 50.0f;        // samples further apart than this are not interpolated
     float interestRadius = 0.0f;       // NPCs within this distance of the squad are replicated (0 = all active)
+    // 0.3.1, per-player streaming: the host sends a player the NPCs within streamRadius of that
+    // player's own characters (0: every NPC to everyone, as before); a client recreates a host NPC
+    // only within standInRadius of its own characters (0: anywhere it is sent), at most spawnsPerTick
+    // per frame; autoZoneResync: the host sends a client's zone again when it keeps missing NPCs.
+    float streamRadius = 3000.0f;
+    float standInRadius = 2500.0f;
+    int spawnsPerTick = 2;
+    bool autoZoneResync = true;
     bool characterPerPlayer = true;    // host: every joining player gets a character of their own
     uint64_t steamId = 0;              // this player's Steam account (0: none)
 };
@@ -534,6 +549,13 @@ public:
     // client (diagnostics): newest state received from the host and the state being rendered now
     bool TargetOf(const Handle& h, EntityState& latest, EntityState& rendered) const;
     size_t joiningPlayers() const;                            // host: players still loading the world
+    // ---- per-player streaming (session_streaming.cpp, 0.3.1)
+    // host: whether that character's positions, health and animations go to that player now
+    bool streamsTo(const Handle& h, uint8_t playerId) const;
+    size_t streamedTo(uint8_t playerId) const;                // host: characters that player is sent
+    size_t zoneResyncs() const { return zoneResyncs_; }       // host: automatic zone resyncs done
+    size_t resyncedHere() const { return resyncedHere_; }     // client: characters the host sent again
+    int spawnPeak() const { return spawnPeak_; }              // client: most stand-ins made in one frame
     // Host: everyone on their way in: the player in the character editor first, then those saving /
     // loading (phase), then those in the world waiting for their editor turn (waiting).
     struct QueueEntry { uint8_t id = 0; std::string name; bool waiting = true; JoinPhase phase = JoinPhase::Saving; };
@@ -683,6 +705,11 @@ private:
         int spawnAttempts = 0;
         double nextSpawnTry = 0;
         double missingSince = -1;            // client: when it was last found missing locally
+        double streamAt = -1e9;              // client: when the host last sent its state (dormant after a few s)
+        int losses = 0;                      // client: its stand-in vanished this many times in a row
+        double presentSince = -1;            // client: here since
+        double dormantApplyAt = 0;           // client: a dormant one is driven only now and then
+        uint32_t streamMask = 0;             // host: players (bit = id) it is streamed to
         // host
         bool keep = false;                   // scratch flag for interest updates
         bool container = false;              // a container a player has open (no character)
@@ -729,6 +756,9 @@ private:
         Handle own;                          // the player's own character (characterPerPlayer)
         bool ownChecked = false;
         bool ownCreated = false;             // made for this join (the player has never had one)
+        size_t streamed = 0;                 // characters streamed to them (UpdateStreams)
+        double statsAt = -1;                 // their stream report: last time, bytes sent then
+        uint64_t bytesAt = 0;
     };
 
     void HostTick(double now, bool live);
@@ -742,6 +772,24 @@ private:
     void StreamWorld(const RemotePlayer& p, const std::vector<WorldFile>& files, const std::vector<uint64_t>& rawSizes);
     void FinishJoin(RemotePlayer& p);
     void UpdateInterest();                   // host: (un)bind squad members and nearby NPCs
+    // ---- per-player streaming (session_streaming.cpp)
+    void UpdateStreams();                    // host: who is sent what, around each player's characters
+    bool StreamsTo(const Entity& e, uint8_t playerId) const;
+    void StreamReport(double now);           // host: per player, a line a minute (characters, KB/s)
+    void ZoneHealthReport(RemotePlayer& pl, const ClientReport& m);   // host: auto zone resync
+    size_t ZoneResync(uint8_t playerId, const std::string& why);
+    void UpdateMyCentres();                  // client: where our own characters are (host positions)
+    bool InMyArea(const Entity& e, double now) const;   // client: near our characters and still sent
+    bool Dormant(const Entity& e, double now) const;    // client: the host stopped sending it
+    std::vector<Vec3> myCentres_;            // client
+    double lastReconcile_ = -1e9;            // client: Reconcile last ran
+    uint32_t standInsLost_ = 0;              // client: since the last summary line
+    LogLimiter lostLog_{1, 30.0};            // client: that summary, at most every 30 s
+    int spawnPeak_ = 0;                      // client (tests)
+    size_t resyncedHere_ = 0;                // client (tests)
+    ZoneHealth zoneHealth_;                  // host
+    size_t zoneResyncs_ = 0;                 // host
+    double nextStreamReport_ = 0;            // host
     void SendSnapshots(double now);
     void SendVitals(double now);
     void SendProgress(double now);
