@@ -518,7 +518,8 @@ void* NewSquad();                                              // what the "new 
 // The player faction's squads in the faction's order (the squad window's), empty ones too, the dead
 // squad left out; a squad's handle (its Platoon's); the squad window's swap, reorder and cross.
 void PlayerSquads(std::vector<void*>& out);
-bool SquadHandle(void* squad, kc::Handle& out);
+inline constexpr uint32_t kSquadIdType = 0x5153;            // the type of a squad id (not a game handle type)
+bool SquadHandle(void* squad, kc::Handle& out);            // its id: from the Platoon's address
 bool SwapInSquad(void* squad, int a, int b);
 bool SetSquadOrder(void* squad, int factionIndex);
 int SquadFactionIndex(void* squad);                           // its place in the faction's list (-1: none)

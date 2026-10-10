@@ -1329,9 +1329,10 @@ bool Decode(Reader& r, MachineRequest& m);
 // ---- squad window and AI settings (protocol 34, messages 60-62). The host's game holds the only
 // squads: a client's squad window edits become SquadRequests, run by the host one at a time (in the
 // order they arrive: the last one wins), then everyone gets the same SquadState.
-// A squad is named by the host's handle of its Platoon (the client maps it to its own squad).
+// A squad is named by an id the host makes from its Platoon's address (kenshi::SquadHandle; the
+// client maps it to its own squad, never compares it with its own ids).
 struct SquadEntry {
-    Handle id;                      // the host's Platoon handle
+    Handle id;                      // the host's squad id (its Platoon's address)
     std::string name;
     std::vector<uint32_t> members;  // netIds, in squad order (index 0: the squad leader)
 };

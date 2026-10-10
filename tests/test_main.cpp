@@ -682,6 +682,15 @@ struct FakeWorld : IWorld {
     void RemoveLocalSquad(uint64_t key) override {
         squads.erase(std::remove_if(squads.begin(), squads.end(), [&](const FSquad& q) { return q.id.serial == key && q.members.empty(); }), squads.end());
     }
+    // the legacy split (Squads): the host's squads from its characters; the client counts what it got
+    int legacyApplies = 0;
+    void ReadSquads(std::vector<WorldSquad>& out) override {
+        out.clear();
+        WorldSquad w; w.name = "Legacy";
+        for (auto& [s, c] : chars) if (c.squad) w.members.push_back(Hc(s));
+        if (!w.members.empty()) out.push_back(w);
+    }
+    void ApplySquads(const std::vector<WorldSquad>& sq) override { if (!sq.empty()) ++legacyApplies; }
     void TakeLocalSquadRequests(std::vector<LocalSquadRequest>& out) override { out.swap(squadReqs); squadReqs.clear(); }
     void SetShared(const std::vector<Handle>& handles) override { sharedSet = handles; }
     bool OrderShared(const Handle& h, const Command& c) override { ++sharedOrders; return Order(h, c); }
@@ -2962,6 +2971,22 @@ static void TestSquadWire() {
     c.kind = CommandKind::MoveTo; CHECK(!Session::IsSettingsCommand(c));
 }
 
+static void TestSquadFallback() {
+    std::printf("squad window: a host whose squads have no id (empty SquadState) still has its squads followed (legacy Squads)\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);   // no FSquad: ReadSquadViews gives nothing, as when the game gave no squad id
+    AtMenu(cw);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    Run({{&host, &hw}, {&cli, &cw}}, 5.0, [&] { return cw.legacyApplies > 0 && !cli.squadState().members.empty(); });
+    CHECK(!cli.squadState().members.empty() && cli.squadState().squads.empty());
+    CHECK(cw.legacyApplies > 0);
+}
+
 static void TestSquadWindow() {
     std::printf("squad window: moves, new squads, renames, order, leader and names go through the host; concurrent edits end the same everywhere\n");
     FakeWorld hw, cw, cw2;
@@ -4224,6 +4249,7 @@ int main() {
     TestJobs();   // fix G5
     TestSquadWire();
     TestSquadWindow();   // squad window and AI settings
+    TestSquadFallback();
     TestAdmin();
     TestTaskTargets();   // actor safety
     TestCallScopeRepair();   // crash at kenshi_x64+0x883B78

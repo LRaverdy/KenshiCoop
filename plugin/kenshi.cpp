@@ -4196,7 +4196,19 @@ void PlayerSquads(std::vector<void*>& out) {
     }
 }
 
-bool SquadHandle(void* squad, kc::Handle& out) { return ObjectHandle(PlatoonOf(squad), out); }
+// A squad's id: its Platoon's address, unique and stable while the squad lives (a synthetic handle,
+// type kSquadIdType). Not Platoon::handle (+0x58): in game, the squad window's squads gave no valid
+// one, so the host sent no squad at all (squadui and suite, 10 Oct.).
+bool SquadHandle(void* squad, kc::Handle& out) {
+    void* platoon = PlatoonOf(squad);
+    out = kc::Handle{};
+    if (!platoon) return false;
+    const uint64_t p = reinterpret_cast<uint64_t>(platoon);
+    out.type = kSquadIdType;
+    out.index = uint32_t(p);
+    out.serial = uint32_t(p >> 32) | 0x80000000u;   // never 0: valid()
+    return true;
+}
 
 bool SwapInSquad(void* squad, int a, int b) {
     const int n = SquadSize(squad);

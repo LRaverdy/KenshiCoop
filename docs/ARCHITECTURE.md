@@ -365,7 +365,7 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | 57 | ResearchRequest | C→H | atelier : mettre en file / retirer une technologie, apprendre un plan (acteur : le perso du joueur ; règle `OwnCharacter`) |
 | 58 | Machines | H→C | atelier : machines des joueurs près d'eux (et celles qu'un perso de joueur travaille) : opérateurs, marche / batterie, énergie, charge, barre de progression, production, ordres de fabrication et « répéter », netId de leur inventaire ; totaux d'énergie de leur ville |
 | 59 | MachineRequest | C→H | atelier : ajouter / retirer un ordre de fabrication, répéter, marche, batterie (acteur nommé ; règle `OwnCharacter`) |
-| 60 | SquadState | H→C | fenêtre Escouade : chaque escouade (handle de son `Platoon` chez l'hôte, nom, membres dans l'ordre : le premier est le chef) dans l'ordre de la faction, vides comprises ; nom et drapeau « à personne » (`kMemberShared`) de chaque perso de l'escouade ; à chaque changement et toutes les 10 s |
+| 60 | SquadState | H→C | fenêtre Escouade : chaque escouade (identifiant fait par l'hôte de l'adresse de son `Platoon`, nom, membres dans l'ordre : le premier est le chef) dans l'ordre de la faction, vides comprises ; nom et drapeau « à personne » (`kMemberShared`) de chaque perso de l'escouade ; à chaque changement et toutes les 10 s |
 | 61 | SquadRequest | C→H | une action de la fenêtre Escouade : déplacer son perso (dans une escouade, ou une nouvelle ; à un rang), créer, renommer, réordonner, retirer une escouade, renommer son perso ; nomme toujours un perso du joueur (`OwnCharacter`) |
 | 62 | JobState | H→C | listes de tâches des persos des joueurs avec la cible de chaque tâche (handle d'un perso, type et endroit d'un meuble, lieu) ; le client fait la même liste (retire, ajoute, réordonne) |
 | 68 | JobList | H→C | fix G5 : la liste de tâches (panneau Tâches) des persos des joueurs, telle que l'hôte l'a |
@@ -482,7 +482,7 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
   retirées, noms des persos) : un nom frappé est envoyé quand il ne change plus depuis 1 s, une
   escouade vide nouvelle après 1,5 s, et reste affiché jusqu'à la réponse (au plus 5 s) ; puis l'état
   de l'hôte (avec nos demandes en cours) est imposé : `ApplySquadViews` associe chaque escouade de
-  l'hôte à une des nôtres (même association qu'avant, même handle, celle qui a le plus de ses
+  l'hôte à une des nôtres (même association qu'avant, celle qui a le plus de ses
   membres, une vide à nous, sinon une nouvelle), y range les membres, la renomme, remet l'ordre et
   retire les nôtres que l'hôte n'a plus (vides).
 - **Réglages d'IA** : bascules, style, allure et tâches permanentes passent par `Command` (`Task`,

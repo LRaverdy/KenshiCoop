@@ -532,8 +532,10 @@ Emplacements de vtable :
   `_allItems`.
 
 ### Escouades
-- `Character` +0x658 → `ActivePlatoon` ; +0x78 → `Platoon` (nom à +0x18, `hand` à +0x58 : il
-  identifie l'escouade ; le même sur toutes les machines pour les escouades de la sauvegarde).
+- `Character` +0x658 → `ActivePlatoon` ; +0x78 → `Platoon` (nom à +0x18). Le `hand` de
+  `RootObjectBase` (+0x58) ne donne **pas** d'identifiant valide pour les escouades du joueur (essai
+  en jeu du 10 oct. : aucune escouade envoyée) ; le mod nomme une escouade par l'adresse de son
+  `Platoon` (`kenshi::SquadHandle`, type 0x5153), propre à chaque machine.
 - `Platoon` +0x1D8 → `ActivePlatoon` ; `ActivePlatoon` +0x58 nombre de membres, +0x60 tableau,
   +0xA0 chef. `Character` +0x418 sa case dans l'escouade.
 - **Le chef est la case 0** [D] : `swapCharacters` et `addCharacterAt` appellent

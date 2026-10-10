@@ -2820,7 +2820,9 @@ void Session::ClientTick(double now, bool live) {
     ClientJobs(now);   // fix G5
     // Squads: split our characters as the host does (again now and then: stand-ins, late arrivals).
     ClientSquads(now);   // squad window: the host's SquadState, our edits asked of the host
-    if (haveSquads_ && !haveSquadState_ && now - squadsAt_ > 2.0) {   // an older host: Squads only
+    // an older host (Squads only), or a SquadState without squads: the legacy split, so the client
+    // never stops following the host's squads
+    if (haveSquads_ && (!haveSquadState_ || squadState_.squads.empty()) && now - squadsAt_ > 2.0) {
         squadsAt_ = now;
         std::vector<IWorld::WorldSquad> ws;
         for (const auto& s : lastSquads_.squads) {

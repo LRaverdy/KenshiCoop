@@ -2935,12 +2935,13 @@ def exp_squadui(host, cli):
     time.sleep(3)
     mh, mc = modes(host, me), modes(cli, me)
     check("ia : style de combat, tenir la position et allure du client", mh is not None and mh[1] == 1 and mh[0] & 16 and mh == mc, f"{mh} / {mc}")
-    log("client: host's character passive (refused):", cmd(cli, f"aiorder {host_char} 13"))
-    before = modes(host, host_char)
-    time.sleep(3)
-    shared_host = cmd(cli, f"aishared {host_char}")[1] == "ok 1"
-    if not shared_host:
-        check("ia : reglage du perso de l'hote refuse", modes(host, host_char) == before, f"{before} -> {modes(host, host_char)}")
+    # the host's own character (not a recruit nobody owns: anyone may set those)
+    owned = next((n for n in others if cmd(cli, f"aishared {n}")[1] == "ok 0"), None)
+    if owned:
+        before = modes(host, owned)
+        log("client: host's own character passive (refused):", owned, cmd(cli, f"aiorder {owned} 13"))
+        time.sleep(3)
+        check("ia : reglage du perso de l'hote refuse", modes(host, owned) == before, f"{before} -> {modes(host, owned)}")
     # 9. a recruit nobody owns: any player sets it, the last one wins; concurrent toggles end the same
     recruit = next((n for n in others if cmd(cli, f"aishared {n}")[1] == "ok 1"), None)
     log("recruit nobody owns:", recruit)

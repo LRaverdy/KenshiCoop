@@ -1,7 +1,7 @@
 // The squad window (Escouade) and the Tâches panel, on the game's side.
 //
 // Host: the squads of the player faction as they are (ReadSquadViews: the faction's order, empty
-// squads too, each squad named by its Platoon's handle) and the squad requests the session
+// squads too, each squad named by its Platoon's address: kenshi::SquadHandle) and the squad requests the session
 // authorized (move, swap, create, rename, reorder, remove, rename a character), run with the game's
 // own functions (addCharacterAt, swapCharacters, createSquad, setName, changePlatoonIndex,
 // destroyPlatoon, Character::setName).
@@ -201,21 +201,15 @@ void KenshiWorld::ApplySquadViews(const std::vector<SquadView>& host) {
         auto it = squadIds_.find(LocalKey(l));
         return it != squadIds_.end() && hostIds.count(it->second);
     };
-    // 1. the squad of ours matched before; 2. the same squad (same handle: loaded from the same save)
+    // 1. the squad of ours matched before (squad ids are the host's Platoon addresses: never compared
+    //    with ours)
     for (size_t i = 0; i < host.size(); ++i)
         for (void* l : locals) {
             auto it = squadIds_.find(LocalKey(l));
             if (it != squadIds_.end() && it->second == host[i].id && !taken.count(l)) { target[i] = l; taken.insert(l); break; }
         }
-    for (size_t i = 0; i < host.size(); ++i) {
-        if (target[i]) continue;
-        for (void* l : locals) {
-            kc::Handle h;
-            if (!taken.count(l) && !mappedElsewhere(l) && kenshi::SquadHandle(l, h) && h == host[i].id) { target[i] = l; taken.insert(l); break; }
-        }
-    }
-    // 3. the squad of ours holding most of its members; 4. a new empty one of ours (made here and
-    //    asked of the host, or one a portrait was dropped on); 5. a new one
+    // 2. the squad of ours holding most of its members; 3. a new empty one of ours (made here and
+    //    asked of the host, or one a portrait was dropped on); 4. a new one
     for (size_t i = 0; i < host.size(); ++i) {
         if (target[i]) continue;
         std::unordered_map<void*, int> count;
