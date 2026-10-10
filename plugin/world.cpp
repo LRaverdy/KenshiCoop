@@ -1,4 +1,4 @@
-#include "world.h"
+﻿#include "world.h"
 
 #include <windows.h>
 
@@ -397,7 +397,10 @@ bool KenshiWorld::Exists(const kc::Handle& h) {
         }
         // The stand-in is gone (killed and cleaned up, or dropped with its zone by the local game):
         // the alias must go too, or Spawn and Reconcile would skip this character forever.
-        if (!kenshi::Resolve(a->second)) {
+        // ResolveObject, not Resolve: aliases also name containers (shop counters of a trade), and
+        // Resolve only finds characters, so a live counter looked gone and its trade window lost
+        // its items (then the client crashed in ShopTraderInventory).
+        if (!kenshi::ResolveObject(a->second)) {
             Log("stand-in %s for the host's %s is gone here: it can be recreated", KeyOf(a->second).c_str(), KeyOf(h).c_str());
             alias_.erase(a);
             resolved_.erase(h);
@@ -1025,6 +1028,11 @@ bool KenshiWorld::ReadFloor(const kc::Handle& h, uint8_t& group) {
 }
 
 void KenshiWorld::ApplyFloor(const kc::Handle& h, uint8_t group) {
+    // Disabled: the game puts its own value back every frame, and a client crashed (kenshi_x64+0x95484b,
+    // read of -1) right after a burst of these writes inside a building. The floor needs the game's own
+    // path (stairs / _setPositionAndTeleport with a floor), not a raw write.
+    static bool kWriteFloors = false;
+    if (!kWriteFloors) { (void)h; (void)group; return; }
     kenshi::Character* c = Find(h);
     int32_t g = 0;
     if (!c || !kenshi::ReadFloorGroup(c, g) || g == group) return;

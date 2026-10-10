@@ -990,9 +990,15 @@ void Session::HostTrades(double now) {
     world_.TakeTradeRequests(scratchTradeReqs_);
     for (const auto& req : scratchTradeReqs_) {
         Entity* looter = entityByHandle(req.looter);
-        if (!looter || !looter->squad || looter->owner == hostId_) continue;
+        if (!looter || !looter->squad || looter->owner == hostId_) {
+            log_(std::string("trade request dropped: ") + (!looter ? "the character is not followed" : !looter->squad ? "not a squad character" : "the host's own character"));
+            continue;
+        }
         auto pl = players_.find(looter->owner);
-        if (pl == players_.end() || !pl->second.inGame) continue;
+        if (pl == players_.end() || !pl->second.inGame) {
+            log_("trade request dropped: player " + std::to_string(looter->owner) + (pl == players_.end() ? " unknown" : " not in game yet"));
+            continue;
+        }
         const std::string who = pl->second.name;
         Entity* trader = entityByHandle(req.trader);
         const std::string merchant = world_.CharacterNameOf(req.trader);
