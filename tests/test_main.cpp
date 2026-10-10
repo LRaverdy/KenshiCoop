@@ -21,6 +21,7 @@
 #include "kc/call_scopes.h"
 #include "kc/protocol.h"
 #include "kc/session.h"
+#include "kc/world_identity.h"
 #include "../plugin/map_view.h"
 
 using namespace kc;
@@ -1743,6 +1744,168 @@ static void TestOwnCharacter() {
     CHECK(cliA.entityCount() == entitiesBefore);        // no unbind / new entity
     Run({{&host, &hw}, {&cliA, &cw}, {&cliB, &bw}}, 1.0);
     CHECK(cw.controllable.size() == 1 && !cw.controllable.empty() && cw.controllable[0].container == 77);   // still ours
+}
+
+// Same world after a gap (a window resized, a zone loading), or a new one (a load)?
+static void TestWorldIdentity() {
+    std::printf("world identity: a gap is not a new world; stand-ins never decide; a load is, and names leftovers\n");
+    auto P = [](uintptr_t v) { return reinterpret_cast<const void*>(v); };
+    auto O = [&](uint32_t serial, uintptr_t ptr) { WorldIdentity::Object o; o.handle = FakeWorld::H(serial); o.ptr = P(ptr); return o; };
+    std::set<uintptr_t> alive;   // object addresses in the game now
+    auto there = [&](const WorldIdentity::Object& o) { return alive.count(reinterpret_cast<uintptr_t>(o.ptr)) != 0; };
+    WorldIdentity id;
+    const void* player = P(0x9000);
+    CHECK(id.Observe(player, {P(0x10), P(0x20)}, {}, there).newWorld);   // the first world
+    CHECK(id.generation() == 1);
+    CHECK(!id.Observe(player, {P(0x20), P(0x10)}, {}, there).newWorld);  // order does not matter
+    // another player joins: we make a stand-in for their character (in our squad, not in `own`)
+    alive = {0x10, 0x20, 0x30};
+    CHECK(!id.Observe(player, {P(0x10), P(0x20)}, {O(90000, 0x30)}, there).newWorld);
+    // a few frames without the main loop (a window resized), then the same world: not new
+    id.Gap();
+    id.Gap();
+    WorldIdentity::Verdict v = id.Observe(player, {P(0x10), P(0x20)}, {O(90000, 0x30)}, there);
+    CHECK(!v.newWorld && v.leftovers.empty() && id.generation() == 1);
+    // our own squad changing while the game runs (a recruit): not a load either
+    CHECK(!id.Observe(player, {P(0x10), P(0x20), P(0x40)}, {O(90000, 0x30)}, there).newWorld);
+    // a load: other objects for our squad after a gap; a stand-in of ours still there is named
+    id.Gap();
+    v = id.Observe(player, {P(0x110), P(0x120), P(0x140)}, {}, there);
+    CHECK(v.newWorld && id.generation() == 2);
+    CHECK(v.leftovers.size() == 1 && !v.leftovers.empty() && v.leftovers[0].handle.serial == 90000);
+    // after a load nothing of the previous world is named again
+    id.Gap();
+    alive.clear();
+    v = id.Observe(P(0x9100), {P(0x210)}, {}, there);   // another player object: a new world too
+    CHECK(v.newWorld && v.leftovers.empty() && id.generation() == 3);
+}
+
+// A client world that, like KenshiWorld, gives a character it recreates a local handle of its own
+// (an alias), puts recreated player characters into its own squad, and tells worlds apart with
+// kc::WorldIdentity (Frame); on a new world it forgets every alias and removes leftover stand-ins.
+struct AliasWorld : FakeWorld {
+    std::map<uint32_t, uint32_t> alias;   // host serial -> local serial
+    std::set<uint32_t> made;              // local serials of the stand-ins Spawn made
+    uint32_t nextLocal = 90000;
+    uintptr_t epoch = 1;                  // a load gives our own characters other addresses
+    WorldIdentity identity;
+    int newWorlds = 0, leftoversRemoved = 0;
+    uint32_t Local(uint32_t s) const { auto it = alias.find(s); return it == alias.end() ? s : it->second; }
+    const void* Ptr(uint32_t s) const {   // stand-ins keep theirs (one left behind by a load: a leftover)
+        return reinterpret_cast<const void*>((made.count(s) ? uintptr_t(0) : epoch << 32) | s);
+    }
+    bool Exists(const Handle& h) override { return chars.count(Local(h.serial)) != 0; }
+    bool Read(const Handle& h, EntityState& out) override { return FakeWorld::Read(H(Local(h.serial)), out); }
+    void Apply(const Handle& h, const EntityState& t, const EntityState& l) override { FakeWorld::Apply(H(Local(h.serial)), t, l); }
+    bool Spawn(const Handle& h, const SpawnInfo& info, const EntityState& at) override {
+        if (alias.count(h.serial) || info.templateSid != "tmpl-" + std::to_string(h.serial)) return false;
+        const uint32_t local = nextLocal++;
+        FakeChar c;
+        c.squad = true;   // a player's character: in our squad, as in the game
+        c.pos = at.pos;
+        c.dest = at.pos;
+        chars[local] = c;
+        alias[h.serial] = local;
+        made.insert(local);
+        ++spawns;
+        return true;
+    }
+    void Despawn(const Handle& h) override {
+        auto it = alias.find(h.serial);
+        if (it == alias.end()) return;
+        if (chars.erase(it->second)) ++despawns;
+        made.erase(it->second);
+        alias.erase(it);
+    }
+    void Frame(bool live) {
+        if (!live || !ready) { identity.Gap(); return; }
+        std::vector<const void*> own;
+        for (auto& [s, c] : chars) if (c.squad && !made.count(s)) own.push_back(Ptr(s));
+        std::vector<WorldIdentity::Object> standIns;
+        for (uint32_t s : made) if (chars.count(s)) { WorldIdentity::Object o; o.handle = H(s); o.ptr = Ptr(s); standIns.push_back(o); }
+        const WorldIdentity::Verdict v = identity.Observe(reinterpret_cast<const void*>(uintptr_t(0x77)), own, standIns,
+                                                          [&](const WorldIdentity::Object& o) { return chars.count(o.handle.serial) && Ptr(o.handle.serial) == o.ptr; });
+        if (!v.newWorld || identity.generation() == 1) return;
+        for (auto& o : v.leftovers) if (chars.erase(o.handle.serial)) ++leftoversRemoved;
+        alias.clear();
+        made.clear();
+        ++newWorlds;
+    }
+    size_t Copies() const { size_t n = 0; for (auto& [s, c] : chars) n += s >= 90000 ? 1 : 0; return n; }
+    bool HasCopyOf(uint32_t hostSerial) const { auto it = alias.find(hostSerial); return it != alias.end() && chars.count(it->second); }
+};
+
+static void TestNoDuplicatePlayers() {
+    std::printf("session: players who join later have exactly one copy on an earlier client, across resizes and zone loads\n");
+    FakeWorld hw, bw, cw3;
+    AliasWorld aw;
+    SetupHost(hw);
+    AtMenu(aw);
+    AtMenu(bw);
+    AtMenu(cw3);
+    for (FakeWorld* w : {static_cast<FakeWorld*>(&aw), &bw, &cw3}) w->editorSupported = true;   // each player confirms their character at once
+    SessionConfig hc; hc.name = "Host"; hc.port = ++g_port;
+    Session host(hw, hc, Now, Quiet("host"));
+    std::string err;
+    CHECK(host.Host(&err));
+    SessionConfig ac; ac.name = "First"; ac.port = hc.port;
+    SessionConfig bc; bc.name = "Second"; bc.port = hc.port;
+    SessionConfig c3; c3.name = "Third"; c3.port = hc.port;
+    Session cliA(aw, ac, Now, Quiet("cliA"));
+    Session cliB(bw, bc, Now, Quiet("cliB"));
+    Session cliC(cw3, c3, Now, Quiet("cliC"));
+    bool aLive = true;
+    auto run = [&](double seconds, std::function<bool()> until) {
+        const double end = Now() + seconds;
+        double last = Now();
+        while (Now() < end) {
+            const double n = Now();
+            for (FakeWorld* w : {&hw, static_cast<FakeWorld*>(&aw), &bw, &cw3}) w->Simulate(float(n - last));
+            for (FakeWorld* w : {static_cast<FakeWorld*>(&aw), &bw, &cw3}) w->editorOpen = false;
+            aw.Frame(aLive);
+            host.Tick(hw.ready);
+            cliA.Tick(aw.ready && aLive);
+            cliB.Tick(bw.ready);
+            cliC.Tick(cw3.ready);
+            last = n;
+            if (until && until()) return;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    };
+    auto gap = [&](int frames) {   // a window resized / a zone loading: the main loop does not run
+        aLive = false;
+        for (int i = 0; i < frames; ++i) run(0.02, nullptr);
+        aLive = true;
+    };
+    CHECK(cliA.Join("127.0.0.1", hc.port, &err));
+    run(10.0, [&] { return cliA.state() == SessionState::Connected && aw.controllable.size() == 1; });
+    CHECK(cliA.state() == SessionState::Connected);
+    CHECK(cliB.Join("127.0.0.1", hc.port, &err));
+    run(15.0, [&] { return cliB.state() == SessionState::Connected && hw.named.count("Second") && aw.HasCopyOf(hw.named["Second"]); });
+    const uint32_t second = hw.named.count("Second") ? hw.named["Second"] : 0;
+    CHECK(aw.HasCopyOf(second) && aw.Copies() == 1);
+    gap(5);   // the stress test's window rearrangement right after the joins
+    run(4.0, nullptr);
+    CHECK(cliC.Join("127.0.0.1", hc.port, &err));
+    run(15.0, [&] { return cliC.state() == SessionState::Connected && hw.named.count("Third") && aw.HasCopyOf(hw.named["Third"]); });
+    const uint32_t third = hw.named.count("Third") ? hw.named["Third"] : 0;
+    for (int round = 0; round < 3; ++round) {   // zone loads, hitches
+        gap(3 + round);
+        run(4.0, nullptr);   // more than the spawn grace and the presence check
+    }
+    CHECK(aw.newWorlds == 0);
+    CHECK(aw.HasCopyOf(second) && aw.HasCopyOf(third));
+    if (aw.Copies() != 2) std::printf("    first client holds %zu copies of the 2 players who joined later\n", aw.Copies());
+    CHECK(aw.Copies() == 2);   // exactly one each, nothing left without an alias
+    CHECK(bw.chars.count(third) == 1);   // and the second player has the third one's too
+    // A real load (our own characters are other objects now) with stand-ins of the previous world
+    // still in the game: they are removed, and the session makes them again: still exactly one each.
+    ++aw.epoch;
+    gap(3);
+    run(5.0, [&] { return aw.HasCopyOf(second) && aw.HasCopyOf(third); });
+    CHECK(aw.newWorlds == 1 && aw.leftoversRemoved == 2);
+    CHECK(aw.HasCopyOf(second) && aw.HasCopyOf(third));
+    CHECK(aw.Copies() == 2);
 }
 
 static void TestSessionReplication() {
@@ -4284,6 +4447,8 @@ int main() {
     TestRejections();
     TestWorldAuthority();
     TestOwnCharacter();
+    TestWorldIdentity();
+    TestNoDuplicatePlayers();
     TestSpawnReplication();
     TestInventories();
     TestInventorySwaps();

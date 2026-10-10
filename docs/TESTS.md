@@ -22,6 +22,8 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `TestFuzz` | les décodeurs résistent à des données aléatoires ou tronquées |
 | `TestJoinFromMenu` | rejoindre depuis le menu : transfert du monde, chargement, `Ready` |
 | `TestOwnCharacter` | un personnage par joueur, retrouvé à la reconnexion |
+| `TestWorldIdentity` | même monde après une coupure du tick (fenêtre, zone), nouveau monde après un chargement ; les doublures ne décident jamais ; celles restées d'un monde précédent sont nommées |
+| `TestNoDuplicatePlayers` | un client déjà là garde exactement une copie de chaque joueur arrivé après lui, à travers des coupures du tick et un vrai chargement |
 | `TestSessionReplication` | positions, santé, heure et pause répliquées |
 | `TestDivergenceIsCorrected` | un client qui diverge est ramené à l'état de l'hôte |
 | `TestRejections` | version, exe, mods, nom, partie pleine, exclusion |

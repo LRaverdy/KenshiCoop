@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "kc/session.h"
+#include "kc/world_identity.h"
 #include "kenshi.h"
 #include "util.h"
 
@@ -422,7 +423,9 @@ private:
     bool live_ = false;
     bool wasReady_ = false;
     void* lastPlayer_ = nullptr;
-    std::vector<const void*> lastSquadPtrs_;   // the squad of the world last seen (sorted): same ones, same world
+    kc::WorldIdentity identity_;               // same world after a gap, or a new one (see kc/world_identity.h)
+    std::unordered_set<kc::Handle, HandleHash> spawned_;   // client: local handles of the stand-ins Spawn made (not adopted ones)
+    void RenameSpawned(const kc::Handle& before, const kc::Handle& after);
     void ResetWorldBound();
     uint32_t generation_ = 0;
     bool holding_ = false, pausedByHold_ = false;

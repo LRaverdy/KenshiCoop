@@ -195,9 +195,14 @@ Ordre dans `Tick()` (`main.cpp`) :
   du même nom sur une connexion muette depuis 2 s) remplace l'ancienne **avant** le choix du nom
   et de l'id.
 - Client : le hook de `SaveManager::save` refuse toute sauvegarde tant que le client est en session.
-- Un nouveau monde (`KenshiWorld::BeginFrame`) est un autre joueur ou une escouade dont les objets
-  ont changé, pas une simple coupure du tick. Il remet tout l'état lié au monde à zéro
-  (`ResetWorldBound`) : alias, pointeurs, demandes en attente, caches.
+- Un nouveau monde (`KenshiWorld::BeginFrame`, décision dans `kc::WorldIdentity`,
+  `common/include/kc/world_identity.h`) est un autre objet joueur, ou, après une coupure du tick
+  (fenêtre redimensionnée, zone qui charge, menu), une escouade dont les objets ont changé. L'escouade
+  est photographiée **à chaque image** et **sans les doublures** (chez un client, les persos des
+  autres joueurs sont des doublures que le mod crée et retire lui-même). Un nouveau monde remet tout
+  l'état lié au monde à zéro (`ResetWorldBound`) : alias, pointeurs, demandes en attente, caches ; les
+  doublures créées par `Spawn` dans l'ancien monde et encore là (même handle, même objet) sont
+  détruites, sinon elles s'empileraient dans l'escouade du joueur.
 - Sérialisation little-endian vérifiée à chaque lecture (`kc/wire.h`) : varints, chaînes bornées.
 - Les quaternions sont compressés sur 32 bits (« smallest three »).
 

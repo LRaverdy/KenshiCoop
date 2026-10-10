@@ -47,6 +47,7 @@ void KenshiWorld::BeginFrame(bool live) {
     bySerialBuilt_ = false;
     if (!live) {   // menus and loading screens: nothing in the world may be touched
         wasReady_ = false;
+        identity_.Gap();
         return;
     }
     kenshi::PlayerCharacters(scratch_);
@@ -56,38 +57,72 @@ void KenshiWorld::BeginFrame(bool live) {
     }
     // A (re)loaded world: a new generation, which tells a joining client its load completed.
     // A frame without the game's main loop (a zone loading after a long walk or a far teleport, a
-    // hitch) also passes through "not live": the same characters at the same addresses afterwards
-    // mean the same world, whose stand-ins and caches must survive. Any reload frees them all.
+    // window resized, a hitch) also passes through "not live": the same characters at the same
+    // addresses afterwards mean the same world, whose stand-ins and caches must survive. Any
+    // reload frees them all. Compared every live frame, the player's squad without the stand-ins
+    // (other players' characters on a client): see kc::WorldIdentity, and the duplicated players
+    // of the 4-player stress test.
     void* player = kenshi::Player();
     const bool ready = player && !squad_.empty();
-    if (ready && (!wasReady_ || player != lastPlayer_)) {
-        std::vector<const void*> now;
-        for (auto& [h, c] : squad_) now.push_back(c);
-        std::sort(now.begin(), now.end());
-        if (player != lastPlayer_ || now != lastSquadPtrs_) {
-            ++generation_;
+    if (!ready) {
+        identity_.Gap();
+    } else {
+        std::unordered_set<kc::Handle, HandleHash> standInHandles;
+        for (const auto& [host, local] : alias_) standInHandles.insert(local);
+        std::vector<const void*> own;
+        for (const auto& [h, c] : squad_) if (!standInHandles.count(h)) own.push_back(c);
+        std::vector<kc::WorldIdentity::Object> made;
+        for (const kc::Handle& local : spawned_)
+            if (kenshi::Character* c = kenshi::Resolve(local)) made.push_back({local, c});
+        const kc::WorldIdentity::Verdict v = identity_.Observe(player, std::move(own), made, [](const kc::WorldIdentity::Object& o) {
+            kenshi::Character* c = kenshi::Resolve(o.handle);
+            return c && c == o.ptr && kenshi::IsCharacter(c);
+        });
+        if (v.newWorld) {
+            // stand-ins we made that are still in the game: nothing would know them any more, and
+            // the session would make new ones beside them
+            int destroyed = 0;
+            for (const kc::WorldIdentity::Object& o : v.leftovers) {
+                kenshi::Character* c = kenshi::Resolve(o.handle);
+                if (!c || c != o.ptr) continue;
+                HostCallScope scope;
+                if (kenshi::InventoryWindowShows(c)) kenshi::CloseInventoryWindows();
+                if (kenshi::DestroyObject(c)) ++destroyed;
+            }
+            generation_ = identity_.generation();
             ResetWorldBound();
-            Log("new world (generation %u): every per-world state reset", generation_);
+            if (!v.leftovers.empty())
+                Log("new world (generation %u): every per-world state reset; %d stand-in(s) of the previous one still here, removed", generation_,
+                    destroyed);
+            else
+                Log("new world (generation %u): every per-world state reset", generation_);
+            squad_.clear();   // removed stand-ins may have been in it
+            kenshi::PlayerCharacters(scratch_);
+            for (kenshi::Character* c : scratch_) {
+                kc::Handle h;
+                if (kenshi::GetHandle(c, h) && h.valid()) squad_[h] = c;
+            }
         }
-        lastSquadPtrs_ = std::move(now);
-        // Same world, but the game ran frames we did not see (it opened a trade window, loaded a
-        // zone): handle lookups are made again, and a stand-in whose local object is gone is
-        // forgotten. A stand-in still there keeps its alias: forgetting them all (as after a reload)
-        // made each one a stranger again, removed 5 s later ("removed N local character(s) the host
-        // does not have"), the merchant of an open trade window with them (window closed, sale lost).
-        resolved_.clear();
-        kenshi::ResetLookupCaches();
-        for (auto a = alias_.begin(); a != alias_.end();) {
-            kc::Handle moved;
-            if (kenshi::ResolveObject(a->second)) ++a;
-            else if (FindMoved(a->second, moved)) { a->second = moved; ++a; }   // moved to another squad meanwhile
-            else a = alias_.erase(a);
+        if (v.newWorld || !wasReady_) {
+            // Same world, but the game ran frames we did not see (it opened a trade window, loaded a
+            // zone): handle lookups are made again, and a stand-in whose local object is gone is
+            // forgotten. A stand-in still there keeps its alias: forgetting them all (as after a reload)
+            // made each one a stranger again, removed 5 s later ("removed N local character(s) the host
+            // does not have"), the merchant of an open trade window with them (window closed, sale lost).
+            resolved_.clear();
+            kenshi::ResetLookupCaches();
+            for (auto a = alias_.begin(); a != alias_.end();) {
+                kc::Handle moved;
+                if (kenshi::ResolveObject(a->second)) ++a;
+                else if (FindMoved(a->second, moved)) { RenameSpawned(a->second, moved); a->second = moved; ++a; }   // moved to another squad meanwhile
+                else { spawned_.erase(a->second); a = alias_.erase(a); }
+            }
+            pendingLoot_.clear();
+            strangerSince_.clear();
+            lastTarget_.clear();
+            fallPrep_.clear();
+            fellAt_.clear();
         }
-        pendingLoot_.clear();
-        strangerSince_.clear();
-        lastTarget_.clear();
-        fallPrep_.clear();
-        fellAt_.clear();
     }
     wasReady_ = ready;
     lastPlayer_ = player;
@@ -98,6 +133,7 @@ void KenshiWorld::BeginFrame(bool live) {
 // frame call the game on freed memory.
 void KenshiWorld::ResetWorldBound() {
     alias_.clear();   // stand-ins belonged to the previous world
+    spawned_.clear();
     {
         std::lock_guard<std::mutex> lk(workshopMutex_);   // workshop: pointers of the previous world
         craftMeta_.clear();
@@ -318,8 +354,13 @@ kenshi::Character* KenshiWorld::FindSquad(const kc::Handle& h) const {
 
 // Client: a character of ours changed squads here, and with it its handle: the host's handle for it
 // now points to the new one.
+void KenshiWorld::RenameSpawned(const kc::Handle& before, const kc::Handle& after) {
+    if (spawned_.erase(before)) spawned_.insert(after);
+}
+
 void KenshiWorld::LocalRehandled(const kc::Handle& before, const kc::Handle& after) {
     if (before == after) return;
+    RenameSpawned(before, after);
     bool found = false;
     for (auto& [host, local] : alias_)
         if (local == before) { local = after; found = true; }
@@ -386,6 +427,7 @@ bool KenshiWorld::Spawn(const kc::Handle& h, const kc::SpawnInfo& info, const kc
     HostCallScope scope;
     kenshi::Teleport(c, at.pos, at.rot);
     alias_[h] = local;
+    spawned_.insert(local);
     resolved_.erase(h);
     return true;
 }
@@ -452,6 +494,7 @@ bool KenshiWorld::Exists(const kc::Handle& h) {
                 HostCallScope scope;
                 kenshi::DestroyObject(standIn);
             }
+            spawned_.erase(a->second);
             alias_.erase(a);
             resolved_[h] = real;
             return true;
@@ -471,6 +514,7 @@ bool KenshiWorld::Exists(const kc::Handle& h) {
                 return true;
             }
             Log("stand-in %s for the host's %s is gone here: it can be recreated", KeyOf(a->second).c_str(), KeyOf(h).c_str());
+            spawned_.erase(a->second);
             alias_.erase(a);
             resolved_.erase(h);
             return false;
@@ -633,6 +677,7 @@ void KenshiWorld::Despawn(const kc::Handle& h) {
         }
         kenshi::DestroyObject(c);
     }
+    spawned_.erase(a->second);
     alias_.erase(a);
     resolved_.erase(h);
 }
