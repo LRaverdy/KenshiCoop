@@ -23,6 +23,12 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   disparu ») : un objet ramassé disparaît du sol mais n'arrive pas dans son inventaire ; une autre
   fois il est bien arrivé puis a disparu de l'inventaire au bout d'un moment (inventaire réécrit
   par celui de l'hôte, où l'objet n'est jamais arrivé ?).
+- **Construction par le client 3** : la construction s'est bien passée, mais (1) la jauge des
+  matériaux de construction du chantier ne montrait pas les matériaux apportés (chez le client) ;
+  (2) une fois fini, le bâtiment n'a pas de collision chez le client (on le traverse), alors qu'un
+  bâtiment normal en a. Probable : le bâtiment est créé ou fini par la synchro sans passer par ce
+  qui crée sa physique (finishConstruction / l'état « fini » du jeu), à vérifier aussi pour les
+  bâtiments posés par l'hôte.
 - **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
