@@ -9,7 +9,7 @@ Deux niveaux de tests :
 
 ```powershell
 .\build.ps1                            # compile aussi kc_tests
-.\build\bin\Release\kc_tests.exe       # dernière ligne : "860 checks, 0 failed" (10 octobre 2026)
+.\build\bin\Release\kc_tests.exe       # dernière ligne : "26728 checks, 0 failed" (10 octobre 2026)
 .\build.ps1 -Asan                      # variante AddressSanitizer, dans build-asan\
 ```
 
@@ -28,9 +28,17 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `TestWorldAuthority` | le client n'exécute rien lui-même, ses ordres passent par l'hôte |
 | `TestSpawnReplication` | personnages créés chez l'hôte puis recréés chez le client |
 | `TestInventories` | inventaires identiques, fouille rejouée par l'hôte |
+| `TestGroundDrops` | objets lâchés au sol par un client : depuis son perso (l'hôte le lâche), depuis un coffre ouvert (lâché par son perso près du coffre, nommé dans `InvOp::toNetId`), depuis le perso de l'hôte (refusé) ; dépôts forgés (perso de l'hôte, aucun perso, son perso loin du coffre) refusés par le contrôle d'autorité |
+| `TestFactions` | relations de la faction du joueur et primes de l'hôte identiques chez le client, changements suivis, dérive du client corrigée |
+| `TestDiplomacy` | diplomatie : seules les paires de factions changées depuis le début voyagent ; guerre, chef tué, ville prise suivis par le client ; nouvelles en français identiques des deux côtés (guerre, mort, ville, relation, prime) ; dérive du client corrigée ; le bruit des relations n'est pas renvoyé |
 | `TestCrashRejoin` | client figé 7 s (gardé), puis relancé avec le même compte avant la coupure : remplacé, même nom, même perso, pas de doublon, fenêtre de commerce fermée, perso arrêté |
 | `TestAdmin` | administration de l'hôte : syntaxe des commandes `admin`, calcul de l'XP du jeu (`increaseStat`, 20 au plus par appel, niveaux visés au plus juste), mode dieu retenu par joueur (même compte Steam = même joueur, « tout le monde » puis un seul retiré), message envoyé à un seul joueur et jamais par un client |
+| `TestTaskTargets` | sécurité des acteurs : chaque numéro de tâche confronté à chaque sorte de cible (rien, soi, PNJ debout / à terre / mort, autre membre, objet, contenant, chantier à nous ou non, bâtiment fini, lit, cage, machine, porte, handle périmé), par les 4 façons de donner un ordre ; numéros inconnus refusés ; barre d'escouade et panneau Tâches ; table des règles des messages ; aller-retour de `Result` |
+| `TestActorSafety` | sécurité des acteurs : 1 hôte + 2 clients ; ordres forgés (aller, arrêter, ramasser, lit, parler, mode, escouade) au nom du perso de l'hôte, d'un autre joueur, d'un PNJ, d'aucun, d'un inconnu : rien n'est exécuté, refus journalisé, `Result` rejeté (par `seq`) et message français ; idem pour regarder dans un contenant, apparence, dépôt d'objet, réponse à la conversation d'un autre ; l'ordre de son propre perso est exécuté (`Done`) ; le client refuse d'envoyer pour un perso qui n'est pas le sien ; un ordre envoyé quand même (`SendRawCommandForTest`) est refusé ; ordres de son perso visant une mauvaise cible (construire, machine, lit, porte, cage, ramasser, coffre sur un PNJ ; handle périmé ; sans cible ; parler à un membre de l'escouade) refusés, la bonne cible acceptée (premiers soins sur le perso de l'hôte compris) |
+| `TestMap` | marqueurs de carte : 1 hôte + 2 clients reçoivent les persos (propriétaires, perso de chaque joueur, positions même très loin) et les escouades hostiles de l'hôte ; un ping de client chez l'hôte et l'autre client, refusé s'il suit le précédent de moins de 0,5 s, 5 au plus par joueur, effacé après 10 s |
 | `TestManyPlayers` | 1 hôte + 4 clients arrivant ensemble, 120 personnages |
+| `TestJoinQueue` | file d'attente des arrivées : 3 arrivées quasi simultanées (une pendant la sauvegarde, une pendant le chargement du premier), un joueur à la fois jusqu'à la fermeture de son éditeur, positions / joueur attendu / étape côté clients, liste côté hôte, personne rejeté pendant l'attente, chaque sauvegarde contient les persos des précédents ; le joueur dans l'éditeur plante (tour suivant), un joueur quitte la file (renumérotée) ; deux éditeurs ouverts ensemble : pause jusqu'à la fermeture du dernier |
+| `TestMessageRules` | autorité : chaque valeur de `Msg` (les 256 octets passés à `MsgName`) a exactement une règle dans `kMessageRules`, et `PeekType` n'accepte que ces messages ; numéros de la fusion du protocole 33 (`JoinQueue` 72, `BagBind` 80, `MapMarkers` 82, `MapPing` 83, `Diplomacy` 85, `Result` 90) ; un client qui envoie `Diplomacy`, `MapMarkers`, `JoinQueue`, `BagBind` ou `Result` est refusé ; 5 pings d'affilée : 1 passe, 4 ignorés (`minInterval` 0,5 s), puis un autre passe |
 
 ## 2. Tests en jeu (`tools/coop_test.py`)
 
@@ -89,7 +97,7 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `four` (`--clients 3`) | 1 hôte + 3 clients : chaque client comparé à l'hôte **et aux autres clients** ; chacun ne commande que son personnage |
 | `run` (`--quick`) | scénario complet avec rapport de désynchronisation |
 | `soak` (`--minutes 20`) | **stabilité** : vitesse 1 → 2 → 3 → 2 → 1 par phases de 90 s, rafale de 20 s au début de chaque phase (vitesse 1/2/3 et pause changées toutes les 1 à 2 s, touches de vitesse aussi chez le client), pause / reprise en pleine activité ; pendant chaque phase : escouades de l'hôte et perso du client qui bougent, combat contre un PNJ créé, K.-O. puis fouille par le client, fenêtre de commerce ouverte / fermée, bâtiments posés par les deux, perso du client téléporté à 30000 puis ramené (une fois). Le client demande une vitesse et une pause (sa vitesse peut s'écarter de 5 % de celle de l'hôte, le temps que son horloge rattrape celle de l'hôte) : l'horloge de l'hôte ne doit pas bouger et le client y revient. Toutes les 30 s : les deux jeux vivants, comparaison en pause (tolérances de la `suite` : escouade ≤ 0.1, 8 pour un corps au sol, K.-O., mort ou à terre jambe brisée (drapeau 4 chez l'hôte) ; aucun manquant, état vital ou inventaire différent), aller-retour d'une commande (< 1 s), mémoire des deux processus (psutil, sinon tasklist) : ÉCHEC si elle dépasse +40 % du relevé pris après 2 min |
-| `join4` (`--clients 3`) | **plusieurs joueurs** : hôte + 3 clients lancés avec chacun un faux Steam id (`KC_FAKE_STEAM_ID`) et un nom (`KC_PLAYER_NAME` : Joueur2, Joueur3...), qui rejoignent **en même temps** puis ferment l'éditeur (`editdone`). Vérifie : ids de joueur distincts, chaque client a son propre perso, chaque client voit les persos de tous les joueurs (noms et positions identiques à l'hôte, en pause) ; puis tous partent proprement et l'hôte continue |
+| `join4` (`--clients 3`) | **plusieurs joueurs** : hôte + 3 clients lancés avec chacun un faux Steam id (`KC_FAKE_STEAM_ID`) et un nom (`KC_PLAYER_NAME` : Joueur2, Joueur3...), qui rejoignent **en même temps** : l'hôte les prend un par un (file d'attente), chacun ferme l'éditeur (`editdone`) à son tour. Vérifie la file (tous entrent, aucun rejeté ; ceux qui attendent voient leur position 2..N/N, le joueur attendu et l'étape ; le dernier voit sa position avancer ; un seul client charge le monde à la fois ; l'hôte affiche la file), puis : ids de joueur distincts, chaque client a son propre perso, chaque client voit les persos de tous les joueurs (noms et positions identiques à l'hôte, en pause) ; puis tous partent proprement et l'hôte continue |
 | `stress4` (`--clients 3 --minutes 15 --hop 180 --seed 4242`) | **4 joueurs partout sur la carte** : les persos de chaque client vivent dans leur propre région lointaine (±40000 autour de la maison de l'hôte, ≥ 30000 de l'hôte et des autres) et changent de région toutes les `--hop` s ; dans chaque zone : combat contre un PNJ créé, K.-O. puis fouille, bâtiment posé. Chaque client **clique partout** (fil par client, graine dérivée de `--seed`, chaque action journalisée avec sa graine pour rejouer un plantage) : déplacements (les siens et ceux des autres, refusés), parler, coffres, glisser des objets, sélection, ordres de la barre, tâches, porter, ramasser, commerce, fermer les fenêtres, vitesse / pause, construire. Tous les joueurs en **mode dieu** (`god all` de la console admin, `heal all` toutes les 8 s). Deux clients prennent les mêmes objets d'un même corps au même instant. L'hôte change de vitesse 1/2/3 et met en pause ; le dernier client part puis revient. Toutes les 30 s : tous les jeux vivants, comparaison en pause hôte / chaque client (tolérances du `soak`), persistance par zone (un perso près d'un client absent ou décalé > 3 deux relevés de suite = ÉCHEC), aller-retour, temps de frame de l'hôte (< 250 ms), mémoire par processus (+40 % après 2 min), **objet marqué** (5 donnés à chaque joueur) compté pareil chez l'hôte et chaque client et jamais en trop. À la fin, chacun ramené à la maison |
 | `facing` | un personnage de l'hôte court dans plusieurs directions : le client doit vraiment courir, dans le même sens |
 | `jitter` (`kctest_town`) | les PNJ immobiles ne tremblent pas chez le client, quelle que soit la vitesse |
@@ -103,6 +111,7 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `admin` | administration de l'hôte (commandes `admin …`) : refusée chez le client (commande et console) ; mode dieu sur le perso du client, combat contre un PNJ créé : ni sang ni membre perdus chez l'hôte, même état chez le client ; le mode dieu tient après un resync (reconnexion), puis retiré ; 100 points d'XP en attaque = le calcul du jeu (5 × 20), même valeur chez le client ; +3 niveaux dans chaque compétence, mêmes valeurs ; TP joueur → hôte, hôte → joueur, joueur → point de la carte : arrivée et même position chez le client ; soigner réveille un K.-O. ; argent +5000 partout ; dieu pour tout le monde puis retiré. Pas encore lancée en jeu |
 | `talk` | un PNJ parle au personnage du client : la conversation tourne chez l'hôte, la fenêtre s'ouvre chez le client |
 | `factions` | lot B : mêmes relations au départ ; relation changée par l'hôte identique chez le client ; prime donnée puis levée par l'hôte visible chez le client ; une relation changée par le jeu du client revient à celle de l'hôte |
+| `diplomacy` (`kctest_town`) | diplomatie : mêmes guerres entre factions, chefs et villes au départ (empreintes `diplo`) ; guerre déclarée par l'hôte entre deux factions identique chez le client ; paix faite par le jeu du client remise à la guerre de l'hôte ; un chef tué par les joueurs chez l'hôte l'est aussi chez le client ; une ville prise par une autre faction chez l'hôte l'est aussi chez le client ; tout est remis comme avant ; mêmes empreintes à la fin. Vérifications « diplomatie : … » |
 | `ranged` (`--shooter <clé>`) | (lot C) 3 tirs d'un arbalétrier de l'hôte sur l'escouade sont refaits chez le client, sur la même trajectoire ; même point visé ; une tourelle proche tournée chez l'hôte tourne pareil chez le client ; santé et inventaires identiques ensuite |
 | `placevalid` | les poses sont vérifiées comme le mode construction vérifie un endroit : le perso du client va sur la terre ferme près du lac d'acide (54612, 40576) ; ce point est de l'eau/acide chez les deux ; refusé par la vérification du client (`buildcheckat`, `buildplaceat`) et de l'hôte ; envoyé quand même (`force`), l'hôte le refuse, le journalise avec la raison, le client reçoit « dans l'eau ou l'acide », rien n'est bâti (aucune annonce, rien dans le lac chez les deux) ; une pose sur un endroit sec à côté est acceptée et bâtie au même endroit chez les deux |
 | `build` (lot E) | une pose du client bâtie par l'hôte puis par tous au même endroit, celle de l'hôte aussi ; avancement et fin du chantier ; démontage demandé par le client ; achat d'un bâtiment à vendre (avec `--save kctest_town`) |
@@ -111,6 +120,7 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `farlong` (`--seconds 300`) | le perso du client à plus de 30000 unités pendant 5 min : zone comparée toutes les 30 s (PNJ, santé, inventaires), combat lancé et bâtiment posé là-bas, l'escouade de l'hôte bouge ; pas de PNJ manquant ni d'écart de position qui dure (le même perso sur deux relevés de suite) près du perso du client (1000 unités pour les absents, 300 pour les positions ; les chiffres de toute la zone vont seulement dans le journal : PNJ autour de l'escouade de l'hôte que le client n'a pas chargés, trafic), l'hôte simule la zone, pas de plantage, aller-retour d'une commande < 1 s ; retour (TP admin) et comparaison |
 | `progress` | compétences, argent, bulles et ordres : l'hôte décide, le client suit |
 | `ground` / `clientpickup` | objets posés et ramassés ; ramassage demandé par un client |
+| `grounddrop` | objets lâchés par le chemin du glisser-déposer (`uidrop` = `Inventory::dropItem`) : une pile de minerai, une arme, une armure, par l'hôte puis par le client, puis les deux à la fois, puis ce qui tombe sur un K.-O. et une mort. Chaque objet une seule fois des deux côtés, même pile, à moins de 5 unités ; ramassé par l'hôte, il disparaît partout. Compteurs `groundstats` des deux côtés au journal. Pas encore lancée |
 | `anim` / `animframe` / `gait` | animations de combat et d'action ; tout ce qui est à l'écran ; allure |
 | `fx` / `fxlive` | effets météo (orage forcé puis comparaison en pause ; en direct) |
 | `bodies` / `dead` / `items` | où reposent les corps ; morts ; objets |
@@ -119,7 +129,9 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `menu` | un hôte qui héberge et un second jeu laissé **au menu principal**, pour rejoindre à la main |
 | `up` | un hôte et un client connectés, laissés ouverts pour un test manuel |
 | `prison` (lot D) | l'hôte met le personnage du client dans la cage la plus proche, l'enchaîne, le réduit en esclavage puis le libère : même état chez le client, gardé dans la cage, tout effacé à la fin. Il faut une cage à moins de 300 m de l'escouade (`--save` d'une sauvegarde près d'une prison ou d'un camp d'esclavagistes) |
+| `actorsafety` (`kctest_town`) | **sécurité des acteurs** : l'hôte sélectionne ses propres persos (comme un joueur) ; le client donne avec son perso chaque sorte d'ordre (lit, parler, piller, ramasser, commerce, tâche, construire, porte, premiers soins sur un perso de l'hôte, suivre, porter un perso de l'hôte K.-O., attaquer) : après chacun, la sélection de l'hôte est inchangée et ses persos n'ont rien reçu (pas de nouvelle tâche, pas de déplacement, pas de lit, pas de conversation ; `actorstats` leaks=0). Puis ordres forgés (`forgeorder`) au nom d'un perso de l'hôte : refusés ; et ordres de son perso visant une cible du mauvais type (dont le chemin du plantage de `stress4` : `npcreq <perso> 2 a`, construire sur un PNJ) : refusés, l'hôte et le client vivants. Contrôles « securite controle : ... ». Pas encore lancée en jeu |
 | `crashrejoin` (`--only abcdefg`) | client **tué** (`taskkill /F`) puis relancé avec le même faux id Steam et revenu : (a) au repos, (b) en combat à la vitesse 3, (c) en portant un corps, (d) fenêtre de commerce ouverte, (e) en fouillant un corps, (f) dans l'éditeur de personnage, (g) relancé avant que l'hôte ait vu la coupure. À chaque fois : l'hôte vit, voit la coupure (< 20 s) et nettoie (journal « disconnected (… » / « cleaned up: »), le joueur retrouve les mêmes persos (clés, inventaires ; sauf combat), pas de doublon, comparaison hôte / client propre, l'hôte n'est pas resté en pause |
+| `map` (`--clients 2`) | **carte, minicarte, repères, barre, pings** : chaque client reçoit le flux de l'hôte (âge < 2 s, mêmes persos, mêmes propriétaires et positions à 30 unités près, mêmes escouades hostiles ; un PNJ copié qui se bat contre l'escouade sert d'ennemi) ; chaque joueur a un perso « à lui » ; chaque machine dessine tous les persos, une couleur par joueur (`mapscene carte`) ; projection du jeu (`worldToMapCoords`) = la nôtre à 1,5 px près ; minicarte centrée sur son perso ; repères au-dessus des têtes ; cadres de la barre seulement aux couleurs des joueurs ; ping du client 1 visible chez l'hôte et chez le client 2 à son nom, second ping trop rapide refusé, 5 au plus, effacé après 10 s. Contrôles « carte : … », « minicarte : … », « tetes : … », « barre : … », « ping : … ». Pas encore lancée en jeu |
 | `cmd <pid> <commande…>` | envoie une commande de debug à une instance |
 
 ### La suite (`suite`) : 32 points
@@ -210,7 +222,7 @@ l'escouade triée par handle.
 | Commande | Rôle |
 |---|---|
 | `echo` | répond `ok` |
-| `status` | état de la session, monde prêt, numéro, entités, PNJ, PNJ manquants, joueurs en cours d'arrivée, sauvegarde en cours, dernière erreur |
+| `status` | état de la session, monde prêt, numéro, entités, PNJ, PNJ manquants, joueurs en cours d'arrivée, file d'attente (`queue=` : client `2/3` + `queueWait=` + `queuePhase=saving/loading/editor`, hôte `Joueur2:editor,Joueur3:wait`, `-` sinon ; espaces des noms remplacés par `_`), sauvegarde en cours, dernière erreur |
 | `load <emplacement>` | charge une sauvegarde |
 | `host` / `join [adresse] [port]` / `leave` | héberger, rejoindre, quitter |
 | `give <joueur> <index\|all>` | donner un ou tous les membres de l'escouade à un joueur |
@@ -230,6 +242,12 @@ l'escouade triée par handle.
 | `probe <index> <dx> <dz> <simple\|teleport>` | essaie une méthode de positionnement et dit ce qui tient |
 | `pos <index>` / `where <clé\|npc\|index>` | position d'un personnage, et `carried=1` s'il a l'animation « porté » (la position d'un corps porté est celle du porteur) |
 | `camto <index>` | caméra sur ce membre |
+| `selectset <i> [<j>…]` | la sélection devient **exactement** ces membres (le perso principal que `unselectAll` garde en est retiré) ; `err` sinon |
+| `selected` | indices des membres sélectionnés (triés ; `+n` : n autres objets) |
+| `charstate <index>` | `tasks=` (système de tâches) `jobs=` (panneau Tâches) `in=` (0 rien, 1 lit, 2 cage) `dialog=` (0/1) `pos=x,z` |
+| `actorstats` | (hôte) demandes de clients refusées (`refused=`), ordres refusés pour leur cible (`target=`), tâches arrivées sur un perso de la sélection de l'hôte pendant un ordre de client (`leaks=`, doit rester 0), sélection mal remise (`restorefail=`) |
+| `results` | (client) réponses `Result` de l'hôte : nombre de refus, puis les dernières en `seq:état:raison` |
+| `forgeorder <acteur> <via> <tâche> <sujet>` | (client) ordre **forgé** envoyé tel quel, sans nos contrôles : `via` 0 = aller, 1-4 = `TaskVia` ; sujet `none`, `self`, `squad<i>`, `npc`, `item`, `building` |
 | `taskreq <sélection> <tâche> <sujet>` | sélectionne ce membre seul et donne l'ordre, comme l'interface |
 | `talkreq <sélection>` | ordre de parler au PNJ le plus proche |
 | `orderreq <sélection> <ordre permanent>` | bouton de la barre d'escouade pour ce membre seul |
@@ -263,6 +281,11 @@ l'escouade triée par handle.
 | `bounty <index>` | primes de ce membre de l'escouade (`faction:montant`), total, crime en cours, heures de prison |
 | `givebounty <index> <nom> <montant>` | (hôte) met cette prime sur ce membre |
 | `factionsync` | messages de relations / primes reçus et valeurs corrigées (client), envois (hôte) |
+| `diplo` | diplomatie de ce jeu : paires de factions (hors joueur), celles en guerre / alliance / paix et leur empreinte `ph`, personnages uniques morts / emprisonnés et empreinte `uh`, villes, variantes et empreinte `th` (identiques hôte / client = synchro) |
+| `diplopair <A> <B>` / `setdiplopair <A> <B> <valeur> [war\|ally\|peace\|none]` | relation de A envers B et l'inverse ; la fixer dans les deux sens (chez l'hôte : comme le jeu ; chez un client : simule une dérive locale) |
+| `unique <nom>` / `setunique <nom> <0\|1\|2> [player]` | état d'un personnage unique (0 mort, 1 vivant, 2 emprisonné ; `player=1` : par les joueurs) ; le fixer |
+| `town <nom>` / `settownowner <ville> <faction>` | faction et variante d'une ville ; changer sa faction (`TownBase::setFaction`) |
+| `diplosync` | parties `Diplomacy` reçues et valeurs corrigées (client), envois (hôte), paires changées suivies, uniques, villes |
 | `look <nom>` / `lookset <nom> <clé> <valeur>` | résumé de l'apparence ; changer un curseur |
 | `editchar` / `editdone` | (client) ouvrir l'éditeur sur son personnage ; valider comme le bouton |
 
@@ -288,6 +311,10 @@ l'escouade triée par handle.
 | `drop <index>` | ce membre pose un objet non équipé (répond avec son handle) |
 | `pickup <index> <clé>` / `pickupreq <index> <modèle> <x,y,z>` | ramasser (hôte) ; ce qu'envoie le « ramasser » d'un client |
 | `groundnear <rayon>` / `ground <clé de l'hôte>` | objets au sol autour ; cet objet est-il au sol ici ? |
+| `uidrop <index> <weapon\|armour\|item\|modèle>` | ce membre lâche cet objet comme le glisser-déposer vers le monde (`Inventory::dropItem`) ; client : demandé à l'hôte |
+| `fetchitem <index> <weapon\|armour\|modèle>` | (hôte) prend un objet de ce genre à un autre membre (porté ou non) et le met dans son sac |
+| `groundall <rayon> [index]` / `groundcopy <clé de l'hôte>` | objets posés dans le monde autour, `clé\|modèle\|nombre\|x,y,z` ; (client) sa copie de cet objet de l'hôte |
+| `groundstats` | compteurs des objets au sol (crochets, relevé, répétitions ; côté client : créés, adoptés, fusionnés, retirés) |
 | `invmove <de> <vers> <rang\|main\|worn> [qté] [x] [y] [section]` | ce que fait un glisser-déposer d'inventaire ; `bag:<qui>` désigne le sac porté par ce personnage |
 | `loot <cible> [index]` / `lootorder <cible>` | fouille d'un corps telle qu'un client la fait ; le chemin du clic droit |
 | `containerreq <sélection> <nom>` | clic droit sur le contenant le plus proche de ce nom |
@@ -307,6 +334,20 @@ l'escouade triée par handle.
 | `chain <i> [off]` | (hôte, lot D) l'enchaîne à la manière du jeu (menottes créées) / le libère |
 | `enslave <i> <0-3>` | (hôte, lot D) état d'esclave : 0 non, 1 esclave, 2 en fuite, 3 ancien |
 | `captive <i>` | (lot D) `in=` (2 = en cage), cage, `chained`, `slave`, `slaveof`, évadé, enlevé, peine, position, nombre de captifs suivis |
+
+**Carte, minicarte, repères, pings**
+
+| Commande | Rôle |
+|---|---|
+| `mapfeed` | le flux de carte de cette machine (hôte : construit, client : reçu) : âge, joueurs, persos (`nom:owner=:av=:x=:z=`), escouades hostiles (`threat:kind=:n=:x=:z=`) |
+| `mapscene carte` | ce que la carte dessine : ouverte, bornes, chaque perso avec propriétaire, couleur (`col=or`…), position, et à l'écran si la carte est ouverte (`sx=`, `sy=`, `vis=`) ; escouades hostiles |
+| `mapscene minicarte` | centre, zoom, rotation, coin, persos et ennemis dans le cercle |
+| `mapscene tetes` | repères au-dessus des têtes : perso, propriétaire, couleur, à l'écran ou non, point projeté |
+| `mapscene barre` | cadres de la barre d'escouade (propriétaire, couleur, rectangle) et cellules de portrait suivies |
+| `mapscene pings` | pings dessinés ici (id, joueur, type, position, âge) |
+| `mapproj <x> <z>` | `MapScreen::worldToMapCoords` du jeu comparé à notre projection (`game=` / `ours=`, taille de l'image) |
+| `ping <x> <z> [type]` | ce joueur pinge ce point (0 aller ici, 1 danger, 2 butin, 3 à l'aide) ; `err` si trop tôt |
+| `pings` | pings vivants dans la session (`id=:owner=:kind=:x=:z=:age=`) |
 
 **Portes et serrures (lot A)** — `<qui>` : index dans l'escouade (autour de qui chercher) ; `<quoi>` :
 `door` (la porte la plus proche), `lock` (le meuble à serrure le plus proche) ou une partie du nom

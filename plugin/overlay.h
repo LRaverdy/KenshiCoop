@@ -34,6 +34,7 @@ struct OverlayModel {
     std::string errorText;              // why the last session ended, in French (empty: none)
     bool leftHostWorld = false;         // a client that left: what it sees is only a copy of the host's world
     float download = -1;                // 0..1 while the host's world is downloading
+    std::vector<std::string> queueLines; // join queue: our place (client) / everyone in it (host)
     std::vector<OverlayPlayer> players; // everyone in the session, us included
     std::string name, address;          // current settings
     uint16_t port = 0;
@@ -50,14 +51,30 @@ struct OverlayModel {
     std::string dialogName, dialogText;
     std::vector<std::string> dialogReplies;
     bool dialogWaiting = false;
+    // "Diplomatie" window: the host's relations, bounties and world, ready to show (French)
+    struct DiploRelation {
+        std::string name;
+        int relation = 0;
+        int standing = 0;               // kc::Standing: 0 neutral, 1 ally, 2 enemy
+        bool war = false;
+    };
+    bool diploHave = false;             // the host's values are known here
+    std::string diploHeader;            // rank, reputation
+    std::vector<DiploRelation> diploRelations;
+    std::vector<std::string> diploBounties, diploWorld;
+    // "Affichage" settings (map markers, minimap, pings...), shown in the Multijoueur window
+    bool optMap = true, optHeads = true, optPortraits = true, optMinimap = true, optMinimapRotate = false, optPings = true;
+    int optMinimapCorner = 1;
 };
 
 // What the player did in our windows; carried out on the game thread.
 struct OverlayAction {
-    enum class Kind { Host, Join, Leave, Command, DialogAnswer, EditCharacter, QuitGame } kind = Kind::Command;
+    enum class Kind { Host, Join, Leave, Command, DialogAnswer, EditCharacter, QuitGame, Ping, SetOption } kind = Kind::Command;
     std::string name, address, text;
     uint16_t port = 0;
-    int index = 0;                      // DialogAnswer
+    int index = 0;                      // DialogAnswer; Ping: kc::PingKind
+    float x = 0, y = 0, z = 0;          // Ping: where
+    float value = 0;                    // SetOption: text = the option's key ([ui] in KenshiCoop.ini)
 };
 
 bool OverlayInstall(std::string* err);      // hooks IDXGISwapChain::Present / ResizeBuffers, DirectInput reads
@@ -65,8 +82,15 @@ void OverlayPublish(OverlayModel model);    // game thread -> render thread
 std::vector<OverlayAction> OverlayTakeActions();
 void OverlayToggleMultiplayer();
 void OverlayToggleConsole();
+void OverlayToggleDiplomacy();
+bool OverlayDiplomacyOpen();
 void OverlayOpenMultiplayer();
 bool OverlayTyping();                       // a text field of ours has the keyboard
+// The map layer (plugin/map_view.h): game thread -> render thread, every frame.
+struct MapScene;
+void OverlayPublishScene(MapScene scene);
+void OverlayScreenSize(float& w, float& h);  // the back buffer, as last drawn
+void OverlayPushAction(OverlayAction a);     // from the overlay's own layers
 void OverlayShutdown();
 
 } // namespace kcp

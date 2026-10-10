@@ -178,6 +178,14 @@ Config LoadConfig(const std::wstring& ini) {
     c.steamLoopback = num(L"debug", L"steam_loopback", 0) != 0;
     c.hostConsole = num(L"ui", L"host_console", 1) != 0;
     c.characterPerPlayer = num(L"coop", L"own_character", 1) != 0;
+    c.mapMarkers = num(L"ui", L"map_markers", 1) != 0;
+    c.headMarkers = num(L"ui", L"head_markers", 1) != 0;
+    c.portraitColours = num(L"ui", L"portrait_colours", 1) != 0;
+    c.minimap = num(L"ui", L"minimap", 1) != 0;
+    c.minimapRotate = num(L"ui", L"minimap_rotate", 0) != 0;
+    c.minimapCorner = std::clamp(int(num(L"ui", L"minimap_corner", 1)), 0, 3);
+    c.minimapZoom = std::clamp(float(num(L"ui", L"minimap_zoom", 1500)), 300.0f, 30000.0f);
+    c.pings = num(L"ui", L"pings", 1) != 0;
     return c;
 }
 
@@ -185,6 +193,25 @@ bool SaveConnection(const std::wstring& ini, const std::string& name, const std:
     return WritePrivateProfileStringW(L"player", L"name", Widen(name).c_str(), ini.c_str()) &&
            WritePrivateProfileStringW(L"network", L"join_address", Widen(address).c_str(), ini.c_str()) &&
            WritePrivateProfileStringW(L"network", L"port", std::to_wstring(port).c_str(), ini.c_str());
+}
+
+bool SetUiOption(Config& c, const std::wstring& ini, const std::string& key, float v) {
+    const bool on = v != 0.0f;
+    if (key == "map_markers") c.mapMarkers = on;
+    else if (key == "head_markers") c.headMarkers = on;
+    else if (key == "portrait_colours") c.portraitColours = on;
+    else if (key == "minimap") c.minimap = on;
+    else if (key == "minimap_rotate") c.minimapRotate = on;
+    else if (key == "pings") c.pings = on;
+    else if (key == "minimap_corner") c.minimapCorner = std::clamp(int(v), 0, 3);
+    else if (key == "minimap_zoom") c.minimapZoom = std::clamp(v, 300.0f, 30000.0f);
+    else return false;
+    std::string text;
+    if (key == "minimap_zoom") text = std::to_string(int(c.minimapZoom));
+    else if (key == "minimap_corner") text = std::to_string(c.minimapCorner);
+    else text = on ? "1" : "0";
+    WritePrivateProfileStringW(L"ui", Widen(key).c_str(), Widen(text).c_str(), ini.c_str());
+    return true;
 }
 
 std::wstring GameDir() {

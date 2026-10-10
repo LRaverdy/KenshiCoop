@@ -117,9 +117,14 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 | `hosting on UDP port 27960` / `steam: hosting through Steam (id …)` | partie hébergée |
 | `* X is joining...` | quelqu'un se connecte |
 | `X is back with their character` / `created X's own character` | personnage retrouvé (compte Steam ou nom) / nouveau personnage |
-| `saving the world for joining players` → `world saved: N files, N KB` → `world sent to X` | sauvegarde puis envoi du monde |
+| `saving the world for X` → `world saved: N files, N KB` → `world sent to X` | sauvegarde pour le joueur dont c'est le tour, puis envoi du monde |
+| `join queue: X's turn to join (N waiting after them)` / `join queue: X's turn is over (raison), N still waiting` | file d'attente des arrivées : début et fin d'un tour (raisons : dans le monde, éditeur fermé, parti, retiré, éditeur jamais ouvert, 10 min d'éditeur) |
+| `join queue: X (save being made / loading / character editor), then Y, then Z` | la file à chaque changement |
+| `join queue: X left during their turn` | le joueur en cours est parti ou a planté : le suivant commence |
+| client : `join queue: position 2/3, waiting for X (étape)` / `join queue: our turn, the host is saving its world for us` | ce que voit un joueur qui attend |
 | `* X is in the world` | le joueur a chargé le monde |
 | `X opened the character editor: the game waits for them` / `X closed the character editor` | éditeur ouvert (partie en pause) / fermé |
+| `nobody is in the character editor any more: the game resumes` | le dernier éditeur ouvert s'est fermé : la partie reprend |
 | `new looks for X` | nouvelle apparence appliquée et envoyée aux autres |
 | `X reconnected: the old connection is closed` | même compte Steam reconnecté |
 | `removed X: <raison>` / `rejected a player: <raison>` | joueur exclu / refusé (version, mods, partie pleine…) |
@@ -148,7 +153,13 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 | `[X] vitals: … faints as on the host (now down=… unconscious=… dead=…)` | K.-O. rejoué chez le client. Répétée toutes les 0,5 s : il ne prend pas (correctif en cours) |
 | `[X] posture: … falls as on the host (…)` | chute rejouée chez le client |
 | `[X] carry: …` | corps porté ou posé comme chez l'hôte |
-| `local order dropped: …` | (client) un ordre visait un perso qui n'est pas à ce joueur : il n'est pas envoyé |
+| `refused locally: … for a character this player does not own …` | (client) une demande visait un perso qui n'est pas à ce joueur : elle n'est pas envoyée, le joueur voit « Action refusée » |
+| `auth: [X] <demande> refused: <règle> (…; n recent of this rule)` | (hôte) contrôle central : demande d'un client refusée avant son traitement ; `n` = refus récents de cette règle (décroît, demi-vie 60 s) |
+| `refused: actor N not owned by player P (…)` | (hôte) l'acteur nommé n'est pas un perso de ce joueur (celui de l'hôte, d'un autre joueur, un PNJ, inconnu) : rien n'est exécuté |
+| `refused: client task T (via V) not run: task … needs …` | (hôte) la cible ne convient pas à la tâche (type, handle périmé) : refusé avant les fonctions d'ordre du jeu |
+| `refused: client task T … the selection could not be made exactly its actor` | (hôte) la sélection n'a pas pu être réduite au seul acteur : ordre non exécuté |
+| `SAFETY: a character of the host's selection got a task from a client's order` | (hôte) ne doit jamais apparaître : un perso de l'hôte a reçu une tâche pendant un ordre de client |
+| `host rejected our request (raison, seq N): …` | (client) réponse `Result` de l'hôte |
 | `[X] effect N ended by the host after …` / `gone by itself …` | cycle de vie des effets météo |
 | `[X] our copy A of the host's B changed squads here (now C): followed` / `our copy of the host's B changed squads here (now C): followed` | le jeu du client a changé d'escouade une copie (une mort la met dans l'escouade des morts), donc son handle : le mod la suit au lieu d'en créer une autre |
 | `[X] stand-in A for the host's B is gone here: it can be recreated` | la doublure a vraiment disparu (nettoyée, zone déchargée) : elle sera recréée |

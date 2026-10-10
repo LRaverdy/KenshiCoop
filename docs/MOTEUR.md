@@ -185,6 +185,16 @@ Les signatures sont celles du commentaire du code.
 | fix G5 | `FnCharRemoveJob` | `Character::removeJob(TaskType)` | `0x5C8EB0` | oui | `removeJobSelectedCharacters` (`0x7F5C80`) |
 | fix G5 | `FnCharGetPermajob` | `Character::getPermajob(int) const` | `0x5C8EF0` | — | type de la tâche d'un emplacement |
 | fix G5 | `FnCharPermajobCount` | `Character::getPermajobCount() const` | `0x5C8F30` | — | nombre de tâches |
+| diplomatie | `FnUniqueMapIndex` | `operator[]` de la table de `UniqueNPCManager` | `0x349950` | — | paire `<GameData* const, UniqueCharacterState>` créée si absente (comme au chargement `0x9AA270`) |
+| diplomatie | `FnTownSetOverride` | `TownBase::setOverride(GameData*)` | `0x9FE7A0` | — | applique une variante de ville (voir « Diplomatie ») |
+| diplomatie | `FnTownSetFaction` | `TownBase::setFaction(Faction*, bool)` | `0x9287D0` | — | vt 0xA0 de `Town` / `TownBase` : change la faction d'une ville |
+| carte | `FnMapWorldToCoords` | `MapScreen::worldToMapCoords(const Vector3&)` | `0x48C3E0` | — | projection de la carte (voir § Carte) ; appelée seulement par la commande de test `mapproj` |
+| carte | `FnMapMarkerColor` | `MapScreen::getMarkerColor(RootObjectBase*)` (statique) | `0x48F320` | — | couleur du point du jeu : allié / neutre / ennemi / joueur ; l'hôte s'en sert pour « hostile » |
+| carte | `FnWarCurrentCampaign` | `FactionWarMgr::getCurrentCampaign(Platoon*)` | `0x283500` | — | la campagne (raid, vague d'attaque, visite) d'une escouade, ou nul ; recherche dans `forces` (+0x28), sans insertion |
+| carte | `FnPortraitCellUpdate` | `PortraitMainCellView::update(const IBDrawItemInfo&, PortraitData*)` | `0x415150` | oui | un portrait de la barre d'escouade est (re)dessiné : le mod retient la cellule |
+| carte | `FnPortraitCellDtor` | `PortraitMainCellView::~PortraitMainCellView()` | `0x426450` | oui | destructeur complet (le destructeur virtuel `0x4264E0` l'appelle) : le mod oublie la cellule |
+| sol | `FnInventoryDropItem` | `Inventory::dropItem(Item*)` | `0x745D90` | oui | ce que fait une fenêtre d'inventaire d'un objet lâché sur le monde ; vt 0x38 de `Inventory` et `ShopTraderInventory` |
+| sol | `FnDropItemAnimal` | `CharacterAnimal::dropItem(RootObject*)` | `0x5CA4A0` | oui | même code que `CharacterHuman::dropItem`, pour les bêtes de somme |
 
 | validité | `FnTerrainHeight` | `UtilityT::getTerrainHeight(float x, float z)` | `0x9B3710` | — | le sol sous l'eau éventuelle ; -99 où aucun terrain n'est connu (saut vers `getTerrainHeightFast(x, z, nullptr)` `0x9B32F0`) |
 | validité | `FnTerrainWithWaterHeight` | `UtilityT::getTerrainWithWaterHeight(float x, float z)` | `0x9B3720` | — | max(sol, 100) : la hauteur que `createBuildings` retire à la position (appel vérifié à `0x4D7512`) |
@@ -231,6 +241,8 @@ commentaire de son énumérateur.
 | `0x2011F78` | `lektor<CombatTechniqueData*>` : toutes les techniques de combat |
 | `0x1E3A5F8` | le `hand` vide que le jeu donne à un objet posé au sol |
 | `0x2247DA0` | pointeur vers `Quaternion::IDENTITY` |
+| `0x212EB00` | pointeur vers `UniqueNPCManager` (créé par son accesseur `0x354560`) |
+| `0x2134100` | pointeur vers `TownList` (créé en `0x15D5B77`) |
 
 Vtables (pour reconnaître un objet) :
 
@@ -422,6 +434,33 @@ Emplacements de vtable :
   largeur / hauteur, +0x188 groupe d'objets.
   - vt 0x228 `activate`, vt 0x238 `deactivate`, vt 0x2B8 `getLevel`, vt 0x358
     `setInventoryWeAreIn`.
+  - +0x190 actif dans le monde (mis à 1 par `activate` via vt 0x230, à 0 par `deactivate`) ;
+    +0x1C8 / +0x1D8 : ce que lit `isPhysical` (vt 0xF8, `0xD2210`). Le corps physique est créé par
+    vt 0x220 (`0x75E5D0`) seulement si l'objet a déjà son visuel (vt 0xC8 non nul) et que sa zone
+    est prête (`0x3B0E3`) : juste après un `activate`, un objet peut être au sol sans être
+    « physique ». [D]
+  - `Item::activate` (`0x75D9B0`) est partagé par les 14 classes d'objets (`Item`, `Weapon`,
+    `Sword`, `Crossbow`, `Armour`, `LockedArmour`, `MoneyItem`, `ContainerItem`, `MapItem`,
+    `NestItem`, `BlueprintItem`, `Gear`, `SeveredLimbItem`, `RobotLimbItem` ; vtables listées dans
+    `kItemVtables`, `plugin/kenshi.cpp`). Il est aussi appelé quand une zone charge les objets de la
+    sauvegarde : il ne distingue pas un objet lâché. [D]
+- **Comment un objet arrive au sol** [D] :
+  - glisser-déposer d'une fenêtre d'inventaire vers le monde : `MouseInventory` (`0x7136A0`, son
+    « Character_Drop_Ground ») appelle `Inventory::dropItem` (vt 0x38) de l'inventaire de la
+    fenêtre. Celui-ci appelle `callbackObject->dropItem` (vt 0x1A8 ; `Inventory` +0x80) puis
+    `removeItemDontDestroy(item, -1, true)` ;
+  - `dropItem` (vt 0x1A8) selon le propriétaire : `CharacterHuman` `0x5CA740`, `CharacterAnimal`
+    `0x5CA4A0` (même code), bâtiments à inventaire (coffres, production, fermes…) `0x54E630` (fait
+    lâcher le personnage dont le `hand` est en +0x380 du bâtiment), sac à dos `ContainerItem`
+    `0x75D810` (fait lâcher son porteur, +0x230) ; `RootObject` et les autres : rien (`0xD2040`) ;
+  - `CharacterHuman::dropItem` : position = devant le perso (`CharMovement`+0xD0),
+    `setInventoryWeAreIn(hand vide 0x1E3A5F8)`, vt 0x1C8 (propriétaire), `activate(true, pos,
+    IDENTITY, false, &2, false)`, puis retrait de **son propre** inventaire. Pour un objet d'un
+    coffre, le drapeau « dans un inventaire » (+0xD8) n'est remis à 0 qu'au retour, par
+    `Inventory::dropItem` ;
+  - une fenêtre qui n'a pas de place pour un objet (`0x70EAA0`) le lâche par vt 0x38 ou par
+    `callbackObject->dropItem` ;
+  - `Character::giveItem(dropOnFail)` : un inventaire plein lâche l'objet.
 - Les armes se créent à partir de leur fabricant :
   `createItem(factory, fabricant, hand, type d'arme, matériau, niveau)`. Le fabricant vient en
   premier, comme dans le code du jeu.
@@ -616,7 +655,7 @@ Tâches par défaut d'un clic droit sur un meuble, selon la recherche :
 - Lits, entraînement, tables, lits squelette et équarrissage deviennent aussi des `UseableStuff`.
 
 ### Types d'objets (`itemType`, valeurs utilisées)
-0 bâtiment ; 1 personnage ; 2 arme ; 7 race ; 0x5B personnage animal.
+0 bâtiment ; 1 personnage ; 2 arme ; 3 armure ; 7 race ; 0x5B personnage animal.
 
 ### Factions, relations et primes (lot B, vérifié par désassemblage)
 - `Faction` : +0x78 `FactionRelations*`, +0x240 `GameData*` (identifiant de chaîne de la faction),
@@ -662,6 +701,51 @@ Tâches par défaut d'un clic droit sur un meuble, selon la recherche :
 - Adresses de KenshiLib (1.0.65) pour `BountyManager` : décalage de +0x1590 dans cette zone
   (`setCrime` 0x8516F0 → `0x852C80`).
 
+### Diplomatie : factions entre elles, personnages uniques, villes [D]
+Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
+- **`UniqueNPCManager`** (`*0x212EB00`) : l'objet est une `boost::unordered_map<GameData*,
+  UniqueCharacterState>` (nombre de seaux +0x18, taille +0x20, seaux +0x38). Nœud : suivant +0,
+  empreinte +8, clé `GameData*` +0x10, valeur +0x18 = `{ GameData* data ; hand escouade (0x20 octets,
+  type 0xB) ; int état ; bool joueur }`, soit `data` +0x18, `hand` +0x20, **état +0x40**, **joueur
+  +0x44** (dans la paire de `operator[]` `0x349950` : +8, +0x10, +0x30, +0x34).
+  - États : **0 mort, 1 vivant, 2 emprisonné**. `getState` (`0x5E87F0`) renvoie 1 pour une entrée
+    absente ; `isPlayerInvolved` (`0x9B0D00`) renvoie l'octet « joueur » (faux si absente).
+  - Écrivains : `Character::declareDead` (`0x7A6200`, à `0x7A6405`) met 0 et « joueur » si la faction
+    du perso est celle du joueur (`Faction`+0x250) ; `0x5CF470` (mise à jour d'un prisonnier :
+    `Character`+0x3D4, son geôlier) met 2 (« joueur » si le geôlier est la faction du joueur) puis 1 à
+    la libération ; `0x7CD570` met 0 ; `0x5E87A0` remet 1 ; `0x34AE20` met 2 ou 1.
+  - Sauvegarde `0x9A8660` / chargement `0x9AA270` : clés `usedUniques`, `usedUniquesState`,
+    `usedUniquesPlayer` (le chargement crée l'entrée par `operator[]` puis écrit `data` = la clé).
+- **États du monde** : `WorldEventStateQuery::evaluate` (`0x9A7E00`) ne lit que : l'état de
+  personnages uniques (`getState`, et `isPlayerInvolved` si la requête +0x140 le demande), et
+  `FactionRelations::isAlly` / `isEnemy` de factions envers la faction du joueur. Avec les mêmes
+  uniques et les mêmes relations du joueur, un client évalue les mêmes états du monde.
+- **`FactionRelations::isAlly(Faction*)`** `0x6B2630` : soi-même, ou `alliance`, ou relation ≥ 50
+  (relation par défaut +0x60 si pas d'entrée). **`isEnemy`** `0x6B26D0` : relation ≤ −30.
+- **`FactionRelations::declareWar(Faction*)`** `0x6B3000` (pas d'appel direct : vtable ou pointeur) :
+  `war` = 1, relation ramenée à −35 si elle était au-dessus, message « War breaks out between {1}
+  and {2} » ; `FactionRelations`+8 = sa faction. Non détournée : ses appelants n'ont pas été
+  retrouvés ; s'ils sont les actions de dialogue ou les campagnes, ils sont déjà refusés chez le client.
+- **`TownList`** (`*0x2134100`, hérite de `RootObjectContainer`) : +0x50 `lektor<TownBase*>`
+  (nombre +0x58, tableau +0x60). `TownList::getNearestTown` `0x927F10` la parcourt.
+- **`TownBase`** (`Town` : vtable `0x1735BA8`, `TownBase` : `0x1734F48`, hérite de `RootObject`) :
+  +0x10 faction propriétaire, +0x18 nom, +0x40 `GameData*`, +0x48 / +0x50 position x / z, +0xD8 type
+  (`getNearestTown` traite 8 à part), +0x110 drapeau remis à 0 par `setOverride`, **+0x338 variante appliquée
+  (`GameData*`)**, +0x380 « is public », +0x384 « no-foliage range ».
+  - `setOverride` `0x9FE7A0` : écrit +0x338, recopie de la variante `no-foliage range`, `type`,
+    `is public`, cherche sa référence `faction` et, si elle diffère, appelle `setFaction` (vt 0xA0).
+  - `setFaction` `0x9287D0` : retire la ville de la liste de son ancienne faction (`Faction`+0x88 → +0x10),
+    l'ajoute à la nouvelle (sauf faction factice +0x1D0), écrit +0x10. Une faction nulle prend celle
+    par défaut.
+- **Choix de la variante d'une ville** : au chargement d'une zone (`0x9FFAD0`, objets de type 0xD),
+  `0x9FF5A0(gestionnaire de zones *0x21349C0, ville)` : rien pour une ville du joueur ; sinon, si la
+  ville n'est pas déjà dans la table du gestionnaire (+0x168148), parcourt les références
+  `override town` de la ville, garde celles dont tous les `world state` sont vrais et différentes de
+  la variante actuelle, prend **la plus lourde** (`0x5778D0` garde le maximum : déterministe), appelle
+  `setOverride` et note la ville dans la table. Puis la zone applique les listes `0-buildinglist` /
+  `1-itemlist` de la variante. La table n'est pas sauvegardée : la décision est reprise à chaque
+  chargement de partie.
+
 ## 6. Comportements observés
 
 - **Mort d'un perso de l'escouade du joueur** : le jeu le déplace dans une escouade `__DEAD_SQUAD__`.
@@ -685,7 +769,20 @@ Tâches par défaut d'un clic droit sur un meuble, selon la recherche :
   `OrdersReceiver::addJob` (`0x5086D0`) : `shift` vrai = tâche permanente (liste +0x88/+0x90, panneau
   Tâches), faux = ordre passager (liste +0x70). `add` faux vide d'abord les tâches.
 - `PlayerInterface::objectSelected` (`0x7F7F20`) écrit aussi un `hand` global (`0x21345D0`) et
-  `PlayerInterface`+0xF0 ; `unselectAll` les vide.
+  `PlayerInterface`+0xF0 ; `unselectAll` les remet à zéro.
+- **La sélection n'est jamais vide par le jeu** (désassemblage 1.0.68) : `unselectAll` (`0x7F8DA0`)
+  vide la sélection puis **resélectionne** un perso : l'objet du `hand` global `0x21345D0` si le
+  `hand` du panneau de détails (+0xF0) est dans la sélection, sinon le premier de la sélection (rien
+  si elle était vide ; et rien du tout si `PlayerInterface`+0x2A0 est nul : il sort sans rien faire).
+  `objectSelected(obj, false)` refuse de retirer le dernier sélectionné (`taille <= 1`).
+  `objectSelected(obj, true)` n'ajoute un perso que s'il est de la faction du joueur
+  (`owner->+0x250` non nul) et sans le drapeau perso +0x5BC. « unselectAll puis sélectionner X »
+  laisse donc aussi le perso principal sélectionné : un ordre « des sélectionnés » part aux deux
+  (`addOrderSelectedCharacters`, `newPlayerTaskSelectedCharacters`, qui renvoie vers `addOrder` ou
+  `addJob`), `addTaskNearestSelectedCharacter` au plus proche des deux. Pour une sélection exacte :
+  unselectAll, sélectionner les acteurs, puis retirer le reste (possible tant qu'un acteur est
+  sélectionné). Pour la vider : `hand` global mis à nul (type 0xB, reste 0), le `hand` +0xF0 sur un
+  sélectionné, puis unselectAll.
 
 - `UseableStuff` : ensemble des occupants (`std::set<hand>`) à +0x3D0, taille à +0x3E0 (lit libre :
   0). `BuildingFunction` (ordre de l'énumération) : 1 mine, 6 lit, 8 cage, 9 boutique, 12 tourelle,
@@ -1227,7 +1324,78 @@ Lu dans le 1.0.68 (désassemblage), pour que l'hôte refuse ce que le mode const
   dans le passage, nœuds d'usage, étage, prospection, aimantation. Terrain inconnu chez l'hôte
   (-99) : refusé (« réessaie »).
 
-## 11. Barre d'escouade et rapport de plantage du jeu [D]
+## 11. Carte du monde, caméra, barre d'escouade (marqueurs de carte, minicarte, pings) [D]
+
+Adresses 1.0.68 traduites depuis KenshiLib 1.0.65 (`translate.py` : décalage +0x780 dans la zone
+`MapScreen`, +0x30D0 pour ses données statiques) puis lues au désassembleur.
+
+**Où est la carte** : `ManagementScreen::singleton` à `0x212F4F8` (lu dans `getSingleton`
+`0x296CA0`, qui la crée si elle manque : le mod lit le pointeur, n'appelle pas la fonction ;
+vtable `0x16DCDF0`). `ManagementScreen` : +0x8 sa fenêtre MyGUI (visible = l'écran de gestion est
+ouvert, `refreshMap` `0x49B550` la teste ainsi), +0xA8 `MapScreen*` (`refreshMap` y appelle
+`centerCamera`).
+
+**`MapScreen`** (pas de vtable) : +0x10 widget principal (`getVisible` `0x48BE60` = `mainWidget->getVisible()`),
++0x18 `ScrollView` (partie visible), +0x20 `ImageBox` de la carte (texture `GUI_Map.dds` d'après
+`data/gui/layout/Kenshi_OverviewWindow.layout` ; sa taille suit le zoom, sa position le
+défilement), +0x194 `worldBounds` (x min, z min, …), +0x1A4 `worldSize` (x, z). Les bornes sont
+écrites dans le constructeur (`0x490210`) : valables dès le chargement, carte jamais ouverte.
+
+**Projection** (`worldToMapCoords` `0x48C3E0`, `TPoint<int>` rendu par pointeur caché, rcx =
+`MapScreen`, rdx = sortie, r8 = position) :
+`x_image = (x - worldBounds.x) / worldSize.x * largeur(image)`,
+`y_image = (z - worldBounds.y) / worldSize.y * hauteur(image)`, arrondis ; la largeur et la
+hauteur lues dans le widget (+0x28 / +0x2C de `MyGUI::Widget`, c.-à-d. `mCoord.width/height` de
+l'`ICroppedRectangle` placé à +0x8). Le z croissant descend sur la carte : le nord (z
+décroissant) est en haut. Le mod refait ce calcul à partir du rectangle absolu de l'image ; la
+commande `mapproj` compare au résultat de la fonction du jeu.
+
+**MyGUI** (exports de `MyGUIEngine_x64.dll`, appelés par `GetProcAddress`) :
+`Widget::getInheritedVisible` (le widget et tous ses parents visibles : faux quand l'onglet carte
+n'est pas choisi ou l'écran fermé), `ICroppedRectangle::getAbsoluteCoord` (this = widget + 0x8,
+`TCoord<int>` rendu par pointeur caché). Les coordonnées MyGUI sont prises comme des pixels du
+tampon d'affichage [U : vrai pour la fenêtre de jeu, non vérifié avec une mise à l'échelle de
+l'interface].
+
+**Couleurs des points du jeu** (`MapScreen::getMarkerColor` `0x48F320`, statique) :
+`MarkerColourAlly` `0x212F538`, `Neutral` `0x212F548` (aussi pour un objet nul), `Enemy`
+`0x212F558`, `Player` `0x212F568`, `PlayerSelected` `0x212F578`. Lecture seule : faction de
+l'objet (vt 0x58), `Faction::isPlayer` (+0x250), relations avec le joueur (`0x2134690` =
+`GameWorld`+0x580 `PlayerInterface*`).
+
+**Raids et vagues d'attaque** : `Faction`+0x88 `FactionWarMgr*` (vérifié dans
+`Blackboard::getMissionTarget` `0x269B60` : `platoon->getFaction()` (vt 0x58) puis +0x88, puis
+`getCurrentCampaign`). `getCurrentCampaign(Platoon*)` `0x283500` → `CampaignInstance*` ou nul.
+`CampaignInstance` : +0x10 `CampaignData*`, +0x70 sa faction, +0x78 `enemy` (la faction attaquée ;
+vérifié dans le constructeur `0x9D4770`, 4e argument). `CampaignData`+0x12 `_isHostile`
+(`isHostile` `0x2856B0`). Un perso → son escouade : `Character`+0x658 `ActivePlatoon*`, +0x78
+`Platoon*`. Limite : seules les escouades chargées (personnages actifs chez l'hôte) sont vues ; un
+raid encore « abstrait » loin de tout joueur n'a pas de position.
+
+**Caméra 3D** : `PlayerInterface`+0x30 `CameraClass*` (`getCamera` `0x3E7060`), `CameraClass`+0x20
+`initialised` (`isInitialised` `0xA1B030`), +0x68 `Ogre::Camera*` (`getCameraPos` `0x1008F0`).
+Matrices par les exports d'`OgreMain_x64.dll` : `Camera::getViewMatrix` (virtuelle, version sans
+argument) et `Frustum::getProjectionMatrix` ; projection = proj × vue (lignes, Ogre). Une ligne de
+la vue = l'axe z de la caméra : la direction regardée est −(m[2][0], m[2][2]) en (x, z).
+[U : la vue rendue par `getViewMatrix` est la vue complète, même si Ogre rend « relatif à la
+caméra » ; à confirmer en jeu, la commande `mapscene tetes` donne les points projetés.]
+
+**Barre d'escouade** : `PortraitMainCellView` (vtable `0x16D26F8`), une par portrait : +0x8
+widget principal (`BaseCellView::mMainWidget` ; `update` lit sa largeur à +0x28), +0xA8
+`characterHandle` (hand), +0xF0 bouton cadre (`Button::setStateSelected`), +0x100 image du
+portrait. `update` `0x415150` ne touche à aucune couleur (seulement taille, alpha, état
+« sélectionné », images) : un cadre de couleur ajouté par-dessus n'est pas effacé par le jeu,
+mais le mod dessine le sien dans l'overlay plutôt que de teinter les widgets du jeu (les cellules
+sont réutilisées pour d'autres persos et la couleur d'origine du skin n'est pas lisible).
+
+**Texture de la carte** : `data/gui/gfx/GUI_Map.dds`, 8192 × 8192 DXT1, 14 niveaux. La minicarte
+lit le niveau de 2048 px (offset = somme des niveaux plus grands) et en fait une texture D3D11.
+Un mod qui remplace la carte du jeu n'est pas suivi (le fichier de base est lu).
+
+**Pas de son d'interface trouvé** : aucune fonction « jouer un son d'interface » simple dans
+KenshiLib (`InventoryGUI::playSound(eventId, Item*)` dépend d'un objet) : les pings sont muets.
+
+## 12. Barre d'escouade (dessin d'une case) et rapport de plantage du jeu [D]
 - **Barre d'escouade** : `MainBarGUI` (objet à `*(0x21337C0)` ; `PlayerInterface::setCurrentPlatoon`
   `0x7F2800` écrit `PlayerInterface+0x2A8` puis l'appelle, `ActivePlatoon::addCharacterAt` aussi).
   Une `unordered_map<ActivePlatoon*, MainTabPortraitPlatoon>` ; chaque onglet a un

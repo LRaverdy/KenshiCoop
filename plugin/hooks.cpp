@@ -11,6 +11,7 @@
 #include <mutex>
 #include <vector>
 
+#include "map.h"
 #include "ranged.h"
 #include "util.h"
 #include "world.h"
@@ -69,6 +70,9 @@ GiveItemFn o_giveItem = nullptr;
 using PickupFn = void (*)(void* pi, void* item);
 PickupFn o_pickup = nullptr;
 DropItemFn o_dropItem = nullptr;
+DropItemFn o_dropItemAnimal = nullptr;
+using InvDropFn = void (*)(void* inv, void* item);
+InvDropFn o_invDrop = nullptr;
 LabelTrackFn o_labelTrack = nullptr;
 LabelColorFn o_labelColor = nullptr;
 // host: the damage number addWound is building (created, then tracked, then coloured)
@@ -785,18 +789,39 @@ bool hk_giveItem(void* chr, void* item, bool dropOnFail, bool destroyOnFail) {
         if (KenshiWorld* w = TheWorld()) w->NoteGround(e);
     return ok;
 }
-void hk_dropItem(void* chr, void* item) {
+// A character's own drop (the game's: a full inventory, the AI; the inventory window's, through
+// Inventory::dropItem below). Humans and pack animals each have their own.
+void DropItemCommon(DropItemFn orig, void* chr, void* item) {
     if (KenshiWorld::ClientActive() && !g_hostCall && KenshiWorld::View()->replicated.count(chr)) {
         // the player dropped it from one of their characters: the host does it (and everyone sees it)
-        if (KenshiWorld* w = TheWorld(); w && item && kenshi::IsCharacter(chr)) w->QueueLocalDrop(static_cast<kenshi::Character*>(chr), item);
+        if (KenshiWorld* w = TheWorld(); w && item && kenshi::IsCharacter(chr)) w->QueueLocalDrop(chr, item);
         return;
     }
-    o_dropItem(chr, item);
-    if (KenshiWorld::ClientActive() || !KenshiWorld::View()->active || !item || !kenshi::ItemOnGround(item)) return;
-    kc::GroundEvent e;
-    e.kind = kc::GroundKind::Dropped;
-    if (kenshi::DescribeGroundItem(item, e.item, e.state, e.pos))
-        if (KenshiWorld* w = TheWorld()) w->NoteGround(e);
+    orig(chr, item);
+    if (!KenshiWorld::ClientActive() && item)
+        if (KenshiWorld* w = TheWorld()) w->NoteItemDropped(item);
+}
+void hk_dropItem(void* chr, void* item) { DropItemCommon(o_dropItem, chr, item); }
+void hk_dropItemAnimal(void* chr, void* item) { DropItemCommon(o_dropItemAnimal, chr, item); }
+// An item released over the world from an inventory window (a character's, a pack animal's, a
+// chest's, a backpack's): the inventory asks its owner (callbackObject) to drop it, then lets it go.
+// Host: announced once it is in the world (whichever owner did it). Client: a character the host
+// drives or a building of the host's world: the host drops it; the item leaves our inventory as the
+// game would have it (the host's inventory comes back anyway).
+void hk_invDrop(void* inv, void* item) {
+    if (KenshiWorld::ClientActive() && !g_hostCall && item) {
+        void* holder = kenshi::InventoryCallback(inv);
+        auto v = KenshiWorld::View();
+        const bool character = kenshi::IsCharacter(holder);
+        if (holder && v->active && ((character && v->replicated.count(holder)) || (!character && !kenshi::IsItemObject(holder)))) {
+            if (KenshiWorld* w = TheWorld()) w->QueueLocalDrop(holder, item);
+            kenshi::InventoryRemove(inv, item);
+            return;
+        }
+    }
+    o_invDrop(inv, item);
+    if (!KenshiWorld::ClientActive() && item)
+        if (KenshiWorld* w = TheWorld()) w->NoteItemDropped(item);
 }
 std::string ColourHex(const float* c) {
     char b[16];
@@ -1285,7 +1310,12 @@ bool CallTaskSeh(void* pi, const kc::Command& cmd, void* subject, void* building
 
 // Host: a client's order, given to that character alone; the host player's selection, squad bar and
 // details panel are left exactly as they were.
-bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, void* building) {
+namespace {
+std::atomic<int> g_actorLeaks{0};
+}
+int ActorLeaks() { return g_actorLeaks.load(); }
+
+bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, void* building, std::string* refused) {
     void* pi = kenshi::Player();
     if (!pi || !kenshi::IsCharacter(c)) return false;
     if (cmd.via == kc::TaskVia::RemovePermajob || cmd.via == kc::TaskVia::MovePermajob || cmd.via == kc::TaskVia::RemoveJob) {
@@ -1315,11 +1345,33 @@ bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, 
     kc::Handle target = cmd.subject;
     if (subject) kenshi::ObjectHandle(subject, target);   // found by kind and place: its handle here
     kenshi::MakeHand(target, hand);
+    // a witness: the host player's own selected characters get nothing from it (checked after)
+    struct Watch { kenshi::Character* c; size_t tasks; int jobs; };
+    std::vector<Watch> watch;
+    {
+        std::vector<kc::Handle> sel;
+        kenshi::SelectedHandles(sel);
+        for (const auto& h : sel)
+            if (kenshi::Character* o = kenshi::Resolve(h); o && o != c) watch.push_back({o, kenshi::LocalTaskCount(o), kenshi::PermajobCount(o)});
+    }
     bool ok = false;
-    kenshi::WithSelection(c, [&] {
+    std::string why;
+    const bool exact = kenshi::WithSelection(std::vector<kenshi::Character*>{c}, [&] {
         HostCallScope scope;
         ok = CallTaskSeh(pi, cmd, subject, building, loc, hand);
-    });
+    }, &why);
+    if (!exact) {
+        Log("refused: client task %d (via %d) not run: the selection could not be made exactly its actor (%s); nothing else got it", cmd.task,
+            int(cmd.via), why.c_str());
+        if (refused) *refused = "Action refusée : ton personnage n'a pas pu recevoir cet ordre seul chez l'hôte (rien n'a été fait).";
+        return false;
+    }
+    if (!why.empty()) Log("client task %d: %s", cmd.task, why.c_str());
+    for (const auto& w : watch)
+        if (kenshi::LocalTaskCount(w.c) > w.tasks || kenshi::PermajobCount(w.c) > w.jobs) {
+            g_actorLeaks.fetch_add(1);
+            Log("SAFETY: a character of the host's selection got a task from a client's order (task %d, via %d)", cmd.task, int(cmd.via));
+        }
     return ok;
 }
 
@@ -1411,6 +1463,8 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnAssignBounty, reinterpret_cast<void*>(&hk_assignBounty), reinterpret_cast<void**>(&o_assignBounty)},
         {kenshi::FnGiveItem, reinterpret_cast<void*>(&hk_giveItem), reinterpret_cast<void**>(&o_giveItem)},
         {kenshi::FnDropItemHuman, reinterpret_cast<void*>(&hk_dropItem), reinterpret_cast<void**>(&o_dropItem)},
+        {kenshi::FnDropItemAnimal, reinterpret_cast<void*>(&hk_dropItemAnimal), reinterpret_cast<void**>(&o_dropItemAnimal)},
+        {kenshi::FnInventoryDropItem, reinterpret_cast<void*>(&hk_invDrop), reinterpret_cast<void**>(&o_invDrop)},
         {kenshi::FnCreateScreenLabel, reinterpret_cast<void*>(&hk_createLabel), reinterpret_cast<void**>(&o_createLabel)},
         {kenshi::FnLabelSetTracking, reinterpret_cast<void*>(&hk_labelTrack), reinterpret_cast<void**>(&o_labelTrack)},
         {kenshi::FnLabelSetColor, reinterpret_cast<void*>(&hk_labelColor), reinterpret_cast<void**>(&o_labelColor)},
@@ -1460,6 +1514,9 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnAddDismantleProgress, reinterpret_cast<void*>(&hk_addDismantle), reinterpret_cast<void**>(&o_addDismantle)},
         {kenshi::FnWorldDestroy, reinterpret_cast<void*>(&hk_worldDestroy), reinterpret_cast<void**>(&o_worldDestroy)},
         {kenshi::FnSaveManagerSave, reinterpret_cast<void*>(&hk_saveManagerSave), reinterpret_cast<void**>(&o_saveManagerSave)},
+        // ---- map markers: the squad bar's portraits
+        {kenshi::FnPortraitCellUpdate, reinterpret_cast<void*>(&mapmarks::hk_portraitUpdate), reinterpret_cast<void**>(&mapmarks::o_portraitUpdate)},
+        {kenshi::FnPortraitCellDtor, reinterpret_cast<void*>(&mapmarks::hk_portraitDtor), reinterpret_cast<void**>(&mapmarks::o_portraitDtor)},
         // ---- crash report
         {kenshi::FnWriteCrashDump, reinterpret_cast<void*>(&hk_writeCrashDump), reinterpret_cast<void**>(&o_writeCrashDump)},
     };

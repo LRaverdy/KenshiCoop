@@ -60,9 +60,12 @@ Raccourcis (Kenshi au premier plan) :
 | Ctrl+Shift+L | quitter la session |
 | Ctrl+Shift+G | (hôte) donner les personnages sélectionnés au joueur suivant |
 | Ctrl+Shift+K | console dans le jeu (journal récent et commandes) |
+| Ctrl+Shift+F | fenêtre Diplomatie : relations de ta faction, primes de l'escouade, guerres, chefs et villes (valeurs de l'hôte) |
 | Ctrl+Shift+W | (hôte) montrer ou cacher la console hors du jeu |
 | Ctrl+Shift+O | afficher ou masquer le panneau |
 | Ctrl+Shift+D | écrire un diagnostic dans `KenshiCoop.log` |
+| Ctrl+Shift+N | afficher ou masquer la minicarte |
+| clic molette / Alt+clic | ping sur la carte, la minicarte ou le sol (Maj : danger, Ctrl : butin, Maj+Ctrl : à l'aide) |
 
 1. L'hôte charge sa partie et appuie sur **Ctrl+Shift+H**.
 2. L'ami clique **Rejoindre** à côté du nom de l'hôte dans sa fenêtre Multijoueur (ou colle son code
@@ -71,7 +74,8 @@ Raccourcis (Kenshi au premier plan) :
 3. La première fois, l'ami reçoit **son propre personnage** dans l'escouade de l'hôte, et
    **l'éditeur de personnage de Kenshi** s'ouvre chez lui : race, visage, cheveux, nom… Toute la
    partie attend pendant qu'il le crée. Le bouton « Modifier mon personnage » de la fenêtre
-   Multijoueur le rouvre plus tard.
+   Multijoueur le rouvre plus tard. Si plusieurs amis rejoignent en même temps, ils passent **un
+   par un** : les autres attendent leur tour et voient leur place dans la file d'attente.
 4. Quand il revient plus tard, même sous un autre nom, il **retrouve le même personnage** : il est
    reconnu par son compte Steam. L'hôte peut lui confier d'autres membres avec Ctrl+Shift+G.
 
@@ -131,6 +135,9 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
   retirés.
 - **Escouades** (noms, membres, ordre), **ordres permanents** (furtif, tenir la position, passif…),
   **compétences et expérience**, **argent**.
+- **Chacun commande ses persos** : un ordre d'un joueur (dormir, parler, piller, construire…) n'est
+  exécuté que par **ses** personnages, jamais par ceux de l'hôte ou d'un autre joueur ; un ordre
+  impossible (mauvaise cible) est refusé avec un message, sans rien faire.
 - **Dialogues** : les bulles chez tout le monde ; une conversation avec un PNJ s'ouvre chez le
   joueur concerné (fenêtre du mod), qui choisit ses réponses.
 - **Heure, vitesse et pause** : celles de l'hôte, imposées en permanence. Les clients ne peuvent
@@ -144,6 +151,10 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
   Si on te voit, la fenêtre se ferme et l'objet reste.
 - **Objets au sol** : posés et ramassés, au même endroit pour tout le monde.
 - **Cadavres** : restent synchronisés et se fouillent, près des joueurs.
+- **Carte et repères** : sur la carte du jeu (M), tous les persos de tous les joueurs à la couleur
+  de leur joueur et les escouades hostiles qui nous visent en rouge ; une minicarte ronde ; un
+  repère au-dessus de la tête des persos des joueurs ; leur cadre de portrait coloré ; des pings
+  partagés. Réglages : fenêtre Multijoueur, « Affichage ».
 
 Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui reste à faire :
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
@@ -156,7 +167,8 @@ Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui
   - état des portes et crochetage ;
   - prisons et esclavage ;
   - combat à distance (projectiles, tourelles) ;
-  - relations de factions et primes.
+  - relations de factions, primes et diplomatie (guerres entre factions, chefs, villes) :
+    implémentés, à vérifier en jeu ; leur état chez l'hôte est dans la fenêtre Diplomatie (Ctrl+Shift+F).
 - Côté client, ne pas poser de bâtiment pour l'instant : il n'existerait probablement que chez
   toi. (Une pose qu'un client fait quand même est vérifiée par l'hôte comme le mode construction
   vérifie un endroit : dans l'eau ou l'acide, trop près d'une ville… elle est refusée et le

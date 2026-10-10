@@ -131,7 +131,7 @@ void KenshiWorld::ResetWorldBound() {
     captiveHold_.clear();
     captiveMissing_.clear();
     resolved_.clear();
-    { std::lock_guard<std::mutex> lk(groundMutex_); localDrops_.clear(); groundAlias_.clear(); }
+    ResetGround();
     { std::lock_guard<std::mutex> lk(doorMutex_); doorReqs_.clear(); doorCache_.clear(); }
     { std::lock_guard<std::mutex> lk(tradeMutex_); tradeReqs_.clear(); hostTradeLooter_ = {}; hostTradeTrader_ = {}; }
     { std::lock_guard<std::mutex> lk(buildMutex_); trackedBuildings_.clear(); localPlacements_.clear(); localBuildActions_.clear(); removedBuildings_.clear(); }
@@ -181,6 +181,7 @@ void KenshiWorld::EndFrame() {
     if (active_ && client_ && live_ && !pendingLoot_.empty()) UpdatePendingLoot();
     if (active_ && !client_ && live_ && !pickups_.empty()) UpdatePendingPickups();
     if (active_ && !client_ && live_ && !reRagdoll_.empty()) UpdateReRagdolls();
+    if (active_ && client_ && live_) GroundReconcile();
     auto v = std::make_shared<HookView>();
     v->active = active_;
     v->client = client_;
@@ -1236,6 +1237,13 @@ void KenshiWorld::ApplyJobs(const kc::Handle& h, const std::vector<int32_t>& job
     Log("jobs: %s had %zu job(s) the host's character no longer has: removed", KeyOf(h).c_str(), drop.size());
 }
 
+// Client: the host rejected an order of ours: a job we showed at once (the Tâches panel) is not
+// kept waiting for the host's list any longer (the next list removes it).
+void KenshiWorld::OrderRejected(const kc::Handle& h, const kc::Command& c) {
+    if (c.kind == kc::CommandKind::Task && c.via == kc::TaskVia::AddJob) localJobs_.erase(KeyOf(h));
+    Log("the host rejected our order (task %d, via %d)", c.task, int(c.via));
+}
+
 void KenshiWorld::NoteLocalJob(const kc::Handle& h, int task) {
     localJobs_[KeyOf(h)].push_back({task, GetTickCount64() + 5000});
 }
@@ -1382,15 +1390,65 @@ void KenshiWorld::HaltCharacter(const kc::Handle& h) {
     Log("player gone: %s halted where it stands", KeyOf(h).c_str());
 }
 
+// What the subject of a client's order is (kc::TargetFlags), as this world sees it.
+uint32_t KenshiWorld::TargetFlagsOf(kenshi::Character* actor, void* subject, bool named) {
+    uint32_t f = named ? kc::kTgtNamed : 0;
+    if (!subject) return f;
+    f |= kc::kTgtNamed | kc::kTgtFound;
+    if (kenshi::IsCharacter(subject)) {
+        auto* ch = static_cast<kenshi::Character*>(subject);
+        f |= kc::kTgtCharacter;
+        if (ch == actor) f |= kc::kTgtSelf;
+        const bool dead = kenshi::IsDead(ch);
+        const bool down = kenshi::IsDown(ch) || kenshi::IsUnconscious(ch) || kenshi::IsRagdoll(ch);
+        if (dead) f |= kc::kTgtDead;
+        if (down) f |= kc::kTgtDown;
+        if (!dead && !down) f |= kc::kTgtConscious;
+        kc::Handle h;
+        if (kenshi::GetHandle(ch, h) && FindSquad(h)) f |= kc::kTgtSquad;
+        return f;
+    }
+    if (kenshi::ItemLoose(subject)) f |= kc::kTgtItem;
+    kc::Handle h;
+    const bool building = kenshi::ObjectHandle(subject, h) && h.type == 0;
+    if (building) {
+        f |= kc::kTgtBuilding;
+        float progress = 0;
+        uint8_t site = 0;
+        if (ReadBuildStateOf(subject, progress, site) && !(site & kc::kSiteComplete)) f |= kc::kTgtUnfinished;
+        if (IsPlayerBuilding(subject)) f |= kc::kTgtOurs;
+        const int fn = kenshi::BuildingFunctionOf(subject);   // 1 mine, 6 bed, 8 cage, 9 shop, 12 turret, 18 decor, 27 natural deposit
+        if (fn == 6) f |= kc::kTgtBed;
+        else if (fn == 8) f |= kc::kTgtCage;
+        else if (fn == 9) f |= kc::kTgtShop;
+        else if (fn > 0 && fn != 18) f |= kc::kTgtMachine;
+        kc::DoorState d;
+        if (kenshi::ReadDoor(subject, d)) f |= kc::kTgtDoor;
+    }
+    std::vector<kc::ItemState> items;
+    if (!(f & kc::kTgtItem) && kenshi::ReadInventory(subject, items)) f |= kc::kTgtContainer;
+    return f;
+}
+
 bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
+    orderRefusal_.clear();
     kenshi::Character* c = FindSquad(h);
-    if (!c) return false;
+    if (!c) {
+        // never a fallback (the host's selection, its main character, the nearest one): nothing
+        Log("refused: client order not run, its actor does not resolve to a character here");
+        orderRefusal_ = "Action refusée : ton personnage est introuvable chez l'hôte (rien n'a été fait).";
+        orderRefusalReason_ = kc::ResultReason::NoActor;
+        return false;
+    }
     // A client's order only ever moves that client's characters: never one the host commands (a
     // stale handle after a squad change once made a player's orders move the host's character).
+    // The session checked that the actor is that player's (Session::AdmitActor).
     if (!client_) {
         auto v = View();
         if (!v->squadForeign.count(c)) {
-            Log("client order refused: the character it resolves to is not another player's");
+            Log("refused: client order not run, the character its actor resolves to is not another player's (the host's?)");
+            orderRefusal_ = "Action refusée : ce personnage n'est pas le tien.";
+            orderRefusalReason_ = kc::ResultReason::NotYourCharacter;
             return false;
         }
     }
@@ -1457,7 +1515,15 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
         return CallPlayerMoveOrder(c, cmd.pos);
     }
     case kc::CommandKind::SquadMove: {
-        kenshi::Character* other = cmd.subject.valid() ? kenshi::Resolve(cmd.subject) : nullptr;
+        // the squad to join: another member of the player faction's squads, never an NPC's squad
+        kenshi::Character* other = cmd.subject.valid() ? FindSquad(cmd.subject) : nullptr;
+        if (cmd.subject.valid() && !other) {
+            ++targetRefusals_;
+            Log("refused: client squad change not run: the squad member it names is not in the player faction here");
+            orderRefusal_ = "Action refusée : cette escouade n'est pas celle d'un joueur (rien n'a été fait).";
+            orderRefusalReason_ = kc::ResultReason::WrongTarget;
+            return false;
+        }
         // creating or filling a squad selects it in the host's squad bar: the host's selection stays
         bool ok = false;
         kenshi::KeepSelection([&] {
@@ -1508,7 +1574,26 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
             Log("client task %d: destination building %sfound by kind and place", cmd.task, building ? "" : "NOT ");
         }
         if (cmd.subject.valid() && !subject) Log("client task %d: its subject is not in the host's world", cmd.task);
-        const bool ok = RunPlayerTask(c, cmd, subject, building);
+        if (building) {   // the destination must be a building (a stale or forged handle: none at all)
+            kc::Handle bh;
+            if (kenshi::IsCharacter(building) || !kenshi::ObjectHandle(building, bh) || bh.type != 0) {
+                Log("client task %d: its destination is not a building here: dropped", cmd.task);
+                building = nullptr;
+            }
+        }
+        // actor safety: what the task expects, checked before the game's order functions get it (a
+        // BUILD order aimed at an NPC crashed the host inside Character::addJob)
+        const uint32_t flags = TargetFlagsOf(c, subject, cmd.subject.valid() || !cmd.itemSid.empty());
+        std::string why;
+        if (!kc::TaskTargetAllowed(cmd.via, cmd.task, flags, &why)) {
+            ++targetRefusals_;
+            Log("refused: client task %d (via %d) not run: %s (subject flags %#x)", cmd.task, int(cmd.via), why.c_str(), unsigned(flags));
+            orderRefusal_ = "Action refusée : cet ordre ne s'applique pas à cette cible (rien n'a été fait).";
+            orderRefusalReason_ = kc::ResultReason::WrongTarget;
+            return false;
+        }
+        const bool ok = RunPlayerTask(c, cmd, subject, building, &orderRefusal_);
+        if (!ok && !orderRefusal_.empty()) orderRefusalReason_ = kc::ResultReason::SelectionBusy;
         Log("client task %d (via %d) run for a character: %s", cmd.task, int(cmd.via), ok ? "ok" : "failed");
         return ok;
     }
@@ -1610,26 +1695,6 @@ void KenshiWorld::DialogAnswer(uint32_t dialogId, int index) {
     }
     if (!dialogue) return;
     Log("conversation %u: the player answered %d (%s)", dialogId, index, CallReplyClicked(dialogue, index) ? "ok" : "failed");
-}
-
-void KenshiWorld::QueueLocalDrop(kenshi::Character* c, void* item) {
-    kc::ItemState s;
-    if (!kenshi::DescribeInventoryItem(item, s)) return;
-    std::lock_guard<std::mutex> lk(groundMutex_);
-    if (localDrops_.size() < 256) localDrops_.emplace_back(c, s);
-}
-
-void KenshiWorld::TakeLocalDrops(std::vector<std::pair<kc::Handle, kc::ItemState>>& out) {
-    out.clear();
-    std::vector<std::pair<kenshi::Character*, kc::ItemState>> raw;
-    {
-        std::lock_guard<std::mutex> lk(groundMutex_);
-        raw.swap(localDrops_);
-    }
-    for (auto& [c, s] : raw) {
-        kc::Handle h;
-        if (kenshi::IsCharacter(c) && kenshi::GetHandle(c, h) && h.valid()) out.emplace_back(h, std::move(s));
-    }
 }
 
 void KenshiWorld::UpdatePendingPickups() {
@@ -2065,54 +2130,6 @@ void KenshiWorld::TakeAnimEvents(std::vector<std::pair<kc::Handle, kc::AnimEvent
         if (kenshi::WeaponInHands(c, sid, sec)) w.name = sid + "\t" + sec;
         out.emplace_back(h, std::move(w));
     }
-}
-
-void KenshiWorld::NoteGround(kc::GroundEvent e) {
-    if (client_ || !active_) return;
-    std::lock_guard<std::mutex> lk(groundMutex_);
-    if (groundOut_.size() < 4096) groundOut_.push_back(std::move(e));
-}
-
-void KenshiWorld::TakeGroundEvents(std::vector<kc::GroundEvent>& out) {
-    std::lock_guard<std::mutex> lk(groundMutex_);
-    out.swap(groundOut_);
-    groundOut_.clear();
-}
-
-void KenshiWorld::ApplyGround(const kc::GroundEvent& e) {
-    if (!client_) return;
-    HostCallScope scope;
-    if (e.kind == kc::GroundKind::PickedUp) {
-        // the same item here (from the shared save), or the copy we made when the host dropped it
-        auto a = groundAlias_.find(e.item);
-        void* item = kenshi::ResolveItem(a != groundAlias_.end() ? a->second : e.item);
-        if (!item || !kenshi::ItemLoose(item)) {   // an item from the save: same thing at the same spot
-            std::vector<void*> around;
-            kenshi::LooseItemsNear(e.pos, 30.0f, around);
-            float best = 15.0f;
-            for (void* it : around) {
-                kc::Handle ih;
-                kc::ItemState st;
-                kc::Vec3 p;
-                if (!kenshi::DescribeGroundItem(it, ih, st, p) || st.templateSid != e.state.templateSid) continue;
-                const float d = Dist(p, e.pos);
-                if (d < best) { best = d; item = it; }
-            }
-        }
-        const bool onGround = item && kenshi::ItemLoose(item);
-        const bool gone = onGround && kenshi::DestroyItem(item);
-        Log("host picked up item %u:%u: %s", e.item.index, e.item.serial,
-            gone ? "removed here" : !item ? "we do not have it" : !onGround ? "not on the ground here" : "could not remove it");
-        if (a != groundAlias_.end()) groundAlias_.erase(a);
-        return;
-    }
-    kc::Handle mine;
-    std::string why;
-    if (kenshi::CreateGroundItem(e.state, e.pos, mine, &why)) {
-        groundAlias_[e.item] = mine;
-        Log("host dropped item %u:%u (%s): placed here as %u:%u", e.item.index, e.item.serial, e.state.templateSid.c_str(), mine.index, mine.serial);
-    }
-    else Log("cannot place the host's dropped item %s: %s", e.state.templateSid.c_str(), why.c_str());
 }
 
 bool KenshiWorld::ReadAnimFrame(const kc::Handle& h, kc::AnimFrame& frame) {
@@ -2709,8 +2726,8 @@ void KenshiWorld::SetRole(bool client, bool active) {
         fxFullDone_.clear();
         fxStopped_.clear();
         fxRebuild_.clear();
-        groundAlias_.clear();
     }
+    ResetGround();
     if (!active) controllable_.clear();
 }
 

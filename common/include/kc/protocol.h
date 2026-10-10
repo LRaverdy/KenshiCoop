@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 33;
+constexpr uint16_t kProtocolVersion = 33;   // 33: BagBind (travelling merchants), Result (actor safety), JoinQueue, Diplomacy, MapMarkers and MapPing (map)
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -93,8 +93,17 @@ enum class Msg : uint8_t {
     Floors = 71,          // S->C  the floor characters are on inside buildings (it drives the floor shown)
     // ---- fix G5
     JobList = 68,         // S->C  the job list (Tâches panel) of the players' characters, as the host has it
+    // ---- join queue
+    JoinQueue = 72,       // S->C  your place in the join queue, who is joining now and what they are doing
     // ---- travelling merchants: worn backpacks
     BagBind = 80,         // S->C  a character's worn backpack: its netId (its items follow as an Inventory)
+    // ---- map: markers and pings (82-83)
+    MapMarkers = 82,      // S->C  every player character's position and the hostile squads near the players (a few times a second)
+    MapPing = 83,         // both  a marker on a spot (client: asks the host; host: shows it to everyone)
+    // ---- diplomacy
+    Diplomacy = 85,       // S->C  the world beyond the player faction: relations between factions, faction leaders, towns
+    // ---- actor safety
+    Result = 90,          // S->C  the host's answer to a request: rejected (with the reason) or done
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -160,6 +169,18 @@ struct Reject {
 };
 struct PlayerLeft {
     uint8_t id = 0;
+};
+// Players join one at a time; the others wait their turn in a queue (FIFO).
+enum class JoinPhase : uint8_t {
+    Saving = 0,    // the host saves its world for the player whose turn it is
+    Loading = 1,   // that player downloads and loads it
+    Editor = 2,    // that player is in the world, making their character
+};
+struct JoinQueueMsg {
+    uint8_t position = 0;   // 1: your turn; 2..: players ahead of you + 1
+    uint8_t total = 0;      // players joining, the one whose turn it is included
+    JoinPhase phase = JoinPhase::Saving;   // what the player whose turn it is is doing
+    std::string current;    // the player whose turn it is
 };
 struct StallMsg {   // fix G6
     uint16_t seconds = 0;   // how long the connection may stay silent
@@ -605,6 +626,7 @@ void Encode(Writer& w, const Reject& m);
 void Encode(Writer& w, const PlayerInfo& m);  // PlayerJoined
 void Encode(Writer& w, const PlayerLeft& m);
 void Encode(Writer& w, const StallMsg& m);
+void Encode(Writer& w, const JoinQueueMsg& m);
 void Encode(Writer& w, const FloorsMsg& m);
 void Encode(Writer& w, const Chat& m);
 void Encode(Writer& w, const Bind& m);
@@ -634,6 +656,84 @@ void Encode(Writer& w, const EditCharacter& m);
 void Encode(Writer& w, const EditState& m);
 const char* TaskLabel(int task);   // a player order's name, for logs ("?" when unknown)
 const char* StandingOrderLabel(int order);   // a squad bar toggle's name, for logs
+
+// ---- actor safety: what the subject of a client's order is, as the host's world sees it. Every
+// task id a client can send is checked against what that task expects before the game's order
+// functions get it (a BUILD order aimed at an NPC once crashed the host inside Character::addJob).
+enum TargetFlags : uint32_t {
+    kTgtNamed = 1u << 0,        // the client named a subject
+    kTgtFound = 1u << 1,        // ... and it was found here, of the kind and at the place the client saw
+    kTgtCharacter = 1u << 2,
+    kTgtConscious = 1u << 3,    // a character standing (not knocked out, not dead)
+    kTgtDown = 1u << 4,         // a character knocked out or lying on the ground
+    kTgtDead = 1u << 5,
+    kTgtSquad = 1u << 6,        // a member of the player faction (any player's)
+    kTgtSelf = 1u << 7,         // the actor itself
+    kTgtItem = 1u << 8,         // an item lying loose
+    kTgtContainer = 1u << 9,    // an object with an inventory (not a character)
+    kTgtBuilding = 1u << 10,    // a building or a piece of furniture
+    kTgtUnfinished = 1u << 11,  // ... still to be built (a construction site)
+    kTgtOurs = 1u << 12,        // ... of the player faction
+    kTgtBed = 1u << 13,
+    kTgtCage = 1u << 14,
+    kTgtMachine = 1u << 15,     // a building one operates (mine, machine, turret, workbench...)
+    kTgtDoor = 1u << 16,        // a door, a gate or a lock
+    kTgtShop = 1u << 17,
+};
+// True when task `task`, asked through `via`, may be given with that subject (flags above); else
+// false and `why` (English, for the log) says what it needed. Unknown task ids are refused.
+bool TaskTargetAllowed(TaskVia via, int task, uint32_t subject, std::string* why);
+
+// The host's answer to a client's request (a Command: its seq; other requests: seq 0). Rejected
+// carries the reason and a French text for the player; the client undoes what it predicted.
+enum class ResultState : uint8_t { Accepted = 1, Rejected = 2, Done = 3 };
+enum class ResultReason : uint8_t {
+    None = 0,
+    NotYourCharacter = 1,   // the actor is not a character of that player (the host's, another player's, an NPC)
+    NoActor = 2,            // no actor named, or unknown to the host
+    WrongTarget = 3,        // the task does not apply to that subject (or the subject is stale / unknown)
+    NotAllowed = 4,         // not available to client players, or not in the game yet
+    SelectionBusy = 5,      // the host could not give the order to that character alone
+    Failed = 6,             // run, but the game did not do it
+};
+const char* ToString(ResultReason r);
+struct Result {
+    Msg request = Msg::Command;
+    uint32_t seq = 0;
+    uint32_t netId = 0;     // the actor, when there is one
+    ResultState state = ResultState::Done;
+    ResultReason reason = ResultReason::None;
+    std::string text;       // French, for the player (empty when nothing to say)
+};
+void Encode(Writer& w, const Result& m);
+bool Decode(Reader& r, Result& m);
+
+// ---- authority: what each message requires when a client sends it, checked by the host before its
+// handler runs (Session::Authorize) and by the client before it sends (the same table). Every Msg has
+// exactly one rule (TestMessageRules goes through all of them): a new message needs one.
+enum class AuthRole : uint8_t {
+    Connected,   // after Hello
+    Joining,     // still loading the host's world
+    InGame,      // in the game
+    Handshake,   // Hello: read before a player exists (HostPacket), never through Authorize
+    HostOnly,    // host->client only: the host refuses it from a client
+};
+enum class AuthSubject : uint8_t {
+    None,              // nothing to check beyond the role
+    OwnCharacter,      // the netId it names is a squad member assigned to the sender
+    OwnConversation,   // the conversation it answers is the sender's
+    Inventory,         // drop: the character that drops it is the sender's; moves: the inventory rules (own, opened, bodies)
+};
+struct MessageRule {
+    Msg type;
+    AuthRole role;
+    AuthSubject subject;
+    const char* name;
+    double minInterval = 0;   // seconds between two of one player's (more often: dropped); 0: no limit
+};
+const char* MsgName(Msg type);                 // the enumerator's name; null: no such message
+const MessageRule* MessageRuleFor(Msg type);   // null only for a value that is no message
+const MessageRule* MessageRules(size_t& count);
 // Containers (chests, shelves, safes...) are furniture: other handles on every machine, so they
 // are named by kind and place. The host gives an open one a netId; its items then travel like a
 // character's (Inventory messages, InvOp moves).
@@ -841,6 +941,7 @@ bool Decode(Reader& r, Reject& m);
 bool Decode(Reader& r, PlayerInfo& m);
 bool Decode(Reader& r, PlayerLeft& m);
 bool Decode(Reader& r, StallMsg& m);
+bool Decode(Reader& r, JoinQueueMsg& m);
 bool Decode(Reader& r, FloorsMsg& m);
 bool Decode(Reader& r, Chat& m);
 bool Decode(Reader& r, Bind& m);
@@ -984,5 +1085,121 @@ void Encode(Writer& w, const FactionsMsg& m);
 bool Decode(Reader& r, FactionsMsg& m);
 void Encode(Writer& w, const BountiesMsg& m);
 bool Decode(Reader& r, BountiesMsg& m);
+
+// ---- diplomacy: what the world thinks beyond the player faction, the host's everywhere.
+// - relations between two factions that are not the player's (wars, alliances: the game changes them
+//   after a leader's death, a dialogue, a campaign). The host sends only the pairs that changed since
+//   it started hosting: every client loaded the host's save, which holds the rest;
+// - unique characters (faction leaders, named NPCs): dead, alive, imprisoned, and whether the player
+//   did it (UniqueNPCManager). World states (and the town overrides, dialogues and campaigns that
+//   test them) are computed from these and from the player faction's relations;
+// - towns: owner faction and the override the world states put on them (taken over, destroyed...).
+struct FactionPairRelation {
+    std::string from, to;   // what `from` feels about `to` (faction game data ids)
+    RelationState rel;
+    bool operator==(const FactionPairRelation&) const = default;
+};
+enum : uint8_t { kUniqueDead = 0, kUniqueAlive = 1, kUniqueImprisoned = 2 };   // UniqueNPCManager states
+struct UniqueState {
+    std::string sid;        // the character's game data id
+    uint8_t state = kUniqueAlive;
+    bool byPlayer = false;  // the player killed / imprisoned it (or it is the player's)
+    bool operator==(const UniqueState&) const = default;
+};
+struct TownState {
+    std::string sid;            // the town's game data id
+    std::string ownerSid;       // its faction ("" none)
+    std::string overrideSid;    // the override applied ("" none: the town as the game data makes it)
+    bool operator==(const TownState&) const = default;
+};
+struct DiplomacyState {         // everything, as one side's game has it
+    std::vector<FactionPairRelation> pairs;
+    std::vector<UniqueState> uniques;
+    std::vector<TownState> towns;
+    bool operator==(const DiplomacyState&) const = default;
+};
+enum class DiploPart : uint8_t { Pairs = 1, Uniques = 2, Towns = 3 };
+struct DiplomacyMsg {           // one part at a time (each fits in a packet)
+    DiploPart part = DiploPart::Pairs;
+    std::vector<FactionPairRelation> pairs;
+    std::vector<UniqueState> uniques;
+    std::vector<TownState> towns;
+    bool operator==(const DiplomacyMsg&) const = default;
+};
+constexpr uint32_t kMaxDiploPairs = 4096, kMaxUniques = 8192, kMaxTowns = 2048;
+constexpr size_t kDiplomacyBudget = 60 * 1024;   // bytes per Diplomacy message (kMaxPacketSize leaves room)
+// Two factions' relation as the game uses it between NPC factions: the flags, and the value to the point.
+inline bool SamePairRelation(const RelationState& a, const RelationState& b) {
+    return a.alliance == b.alliance && a.peace == b.peace && a.war == b.war && a.coexists == b.coexists && CloseEnough(a.relation, b.relation, 1.0f);
+}
+// What a faction thinks of another, as the game decides it (FactionRelations::isAlly 0x6B2630:
+// alliance or relation >= 50; isEnemy 0x6B26D0: relation <= -30).
+enum class Standing : uint8_t { Neutral = 0, Ally = 1, Enemy = 2 };
+inline Standing StandingOf(const RelationState& r) {
+    if (r.alliance || r.relation >= 50.0f) return Standing::Ally;
+    if (r.relation <= -30.0f) return Standing::Enemy;
+    return Standing::Neutral;
+}
+void Encode(Writer& w, const DiplomacyMsg& m);
+bool Decode(Reader& r, DiplomacyMsg& m);
+
+// ---- map: markers and pings (common/src/protocol_map.cpp)
+// What every player's world map, minimap and markers above the heads show, as the host sees it:
+// the players, every squad character (with its owner), and the hostile squads near them.
+struct MapPlayer {
+    uint8_t id = 0;
+    std::string name;
+    bool operator==(const MapPlayer&) const = default;
+};
+enum MapCharFlags : uint8_t {
+    kMapAvatar = 1,     // the player's own character (not a recruit): marker above its head, squad bar frame
+    kMapDown = 2,       // knocked out
+    kMapDead = 4,
+};
+struct MapChar {
+    uint32_t netId = 0;
+    uint8_t owner = 0;           // player id
+    uint8_t flags = 0;           // MapCharFlags
+    std::string name;
+    Vec3 pos;
+    bool operator==(const MapChar& o) const {
+        return netId == o.netId && owner == o.owner && flags == o.flags && name == o.name && pos.x == o.pos.x && pos.y == o.pos.y && pos.z == o.pos.z;
+    }
+};
+enum class ThreatKind : uint8_t { Near = 1, Attacking = 2, Raid = 3 };
+struct MapThreat {
+    Vec3 pos;                    // the squad's centre
+    uint8_t count = 0;           // its characters (capped at 255)
+    ThreatKind kind = ThreatKind::Near;
+    std::string label;           // its faction, as players read it
+    bool operator==(const MapThreat& o) const {
+        return pos.x == o.pos.x && pos.y == o.pos.y && pos.z == o.pos.z && count == o.count && kind == o.kind && label == o.label;
+    }
+};
+struct MapMarkersMsg {
+    std::vector<MapPlayer> players;
+    std::vector<MapChar> chars;
+    std::vector<MapThreat> threats;
+    bool operator==(const MapMarkersMsg&) const = default;
+};
+constexpr uint32_t kMaxMapPlayers = 16, kMaxMapChars = 128, kMaxMapThreats = 32;
+constexpr size_t kMaxMapLabelLen = 48;
+void Encode(Writer& w, const MapMarkersMsg& m);
+bool Decode(Reader& r, MapMarkersMsg& m);
+
+// A ping: a marker a player puts on a spot. It changes nothing in the game world.
+enum class PingKind : uint8_t { Go = 0, Danger = 1, Loot = 2, Help = 3 };
+constexpr uint8_t kPingKinds = 4;
+struct MapPingMsg {
+    uint32_t id = 0;             // host: unique per session (client request: 0)
+    uint8_t owner = 0;           // host: the player who pinged (client request: ignored)
+    PingKind kind = PingKind::Go;
+    Vec3 pos;
+    bool operator==(const MapPingMsg& o) const {
+        return id == o.id && owner == o.owner && kind == o.kind && pos.x == o.pos.x && pos.y == o.pos.y && pos.z == o.pos.z;
+    }
+};
+void Encode(Writer& w, const MapPingMsg& m);
+bool Decode(Reader& r, MapPingMsg& m);
 
 } // namespace kc

@@ -1085,6 +1085,128 @@ def exp_prison(host, cli):
     summary()
 
 
+def exp_map(host, clis):
+    """Map markers, minimap, markers above the heads, squad bar frames and pings (1 host + 2 clients
+    or more). Every player's map feed must match the host's (positions, owners, own characters,
+    hostile squads); what each machine draws is read back (mapscene); the game's map projection must
+    match ours; a client's ping must show on the host and on the other client, rate-limited."""
+    import re as _re
+    time.sleep(6)
+    for c in clis:
+        cmd(c, "editdone")
+    time.sleep(4)
+
+    def kv(text):
+        return dict(p.split("=", 1) for p in text.split(";")[0].split() if "=" in p)
+
+    def items(text, section=1):
+        parts = text.split(";")
+        if len(parts) <= section:
+            return []
+        out = []
+        for tok in parts[section].split():
+            f = tok.split(":")
+            d = {"name": f[0]}
+            for x in f[1:]:
+                if "=" in x:
+                    k, v = x.split("=", 1)
+                    d[k] = v
+            out.append(d)
+        return out
+
+    def feed(pid):
+        ok, t = cmd(pid, "mapfeed")
+        return ok, kv(t), items(t, 1), items(t, 2), t
+
+    def me(pid):
+        return kv(cmd(pid, "mapscene carte")[1]).get("me", "?")
+
+    # a hostile in a fight with the squad: an NPC copy next to squad member 0, engaged
+    log("spawn an NPC to fight:", cmd(host, "spawnnpc 60 0"), cmd(host, "fight 0"))
+    time.sleep(5)
+    hok, hk, hchars, hthreats, ht = feed(host)
+    log("host feed:", ht[:400])
+    check("carte : l'hote construit le flux", hok and int(hk.get("chars", 0)) > 0, ht[:200])
+    ids = {}
+    for i, c in enumerate(clis):
+        ok, k, chars, threats, t = feed(c)
+        ids[c] = me(c)
+        log(f"client {i + 1} (joueur {ids[c]}) feed:", t[:400])
+        check(f"carte : client {i + 1} recoit le flux de l'hote", ok and float(k.get("age", 999)) < 2.0, t[:120])
+        check(f"carte : client {i + 1} a les memes persos que l'hote", len(chars) == len(hchars), f"{len(chars)} / {len(hchars)}")
+        worst = 0.0
+        for a, b in zip(chars, hchars):
+            if a.get("owner") != b.get("owner"):
+                worst = 1e9
+                break
+            worst = max(worst, dist((float(a["x"]), 0, float(a["z"])), (float(b["x"]), 0, float(b["z"]))))
+        check(f"carte : client {i + 1} memes positions et proprietaires que l'hote", worst < 30.0, f"ecart max {worst:.1f}")
+        check(f"carte : client {i + 1} memes escouades hostiles que l'hote", len(threats) == len(hthreats), f"{len(threats)} / {len(hthreats)}")
+    owners = sorted({c.get("owner") for c in hchars})
+    av = {o: sum(1 for c in hchars if c.get("owner") == o and c.get("av") == "1") for o in owners}
+    check("carte : chaque joueur a un perso a lui (repere, barre d'escouade)", all(v >= 1 for v in av.values()) and len(owners) >= 1 + len(clis), av)
+    check("carte : ennemis visibles (le PNJ qui se bat contre l'escouade)", len(hthreats) >= 1,
+          "aucune escouade hostile (le PNJ copie n'est peut-etre pas hostile)" if not hthreats else hthreats[0])
+    # what each machine draws on its map, with its colours
+    for pid, label in [(host, "hote")] + [(c, f"client {i + 1}") for i, c in enumerate(clis)]:
+        t = cmd(pid, "mapscene carte")[1]
+        k = kv(t)
+        drawn = items(t, 1)
+        cols = {}
+        for d in drawn:
+            cols.setdefault(d.get("owner"), set()).add(d.get("col"))
+        distinct = len({next(iter(v)) for v in cols.values()}) == len(cols) and all(len(v) == 1 for v in cols.values())
+        check(f"carte : {label} dessine tous les persos", k.get("live") == "1" and len(drawn) == len(hchars), f"{len(drawn)} / {len(hchars)}")
+        check(f"carte : {label} une couleur par joueur", distinct, cols)
+    # the game's own projection (MapScreen::worldToMapCoords) against ours
+    if hchars:
+        x, z = float(hchars[0]["x"]), float(hchars[0]["z"])
+        ok, t = cmd(clis[0], f"mapproj {x} {z}")
+        m = _re.search(r"game=(-?\d+),(-?\d+) ours=(-?[\d.]+),(-?[\d.]+)", t)
+        good = bool(m) and abs(int(m.group(1)) - float(m.group(3))) <= 1.5 and abs(int(m.group(2)) - float(m.group(4))) <= 1.5
+        check("carte : projection du jeu = la notre", good, t)
+    # minimap and heads
+    for pid, label in [(host, "hote")] + [(c, f"client {i + 1}") for i, c in enumerate(clis)]:
+        t = cmd(pid, "mapscene minicarte")[1]
+        k = kv(t)
+        dots = items(t, 1)
+        mine = [d for d in dots if d.get("owner") == k.get("me")]
+        check(f"minicarte : {label} centree sur son perso, ses persos dedans", k.get("centre", "0").startswith("1") and len(mine) >= 1, t[:200])
+        t = cmd(pid, "mapscene tetes")[1]
+        heads = items(t, 1)
+        check(f"tetes : {label} repere au-dessus des persos des joueurs, a leur couleur", len(heads) >= 1 and all(h.get("col") for h in heads), t[:300])
+        t = cmd(pid, "mapscene barre")[1]
+        log(f"{label} squad bar frames:", t[:300])
+        frames = items(t, 1)
+        check(f"barre : {label} cadres aux couleurs des joueurs seulement", all(f.get("owner") in owners for f in frames), t[:200])
+    # pings: client 1 pings, the host and client 2 see it in its name
+    px, pz = (float(hchars[0]["x"]) + 50, float(hchars[0]["z"]) + 50) if hchars else (0.0, 0.0)
+    r1 = cmd(clis[0], f"ping {px} {pz} 1")
+    r2 = cmd(clis[0], f"ping {px + 5} {pz} 0")
+    check("ping : place par le client", r1[0], r1)
+    check("ping : un seul toutes les 0,5 s", not r2[0], r2)
+    time.sleep(2)
+    me1 = ids[clis[0]]
+    for pid, label in [(host, "hote")] + [(c, f"client {i + 1}") for i, c in enumerate(clis)]:
+        t = cmd(pid, "pings")[1]
+        got = [p for p in items(" ;" + t.replace(" id=", " ping:id="), 1) if p.get("owner") == me1 and p.get("kind") == "1"]
+        near = [p for p in got if abs(float(p["x"]) - px) < 1 and abs(float(p["z"]) - pz) < 1]
+        check(f"ping : visible chez {label}, au nom du client 1", len(near) == 1, t[:200])
+    t = cmd(clis[-1], "mapscene pings")[1]
+    check("ping : dessine chez l'autre client", f"owner={me1}" in t, t[:200])
+    for n in range(6):
+        time.sleep(0.6)
+        cmd(clis[0], f"ping {px + 10 * n} {pz} 0")
+    time.sleep(2)
+    t = cmd(host, "pings")[1]
+    mine = t.count(f":owner={me1}:")
+    check("ping : 5 au plus par joueur", mine == 5, t[:300])
+    time.sleep(11)
+    t = cmd(host, "pings")[1]
+    check("ping : disparait apres 10 s", "n=0" in t, t[:120])
+    summary()
+
+
 def exp_admin(host, cli):
     """The host's Administration section (plugin/admin.cpp), through its debug mirror 'admin ...':
     refused on the client; god mode holds through a fight and survives a rejoin; experience (points in
@@ -1377,6 +1499,92 @@ def exp_factions(host, cli):
     check("factions : le client ne garde pas ses propres relations", rh == rc and "ours=50.0" not in rc, f"hote {rh} / client {rc} | {before} -> {after}")
     fh, fc = cmd(host, "factions")[1], cmd(cli, "factions")[1]
     check("factions : memes relations a la fin", fh == fc, f"hote {fh} / client {fc}")
+def exp_diplomacy(host, cli):
+    """Diplomacy: relations between two NPC factions (war, alliance), unique characters (faction
+    leaders dead or imprisoned) and towns (owner, override) are the host's on every machine; the
+    client's game cannot keep its own. Self-contained: everything changed is put back."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+
+    def fields(t):
+        out = {}
+        for e in t.split()[1:]:
+            if "=" in e:
+                k, v = e.split("=", 1)
+                out[k] = v
+        return out
+
+    def same_world(tag):
+        dh, dc = cmd(host, "diplo")[1], cmd(cli, "diplo")[1]
+        fh, fc = fields(dh), fields(dc)
+        log("diplo", tag, "host:", dh, "/ client:", dc)
+        ok = dh.startswith("ok") and dc.startswith("ok") and all(fh.get(k) == fc.get(k) for k in ("ph", "uh", "th"))
+        check("diplomatie : memes guerres, chefs et villes " + tag, ok, f"hote {dh} / client {dc}")
+
+    same_world("au depart")
+    # 1. a war between two factions that are not the player's, declared on the host
+    pair = None
+    for a, b in (("Nation_Sainte", "Shek"), ("Shek", "Bandit"), ("Nation", "Ville"), ("Shinobi", "Ville"), ("a", "e")):
+        r = cmd(host, f"diplopair {a} {b}")
+        if r[0]:
+            pair = (a, b, r[1])
+            break
+    check("diplomatie : deux factions trouvees", pair is not None, pair)
+    if pair:
+        a, b, before = pair
+        orig = "0"
+        for e in before.split():
+            if e.startswith("ab="):
+                orig = e[3:].split(",")[0]
+        log("host declares war:", cmd(host, f"setdiplopair {a} {b} -100 war"))
+        time.sleep(8)
+        ph, pc = cmd(host, f"diplopair {a} {b}")[1], cmd(cli, f"diplopair {a} {b}")[1]
+        check("diplomatie : guerre entre deux factions visible chez le client", "war" in ph and ph == pc, f"hote {ph} / client {pc}")
+        # 2. the client's game changes it by itself: back to the host's
+        log("client makes peace on its own:", cmd(cli, f"setdiplopair {a} {b} 50 none"))
+        time.sleep(8)
+        ph, pc = cmd(host, f"diplopair {a} {b}")[1], cmd(cli, f"diplopair {a} {b}")[1]
+        check("diplomatie : le client ne garde pas sa propre paix", ph == pc and "war" in pc, f"hote {ph} / client {pc}")
+        log("host restores the pair:", cmd(host, f"setdiplopair {a} {b} {orig} none"))
+    # 3. a faction leader killed by the players, on the host
+    uniq = None
+    for part in ("Tinfist", "Esata", "Phoenix", "Seto", "Longen", "Valamon", "Bayan", "Moll", "a"):
+        r = cmd(host, f"unique {part}")
+        if r[0]:
+            uniq = (part, r[1])
+            break
+    check("diplomatie : un personnage unique trouve", uniq is not None, uniq)
+    if uniq:
+        part, before = uniq
+        f0 = fields(before)
+        log("host: the leader dies by the players' hand:", cmd(host, f"setunique {part} 0 player"))
+        time.sleep(8)
+        uh, uc = cmd(host, f"unique {part}")[1], cmd(cli, f"unique {part}")[1]
+        check("diplomatie : chef tue (etat unique) identique chez le client", "state=0" in uh and uh == uc, f"hote {uh} / client {uc}")
+        log("host: put back:", cmd(host, f"setunique {part} {f0.get('state', '1')} {'player' if f0.get('player') == '1' else ''}"))
+    # 4. a town taken over by another faction, on the host
+    town = None
+    for part in ("Squin", "Stack", "Hub", "Admag", "Mongrel", "Shark", "Stoat", "a"):
+        r = cmd(host, f"town {part}")
+        if r[0] and "owner=-" not in r[1]:
+            town = (part, r[1])
+            break
+    check("diplomatie : une ville trouvee", town is not None, town)
+    if town and pair:
+        part, before = town
+        owner = before.split("owner=", 1)[1].split(" override=")[0]
+        target = pair[0] if pair[0].replace("_", " ") not in owner else pair[1]
+        log("host: town taken over:", cmd(host, f"settownowner {part} {target}"))
+        time.sleep(8)
+        th, tc = cmd(host, f"town {part}")[1], cmd(cli, f"town {part}")[1]
+        check("diplomatie : changement de proprietaire d'une ville identique", th != before and th == tc, f"avant {before} / hote {th} / client {tc}")
+        log("host: town given back:", cmd(host, f"settownowner {part} {owner.replace(' ', '_')}"))
+    time.sleep(8)
+    log("diplosync host:", cmd(host, "diplosync")[1], "/ client:", cmd(cli, "diplosync")[1])
+    same_world("a la fin")
+
+
 def exp_buildstate(host, cli):
     """Construction state of the buildings already there (save, towns, the bought one in kctest_mine):
     every building both games see near the squad has the same state (finished or site, progress)."""
@@ -2362,6 +2570,133 @@ def own_index(pid):
     return len(keys) - 1
 
 
+# ---- actor safety: a client never makes a character it does not own act
+def exp_actorsafety(host, cli):
+    """The host selects its own characters, as a player would. The client then gives every kind of order
+    with its own character (bed, talk, loot, pick up, trade, carry, job, build, door, first aid on a host
+    character, follow, attack): on the host the actor is the client's character, the host's characters
+    get nothing (no new task, no move, no bed, no conversation) and the host's selection is unchanged.
+    Then forged requests naming a host character as the actor, and orders aimed at the wrong kind of
+    target (the BUILD on an NPC that crashed the host in stress4): refused, the host stays alive."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    mine_h = cmd(host, "ownidx 1")[1].split()[1:]
+    hidx = [int(x) for x in mine_h if int(x) != own][:3]
+    check("securite controle : l'hote a ses propres persos", len(hidx) > 0, mine_h)
+    if not hidx:
+        summary()
+        return
+    log("host selects its own characters", cmd(host, "selectset " + " ".join(str(i) for i in hidx)))
+    sel0 = cmd(host, "selected")[1]
+    check("securite controle : la selection de l'hote est exactement ses persos",
+          sel0 == "ok " + " ".join(str(i) for i in sorted(hidx)), sel0)
+
+    def state(i):
+        t = cmd(host, f"charstate {i}")[1]
+        d = dict(kv.split("=") for kv in t.split()[1:]) if t.startswith("ok") else {}
+        if "pos" in d:
+            x, z = d["pos"].split(",")
+            d["pos"] = (float(x), float(z))
+        return d
+
+    excluded = set()   # a host character the client legitimately acts on (carried): not compared for moves
+
+    def host_untouched(label, before, actor_word):
+        time.sleep(4)
+        sel = cmd(host, "selected")[1]
+        check(f"securite controle : {label} : selection de l'hote inchangee", sel == sel0, f"{sel0} -> {sel}")
+        for i in hidx:
+            if i in excluded:
+                continue
+            a, b = before[i], state(i)
+            if not a or not b:
+                check(f"securite controle : {label} : perso {i} de l'hote lisible", False, f"{a} / {b}")
+                continue
+            moved = ((a["pos"][0] - b["pos"][0]) ** 2 + (a["pos"][1] - b["pos"][1]) ** 2) ** 0.5
+            check(f"securite controle : {label} : le perso {i} de l'hote n'a rien recu",
+                  int(b["tasks"]) <= int(a["tasks"]) and int(b["jobs"]) <= int(a["jobs"]) and b["in"] == a["in"] and b["dialog"] == a["dialog"]
+                  and moved < 5.0, f"{a} -> {b} (deplace de {moved:.1f})")
+        st = cmd(host, "actorstats")[1]
+        check(f"securite controle : {label} : aucune fuite vers un perso de l'hote", "leaks=0" in st, st)
+        hl = host_log()
+        if actor_word:
+            check(f"securite controle : {label} : l'hote execute l'ordre du client", actor_word in hl[-20000:], actor_word)
+
+    actions = [
+        ("lit", f"bedreq {own}", "client task 258"),
+        ("parler", f"talkreq {own}", "client task 12"),
+        ("piller", f"npcreq {own} 26 a", "client task 26"),
+        ("commerce", f"tradeopen {own} any", None),
+        ("tache", f"jobreq {own} 31 {hidx[0]}", "client task 31"),
+        ("construire", f"buildreq {own} 2", "client task 2"),
+        ("porte", f"doororder {own} 72 door", "client task 72"),
+        ("premiers soins sur un perso de l'hote", f"taskreq {own} 25 {hidx[0]}", "client task 25"),
+        ("suivre", f"taskreq {own} 44 {hidx[0]}", "client task 44"),
+    ]
+    g = cmd(cli, f"groundnear 400 ground {own}")[1].split()[2:]
+    if g:
+        _, isid, at = g[0].split("|")
+        actions.insert(3, ("ramasser", f"pickupreq {own} {isid} {at}", "pick up"))
+    for label, line, word in actions:
+        before = {i: state(i) for i in hidx}
+        r = cmd(cli, line)
+        log(f"client: {label}:", line, "->", r)
+        if not r[0]:
+            log(f"   ({label} not available here: {r[1]})")
+            continue
+        host_untouched(label, before, word)
+    # carrying: a host character knocked out, carried by the client's character
+    if len(hidx) > 1:
+        target = hidx[-1]
+        cmd(host, f"kosquad {target}")
+        time.sleep(2)
+        excluded.add(target)
+        before = {i: state(i) for i in hidx}
+        log("client: carry a knocked out host character", cmd(cli, f"carryreq {own} {target}"))
+        host_untouched("porter", before, "client task 225")
+    # attack: last (a fight may draw everyone in)
+    before = {i: state(i) for i in hidx}
+    log("host spawns an NPC", cmd(host, f"spawnnpc 40 40 {own}"))
+    time.sleep(2)
+    log("client: attack", cmd(cli, f"npcreq {own} 4 a"))
+    host_untouched("attaquer", before, "client task 4")
+
+    # forged requests: a host character as the actor
+    st0 = cmd(host, "actorstats")[1]
+    before = {i: state(i) for i in hidx}
+    for via, task, subj in ((3, 258, "none"), (3, 12, "npc"), (0, 0, "none"), (1, 4, "npc"), (4, 31, f"squad{own}"), (2, 2, "building")):
+        log("client forges an order for host character", hidx[0], via, task, subj, cmd(cli, f"forgeorder {hidx[0]} {via} {task} {subj}"))
+    time.sleep(1)
+    st1 = cmd(host, "actorstats")[1]
+    n0 = int(st0.split("refused=")[1].split()[0]) if "refused=" in st0 else 0
+    n1 = int(st1.split("refused=")[1].split()[0]) if "refused=" in st1 else 0
+    check("securite controle : ordres forges au nom d'un perso de l'hote refuses", n1 - n0 >= 6, f"{st0} -> {st1}")
+    check("securite controle : refus journalises en anglais", "not owned by player" in host_log(), "refused: actor ... not owned by player N")
+    host_untouched("ordres forges", before, None)
+    res = cmd(cli, "results")[1]
+    check("securite controle : le client recoit les refus", res.startswith("ok") and int(res.split()[1]) > 0, res)
+
+    # wrong targets with the client's own character (the stress4 crash: BUILD via 3 on an NPC)
+    t0 = cmd(host, "actorstats")[1]
+    wrong = [(3, 2, "npc"), (4, 2, "npc"), (2, 2, "item"), (3, 98, "npc"), (3, 258, "item"), (3, 12, "item"), (3, 12, f"squad{hidx[0]}"),
+             (3, 87, "npc"), (1, 72, "npc"), (3, 107, "npc"), (3, 3, "npc"), (3, 284, "npc"), (4, 2, "none"), (3, 5, "self")]
+    for via, task, subj in wrong:
+        log("client forges a wrong target", via, task, subj, cmd(cli, f"forgeorder {own} {via} {task} {subj}"))
+        time.sleep(0.2)
+    log("client: the stress4 path (npcreq task 2 on an NPC)", cmd(cli, f"npcreq {own} 2 a"))
+    time.sleep(2)
+    t1 = cmd(host, "actorstats")[1]
+    tr0 = int(t0.split("target=")[1].split()[0]) if "target=" in t0 else 0
+    tr1 = int(t1.split("target=")[1].split()[0]) if "target=" in t1 else 0
+    check("securite controle : cibles du mauvais type refusees", tr1 - tr0 >= 10, f"{t0} -> {t1}")
+    check("securite controle : l'hote est toujours vivant", alive(host) and cmd(host, "state")[0], t1)
+    check("securite controle : le client est toujours vivant", alive(cli) and cmd(cli, "state")[0])
+    check("securite controle : selection de l'hote inchangee a la fin", cmd(host, "selected")[1] == sel0, cmd(host, "selected")[1])
+    summary()
+
+
 def exp_stuck(host, cli):
     """An NPC's copy shut in a wall / under the floor on the client only: the client must notice it
     makes no progress and put it back where the host has it (within ~2 s)."""
@@ -2796,6 +3131,124 @@ def exp_ground(host, cli):
         log("  host pickup:", cmd(host, f"pickup {idx} {key}"))
         time.sleep(0.7)
         log("  client after pickup:", cmd(cli, f"ground {key}"), "| host:", cmd(host, f"ground {key}"))
+
+
+def exp_grounddrop(host, cli):
+    """Items dropped the way the inventory window does (Inventory::dropItem, debug "uidrop"): a stack
+    of ore, a weapon and armour, by the host, by the client, both at once, plus whatever a knockout and
+    a death leave on the ground. Each must lie once on both sides, same place, same stack; a pickup
+    removes it everywhere."""
+    time.sleep(8)
+    cmd(cli, "editdone")   # the joiner's character editor holds the whole game paused
+    time.sleep(3)
+    own = own_index(host)
+    hidx = 0 if own != 0 else 1
+    ore = None
+    for part in ("Iron_Ore", "Copper_Ore", "Ore", "Stone"):
+        t = cmd(host, f"itemtypes {part}")[1].split()
+        if len(t) > 2 and "=" in t[2]:
+            ore = t[2].split("=")[0]
+            break
+    check("objet au sol : un minerai trouve", ore is not None, ore)
+    for i in (hidx, own):
+        if ore:
+            log(f"ore for squad{i}:", cmd(host, f"giveitem {ore} 12 {i}"))
+        for kind in ("weapon", "armour"):
+            log(f"{kind} for squad{i}:", cmd(host, f"fetchitem {i} {kind}"))
+    time.sleep(4)   # the client's inventory follows the host's
+
+    def ground(pid, idx):
+        ok, t = cmd(pid, f"groundall 700 {idx}")
+        out = {}
+        for x in (t.split()[2:] if ok and t.startswith("ok") else []):
+            k, sid, q, pos = x.split("|")
+            out[k] = (sid, int(q), tuple(map(float, pos.split(","))))
+        return out
+
+    def new_items(before, after):
+        return {k: v for k, v in after.items() if k not in before}
+
+    def twins(v, items):   # the same stack lying within 5 units
+        return [k for k, w in items.items() if w[0] == v[0] and w[1] == v[1] and dist(w[2], v[2]) < 5.0]
+
+    def compare(label, hn, cn, expect=None):
+        if expect is not None:
+            check(f"objet au sol : {label} : {expect} objet(s) chez l'hote", len(hn) == expect, list(hn.values()))
+        check(f"objet au sol : {label} : autant d'objets chez le client", len(cn) == len(hn),
+              f"hote {sorted(v[:2] for v in hn.values())} / client {sorted(v[:2] for v in cn.values())}")
+        for hk, v in hn.items():
+            tw = twins(v, cn)
+            near = min((dist(w[2], v[2]) for w in cn.values() if w[0] == v[0]), default=-1)
+            check(f"objet au sol : {label} : {v[0]} x{v[1]} une seule fois chez le client, meme endroit, meme pile", len(tw) == 1,
+                  f"{len(tw)} copie(s), ecart {near:.1f}")
+
+    def pickup_everywhere(label, idx, hn, cn):
+        for hk, v in hn.items():
+            log(f"  host pickup {v[0]}:", cmd(host, f"pickup {idx} {hk}"))
+        time.sleep(2.5)
+        hl, cl = ground(host, idx), ground(cli, idx)
+        left_h = [k for k in hn if k in hl]
+        left_c = [k for k in cn if k in cl]
+        check(f"objet au sol : {label} : ramasse, disparu chez l'hote", not left_h, left_h)
+        check(f"objet au sol : {label} : ramasse, disparu chez le client", not left_c, left_c)
+
+    def drop(label, pid, idx, kind):
+        hb, cb = ground(host, idx), ground(cli, idx)
+        ok, t = cmd(pid, f"uidrop {idx} {kind}")
+        log(f"{label}: uidrop {idx} {kind} ->", t)
+        if not ok or not t.startswith("ok"):
+            check(f"objet au sol : {label} : lache", False, t)
+            return
+        time.sleep(2.5)
+        hn, cn = new_items(hb, ground(host, idx)), new_items(cb, ground(cli, idx))
+        compare(label, hn, cn, 1)
+        pickup_everywhere(label, idx, hn, cn)
+
+    # 1. the host drops, through the inventory window's path
+    for kind in ("ore", "weapon", "armour"):
+        drop(f"l'hote lache ({kind})", host, hidx, ore if kind == "ore" and ore else kind)
+    # 2. the client drops from its own character: the host's game does it
+    for kind in ("ore", "weapon", "armour"):
+        drop(f"le client lache ({kind})", cli, own, ore if kind == "ore" and ore else kind)
+    # 3. both at once
+    if ore:
+        log("ore again:", cmd(host, f"giveitem {ore} 7 {hidx}"), cmd(host, f"giveitem {ore} 9 {own}"))
+        time.sleep(4)
+        hb, cb = ground(host, own), ground(cli, own)
+        hb.update(ground(host, hidx))
+        cb.update(ground(cli, hidx))
+        res = {}
+        th = [threading.Thread(target=lambda: res.__setitem__("h", cmd(host, f"uidrop {hidx} {ore}"))),
+              threading.Thread(target=lambda: res.__setitem__("c", cmd(cli, f"uidrop {own} {ore}")))]
+        for t in th:
+            t.start()
+        for t in th:
+            t.join()
+        log("both at once:", res)
+        time.sleep(3)
+        ha, ca = ground(host, own), ground(cli, own)
+        ha.update(ground(host, hidx))
+        ca.update(ground(cli, hidx))
+        hn, cn = new_items(hb, ha), new_items(cb, ca)
+        compare("les deux en meme temps", hn, cn, 2)
+        pickup_everywhere("les deux en meme temps", hidx, hn, cn)
+    # 4. a knockout, then a death: whatever falls to the ground (the scan finds what no hook saw)
+    ok, t = cmd(host, "spawnnpc 12 8")
+    log("spawn", ok, t)
+    if ok and t.startswith("ok"):
+        time.sleep(5)
+        for what in ("ko", "kill"):
+            hb, cb = ground(host, hidx), ground(cli, hidx)
+            log(what, cmd(host, what))
+            time.sleep(5)
+            hn, cn = new_items(hb, ground(host, hidx)), new_items(cb, ground(cli, hidx))
+            log(f"  {what}: fell to the ground on the host: {sorted(v[:2] for v in hn.values())}")
+            compare("assomme" if what == "ko" else "mort", hn, cn)
+    log("host ground stats:", cmd(host, "groundstats")[1])
+    log("client ground stats:", cmd(cli, "groundstats")[1])
+    for l in [l for l in host_log().splitlines()[-400:] if "ground:" in l][-10:]:
+        log("  host:", l.strip()[:220])
+    summary()
 
 
 def exp_clientpickup(host, cli):
@@ -3719,10 +4172,26 @@ def join_one(c, label):
     return cmd(c, "join " + os.environ["KC_JOIN"]) if os.environ.get("KC_JOIN") else cmd(c, "join")
 
 
+JOIN_QUEUE = {}   # what setup_multi saw of the host's join queue (simultaneous joins)
+
+
+def close_join_editor(host, c, name, i):
+    """The player whose join turn it is makes their character: wait until the host sees their
+    editor open (its join queue shows '<name>:editor'), then close it as the confirm button does."""
+    try:
+        wait_for(host, lambda s: f"{name}:editor" in s.get("queue", ""), 30, f"client {i + 1} character editor")
+    except RuntimeError as e:   # no editor (a character they already had): the turn ends by itself
+        log(f"client {i + 1}: no character editor seen ({e})")
+    time.sleep(2)
+    log(f"client {i + 1} editdone:", cmd(c, "editdone"))
+
+
 def setup_multi(save, n_clients=3, simultaneous=False):
     """A host and n_clients clients on this PC, each with its own fake Steam id and player name.
-    Sequential: each client joins once the previous one is in. Simultaneous: every client sends its
-    join at once. Each client then closes the character editor and must own a character of its own.
+    Sequential: each client joins once the previous one is in (editor closed). Simultaneous: every
+    client sends its join at once; the host takes them one at a time (join queue), the others show
+    their place; each closes its character editor when its turn comes (what was seen of the queue
+    goes to JOIN_QUEUE). Each client must own a character of its own.
     Returns (host, [client pids], {pid: player id})."""
     kill_all()
     host = launch(name="Hote")
@@ -3747,24 +4216,57 @@ def setup_multi(save, n_clients=3, simultaneous=False):
         wait_for(c, lambda s: s.get("state") == "idle", 240, f"client {n + 1} menu")
         time.sleep(3)
         if not simultaneous:
+            # one join turn at a time: the next player would wait in the queue until this one's
+            # character editor is closed
             log(f"client {n + 1} join:", join_one(c, n))
             wait_for(c, lambda s: s.get("state") == "connected" and s.get("ready") == "1", 420, f"client {n + 1} in host world")
             log(f"client {n + 1} connected")
+            close_join_editor(host, c, f"Joueur{n + 2}", n)
         clis.append(c)
     if simultaneous:
-        log("every client joins at the same time")
+        log("every client joins at the same time: they go through the host's join queue one by one")
+        JOIN_QUEUE.clear()
         th = [threading.Thread(target=lambda c=c, i=i: log(f"client {i + 1} join:", join_one(c, i))) for i, c in enumerate(clis)]
         for t in th:
             t.start()
         for t in th:
             t.join()
-        for i, c in enumerate(clis):
-            wait_for(c, lambda s: s.get("state") == "connected" and s.get("ready") == "1", 600, f"client {i + 1} in host world")
-            log(f"client {i + 1} connected")
+        JOIN_QUEUE["seen"] = {c: set() for c in clis}   # (position, total, waiting for, phase) each client showed
+        JOIN_QUEUE["host"] = []                           # the host's queue lists seen
+        JOIN_QUEUE["order"] = []                          # clients in the order they got in
+        JOIN_QUEUE["overlap"] = []                        # two clients loading the world at once
+        deadline = time.time() + 420 * len(clis)
+        while len(JOIN_QUEUE["order"]) < len(clis) and time.time() < deadline:
+            hq = status(host).get("queue", "-")
+            if hq != "-" and (not JOIN_QUEUE["host"] or JOIN_QUEUE["host"][-1] != hq):
+                JOIN_QUEUE["host"].append(hq)
+                log("host join queue:", hq)
+            busy = []
+            for i, c in enumerate(clis):
+                if c in JOIN_QUEUE["order"]:
+                    continue
+                s = status(c)
+                if s.get("state") == "failed":
+                    log(f"client {i + 1} failed while joining:", s.get("error"))
+                    JOIN_QUEUE["order"].append(c)   # counted, checked by exp_join4
+                    continue
+                if s.get("queue", "-") != "-":
+                    q = (s.get("queue"), s.get("queueWait"), s.get("queuePhase"))
+                    if q not in JOIN_QUEUE["seen"][c]:
+                        log(f"client {i + 1} in the join queue: position {q[0]}, waiting for {q[1]} ({q[2]})")
+                    JOIN_QUEUE["seen"][c].add(q)
+                elif s.get("state") == "loading":
+                    busy.append(c)
+                if s.get("state") == "connected" and s.get("ready") == "1":
+                    log(f"client {i + 1} connected")
+                    close_join_editor(host, c, f"Joueur{i + 2}", i)
+                    JOIN_QUEUE["order"].append(c)
+            if len(busy) > 1:
+                JOIN_QUEUE["overlap"].append([clis.index(c) + 1 for c in busy])
+            time.sleep(1)
     time.sleep(6)
     ids = {host: player_id(host)}
     for i, c in enumerate(clis):
-        log(f"client {i + 1} editdone:", cmd(c, "editdone"))
         ids[c] = player_id(c)
     time.sleep(3)
     for i, c in enumerate(clis):
@@ -3803,13 +4305,38 @@ def keys_of_owner(state, owner):
 
 
 def exp_join4(host, clis, ids):
-    """3 clients joined at the same time: everyone sees every player's characters (names, positions),
+    """3 clients joined at the same time: the host's join queue took them one at a time (the others
+    shown their place, nobody dropped), everyone sees every player's characters (names, positions),
     then every client leaves and the host carries on."""
     n = len(clis)
     who = f"{n + 1} joueurs"
     check(f"{who} : chaque client est connecte", all(status(c).get("state") == "connected" for c in clis),
           [(c, status(c).get("state")) for c in clis])
     check(f"{who} : ids de joueur distincts", len(set(ids.values())) == len(ids), ids)
+    # the join queue: one player at a time, the others shown their place, nobody dropped
+    seen, order = JOIN_QUEUE.get("seen", {}), JOIN_QUEUE.get("order", [])
+    log("join queue seen by the host:", JOIN_QUEUE.get("host"))
+    check(f"{who} : file d'attente : tous les clients arrivent dans la partie, aucun rejete",
+          len(order) == n and all(status(c).get("state") == "connected" for c in order), [(clis.index(c) + 1, status(c).get("error")) for c in order])
+    waited = [c for c in clis if seen.get(c)]
+    check(f"{who} : file d'attente : les clients qui attendent voient leur position", len(waited) >= n - 1,
+          {clis.index(c) + 1: sorted(seen.get(c, [])) for c in clis})
+    bad_pos = []
+    for c in waited:
+        for pos, wait, phase in seen[c]:
+            try:
+                p_, t_ = (int(x) for x in pos.split("/"))
+            except ValueError:
+                bad_pos.append((clis.index(c) + 1, pos))
+                continue
+            if not (2 <= p_ <= t_ <= n) or not wait.startswith("Joueur") or phase not in ("saving", "loading", "editor"):
+                bad_pos.append((clis.index(c) + 1, pos, wait, phase))
+    check(f"{who} : file d'attente : positions (2..{n}/{n}), joueur attendu et etape coherents", waited and not bad_pos, bad_pos[:6])
+    last = order[-1] if order else None
+    check(f"{who} : file d'attente : le dernier arrive a vu sa position avancer",
+          last is not None and len({q[0] for q in seen.get(last, set())}) >= 2, sorted(seen.get(last, [])) if last else None)
+    check(f"{who} : file d'attente : un seul joueur charge le monde a la fois", not JOIN_QUEUE.get("overlap"), JOIN_QUEUE.get("overlap", [])[:5])
+    check(f"{who} : file d'attente : l'hote affiche la file", any("," in q for q in JOIN_QUEUE.get("host", [])), JOIN_QUEUE.get("host", [])[:6])
     cmd(host, "pause 1")
     time.sleep(3)
     h = dump(host, "h_join4")
@@ -4347,6 +4874,12 @@ def main():
     fa_ = sub.add_parser("factions", help="lot B: relations, bounties and crimes the host's everywhere")
     fa_.add_argument("--save", default="kctest_base")
     fa_.add_argument("--keep", action="store_true")
+    asf = sub.add_parser("actorsafety", help="a client's orders only ever move its own characters; forged and wrong-target orders refused")
+    asf.add_argument("--save", default="kctest_town")
+    asf.add_argument("--keep", action="store_true")
+    dp_ = sub.add_parser("diplomacy", help="wars between factions, faction leaders, towns: the host's everywhere")
+    dp_.add_argument("--save", default="kctest_town")
+    dp_.add_argument("--keep", action="store_true")
     tk = sub.add_parser("talk")
     tk.add_argument("--save", default="kctest_base")
     tk.add_argument("--keep", action="store_true")
@@ -4385,6 +4918,10 @@ def main():
     j4.add_argument("--save", default="kctest_base")
     j4.add_argument("--clients", type=int, default=3)
     j4.add_argument("--keep", action="store_true")
+    mp = sub.add_parser("map", help="map markers, minimap, head markers, squad bar frames, pings (1 host + 2 clients)")
+    mp.add_argument("--save", default="kctest_base")
+    mp.add_argument("--clients", type=int, default=2)
+    mp.add_argument("--keep", action="store_true")
     fo = sub.add_parser("four", help="1 host + 3 clients")
     fo.add_argument("--save", default="kctest_base")
     fo.add_argument("--clients", type=int, default=3)
@@ -4394,6 +4931,9 @@ def main():
     gr = sub.add_parser("ground")
     gr.add_argument("--save", default="kctest_base")
     gr.add_argument("--keep", action="store_true")
+    gd = sub.add_parser("grounddrop", help="items dropped the inventory window's way (host, client, both, KO/death): once, same place, everywhere")
+    gd.add_argument("--save", default="kctest_base")
+    gd.add_argument("--keep", action="store_true")
     af = sub.add_parser("animframe")
     af.add_argument("--save", default="kctest_base")
     af.add_argument("--keep", action="store_true")
@@ -4444,6 +4984,15 @@ def main():
             if not a.keep:
                 kill_launched()
         return
+    if a.what == "map":
+        host, clis = setup_many(a.save, max(2, a.clients))
+        arrange_grid([host] + clis)
+        try:
+            exp_map(host, clis)
+        finally:
+            if not a.keep:
+                kill_launched()
+        return
     if a.what == "four":
         host, clis = setup_many(a.save, a.clients)
         arrange_grid([host] + clis)
@@ -4472,6 +5021,8 @@ def main():
             exp_facing(host, cli)
         elif a.what == "talk":
             exp_talk(host, cli)
+        elif a.what == "actorsafety":
+            exp_actorsafety(host, cli)
         elif a.what == "stuck":
             exp_stuck(host, cli)
         elif a.what == "farnpc":
@@ -4494,6 +5045,8 @@ def main():
             exp_floor(host, cli)
         elif a.what == "factions":
             exp_factions(host, cli)
+        elif a.what == "diplomacy":
+            exp_diplomacy(host, cli)
         elif a.what == "doors":
             exp_doors(host, cli)
         elif a.what == "prison":
@@ -4532,6 +5085,8 @@ def main():
             exp_clientpickup(host, cli)
         elif a.what == "ground":
             exp_ground(host, cli)
+        elif a.what == "grounddrop":
+            exp_grounddrop(host, cli)
         elif a.what == "animframe":
             exp_animframe(host, cli)
         elif a.what == "anim":

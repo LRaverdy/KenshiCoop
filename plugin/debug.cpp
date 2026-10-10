@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "hooks.h"
+#include "map.h"
 #include "ranged.h"
 #include "steam_link.h"
 #include "kenshi.h"
@@ -111,11 +112,67 @@ void DumpCharacter(std::ostream& o, const char* tag, KenshiWorld& w, const kc::H
 std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstream& in, const std::string& cmd) {
     std::string err;
     if (cmd == "echo") return "ok";
+    // ---- map markers, minimap, heads, squad bar, pings (exp_map)
+    if (cmd == "mapscene") {   // mapscene <carte|minicarte|tetes|barre|pings>: what this machine draws
+        std::string what;
+        in >> what;
+        return DescribeMapScene(what);
+    }
+    if (cmd == "mapfeed") {   // mapfeed: the map feed as this machine has it (host: built, client: received)
+        const kc::MapMarkersMsg& m = s.mapMarkers();
+        std::ostringstream o;
+        o.setf(std::ios::fixed);
+        o.precision(1);
+        o << "ok age=" << std::min(999.0, s.mapMarkersAge()) << " players=" << m.players.size() << " chars=" << m.chars.size() << " threats=" << m.threats.size() << " ;";
+        for (const auto& c : m.chars) {
+            std::string n = c.name;
+            for (char& ch : n) if (ch == ' ' || ch == '=' || ch == ';' || (unsigned char)ch < 32) ch = '_';
+            o << ' ' << (n.empty() ? "-" : n) << ":owner=" << int(c.owner) << ":av=" << ((c.flags & kc::kMapAvatar) ? 1 : 0) << ":x=" << c.pos.x << ":z=" << c.pos.z;
+        }
+        o << " ;";
+        for (const auto& t : m.threats) o << " threat:kind=" << int(t.kind) << ":n=" << int(t.count) << ":x=" << t.pos.x << ":z=" << t.pos.z;
+        return o.str();
+    }
+    if (cmd == "mapproj") {   // mapproj <x> <z>: the game's MapScreen::worldToMapCoords against ours
+        float x = 0, z = 0;
+        if (!(in >> x >> z)) return "err usage: mapproj <x> <z>";
+        return CheckMapProjection(x, z);
+    }
+    if (cmd == "ping") {   // ping <x> <z> [type 0-3]: this player pings that spot (as a middle click would)
+        float x = 0, z = 0;
+        int type = 0;
+        if (!(in >> x >> z)) return "err usage: ping <x> <z> [type]";
+        in >> type;
+        if (type < 0 || type >= int(kc::kPingKinds)) return "err type 0-3";
+        return s.PlaceMapPing({x, 0, z}, kc::PingKind(type)) ? "ok" : "err refused (too soon, or no session)";
+    }
+    if (cmd == "pings") {   // pings: the live pings here
+        std::ostringstream o;
+        o.setf(std::ios::fixed);
+        o.precision(1);
+        o << "ok n=" << s.pings().size();
+        for (const auto& p : s.pings())
+            o << " id=" << p.ping.id << ":owner=" << int(p.ping.owner) << ":kind=" << int(p.ping.kind) << ":x=" << p.ping.pos.x << ":z=" << p.ping.pos.z
+              << ":age=" << s.pingAge(p);
+        return o.str();
+    }
     if (cmd == "status") {
         std::ostringstream o;
         o << "ok state=" << StateStr(s.state()) << " live=" << live << " ready=" << w.Ready() << " id=" << int(s.localId())
           << " entities=" << s.entityCount() << " npcs=" << s.npcCount() << " missingNpcs=" << s.missingNpcs()
-          << " joining=" << s.joiningPlayers() << " busy=" << kenshi::SaveManagerBusy() << " error=\"" << s.lastError() << "\"";
+          << " joining=" << s.joiningPlayers();
+        // join queue (names without spaces): client "queue=2/3 queueWait=<name> queuePhase=saving|loading|editor",
+        // host "queue=<name>:<phase>,<name>:wait,..."
+        auto word = [](std::string t) { for (char& c : t) if (c == ' ' || c == '"') c = '_'; return t.empty() ? std::string("-") : t; };
+        auto phase = [](kc::JoinPhase p) { return p == kc::JoinPhase::Saving ? "saving" : p == kc::JoinPhase::Loading ? "loading" : "editor"; };
+        if (const kc::JoinQueueMsg* q = s.queueStatus())
+            o << " queue=" << int(q->position) << '/' << int(q->total) << " queueWait=" << word(q->current) << " queuePhase=" << phase(q->phase);
+        else if (s.isHost()) {
+            std::string list;
+            for (const auto& e : s.joinQueue()) list += (list.empty() ? "" : ",") + word(e.name) + ':' + (e.waiting ? "wait" : phase(e.phase));
+            o << " queue=" << (list.empty() ? "-" : list);
+        } else o << " queue=-";
+        o << " busy=" << kenshi::SaveManagerBusy() << " error=\"" << s.lastError() << "\"";
         return o.str();
     }
     if (cmd == "load") {
@@ -354,6 +411,99 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         snprintf(b, sizeof(b), "ok on-ground %s %.1f,%.1f,%.1f", st.templateSid.c_str(), p.x, p.y, p.z);
         return b;
     }
+    if (cmd == "uidrop") {   // uidrop <squadIndex> <weapon|armour|item|sid|name_part>: drop it as the inventory window does (Inventory::dropItem)
+        size_t idx = 0;
+        std::string kind;
+        in >> idx >> kind;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size() || kind.empty()) return "err usage: uidrop <squadIndex> <weapon|armour|item|sid>";
+        kenshi::Character* c = w.FindSquad(squad[idx]);
+        void* item = kenshi::FindItemOfKind(c, kind);
+        if (!item) return "err no " + kind + " carried";
+        kc::ItemState st;
+        kenshi::DescribeInventoryItem(item, st);
+        // no HostCallScope: the hooks see it as the player's own drop (a client asks the host)
+        if (!kenshi::InventoryDrop(kenshi::InventoryOfHolder(c), item)) return "err drop failed";
+        if (!s.isHost()) return "ok asked " + st.templateSid + " x" + std::to_string(st.quantity);
+        kc::Handle ih;
+        kc::Vec3 p;
+        if (!kenshi::ItemInWorld(item) || !kenshi::DescribeGroundItem(item, ih, st, p)) return "err not in the world after the drop";
+        char b[220];
+        snprintf(b, sizeof(b), "ok %s %s %d %.1f,%.1f,%.1f", Key(ih).c_str(), st.templateSid.c_str(), st.quantity, p.x, p.y, p.z);
+        return b;
+    }
+    if (cmd == "fetchitem") {   // fetchitem <squadIndex> <weapon|armour|sid>: (host) one from another squad member (worn or not) into its bag
+        size_t idx = 0;
+        std::string kind;
+        in >> idx >> kind;
+        if (!s.isHost()) return "err host only";
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        kenshi::Character* to = w.FindSquad(squad[idx]);
+        if (void* mine = kenshi::FindItemOfKind(to, kind)) {
+            kc::ItemState st;
+            kenshi::DescribeInventoryItem(mine, st);
+            if (st.section == "main") return "ok " + st.templateSid + " (already carried)";
+        }
+        HostCallScope scope;
+        for (size_t j = 0; j < squad.size(); ++j) {
+            if (j == idx) continue;
+            kenshi::Character* from = w.FindSquad(squad[j]);
+            void* it = kenshi::FindItemOfKind(from, kind);
+            kc::InvOp op;
+            if (!it || !kenshi::DescribeInventoryItem(it, op.item)) continue;
+            op.toSection = "main";
+            op.toX = op.toY = -1;
+            std::string e;
+            if (kenshi::MoveInventoryItem(from, to, op, &e)) return "ok " + op.item.templateSid + " from squad" + std::to_string(j);
+        }
+        return "err no " + kind + " to fetch";
+    }
+    if (cmd == "groundall") {   // groundall <radius> [squadIndex]: items lying in the world around it, "key|sid|qty|x,y,z"
+        float radius = 500;
+        size_t sel = 0;
+        in >> radius >> sel;
+        auto squad = SortedSquad(w);
+        kc::Vec3 base;
+        if (sel >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[sel]), base)) return "err no squad";
+        std::vector<void*> items;
+        kenshi::WorldItemsNear(base, radius, items);
+        std::string out = "ok " + std::to_string(items.size());
+        for (void* it : items) {
+            kc::Handle ih;
+            kc::ItemState st;
+            kc::Vec3 p;
+            if (!kenshi::DescribeGroundItem(it, ih, st, p)) continue;
+            char b[200];
+            snprintf(b, sizeof(b), " %s|%s|%d|%.1f,%.1f,%.1f", Key(ih).c_str(), st.templateSid.c_str(), st.quantity, p.x, p.y, p.z);
+            out += b;
+            if (out.size() > 6000) break;
+        }
+        return out;
+    }
+    if (cmd == "groundcopy") {   // groundcopy <hostItemKey>: (client) our copy of that host item: "key|sid|qty|x,y,z" or "none"
+        std::string k;
+        in >> k;
+        kc::Handle ih;
+        sscanf(k.c_str(), "%u:%u:%u:%u:%u", &ih.type, &ih.container, &ih.containerSerial, &ih.index, &ih.serial);
+        void* item = kenshi::ResolveItem(w.GroundCopyOf(ih));
+        kc::Handle h2;
+        kc::ItemState st;
+        kc::Vec3 p;
+        if (!item || !kenshi::ItemInWorld(item) || !kenshi::DescribeGroundItem(item, h2, st, p)) return "ok none";
+        char b[200];
+        snprintf(b, sizeof(b), "ok %s|%s|%d|%.1f,%.1f,%.1f", Key(h2).c_str(), st.templateSid.c_str(), st.quantity, p.x, p.y, p.z);
+        return b;
+    }
+    if (cmd == "groundstats") {   // groundstats: drop / pickup bookkeeping counters (plugin/ground.cpp)
+        const auto g = w.GroundCounters();
+        char b[300];
+        snprintf(b, sizeof(b), "ok hookDrops=%llu scanDrops=%llu scanGone=%llu scanChanged=%llu repeatsSkipped=%llu created=%llu matched=%llu repeats=%llu merged=%llu removed=%llu",
+                 (unsigned long long)g.hookDrops, (unsigned long long)g.scanDrops, (unsigned long long)g.scanGone, (unsigned long long)g.scanChanged,
+                 (unsigned long long)g.repeatsSkipped, (unsigned long long)g.created, (unsigned long long)g.matched, (unsigned long long)g.repeats,
+                 (unsigned long long)g.merged, (unsigned long long)g.removed);
+        return b;
+    }
     if (cmd == "stats") {   // stats <squadIndex>: its skill levels, comma separated
         size_t idx = 0;
         in >> idx;
@@ -466,6 +616,121 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         const auto v = s.factionsView();
         return "ok received=" + std::to_string(v.received) + " bounties=" + std::to_string(v.bountiesReceived) + " corrected=" +
                std::to_string(v.corrected) + " sent=" + std::to_string(v.sent);
+    }
+    // ---- diplomacy: relations between factions, unique characters, towns
+    if (cmd == "diplo" || cmd == "diplopair" || cmd == "setdiplopair" || cmd == "unique" || cmd == "setunique" || cmd == "town" ||
+        cmd == "settownowner" || cmd == "diplosync") {
+        // diplo: wars/alliances between factions, unique characters, towns: counts and fingerprints
+        // diplopair <A> <B>: A toward B and back; setdiplopair <A> <B> <value> [war|ally|peace|none]: both ways
+        // unique <name part>: state (0 dead, 1 alive, 2 imprisoned) and by-player flag; setunique <part> <state> [player]
+        // town <name part>: owner and override; settownowner <town part> <faction part>
+        // diplosync: Diplomacy parts received, values corrected (client), sent (host)
+        if (cmd == "diplosync") {
+            const auto v = s.diplomacyView();
+            return "ok received=" + std::to_string(v.received) + " corrected=" + std::to_string(v.corrected) + " sent=" + std::to_string(v.sent) +
+                   " pairs=" + std::to_string(v.pairs) + " uniques=" + std::to_string(v.uniques) + " towns=" + std::to_string(v.towns);
+        }
+        kc::DiplomacyState d;
+        if (!w.ReadDiplomacy(d)) return "err no world";
+        auto fnv = [](uint64_t h, const std::string& t) {
+            for (unsigned char c : t) { h ^= c; h *= 1099511628211ull; }
+            h ^= 0xFF;
+            return h * 1099511628211ull;
+        };
+        auto nameOf = [](const std::string& sid) {
+            std::string n;
+            kenshi::TemplateDisplayName(sid, n);
+            return n.empty() ? sid : n;
+        };
+        auto matches = [&](const std::string& sid, const std::string& part) {
+            return sid.find(part) != std::string::npos || nameOf(sid).find(part) != std::string::npos;
+        };
+        if (cmd == "diplo") {
+            uint64_t ph = 1469598103934665603ull, uh = ph, th = ph;
+            size_t flagged = 0, wars = 0, dead = 0, jailed = 0, overridden = 0;
+            for (const auto& p : d.pairs) {
+                if (!p.rel.war && !p.rel.alliance && !p.rel.peace) continue;
+                ++flagged;
+                wars += p.rel.war;
+                ph = fnv(ph, p.from + ">" + p.to + (p.rel.war ? "w" : "") + (p.rel.alliance ? "a" : "") + (p.rel.peace ? "p" : ""));
+            }
+            for (const auto& u : d.uniques) {
+                if (u.state == kc::kUniqueAlive && !u.byPlayer) continue;   // what a missing entry means too
+                dead += u.state == kc::kUniqueDead;
+                jailed += u.state == kc::kUniqueImprisoned;
+                uh = fnv(uh, u.sid + char('0' + u.state) + (u.byPlayer ? "p" : ""));
+            }
+            for (const auto& t : d.towns) {
+                overridden += !t.overrideSid.empty();
+                th = fnv(th, t.sid + "|" + t.ownerSid + "|" + t.overrideSid);
+            }
+            char b[300];
+            snprintf(b, sizeof(b), "ok pairs=%zu flagged=%zu wars=%zu ph=%016llx uniques=%zu dead=%zu jailed=%zu uh=%016llx towns=%zu overridden=%zu th=%016llx",
+                     d.pairs.size(), flagged, wars, (unsigned long long)ph, d.uniques.size(), dead, jailed, (unsigned long long)uh, d.towns.size(),
+                     overridden, (unsigned long long)th);
+            return b;
+        }
+        std::string a, b2, extra;
+        in >> a;
+        std::replace(a.begin(), a.end(), '_', ' ');
+        if (cmd == "diplopair" || cmd == "setdiplopair") {
+            float value = 0;
+            in >> b2 >> value >> extra;
+            std::replace(b2.begin(), b2.end(), '_', ' ');
+            // factions by name part, from every faction the game knows (the pairs list them all)
+            std::string sa, sb;
+            for (const auto& p : d.pairs) {
+                if (sa.empty() && matches(p.from, a)) sa = p.from;
+                if (sb.empty() && matches(p.from, b2)) sb = p.from;
+            }
+            if (sa.empty() || sb.empty() || sa == sb) return "err no such factions";
+            if (cmd == "setdiplopair") {
+                kc::RelationState r;
+                for (const auto& p : d.pairs) if (p.from == sa && p.to == sb) r = p.rel;
+                r.relation = value;
+                r.war = extra == "war";
+                r.alliance = extra == "ally";
+                r.peace = extra == "peace";
+                return w.SetFactionPair(sa, sb, r) ? "ok " + nameOf(sa) + " / " + nameOf(sb) + " set" : "err not set";
+            }
+            std::string out = "ok " + nameOf(sa) + " / " + nameOf(sb);
+            for (const auto& p : d.pairs) {
+                if (!((p.from == sa && p.to == sb) || (p.from == sb && p.to == sa))) continue;
+                char t[96];
+                snprintf(t, sizeof(t), " %s=%.0f%s%s%s", p.from == sa ? "ab" : "ba", double(p.rel.relation), p.rel.war ? ",war" : "",
+                         p.rel.alliance ? ",ally" : "", p.rel.peace ? ",peace" : "");
+                out += t;
+            }
+            return out;
+        }
+        if (cmd == "unique" || cmd == "setunique") {
+            int state = -1;
+            in >> state >> extra;
+            for (const auto& u : d.uniques) {
+                if (!matches(u.sid, a)) continue;
+                if (cmd == "setunique") {
+                    if (state < 0 || state > 2) return "err state 0..2";
+                    return w.SetUniqueState(u.sid, uint8_t(state), extra == "player") ? "ok " + nameOf(u.sid) + " set" : "err not set";
+                }
+                return "ok " + nameOf(u.sid) + " sid=" + u.sid + " state=" + std::to_string(u.state) + " player=" + (u.byPlayer ? "1" : "0");
+            }
+            return "err no such unique character";
+        }
+        // towns
+        in >> b2;
+        std::replace(b2.begin(), b2.end(), '_', ' ');
+        for (const auto& t : d.towns) {
+            if (!matches(t.sid, a)) continue;
+            if (cmd == "settownowner") {
+                std::string fs;
+                for (const auto& p : d.pairs) if (fs.empty() && matches(p.from, b2)) fs = p.from;
+                if (fs.empty()) return "err no such faction";
+                return w.SetTownOwner(t.sid, fs) ? "ok " + nameOf(t.sid) + " now " + nameOf(fs) : "err not set";
+            }
+            return "ok " + nameOf(t.sid) + " sid=" + t.sid + " owner=" + (t.ownerSid.empty() ? "-" : nameOf(t.ownerSid)) +
+                   " override=" + (t.overrideSid.empty() ? "-" : t.overrideSid);
+        }
+        return "err no such town";
     }
     if (cmd == "money") {   // money [set]: the player faction's cats (host: set them)
         int32_t m = 0;
@@ -697,18 +962,125 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         const bool on = kenshi::ReadCombat(w.FindSquad(squad[idx]), t);
         return std::string("ok ") + (on ? "1 " + Key(t) : "0");
     }
-    if (cmd == "selectset") {   // selectset <i> [<j>...]: the player's selection becomes those squad members (as clicks would)
+    if (cmd == "selectset") {   // selectset <i> [<j>...]: the player's selection becomes exactly those squad members (as clicks would)
         auto squad = SortedSquad(w);
-        void* pi = kenshi::Player();
-        if (!pi) return "err";
-        reinterpret_cast<void (*)(void*)>(kenshi::FnAddr(kenshi::FnUnselectAll))(pi);
-        size_t i = 0, n = 0;
+        if (!kenshi::Player()) return "err";
+        std::vector<kenshi::Character*> want;
+        size_t i = 0;
         while (in >> i)
-            if (i < squad.size()) {
-                reinterpret_cast<void (*)(void*, void*, bool)>(kenshi::FnAddr(kenshi::FnObjectSelected))(pi, w.FindSquad(squad[i]), true);
-                ++n;
+            if (i < squad.size())
+                if (kenshi::Character* c = w.FindSquad(squad[i])) want.push_back(c);
+        std::string why;
+        // unselectAll keeps the main selected character: SelectExactly takes it out when it is not wanted
+        if (!kenshi::SelectExactly(want, &why)) return "err " + why;
+        return "ok " + std::to_string(want.size());
+    }
+    // ---- actor safety
+    if (cmd == "selected") {   // selected: squad indices (this machine's order) of the player's selection, sorted
+        auto squad = SortedSquad(w);
+        std::vector<kc::Handle> sel;
+        kenshi::SelectedHandles(sel);
+        std::vector<size_t> idx;
+        size_t other = 0;
+        for (const auto& h : sel) {
+            auto it = std::find(squad.begin(), squad.end(), h);
+            if (it != squad.end()) idx.push_back(size_t(it - squad.begin()));
+            else ++other;
+        }
+        std::sort(idx.begin(), idx.end());
+        std::string out = "ok";
+        for (size_t k : idx) out += " " + std::to_string(k);
+        if (other) out += " +" + std::to_string(other);
+        return out;
+    }
+    if (cmd == "charstate") {   // charstate <squadIndex>: tasks=<task system> jobs=<Tâches> in=<0 nothing,1 bed,2 cage> dialog=<0/1> pos=x,z
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        kenshi::Character* c = w.FindSquad(squad[idx]);
+        kc::Vec3 p;
+        if (!c || !kenshi::GetPosition(c, p)) return "err";
+        int inside = -1;
+        kenshi::ReadInSomething(c, inside);
+        void* d = kenshi::CharacterDialogue(c);
+        const bool talking = d && kenshi::DialogueTarget(d) != nullptr;
+        char b[200];
+        snprintf(b, sizeof(b), "ok tasks=%zu jobs=%d in=%d dialog=%d pos=%.1f,%.1f", kenshi::LocalTaskCount(c), kenshi::PermajobCount(c), inside,
+                 talking ? 1 : 0, p.x, p.z);
+        return b;
+    }
+    if (cmd == "actorstats") {   // actorstats: (host) refusals of client requests, refusals for their target, leaks, selection restore failures
+        char b[200];
+        snprintf(b, sizeof(b), "ok refused=%u target=%d leaks=%d restorefail=%d", unsigned(s.actorRefusals()), w.targetRefusals(), ActorLeaks(),
+                 kenshi::SelectionRestoreFailures());
+        return b;
+    }
+    if (cmd == "results") {   // results: (client) answers of the host: rejected count, then the last ones as seq:state:reason
+        std::string out = "ok " + std::to_string(s.rejectedCount());
+        const auto& r = s.results();
+        for (size_t k = r.size() > 12 ? r.size() - 12 : 0; k < r.size(); ++k)
+            out += " " + std::to_string(r[k].seq) + ":" + std::to_string(int(r[k].state)) + ":" + std::to_string(int(r[k].reason));
+        return out;
+    }
+    if (cmd == "forgeorder") {
+        // forgeorder <actorIndex> <via> <task> <subject>: (client) an order sent to the host as is, without
+        // our own checks: a forged request. actorIndex: squad index (any owner). subject: none, self,
+        // squad<i>, npc (nearest living NPC), item (nearest loose item), building (nearest building)
+        size_t idx = 0;
+        int via = 0, task = 0;
+        std::string subj = "none";
+        in >> idx >> via >> task >> subj;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[idx]);
+        kc::Vec3 mp, p;
+        if (!me || !kenshi::GetPosition(me, mp)) return "err";
+        const kc::Handle hostHandle = w.HostHandleOf(squad[idx]);
+        uint32_t netId = 0;
+        s.ForEachEntity([&](uint32_t id, const kc::Handle& h, uint8_t, bool, bool) { if (h == hostHandle) netId = id; });
+        if (!netId) return "err that character is not followed";
+        kc::Command c;
+        c.netId = netId;
+        c.kind = via == 0 ? kc::CommandKind::MoveTo : kc::CommandKind::Task;
+        c.via = kc::TaskVia(via ? via : 1);
+        c.task = task;
+        c.pos = mp;
+        void* o = nullptr;
+        if (subj == "self") o = me;
+        else if (subj.rfind("squad", 0) == 0) {
+            const size_t k = size_t(std::atoi(subj.c_str() + 5));
+            if (k < squad.size()) o = w.FindSquad(squad[k]);
+        } else if (subj == "npc") {
+            std::vector<kenshi::Character*> all;
+            kenshi::ActiveCharacters(all);
+            float best = 1e30f;
+            for (kenshi::Character* ch : all) {
+                kc::Handle h;
+                if (!kenshi::GetHandle(ch, h) || w.FindSquad(h) || kenshi::IsDead(ch) || kenshi::IsDown(ch) || !kenshi::GetPosition(ch, p)) continue;
+                const float d = (p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z);
+                if (d < best) { best = d; o = ch; }
             }
-        return "ok " + std::to_string(n);
+        } else if (subj == "item" || subj == "building") {
+            std::vector<void*> objs;
+            if (subj == "item") kenshi::LooseItemsNear(mp, 400.0f, objs);
+            else kenshi::ObjectsNear(mp, 600.0f, objs);
+            float best = 1e30f;
+            for (void* ob : objs) {
+                if (!kenshi::ObjectPosition(ob, p)) continue;
+                const float d = (p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z);
+                if (d < best) { best = d; o = ob; }
+            }
+        } else if (subj != "none") {
+            return "err unknown subject kind";
+        }
+        if (subj != "none" && !o) return "err no such subject around";
+        if (o) {
+            kc::Handle sh;
+            if (kenshi::ObjectHandle(o, sh)) c.subject = kenshi::IsCharacter(o) ? w.HostHandleOf(sh) : sh;
+            if (!kenshi::IsCharacter(o)) { kenshi::ObjectTemplate(o, c.itemSid); kenshi::ObjectPosition(o, c.subjectPos); }
+        }
+        return s.SendRawCommandForTest(c) ? "ok netId=" + std::to_string(netId) : "err not connected";
     }
     if (cmd == "selorder") {   // selorder <standingOrder>: the squad bar's toggle on the current selection, as a click does
         int order = 0;

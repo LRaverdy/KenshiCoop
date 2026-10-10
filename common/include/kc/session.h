@@ -94,8 +94,14 @@ public:
     virtual void Apply(const Handle& h, const EntityState& target, const EntityState& latest) = 0;
     virtual void ApplyVitals(const Handle& h, const EntityVitals& v) = 0;
 
-    // Host side: execute an order for a character (issued by a client).
+    // Host side: execute an order for a character (issued by a client), on exactly that character:
+    // never on the host's selection, a fallback or the nearest one (false: refused or failed).
     virtual bool Order(const Handle& h, const Command& c) = 0;
+    // Host side: why the last Order was refused (French, for the player, and the reason); empty when
+    // it was not refused.
+    virtual std::string TakeOrderRefusal(ResultReason& reason) { reason = ResultReason::None; return {}; }
+    // Client side: the host rejected an order of ours for character `h` (undo what we predicted).
+    virtual void OrderRejected(const Handle& h, const Command& c) { (void)h; (void)c; }
     // Host side: a character whose player just left or lost their connection stops what it was
     // doing (walk, task, pending pick up) and stays where it is.
     virtual void HaltCharacter(const Handle& h) { (void)h; }
@@ -220,6 +226,12 @@ public:
     virtual size_t ApplyFactions(const FactionsMsg& m) { (void)m; return 0; }
     virtual bool ReadBounties(const Handle& h, CharBounties& out) { (void)h; out = CharBounties{}; return false; }
     virtual size_t ApplyBounties(const Handle& h, const CharBounties& b) { (void)h; (void)b; return 0; }
+    // ---- diplomacy. Host: relations between every two factions that are not the player's, the
+    // unique characters' states, the towns. Client: impose the host's (returns values changed here).
+    virtual bool ReadDiplomacy(DiplomacyState& out) { out = DiplomacyState{}; return false; }
+    virtual size_t ApplyFactionPairs(const std::vector<FactionPairRelation>& pairs) { (void)pairs; return 0; }
+    virtual size_t ApplyUniques(const std::vector<UniqueState>& uniques) { (void)uniques; return 0; }
+    virtual size_t ApplyTowns(const std::vector<TownState>& towns) { (void)towns; return 0; }
     // ---- fix G5: the job list (Tâches panel) of a character, by kind in order. Host: read it.
     // Client: remove from ours the jobs the host's no longer has.
     virtual bool ReadJobs(const Handle& h, std::vector<int32_t>& jobs) { (void)h; jobs.clear(); return false; }
@@ -239,6 +251,10 @@ public:
     // keep a caged character where the cage holds it.
     virtual bool ReadCaptive(const Handle& h, CaptiveState& out) { (void)h; (void)out; return false; }
     virtual void ApplyCaptive(const Handle& h, const CaptiveState& s) { (void)h; (void)s; }
+    // ---- map: hostile squads for the players' maps (host). Raid parties whose campaign targets the
+    // player faction (anywhere they are loaded), squads fighting a player character, and squads the
+    // game marks as enemies within `radius` of one of `centers`. At most kMaxMapThreats.
+    virtual void ReadMapThreats(const std::vector<Vec3>& centers, float radius, std::vector<MapThreat>& out) { (void)centers; (void)radius; out.clear(); }
     // ---- lot C: ranged combat. Host: the shots its game fired since the last call (fired on any
     // thread; the world queues them); where a character in ranged combat aims (false: not in it);
     // turrets near these points and where they aim. Client: fire the host's shot here (visual only:
@@ -406,6 +422,12 @@ public:
     // client (diagnostics): newest state received from the host and the state being rendered now
     bool TargetOf(const Handle& h, EntityState& latest, EntityState& rendered) const;
     size_t joiningPlayers() const;                            // host: players still loading the world
+    // Host: the join queue, the player whose turn it is first (phase: what they are doing;
+    // waiting: still in the queue).
+    struct QueueEntry { uint8_t id = 0; std::string name; bool waiting = true; JoinPhase phase = JoinPhase::Saving; };
+    std::vector<QueueEntry> joinQueue() const;
+    // Client: our place in the host's join queue (nullptr: not waiting in it).
+    const JoinQueueMsg* queueStatus() const { return queued_ ? &queue_ : nullptr; }
     // Client: the conversation window of one of our characters (open = false: none).
     struct DialogView {
         bool open = false;
@@ -440,6 +462,14 @@ public:
     // ---- lot B: factions (tests): messages received / values corrected here (client), sent (host)
     struct FactionsView { size_t received = 0, bountiesReceived = 0, corrected = 0, sent = 0; };
     FactionsView factionsView() const { return factionsView_; }
+    // ---- diplomacy (tests): parts received / values corrected (client), sent (host), pairs that
+    // changed since the host started (host: tracked; client: received)
+    struct DiplomacyView { size_t received = 0, corrected = 0, sent = 0, pairs = 0, uniques = 0, towns = 0; };
+    DiplomacyView diplomacyView() const;
+    // the host's diplomacy as this side knows it (host: its last read; client: what it received)
+    const DiplomacyState& hostDiplomacy() const { return hostDiplo_; }
+    const FactionsMsg& hostFactions() const { return hostFactions_; }      // client: the host's relations (host: last sent)
+    const BountiesMsg& hostBounties() const { return hostBounties_; }      // client: the host's bounties (host: last sent)
     // ---- lot A: doors (tests): doors sent (host) / known and applied here (client)
     size_t doorsKnown() const { return isHost() ? doorsSent_.size() : clientDoors_.size(); }
     size_t doorsApplied() const { return doorsApplied_; }
@@ -454,6 +484,40 @@ public:
     // client: those the host told us about), and how many are found here.
     size_t buildingCount() const { return buildings_.size(); }
     size_t buildingsResolved() const;
+    // ---- actor safety and authority (session_authority.cpp). The one rule for every client request the
+    // host runs (orders, containers, looks, item drops): the character that acts (the actor, named in
+    // the request) must be a squad member assigned to that very player. Never the host's, another
+    // player's, an NPC, an unknown one; and nothing is ever run on another character instead. Every
+    // client->host message goes through Authorize (its MessageRule) before its handler; the client
+    // filters what it sends with the same rules.
+    enum class ActorVerdict : uint8_t { Ok, Missing, Unknown, NotSquad, NotOwned };
+    ActorVerdict CheckActor(uint8_t player, uint32_t actorNetId) const;
+    static const char* VerdictText(ActorVerdict v);
+    uint32_t actorRefusals() const { return actorRefusals_; }   // host: requests refused (all rules)
+    uint32_t rateLimited() const { return rateLimited_; }       // host: messages dropped by a rule's minInterval
+    double recentRefusals(uint8_t player) const;                // host: refusals of that player, decaying (half-life 60 s)
+    // client: the host's answers received (newest last, at most 64), and how many rejected
+    const std::deque<Result>& results() const { return results_; }
+    uint32_t rejectedCount() const { return rejected_; }
+    // tests: a message as if player `playerId` had sent it (forged requests); false: no such player
+    bool InjectForTest(uint8_t playerId, const Writer& w);
+    // tests (client): send this order as is, without our own checks (a forged request)
+    bool SendRawCommandForTest(Command c);
+    // ---- map (session_map.cpp). Markers: built here (host) or received (client) a few times a
+    // second; age in seconds (a large value: none yet). Pings: the live ones, oldest first; PlaceMapPing()
+    // puts one for the local player (false: too soon after the last one, or not in a session).
+    const MapMarkersMsg& mapMarkers() const { return mapMarkers_; }
+    double mapMarkersAge() const;
+    struct LivePing {
+        MapPingMsg ping;
+        double at = 0;      // when it appeared here (session clock)
+    };
+    const std::vector<LivePing>& pings() const { return pings_; }
+    double pingAge(const LivePing& p) const;
+    bool PlaceMapPing(const Vec3& pos, PingKind kind);
+    bool netIdHandle(uint32_t netId, Handle& out) const;   // the character a map marker names
+    static constexpr double kPingLife = 10.0, kPingInterval = 0.5;
+    static constexpr size_t kPingsPerPlayer = 5;
 
 private:
     struct Sample { double t; EntityState s; };
@@ -519,6 +583,11 @@ private:
         std::unordered_map<uint32_t, Sent> sent;
         bool worldSent = false;              // the world save was streamed to this player
         double joinedAt = 0;
+        double worldSentAt = 0;              // when it was streamed (the loading deadline runs from there)
+        double turnStartedAt = -1;           // their turn in the join queue began (-1: still queued)
+        double inGameAt = 0;                 // FinishJoin
+        bool editorExpected = false;         // asked to make their character (EditCharacter sent)
+        bool editorSeen = false;             // ... and their editor opened
         uint64_t readyHash = 0;              // pending Ready to verify on the next live tick
         bool readyPending = false;
         bool kicked = false;
@@ -560,6 +629,24 @@ private:
     RemotePlayer* playerByPeer(PeerId p);
     Entity* entityByHandle(const Handle& h);
     void ApplyCommand(uint8_t from, const Command& c);
+    // host: the message's rule (role, subject) before its handler; a refusal is logged, counted and answered
+    bool Authorize(RemotePlayer& pl, Msg type, Reader r);
+    // host: CheckActor at the time the request runs; refused: logged, counted, answered (Result)
+    bool AdmitActor(uint8_t player, uint32_t actorNetId, const std::string& request, Msg type = Msg::Command, uint32_t seq = 0);
+    void Refuse(uint8_t player, Msg type, uint32_t seq, uint32_t netId, ResultReason reason, const std::string& rule, const std::string& detail,
+                const std::string& french);
+    void SendResult(uint8_t player, const Result& m);
+    bool ClientMaySend(Msg type, uint32_t netId, const char* what);   // client: the same rule, before sending
+    void OnResult(const Result& m);                                     // client
+    uint32_t actorRefusals_ = 0;
+    struct Decaying { double value = 0, at = 0; };
+    std::map<std::pair<uint8_t, std::string>, Decaying> refusals_;   // host: per player and rule
+    std::map<std::pair<uint8_t, Msg>, double> lastAccepted_;        // host: when each player's message of a rate-limited rule last passed
+    uint32_t rateLimited_ = 0;                                        // host: messages dropped for coming too often
+    std::deque<Result> results_;                                      // client
+    uint32_t rejected_ = 0;
+    double nextResultNote_ = 0;
+    std::map<uint32_t, std::pair<Handle, Command>> sentOrders_;      // client: seq -> order, until answered (64 kept)
     EntityState Interpolate(const Entity& e, double renderTime) const;
 
     IWorld& world_;
@@ -670,6 +757,14 @@ private:
     void ClientBags(double now);
     double nextClientBags_ = 0;
     const Entity* Wearer(const Entity& e) const;   // a bag's wearer, else the entity itself (null: unknown wearer)
+    static constexpr float kDropReach = 160.0f;   // a drop from a chest or a body: the dropping character stands this close (a looter's reach x 2)
+    uint32_t DropActor(uint32_t netId) const;      // who drops an item from that inventory: a worn bag's wearer, else netId itself
+    // A drop to the ground names the character that drops it (actor safety). From a squad character or
+    // the backpack one wears (SelfDrop): that character (DropActor). From anything else (a chest one has
+    // open, a body, an NPC's backpack): InvOp::toNetId, a character of that player standing by it.
+    bool SelfDrop(uint32_t netId) const;
+    uint32_t DropRequestActor(const InvOp& op) const { return SelfDrop(op.fromNetId) ? DropActor(op.fromNetId) : op.toNetId; }
+    bool DropSourcePos(const Entity& e, Vec3& out);   // where that inventory is (a chest's place, a character's or a wearer's position)
     std::map<uint8_t, double> lastDialogAnswer_;   // host: when each player last answered a conversation
     bool squadKnown_ = false;                      // host: the squad was listed once (later arrivals are newcomers)
     void EndTrade(uint8_t player, const std::string& reason);   // host: close it (reason shown to the player)
@@ -705,6 +800,25 @@ private:
     BountiesMsg hostBounties_;
     bool haveFactions_ = false, haveBounties_ = false, factionsDirty_ = false;
     FactionsView factionsView_;
+    // French lines for the event list when relations or bounties change (both sides, from two
+    // successive versions of the host's; nothing on the first one)
+    void NoteFactionChanges(const FactionsMsg& before, const FactionsMsg& after);
+    void NoteBountyChanges(const BountiesMsg& before, const BountiesMsg& after);
+    // ---- diplomacy (session_diplomacy.cpp)
+    void SendDiplomacy(double now);                    // host: every few seconds, the parts that changed
+    void ClientDiplomacyTick(double now);              // client: impose the host's, now and then
+    bool ClientDiplomacyPacket(Msg type, Reader& r);   // client: Diplomacy (true: handled)
+    void ResetDiplomacy();
+    void NoteDiplomacyChanges(const DiplomacyState& before, const DiplomacyState& after);
+    double nextDiplo_ = 0, nextDiploApply_ = 0;
+    bool diploBaseline_ = false;                       // host: the pairs as they were when it started
+    std::map<std::pair<std::string, std::string>, RelationState> diploBase_;
+    std::map<std::pair<std::string, std::string>, RelationState> diploChanged_;   // host: pairs that changed since
+    uint64_t diploHash_[3] = {0, 0, 0};
+    std::set<PeerId> diploServed_;                     // host: players who got every part
+    DiplomacyState hostDiplo_;                         // host: last read; client: the host's (pairs: the changed ones)
+    bool haveDiplo_[3] = {false, false, false}, diploDirty_ = false;
+    DiplomacyView diploView_;
     // ---- lot A: doors and locks. Host: what each door near the players looked like when last sent
     // (key: kind and place); door buttons clients clicked. Client: the host's doors, applied (and
     // re-applied now and then: a door of a zone that was not loaded yet, a local change).
@@ -742,6 +856,19 @@ private:
     void HostCaptives(double now);
     void ClientCaptives(double now);
     void OnCaptives(Reader& r);
+    // ---- map (session_map.cpp)
+    MapMarkersMsg mapMarkers_;
+    double mapMarkersAt_ = -1e9, nextMapMarkers_ = 0;
+    std::vector<LivePing> pings_;
+    std::map<uint8_t, double> lastPingAt_;   // per player (host); [0]: ours (client)
+    uint32_t nextPingId_ = 1;
+    std::vector<Vec3> scratchCenters_;
+    void HostMapMarkers(double now);
+    void HostPingPacket(uint8_t from, Reader& r);
+    void ClientMapPacket(Msg type, Reader& r);
+    void AddPing(const MapPingMsg& m);   // host: also shown to every player
+    void PrunePings(double now);
+    void ResetMap();
     // ---- lot C: ranged combat (session_ranged.cpp). Host: shots go out as they are fired, aims a few
     // times a second when they change. Client: fired / imposed on the next live tick.
     void HostRanged(double now);
@@ -807,6 +934,18 @@ private:
     std::vector<WorldFile> exportFiles_;
     bool exportReady_ = false;
     uint64_t exportHash_ = 0;
+
+    // host join queue: one player at a time joins (save, download, load, character editor)
+    std::deque<uint8_t> joinQueue_;   // waiting their turn, first come first served
+    uint8_t joinTurn_ = 0;            // the player whose turn it is (0: none)
+    std::string queueSig_;            // what the queued players were last told
+    double queueSentAt_ = -1e9;
+    void AdvanceJoinQueue(double now);
+    void SendJoinQueue(double now);
+    JoinPhase TurnPhase() const;
+    // client: our place in the host's join queue
+    JoinQueueMsg queue_;
+    bool queued_ = false;
 
     // client world download
     WorldBegin dlInfo_;

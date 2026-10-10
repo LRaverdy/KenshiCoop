@@ -105,6 +105,16 @@ public:
     size_t ApplyFactions(const kc::FactionsMsg& m) override;
     bool ReadBounties(const kc::Handle& h, kc::CharBounties& out) override;
     size_t ApplyBounties(const kc::Handle& h, const kc::CharBounties& b) override;
+    // ---- diplomacy (plugin/factions.cpp): relations between factions, unique characters, towns
+    bool ReadDiplomacy(kc::DiplomacyState& out) override;
+    size_t ApplyFactionPairs(const std::vector<kc::FactionPairRelation>& pairs) override;
+    size_t ApplyUniques(const std::vector<kc::UniqueState>& uniques) override;
+    size_t ApplyTowns(const std::vector<kc::TownState>& towns) override;
+    // tests (debug commands): one faction toward another, set both ways; a unique character's state; a
+    // town's owner (the host's game, as the game itself would change them)
+    bool SetFactionPair(const std::string& fromSid, const std::string& toSid, const kc::RelationState& rel);
+    bool SetUniqueState(const std::string& sid, uint8_t state, bool byPlayer);
+    bool SetTownOwner(const std::string& townSid, const std::string& factionSid);
     // ---- lot A: doors and locks (plugin/doors.cpp)
     void ReadDoors(const std::vector<kc::Vec3>& centers, float radius, std::vector<kc::DoorState>& out) override;
     bool ContainerLocked(const kc::Handle& container) override;
@@ -116,6 +126,8 @@ public:
     // ---- end lot A
     // ---- lot D: prisons (plugin/prisons.cpp)
     bool ReadCaptive(const kc::Handle& h, kc::CaptiveState& out) override;
+    // ---- map markers (plugin/map.cpp): hostile squads near the players (host)
+    void ReadMapThreats(const std::vector<kc::Vec3>& centers, float radius, std::vector<kc::MapThreat>& out) override;
     void ApplyCaptive(const kc::Handle& h, const kc::CaptiveState& s) override;
     bool CaptiveHold(const kc::Handle& h, kenshi::Character* c);   // client: the host keeps it in a cage here
     // Hooks (host): the game asked for a trade window for another player's character (any thread);
@@ -177,6 +189,14 @@ public:
     void ApplySquads(const std::vector<WorldSquad>& squads) override;
     void ApplyMoney(int32_t money) override { kenshi::WritePlayerMoney(money); }
     bool Order(const kc::Handle& h, const kc::Command& c) override;
+    std::string TakeOrderRefusal(kc::ResultReason& reason) override {
+        reason = orderRefusal_.empty() ? kc::ResultReason::None : orderRefusalReason_;
+        return std::exchange(orderRefusal_, std::string{});
+    }
+    void OrderRejected(const kc::Handle& h, const kc::Command& c) override;
+    // host: what a client order's subject is (kc::TargetFlags); orders refused for their target
+    uint32_t TargetFlagsOf(kenshi::Character* actor, void* subject, bool named);
+    int targetRefusals() const { return targetRefusals_; }
     void HaltCharacter(const kc::Handle& h) override;
     void TakeLocalOrders(std::vector<std::pair<kc::Handle, kc::Command>>& out) override;
     bool ReadInventory(const kc::Handle& h, std::vector<kc::ItemState>& out) override;
@@ -192,6 +212,15 @@ public:
     void TakeGroundEvents(std::vector<kc::GroundEvent>& out) override;
     void ApplyGround(const kc::GroundEvent& e) override;
     void NoteGround(kc::GroundEvent e);   // host: a hook saw an item dropped / picked up (any thread)
+    void NoteItemDropped(void* item);     // host: a drop hook put this item into the world (any thread)
+    // Client (game thread, EndFrame): a copy we made of a host item, with the same thing from our own
+    // save lying on the same spot (its zone loaded after the host's drop arrived): ours goes.
+    void GroundReconcile();
+    struct GroundStats {   // tests (plugin/ground.cpp)
+        uint64_t hookDrops = 0, scanDrops = 0, scanGone = 0, scanChanged = 0, repeatsSkipped = 0;   // host
+        uint64_t created = 0, matched = 0, repeats = 0, merged = 0, removed = 0;                    // client
+    };
+    GroundStats GroundCounters();
     kc::Handle GroundCopyOf(const kc::Handle& hostItem) const {   // tests (client)
         auto it = groundAlias_.find(hostItem);
         return it != groundAlias_.end() ? it->second : hostItem;
@@ -258,7 +287,8 @@ public:
     void DialogAnswer(uint32_t dialogId, int index) override;
     int saysApplied = 0;          // tests (client): speech bubbles replayed
     std::string lastSay;
-    void QueueLocalDrop(kenshi::Character* c, void* item);   // client: the player dropped it (any thread)
+    // Client: the player dropped it from that character or that building's inventory (any thread).
+    void QueueLocalDrop(void* holder, void* item);
     // Client: the local player wants `looter` (one of its characters) to loot `target`, a knocked-out
     // or dead character. It walks there through the host; the loot window opens once it is close.
     void RequestLoot(const kc::Handle& looter, kenshi::Character* target);
@@ -317,6 +347,9 @@ private:
     std::unordered_map<const void*, double> replicatedAt_;           // client: when Apply last drove each one
     bool ReadyToFall(const kc::Handle& h, kenshi::Character* c, const kc::EntityState& at, double now);
     std::mutex ordersMutex_;
+    std::string orderRefusal_;
+    kc::ResultReason orderRefusalReason_ = kc::ResultReason::None;
+    int targetRefusals_ = 0;   // host: why the last client order was refused for safety (French)
     std::vector<std::pair<kc::Handle, kc::Command>> orders_;
     struct PendingLoot { kc::Handle looter, target; double until; };
     std::vector<PendingLoot> pendingLoot_;   // client, game thread only
@@ -400,7 +433,21 @@ private:   // first few lifecycle events (tests)
     std::mutex groundMutex_;
     std::vector<kc::GroundEvent> groundOut_;                                // host: not sent yet
     std::unordered_map<kc::Handle, kc::Handle, kc::HandleHash> groundAlias_;   // client: host item -> our copy
-    std::vector<std::pair<kenshi::Character*, kc::ItemState>> localDrops_;   // client, under groundMutex_
+    std::vector<std::pair<void*, kc::ItemState>> localDrops_;   // client, under groundMutex_
+    // Host: every item lying near a player's character, as last seen (plugin/ground.cpp). An item
+    // that turns up where a character already stood watching (not one carried into view by a walk or
+    // a zone loading) was dropped by some path no hook saw: it is announced; one that leaves the
+    // ground there was taken; a stack that changes is announced again.
+    struct GroundTrack { kc::ItemState st; kc::Vec3 pos; bool announced = false; double seen = 0; };
+    std::unordered_map<kc::Handle, GroundTrack, kc::HandleHash> groundTrack_;   // under groundMutex_
+    std::vector<kc::Vec3> groundWatch_;                                         // game thread
+    std::unordered_map<const void*, std::pair<kc::Vec3, double>> groundCentre_; // character -> position, settled since
+    double groundScanAt_ = 0, groundSince_ = 0, groundReconcileAt_ = 0;
+    std::unordered_set<kc::Handle, kc::HandleHash> groundMade_;                 // client: copies we created
+    GroundStats groundStats_;                                                   // under groundMutex_
+    void GroundScan(double now);                                                // host, game thread
+    void GroundOutLocked(kc::GroundEvent e);                                    // under groundMutex_
+    void ResetGround();                                                         // world (re)loaded, role changed
     std::vector<kenshi::Character*> edited_;   // characters whose looks the editor just changed
     std::vector<ContainerRequest> containerReqs_;   // client: right clicks on containers, for the host
     // ---- lot A: doors

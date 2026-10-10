@@ -42,10 +42,14 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   - place libre (8 joueurs au plus, hôte compris).
 - **Garde-fous** :
   - l'hôte reste en pause même si quelqu'un appuie sur lecture pendant une arrivée ;
-  - un joueur qui arrive pendant la sauvegarde pour un autre déclenche une nouvelle sauvegarde,
-    qui contient son personnage ;
+  - **file d'attente** : les joueurs arrivent un par un (sauvegarde, téléchargement, chargement,
+    éditeur de personnage). Les autres attendent, connectés, et voient leur place, le joueur en
+    cours et son étape (« File d'attente : position 2/3 — en attente de Joueur2 (création du
+    personnage)… »), mise à jour en direct. L'hôte voit la file dans son panneau. Au tour suivant,
+    une sauvegarde neuve contient tous ceux arrivés avant. Un joueur qui part ou plante pendant
+    son tour passe la main ; un joueur qui quitte la file la fait avancer ;
   - délais : 120 s pour la sauvegarde de l'hôte, 300 s pour le téléchargement et le chargement
-    côté client.
+    côté client, comptés à partir du tour du joueur (l'attente dans la file ne compte pas).
 - **Limites** : tous les joueurs doivent avoir la même version de Kenshi (1.0.68 Steam) et les
   mêmes mods.
 
@@ -279,6 +283,31 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   - 🟡 miner ou utiliser une machine (bug signalé par les amis, corrigé depuis par la recherche
     « type + endroit ») ;
   - 🟡 les autres ordres.
+- **Sécurité des acteurs** 🟡 (tests unitaires ; expérience `actorsafety` pas encore lancée en jeu) :
+  un client ne fait **jamais** agir un personnage qui n'est pas le sien.
+  - Bug signalé en partie réelle : le joueur 2 voulait dormir ou parler à un PNJ, et c'est le perso
+    de l'hôte qui y allait. Cause (désassemblage 1.0.68) : `PlayerInterface::unselectAll` ne vide pas
+    la sélection, il resélectionne le perso « principal » ; et `objectSelected(perso, false)` refuse
+    de retirer le dernier sélectionné. L'hôte, qui sélectionnait « seulement » le perso du client,
+    gardait donc son propre perso principal sélectionné : l'ordre partait aux deux (addOrder,
+    newPlayerTask, addJob, ramasser) ou au plus proche des deux (lit, conversation). Seule une
+    sélection vide chez l'hôte (juste après le chargement, comme dans les tests) était sûre.
+  - Maintenant : la sélection est faite **exactement** des acteurs (le principal gardé par le jeu en
+    est retiré), vérifiée, sinon l'ordre est refusé sans rien exécuter ; puis la sélection, l'escouade
+    affichée, le panneau de détails et le perso principal de l'hôte sont remis, dans le même appel.
+  - Chaque demande d'un client nomme son acteur ; l'hôte vérifie, à un seul endroit, qu'il est à **ce**
+    joueur (ni l'hôte, ni un autre joueur, ni un PNJ, ni inconnu) avant tout traitement. Refus :
+    journal anglais (`refused: actor N not owned by player P`, `auth: [nom] ... refused: ...`),
+    compteur par joueur et par règle, réponse `Result` avec un texte en français affiché au joueur.
+  - Le client ne demande rien pour un perso qui n'est pas le sien : refusé chez lui avec « Action
+    refusée : ce personnage n'est pas le tien. ». Agir **sur** le perso d'un autre (premiers soins,
+    suivre, porter un corps) reste possible : l'acteur est le sien.
+  - **Cible vérifiée** : chaque numéro de tâche qu'un client peut envoyer est confronté à ce qu'est sa
+    cible (construire : un chantier de la faction du joueur ; parler : un PNJ debout ; lit : un lit ;
+    machine : une machine ; attaquer : un autre perso ; porter : un corps ; portes, cages...). Numéro
+    inconnu, cible introuvable, périmée ou du mauvais type : refusé avant les fonctions d'ordre du jeu.
+    Corrige le plantage de l'hôte du test `stress4` (ordre « construire » visant un PNJ, plantage dans
+    `Character::addJob`). Changement d'escouade : seulement vers l'escouade d'un joueur.
 - **Sélection mixte chez l'hôte** (fix G5) : si la sélection de l'hôte contient le perso d'un autre
   joueur, ce perso en est retiré et l'ordre (déplacement, arrêt, mode passif...) part aux persos de
   l'hôte ; avant, l'ordre entier était refusé. Expérience `passive`.
@@ -290,12 +319,39 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   stockage des PNJ (124, 284). Le joueur voit le message « Commercer et ouvrir un coffre ne sont
   pas encore synchronises. » (texte à mettre à jour : les coffres marchent, voir plus bas).
 
-### Objets au sol ✅
+### Objets au sol ✅ (glisser-déposer : 🟡 pas encore vérifié en jeu)
 - **Le joueur** voit un objet posé par l'hôte au même endroit chez tout le monde, puis disparaître
   partout quand quelqu'un le ramasse. Un client qui ramasse ou dépose le demande à l'hôte : son
   personnage va chercher l'objet chez l'hôte.
+- **Toutes les façons de poser** : glisser un objet d'une fenêtre d'inventaire vers le monde (perso,
+  bête de somme, coffre, sac à dos), inventaire plein, l'IA d'un PNJ, et tout ce qu'aucun crochet ne
+  voit (sur K.-O. ou mort s'il en tombe quelque chose, sortie d'une machine, etc.).
+- **Fonctionnement** :
+  - l'hôte annonce l'objet dès qu'il est au sol : crochets sur `Inventory::dropItem` (le chemin du
+    glisser-déposer), `CharacterHuman::dropItem` et `CharacterAnimal::dropItem`. L'objet compte
+    comme posé dès qu'il est actif hors de tout inventaire, sans attendre son corps physique (que le
+    jeu crée parfois quelques images plus tard : l'ancien test l'exigeait et l'objet n'était alors
+    jamais annoncé) ;
+  - en plus, deux fois par seconde, l'hôte relève les objets à 30 m autour de chaque perso des
+    joueurs. Un objet qui apparaît là où un perso regardait déjà est annoncé (posé par un chemin sans
+    crochet) ; un objet qui disparaît de là est annoncé ramassé ; une pile qui change de nombre (ou un
+    objet annoncé qui a roulé à plus de 3 m) est annoncée de nouveau. Un objet qui entre dans le champ
+    parce qu'on marche, qu'on est téléporté ou qu'une zone charge est seulement noté : les clients
+    l'ont par la sauvegarde ;
+  - chaque objet n'est annoncé qu'une fois (les crochets s'emboîtent) ; chez le client, une annonce
+    répétée est ignorée, et un objet identique (même pile) déjà posé à moins de 0,3 m et qui ne
+    représente aucun autre objet de l'hôte (sa copie de la sauvegarde) est adopté au lieu d'être créé
+    en double. Si la zone du client charge après coup sa propre copie au même endroit, la copie créée
+    est retirée (toutes les 2 s) ;
+  - un client qui lâche un objet (son perso, sa bête, un coffre qu'il a ouvert) le demande à l'hôte ;
+    pour un coffre, c'est son perso le plus proche du coffre qui le pose. L'hôte refuse depuis le
+    perso d'un autre joueur.
 - Vérifié par les expériences `ground` (objets posés puis ramassés par l'hôte) et `clientpickup`
-  (ramassage demandé par un client).
+  (ramassage demandé par un client) ; `grounddrop` (chemin du glisser-déposer : minerai, arme,
+  armure, par l'hôte, par le client, les deux à la fois, K.-O. et mort) écrite, pas encore lancée.
+  Test unitaire `TestGroundDrops`.
+- 🟡 Limites : un objet lâché depuis un sac à dos par un client passe par le perso qui le porte
+  (comme avant) ; les objets à plus de 30 m de tout joueur ne sont vus que par les crochets.
 - 🟡 Un objet qui traînait déjà dans la sauvegarde a un autre handle chez chaque joueur : l'hôte le
   retrouve par type et endroit, le plus proche à moins de 40 unités, parmi **tous** les objets hors
   inventaire (marchandises de magasin, objets de décor de la ville, que le jeu range dans un groupe
@@ -651,13 +707,34 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
     à confirmer en jeu.
 
 ### Factions, relations, primes, crimes 🟡 (implémenté, à vérifier en jeu)
-> **Primes désactivées chez le client** depuis le 10/10 (`ApplyBounties` retourne tout de suite) :
-> tous les clients plantaient à l'apparition d'une prime. Seules les relations sont appliquées.
+> **Primes jamais écrites dans le jeu du client** depuis le 10/10 : tous les clients plantaient à
+> l'apparition d'une prime. Le client garde la copie de l'hôte et l'affiche dans la fenêtre
+> **Diplomatie** (Ctrl+Shift+F). Les relations, elles, sont écrites dans son jeu.
 - **Le joueur** voit partout les mêmes relations de sa faction avec chaque faction (écran des
-  factions : valeur, alliance, guerre, paix), dans les deux sens (ce que chaque faction pense de la
+  factions du jeu : valeur, alliance, guerre, paix), dans les deux sens (ce que chaque faction pense de la
   faction du joueur compte pour les PNJ et l'interface). Il voit aussi le même rang et la même
-  réputation, et, pour chaque personnage de l'escouade, les mêmes primes (montant par faction,
-  crimes), le crime en cours, la peine de prison restante et le laissez-passer.
+  réputation, et, pour chaque personnage de l'escouade (ceux des clients compris), les mêmes primes
+  (montant par faction, crimes), le crime en cours, la peine de prison restante et le laissez-passer.
+- **Fenêtre Diplomatie** (Ctrl+Shift+F, hôte et clients, en français) : les relations de la
+  faction du joueur avec chaque faction telles que l'hôte les a (valeur, état « allié / neutre /
+  ennemi / en guerre » calculé comme le jeu : allié = alliance ou relation ≥ 50, ennemi = relation
+  ≤ −30), le rang et la réputation, les primes et peines de chaque perso de l'escouade, et le monde
+  (guerres entre factions, chefs morts ou emprisonnés, villes changées).
+- **Nouvelles dans le panneau** (hôte et clients, en français, à chaque changement venu de l'hôte) :
+  « Diplomatie : X vous considère maintenant comme ennemi (relation −60) », « Diplomatie : X est en
+  guerre contre vous », « Prime : Bob est recherché par X (3000 cats) », « Prime : Bob n'est plus
+  recherché par X ».
+- **Ce qui change les relations et les primes** quand c'est un perso d'un client qui agit : tout se
+  passe dans le monde de l'hôte, qui fait jouer le perso du client. Attaquer ou tuer des membres
+  d'une faction, libérer des esclaves ou des prisonniers, aider dans un combat, les répliques et
+  issues de quête d'une conversation (`Dialogue::_doActions`), payer sa prime, commercer, assassiner
+  un chef, livrer une cible à un poste de police (la récompense est une action de dialogue : l'argent
+  arrive par la synchro de l'argent) : le jeu de l'hôte applique l'effet **une fois**, chez lui, et
+  il part à tous par les messages ci-dessous. Chez un client, les points de décision sont refusés
+  (`affectRelations`, `setRelation`, `setCrime`, `assignBountyForCrimes`, `_doActions`, événements de
+  dialogue, IA) : rien n'est appliqué deux fois.
+- **Gardes** : ce sont les gardes de l'hôte qui reconnaissent un perso recherché (prime de l'hôte) ;
+  ils agissent dans son monde et cela se voit chez tout le monde. Ceux du client n'agissent pas.
 - **Fonctionnement** :
   - l'hôte relit chaque seconde les relations de la faction du joueur et les primes de l'escouade ;
     il envoie `Factions` / `Bounties` dès qu'une valeur change, à tout le monde, plus un envoi
@@ -666,23 +743,109 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
     avec la fonction du jeu), à l'arrivée du message puis toutes les 2 s : si le jeu local les a
     changées au-delà du bruit (0,5 point de relation ou de confiance, 1 % de force), elles reviennent
     à celles de l'hôte. L'hôte n'envoie lui aussi qu'un vrai changement (au-delà de ce même bruit) ;
-  - les **primes et crimes ne sont pas écrits dans le jeu du client** (depuis le 10/10) : le client
-    garde la copie de l'hôte (commande `bounty`, rapports), et vide toute prime ou tout crime que son
-    propre jeu crée. Une prime dans le jeu du client réveille sa police (gardes, chasseurs de primes)
-    contre un perso que l'hôte pilote : tous les clients plantaient quelques secondes après une
-    nouvelle prime. Les gardes de l'hôte, eux, agissent et cela se voit chez tout le monde ;
-  - les hooks existants empêchent toujours le jeu du client de décider seul d'un crime, d'une prime
-    ou d'un changement de relation ; ce qui vient de l'hôte (dialogue « payer sa prime », guerre
-    déclarée, prime fixée par un garde) arrive par ces messages ;
+  - les **primes et crimes ne sont pas écrits dans le jeu du client** : il garde la copie de l'hôte
+    (fenêtre Diplomatie, commande `bounty`) et vide toute prime ou tout crime que son propre jeu crée.
+    Une prime dans le jeu du client réveille sa police (gardes, chasseurs de primes) contre un perso
+    que l'hôte pilote : tous les clients plantaient quelques secondes après une nouvelle prime ;
   - le journal de l'hôte note chaque changement (« relations: … now -80 at war », « bounty: … wanted
     by … for 1500 cats », « crime: … », « prison: … »).
 - **Limites** :
-  - l'écran de personnage du client n'affiche pas les primes (son jeu n'en a pas) ; la copie de
-    l'hôte est dans le mod (commande `bounty`) ;
-  - les relations entre deux factions qui ne sont pas celle du joueur ne sont pas envoyées (elles
-    ne changent que l'IA, qui tourne chez l'hôte) ;
+  - l'écran de personnage du jeu du client n'affiche pas les primes (son jeu n'en a pas) : elles
+    sont dans la fenêtre Diplomatie ;
   - la victime d'un crime en cours (un PNJ précis) n'est pas envoyée, seulement la faction.
 - **Test en jeu** : `python tools/coop_test.py factions` (voir [TESTS.md](TESTS.md)).
+
+### Diplomatie : factions entre elles, chefs, villes 🟡 (implémenté, tests unitaires ; à vérifier en jeu)
+- **Le joueur** voit partout le même monde que l'hôte : les guerres et alliances entre factions
+  (déclarées par le jeu après la mort d'un chef, un dialogue, une campagne), l'état des personnages
+  uniques (chefs de faction, PNJ nommés : vivant, mort, emprisonné, et si ce sont les joueurs), et les
+  villes (faction propriétaire, ville prise, détruite ou remplacée par les états du monde).
+- **Pourquoi c'est important** : les « états du monde » du jeu (`WorldEventStateQuery`) ne dépendent
+  que de l'état des personnages uniques et des relations de la faction du joueur. Les variantes de
+  villes, les conditions de dialogue et les campagnes les testent. Avec les mêmes états que l'hôte,
+  le jeu du client prend les mêmes décisions quand il les évalue (en chargeant une zone, par exemple).
+- **Fonctionnement** (message `Diplomacy`, en trois parties, chacune envoyée quand elle change et
+  en entier à un joueur qui arrive ; relue toutes les 3 s chez l'hôte) :
+  - **relations entre deux factions** (aucune n'étant celle du joueur) : l'hôte note toutes les paires
+    quand il commence à héberger (la sauvegarde que chaque client charge les contient) et n'envoie que
+    celles qui ont changé depuis (drapeaux, ou relation d'au moins 1 point). Une paire envoyée reste
+    suivie (retour à la paix compris) ;
+  - **personnages uniques** : la table du jeu (`UniqueNPCManager`) entière : mort / vivant /
+    emprisonné et « par les joueurs ». Le client écrit l'état de l'hôte dans sa table (une entrée
+    absente est créée comme le fait le chargement d'une sauvegarde) et remet « vivant » une entrée
+    que l'hôte n'a pas ;
+  - **villes** : faction propriétaire et variante appliquée. Le client applique la variante de l'hôte
+    avec la fonction du jeu (`TownBase::setOverride`) puis le propriétaire (`TownBase::setFaction`).
+    Une ville qui a une variante chez le client et aucune chez l'hôte est laissée (le jeu n'a pas de
+    retour en arrière) et notée au journal ;
+  - le client réimpose toutes les 3 s (son jeu ne doit pas dériver) ; le journal note les corrections
+    (« diplomacy: N … values set to the host's »).
+- **Nouvelles** (hôte et clients, en français) : « Diplomatie : guerre entre X et Y », « fin de la
+  guerre », « X et Y sont alliés », « Monde : Tinfist est mort (de la main des joueurs) », « Monde :
+  … est emprisonné par les joueurs », « Monde : Squin appartient maintenant à … », « Monde : Squin a
+  changé (…) ». Le journal a la même chose en anglais (« diplomacy: », « world: »).
+- **Limites, à vérifier en jeu** :
+  - une paire de factions que l'hôte n'a jamais changée n'est pas réimposée chez le client (elle
+    n'est pas envoyée). Le jeu du client ne peut pas la changer lui-même (ses points de décision sont
+    refusés), sauf `FactionRelations::declareWar` (`0x6B3000`), appelée par la vtable, non détournée ;
+  - une ville que l'hôte n'a pas encore « décidée » (zone jamais chargée chez lui) reste telle que le
+    jeu du client la décide, avec les mêmes états du monde ;
+  - le choix de la variante d'une ville au chargement d'une zone est déterministe (la plus lourde des
+    variantes dont les états du monde sont vrais) : il devrait être le même partout, l'envoi de
+    l'hôte corrige sinon ;
+  - les bâtiments d'une ville détruite ou prise viennent de la décision du jeu au chargement de la
+    zone, pas de la synchro (seuls ceux des joueurs sont synchronisés par le lot E).
+- **Test en jeu** : `python tools/coop_test.py diplomacy` (voir [TESTS.md](TESTS.md)). Test
+  unitaire `TestDiplomacy`.
+
+### Carte, minicarte, repères des joueurs, pings 🟡 (implémenté, à vérifier en jeu)
+- **Une couleur par joueur**, la même partout et chez tout le monde (`kc::PlayerColor`,
+  `common/include/kc/colors.h`) : or (l'hôte), bleu, vert, magenta, orange, cyan, blanc, violet.
+  Le rouge est réservé aux ennemis.
+- **Carte du monde (touche M)** : par-dessus la carte du jeu, chaque joueur voit **tous les persos
+  de tous les joueurs** (gros point : le perso du joueur, petit : une recrue), à la couleur de leur
+  joueur, même ceux qui sont très loin de lui (hors de la zone que son jeu a chargée). En rouge,
+  les **escouades hostiles qui nous visent** : un raid ou une vague d'attaque du jeu dont la cible
+  est notre faction (cercle qui pulse), une escouade qui se bat contre un de nos persos, ou une
+  escouade que le jeu marque « ennemie » à moins de ~250 m d'un de nos persos ; le nombre de
+  persos au-dessus. Une **légende** dans le coin de la carte ; au survol d'un point, une
+  **infobulle** : nom, joueur (ou « recrue »), état, **distance** depuis le perso sélectionné. Les
+  points suivent la carte quand on la fait glisser ou qu'on zoome (projection du jeu, relue à
+  chaque image).
+- **Minicarte** ronde dans un coin (au choix), centrée sur le perso sélectionné (sinon le sien),
+  nord en haut ou tournant avec la caméra ; fond : la carte du jeu (`GUI_Map.dds`) découpée dans le
+  cercle, sinon une grille. Persos des joueurs, ennemis, pings (flèche sur le bord quand ils sont
+  hors du cercle), repère « N », échelle en mètres, boutons + / − et molette au survol, infobulles.
+  Cachée au menu, pendant les chargements, dans l'éditeur de personnage et quand l'écran de
+  gestion (carte, escouades…) est ouvert. Ctrl+Shift+N l'affiche ou la cache ; zoom, coin,
+  rotation retenus dans `KenshiCoop.ini` (`[ui]`).
+- **Repère au-dessus de la tête** de chaque perso de joueur (pas des recrues) : un petit curseur à
+  la couleur du joueur, avec son nom, projeté avec la caméra du jeu ; rien quand le perso est hors
+  de l'écran ou derrière la caméra.
+- **Barre d'escouade** : le portrait des persos des joueurs reçoit un cadre à la couleur du joueur
+  (dessiné par l'overlay sur le rectangle du portrait lu dans le jeu) ; les recrues gardent le
+  cadre normal.
+- **Pings** : clic molette ou Alt+clic sur la carte, sur la minicarte ou sur le sol (un clic
+  molette court : le clic molette tenu tourne toujours la caméra). Sans touche : « Aller ici » ;
+  Maj : « Danger / ennemis » ; Ctrl : « Butin » ; Maj+Ctrl : « À l'aide ». Le ping apparaît chez
+  tout le monde à la couleur et au nom de son joueur : sur la carte, la minicarte et en 3D au-dessus
+  du point avec la distance ; il s'efface en 10 s. Au plus un ping toutes les 0,5 s et 5 en même
+  temps par joueur (le plus ancien part). Un ping ne change rien au monde. Pas de son (aucun son
+  d'interface simple trouvé dans le jeu).
+- **Réglages** : fenêtre Multijoueur, section « Affichage » (carte, repères, barre d'escouade,
+  minicarte, rotation, coin, pings) ; tout est retenu dans `KenshiCoop.ini`.
+- **Fonctionnement** : l'hôte envoie trois fois par seconde à tout le monde (`MapMarkers`) la
+  liste des joueurs, la position de chaque perso de l'escouade avec son joueur et s'il est « son »
+  perso (celui créé pour lui ou qui porte son nom ; sinon son premier perso), et les escouades
+  hostiles (au plus 128 persos, 32 escouades). La carte, la minicarte, les repères et la barre de
+  chaque joueur, l'hôte compris, en sont tirés ; un perso présent dans le monde local est placé à
+  sa position locale (fluide). Un ping de client part à l'hôte (`MapPing`), qui vérifie le rythme
+  et le renvoie à tous. **Protocole 33.**
+- **Limites / à vérifier en jeu** : tout (aucun essai en jeu encore) ; un raid lointain encore
+  « abstrait » (escouade pas chargée chez l'hôte) n'est pas montré ; le sol d'un ping 3D est pris
+  plat à la hauteur du perso centré ; la vue de la caméra et l'échelle des coordonnées MyGUI sont
+  supposées (docs/MOTEUR.md § 11) ; un Alt+clic gauche ne va plus au jeu tant que les pings sont
+  actifs ; hors session (partie solo) la minicarte montre l'escouade locale, sans ennemis ni pings.
 
 ### Précision des PNJ lointains 🟡 implémenté, à vérifier en jeu
 - Loin de l'escouade du client (plus de 300 unités), le jeu ne déplace un personnage que quelques

@@ -6,8 +6,10 @@
 #include <atomic>
 #include <cctype>
 #include <cstdio>
+#include <cmath>
 #include <ctime>
 #include <deque>
+#include <map>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -16,6 +18,7 @@
 #include "admin.h"
 #include "debug.h"
 #include "hooks.h"
+#include "map.h"
 #include "kc/session.h"
 #include "kenshi.h"
 #include "overlay.h"
@@ -81,7 +84,7 @@ struct Hotkey {
     bool down = false;
 };
 Hotkey g_hkHost{'H'}, g_hkJoin{'J'}, g_hkLeave{'L'}, g_hkGive{'G'}, g_hkOverlay{'O'}, g_hkDiag{'D'}, g_hkMultiplayer{'M'}, g_hkConsoleWindow{'W'},
-    g_hkConsole{'K'};
+    g_hkConsole{'K'}, g_hkDiplomacy{'F'}, g_hkMinimap{'N'};
 
 bool Pressed(Hotkey& k, bool modifiers) {
     const bool now = modifiers && KeyDown(k.vk);
@@ -146,6 +149,7 @@ void HandleHotkeys() {
     std::string err;
     if (Pressed(g_hkMultiplayer, mods)) OverlayToggleMultiplayer();
     if (Pressed(g_hkConsole, mods)) OverlayToggleConsole();
+    if (Pressed(g_hkDiplomacy, mods)) OverlayToggleDiplomacy();
     if (Pressed(g_hkOverlay, mods)) g_overlayVisible = !g_overlayVisible;
     if (Pressed(g_hkHost, mods)) {
         if (g_session->isHost()) Toast("Tu héberges déjà la partie.");
@@ -164,9 +168,37 @@ void HandleHotkeys() {
     if (Pressed(g_hkGive, mods)) GiveSelectedToNextPlayer();
     if (Pressed(g_hkDiag, mods)) { DumpDiagnostics("hotkey"); Toast("Diagnostic écrit dans KenshiCoop.log"); }
     if (Pressed(g_hkConsoleWindow, mods)) HostConsoleShow(!HostConsoleVisible());
+    if (Pressed(g_hkMinimap, mods)) {
+        SetUiOption(g_cfg, g_iniPath, "minimap", g_cfg.minimap ? 0.0f : 1.0f);
+        Toast(g_cfg.minimap ? "Minicarte affichée." : "Minicarte masquée (Ctrl+Shift+N pour la revoir).", 2.0);
+    }
 }
 
 // ---- the Multijoueur window and the console (French: what the players read)
+const char* FrenchPhase(kc::JoinPhase p) {
+    switch (p) {
+    case kc::JoinPhase::Saving: return "préparation du monde";
+    case kc::JoinPhase::Loading: return "chargement du monde";
+    case kc::JoinPhase::Editor: return "création du personnage";
+    }
+    return "";
+}
+
+// The join queue in French: a waiting client's place, or (host) everyone in it.
+std::vector<std::string> QueueLines() {
+    std::vector<std::string> out;
+    if (const kc::JoinQueueMsg* q = g_session->queueStatus()) {
+        out.push_back("File d'attente : position " + std::to_string(q->position) + "/" + std::to_string(q->total) + " — en attente de " + q->current +
+                      " (" + FrenchPhase(q->phase) + ")…");
+    } else if (g_session->isHost()) {
+        const auto list = g_session->joinQueue();
+        if (!list.empty()) out.push_back("File d'attente des arrivées :");
+        for (size_t i = 0; i < list.size(); ++i)
+            out.push_back("  " + std::to_string(i + 1) + ". " + list[i].name + " — " + (list[i].waiting ? std::string("attend son tour") : FrenchPhase(list[i].phase)));
+    }
+    return out;
+}
+
 const char* FrenchState(kc::SessionState s) {
     switch (s) {
     case kc::SessionState::Idle: return "Hors ligne";
@@ -287,6 +319,7 @@ void ConsoleCommand(const std::string& line) {
         if (client && g_session->missingNpcs()) out(std::to_string(g_session->missingNpcs()) + " PNJ de l'hôte pas encore présents ici");
         if (client && g_session->missingSquad()) out(std::to_string(g_session->missingSquad()) + " membres de l'escouade introuvables ici");
         if (host && g_session->joiningPlayers()) out(std::to_string(g_session->joiningPlayers()) + " joueur(s) en train de rejoindre");
+        for (const auto& q : QueueLines()) out(q);
         if (!g_session->lastError().empty() && !host && !client) out("dernière erreur : " + FrenchError(g_session->lastError()));
         return;
     }
@@ -439,8 +472,76 @@ void HandleOverlayActions() {
         case OverlayAction::Kind::DialogAnswer:
             g_session->AnswerDialog(a.index);
             break;
+        case OverlayAction::Kind::Ping:
+            if (!g_cfg.pings) break;
+            if (!g_session->isHost() && !g_session->isClient()) { Toast("Les pings se partagent en partie multijoueur.", 2.0); break; }
+            g_session->PlaceMapPing({a.x, a.y, a.z}, kc::PingKind(std::clamp(a.index, 0, int(kc::kPingKinds) - 1)));
+            break;
+        case OverlayAction::Kind::SetOption:
+            if (SetUiOption(g_cfg, g_iniPath, a.text, a.value)) Log("setting [ui] %s = %g", a.text.c_str(), double(a.value));
+            break;
         }
     }
+}
+
+// The "Diplomatie" window: the host's values (a client's game does not hold the bounties), in French.
+// Rebuilt once a second while the window is open.
+void FillDiplomacy(OverlayModel& m) {
+    static double next = 0;
+    static OverlayModel cache;
+    const double now = NowSeconds();
+    if (now < next) {
+        m.diploHave = cache.diploHave;
+        m.diploHeader = cache.diploHeader;
+        m.diploRelations = cache.diploRelations;
+        m.diploBounties = cache.diploBounties;
+        m.diploWorld = cache.diploWorld;
+        return;
+    }
+    next = now + 1.0;
+    cache = OverlayModel{};
+    const auto& f = g_session->hostFactions();
+    cache.diploHave = !f.factions.empty();
+    char head[160];
+    snprintf(head, sizeof(head), "Rang %d   réputation : confiance %.0f, renommée %.0f", f.playerRank, double(f.reputationTrust), double(f.reputationBadassery));
+    cache.diploHeader = head;
+    for (const auto& e : f.factions) {
+        if (!e.hasOurs && !e.hasTheirs) continue;
+        const kc::RelationState& r = e.hasTheirs ? e.theirs : e.ours;   // how they treat us
+        OverlayModel::DiploRelation d;
+        d.name = g_world->TemplateName(e.factionSid);
+        d.relation = int(std::lround(r.relation));
+        d.standing = int(kc::StandingOf(r));
+        d.war = e.ours.war || e.theirs.war;
+        cache.diploRelations.push_back(std::move(d));
+    }
+    std::sort(cache.diploRelations.begin(), cache.diploRelations.end(), [](const auto& a, const auto& b) {
+        if (a.war != b.war) return a.war;
+        return a.relation != b.relation ? a.relation < b.relation : a.name < b.name;
+    });
+    std::map<uint32_t, kc::Handle> handles;
+    g_session->ForEachEntity([&](uint32_t id, const kc::Handle& h, uint8_t, bool squad, bool) { if (squad) handles[id] = h; });
+    for (const auto& c : g_session->hostBounties().chars) {
+        auto it = handles.find(c.netId);
+        std::string who = it != handles.end() ? g_world->CharacterNameOf(it->second) : std::string();
+        if (who.empty()) who = "#" + std::to_string(c.netId);
+        for (const auto& b : c.bounties)
+            if (b.amount > 0) cache.diploBounties.push_back(who + " : " + std::to_string(b.amount) + " cats (" + g_world->TemplateName(b.factionSid) + ")");
+        if (c.prisonSentence > 0) cache.diploBounties.push_back(who + " : en prison, encore " + std::to_string(int(c.prisonSentence)) + " h");
+    }
+    const auto& d = g_session->hostDiplomacy();
+    for (const auto& p : d.pairs)
+        if (p.rel.war && p.from < p.to) cache.diploWorld.push_back("Guerre : " + g_world->TemplateName(p.from) + " et " + g_world->TemplateName(p.to));
+    for (const auto& u : d.uniques) {
+        if (u.state == kc::kUniqueAlive) continue;
+        cache.diploWorld.push_back(g_world->TemplateName(u.sid) + (u.state == kc::kUniqueDead ? " : mort" : " : emprisonné") + (u.byPlayer ? " (joueurs)" : ""));
+        if (cache.diploWorld.size() > 400) break;
+    }
+    for (const auto& t : d.towns)
+        if (!t.overrideSid.empty())
+            cache.diploWorld.push_back(g_world->TemplateName(t.sid) + " : " + g_world->TemplateName(t.overrideSid) +
+                                       (t.ownerSid.empty() ? std::string() : " (" + g_world->TemplateName(t.ownerSid) + ")"));
+    FillDiplomacy(m);   // from the cache just made
 }
 
 void PublishOverlay() {
@@ -448,7 +549,10 @@ void PublishOverlay() {
     m.visible = g_overlayVisible;
     m.title = std::string("KenshiCoop ") + kVersion + "  -  " + FrenchState(g_session->state());
     const auto st = g_session->state();
-    if (st == kc::SessionState::Downloading) {
+    m.queueLines = QueueLines();
+    if (st == kc::SessionState::Downloading && g_session->queueStatus()) {
+        m.lines.insert(m.lines.end(), m.queueLines.begin(), m.queueLines.end());
+    } else if (st == kc::SessionState::Downloading) {
         m.lines.push_back("Réception du monde de l'hôte : " + std::to_string(int(g_session->downloadProgress() * 100)) + " %");
     } else if (st == kc::SessionState::Loading || st == kc::SessionState::Connecting || st == kc::SessionState::Handshake) {
         m.lines.push_back("Patiente...");
@@ -474,7 +578,9 @@ void PublishOverlay() {
             m.lines.push_back("ATTENTION : " + std::to_string(g_session->missingSquad()) + " membres de l'escouade manquent ici (charge la sauvegarde de l'hôte)");
         if (g_session->isHost() && g_session->joiningPlayers())
             m.lines.push_back(std::to_string(g_session->joiningPlayers()) + " joueur(s) en train d'arriver : partie en pause");
+        if (g_session->isHost()) m.lines.insert(m.lines.end(), m.queueLines.begin(), m.queueLines.end());
         if (g_session->isHost()) m.lines.push_back("Ctrl+Shift+G  confier la sélection au joueur suivant");
+        m.lines.push_back("Ctrl+Shift+F  diplomatie (relations, primes, monde)");
         m.lines.push_back("Ctrl+Shift+L  quitter la session");
     }
     const auto& chat = g_session->chatLog();
@@ -483,6 +589,7 @@ void PublishOverlay() {
     m.worldLoaded = g_world->Ready();
     m.hosting = g_session->isHost();
     m.active = m.hosting || g_session->isClient();
+    if (m.active && OverlayDiplomacyOpen()) FillDiplomacy(m);
     m.stateText = FrenchState(st);
     if (st == kc::SessionState::Failed && !g_session->lastError().empty()) m.errorText = FrenchError(g_session->lastError());
     m.leftHostWorld = g_leftHostWorld && g_world->Ready();
@@ -534,6 +641,13 @@ void PublishOverlay() {
         m.dialogReplies = d.replies;
         m.dialogWaiting = d.waiting;
     }
+    m.optMap = g_cfg.mapMarkers;
+    m.optHeads = g_cfg.headMarkers;
+    m.optPortraits = g_cfg.portraitColours;
+    m.optMinimap = g_cfg.minimap;
+    m.optMinimapRotate = g_cfg.minimapRotate;
+    m.optMinimapCorner = g_cfg.minimapCorner;
+    m.optPings = g_cfg.pings;
     const double now = NowSeconds();
     while (!g_toasts.empty() && g_toasts.front().second < now) g_toasts.pop_front();
     for (auto& t : g_toasts) m.toasts.push_back(t.first);
@@ -695,6 +809,8 @@ void Tick(bool live) {
     LogAndConsoleUpkeep();
     SetCrashPhase("tick: session");
     g_session->Tick(live);
+    SetCrashPhase("tick: map scene");
+    UpdateMapScene(*g_session, *g_world, g_cfg, live);   // map markers, minimap, heads, squad bar, pings
     SetCrashPhase("tick: resync");
     ResyncUpkeep();
     AfterLeavingHostWorld();

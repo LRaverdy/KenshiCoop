@@ -67,6 +67,16 @@ struct FakeWorld : IWorld {
     std::vector<Handle> controllable;
     float speed = 50.0f;  // units per second
     // world transfer simulation
+    // character editor (client): off unless a test turns it on; it stays open until the test closes it
+    bool editorSupported = false, editorOpen = false;
+    int editorOpened = 0;
+    bool OpenCharacterEditor(const Handle&) override {
+        if (!editorSupported) return false;
+        editorOpen = true;
+        ++editorOpened;
+        return true;
+    }
+    bool CharacterEditorOpen() override { return editorOpen; }
     int exportFrames = 3, exportCountdown = -1;
     int importFrames = 5, importCountdown = 0;
     std::vector<WorldFile> pendingImport;
@@ -244,9 +254,34 @@ struct FakeWorld : IWorld {
     }
     int halts = 0;                                     // host: characters halted (their player gone)
     void HaltCharacter(const Handle& h) override { (void)h; ++halts; }
+    // actor safety: what each order subject is (serial -> kc::TargetFlags), orders run, refusal
+    std::map<uint32_t, uint32_t> subjectFlags;
+    int tasksRun = 0;
+    std::vector<uint32_t> orderedSerials;   // every character an order ran on
+    std::string refusal;
+    ResultReason refusalReason = ResultReason::None;
+    std::string TakeOrderRefusal(ResultReason& r) override {
+        r = refusal.empty() ? ResultReason::None : refusalReason;
+        return std::exchange(refusal, std::string{});
+    }
     bool Order(const Handle& h, const Command& c) override {
         auto it = chars.find(h.serial);
         if (it == chars.end()) return false;
+        if (c.kind == CommandKind::Task) {   // as the plugin does: the subject checked against the task
+            uint32_t f = 0;
+            if (c.subject.valid()) {
+                f = kTgtNamed;
+                if (auto sf = subjectFlags.find(c.subject.serial); sf != subjectFlags.end()) f = sf->second | kTgtNamed | kTgtFound;
+                if (c.subject.serial == h.serial) f |= kTgtSelf;
+            }
+            if (!TaskTargetAllowed(c.via, c.task, f, nullptr)) {
+                refusal = "Action refusée : cet ordre ne s'applique pas à cette cible.";
+                refusalReason = ResultReason::WrongTarget;
+                return false;
+            }
+            ++tasksRun;
+        }
+        orderedSerials.push_back(h.serial);
         if (c.kind == CommandKind::MoveTo) it->second.dest = c.pos;
         else it->second.dest = it->second.pos;
         return true;
@@ -280,10 +315,15 @@ struct FakeWorld : IWorld {
         *mine = items;
         return true;
     }
+    std::vector<std::pair<Handle, ItemState>> localDrops;   // client: items the player dropped to the ground
+    void TakeLocalDrops(std::vector<std::pair<Handle, ItemState>>& out) override { out.swap(localDrops); localDrops.clear(); }
+    int drops = 0;
+    Handle lastDropper;
     bool ExecuteInvOp(const Handle& from, const Handle& to, const InvOp& op) override {
         auto* a = ItemsOf(from);
         auto* b = ItemsOf(to);
         if (!a || !b) return false;
+        if (op.kind == InvOpKind::Drop) { ++drops; lastDropper = to; }
         for (size_t i = 0; i < a->size(); ++i) {
             ItemState& it = (*a)[i];
             if (!it.sameKind(op.item) || it.quantity < op.item.quantity) continue;
@@ -339,6 +379,19 @@ struct FakeWorld : IWorld {
         return it == chars.end() ? 1e9f : Dist(it->second.pos, pos);
     }
     std::string CharacterNameOf(const Handle& h) override { return "npc-" + std::to_string(h.serial); }
+    std::vector<MapThreat> threats;   // map: what ReadMapThreats answers
+    size_t threatCalls = 0;
+    void ReadMapThreats(const std::vector<Vec3>& centers, float radius, std::vector<MapThreat>& out) override {
+        (void)radius;
+        ++threatCalls;
+        out = centers.empty() ? std::vector<MapThreat>{} : threats;
+    }
+    bool ContainerKind(const Handle& h, std::string& sid) override {
+        auto b = h.type == 0 ? boxes.find(h.serial) : boxes.end();
+        if (b == boxes.end()) return false;
+        sid = b->second.sid;
+        return true;
+    }
     bool FindContainer(const std::string& sid, const Vec3& pos, Handle& out) override {
         for (auto& [s, b] : boxes)
             if (b.sid == sid && Dist(b.pos, pos) < 30) { out = B(s); return true; }
@@ -546,6 +599,30 @@ struct FakeWorld : IWorld {
         bounties[h.serial] = want;
         return 1;
     }
+    // ---- diplomacy: relations between factions, unique characters, towns (as a game holds them)
+    DiplomacyState diplo;
+    bool ReadDiplomacy(DiplomacyState& out) override { out = diplo; return true; }
+    size_t ApplyFactionPairs(const std::vector<FactionPairRelation>& pairs) override {
+        size_t n = 0;
+        for (const auto& p : pairs) {
+            auto it = std::find_if(diplo.pairs.begin(), diplo.pairs.end(), [&](const FactionPairRelation& o) { return o.from == p.from && o.to == p.to; });
+            if (it == diplo.pairs.end()) { diplo.pairs.push_back(p); ++n; }
+            else if (!SamePairRelation(it->rel, p.rel)) { it->rel = p.rel; ++n; }
+        }
+        return n;
+    }
+    size_t ApplyUniques(const std::vector<UniqueState>& uniques) override {
+        if (diplo.uniques == uniques) return 0;
+        diplo.uniques = uniques;
+        return 1;
+    }
+    size_t ApplyTowns(const std::vector<TownState>& towns) override {
+        size_t n = 0;
+        for (const auto& t : towns)
+            for (auto& o : diplo.towns)
+                if (o.sid == t.sid && !(o == t)) { o = t; ++n; }
+        return n;
+    }
     // ---- lot A: doors and locks (key: sid; the fake world has one door per kind)
     std::map<std::string, DoorState> doors;
     std::vector<DoorRequest> doorReqs;      // client: buttons the player clicked
@@ -687,6 +764,7 @@ static void SetupHost(FakeWorld& host) {
 static void AtMenu(FakeWorld& cli) { cli.ready = false; cli.chars.clear(); cli.fp = 0; }
 
 static Session::LogFn Quiet(const char* tag, bool verbose = false) {
+    if (std::getenv("KC_VERBOSE")) verbose = true;
     return [tag, verbose](const std::string& s) { if (verbose) std::printf("    [%s] %s\n", tag, s.c_str()); };
 }
 
@@ -723,6 +801,13 @@ static void TestWire() {
         Reader sr(sw.data(), sw.size());
         CHECK(PeekType(sr) == Msg::Stall);
         StallMsg s2; CHECK(Decode(sr, s2)); CHECK(s2.seconds == 90);
+        Writer qw; Encode(qw, JoinQueueMsg{2, 3, JoinPhase::Editor, "Joueur2"});   // join queue
+        Reader qr(qw.data(), qw.size());
+        CHECK(PeekType(qr) == Msg::JoinQueue);
+        JoinQueueMsg q2; CHECK(Decode(qr, q2)); CHECK(q2.position == 2 && q2.total == 3 && q2.phase == JoinPhase::Editor && q2.current == "Joueur2");
+        Writer bad; Encode(bad, JoinQueueMsg{4, 3, JoinPhase::Saving, "x"});   // a place beyond the queue: refused
+        Reader br(bad.data(), bad.size()); PeekType(br);
+        JoinQueueMsg q3; CHECK(!Decode(br, q3));
         FloorsMsg f; f.entries = {{3, 10}, {70000, 9}};
         Writer fw; Encode(fw, f);
         Reader fr(fw.data(), fw.size());
@@ -943,6 +1028,61 @@ static void TestWire() {
         Reader xr(bad.data(), bad.size()); PeekType(xr);
         BountiesMsg bm3; CHECK(!Decode(xr, bm3));
     }
+    {   // diplomacy: the three parts, and what a decoder refuses
+        DiplomacyMsg pm; pm.part = DiploPart::Pairs;
+        FactionPairRelation fp; fp.from = "5-gamedata.base"; fp.to = "6-gamedata.base"; fp.rel.war = true; fp.rel.relation = -100; fp.rel.strength = 3;
+        pm.pairs = {fp, {"6-gamedata.base", "5-gamedata.base", fp.rel}};
+        DiplomacyMsg um; um.part = DiploPart::Uniques; um.uniques = {{"tinfist", kUniqueDead, true}, {"phoenix", kUniqueImprisoned, false}, {"ruka", kUniqueAlive, false}};
+        DiplomacyMsg tm; tm.part = DiploPart::Towns; tm.towns = {{"town-1", "holy", "town-1-destroyed"}, {"town-2", "", ""}};
+        for (const DiplomacyMsg* m : {&pm, &um, &tm}) {
+            Writer dw; Encode(dw, *m);
+            Reader dr(dw.data(), dw.size()); CHECK(PeekType(dr) == Msg::Diplomacy);
+            DiplomacyMsg back; CHECK(Decode(dr, back) && back == *m);
+        }
+        auto refused = [](DiplomacyMsg m) { Writer w2; Encode(w2, m); Reader r2(w2.data(), w2.size()); PeekType(r2); DiplomacyMsg o; return !Decode(r2, o); };
+        DiplomacyMsg self = pm; self.pairs[0].to = self.pairs[0].from; CHECK(refused(self));        // a faction toward itself
+        DiplomacyMsg nosid = um; nosid.uniques[0].sid.clear(); CHECK(refused(nosid));
+        DiplomacyMsg badstate = um; badstate.uniques[0].state = 3; CHECK(refused(badstate));
+        DiplomacyMsg notown = tm; notown.towns[0].sid.clear(); CHECK(refused(notown));
+        Writer bp; bp.u8(uint8_t(Msg::Diplomacy)); bp.u8(9); bp.varint(0);
+        Reader bpr(bp.data(), bp.size()); PeekType(bpr); DiplomacyMsg o; CHECK(!Decode(bpr, o));   // unknown part
+        // the game's own tests for ally / enemy (FactionRelations::isAlly, isEnemy)
+        RelationState rs; rs.relation = 49; CHECK(StandingOf(rs) == Standing::Neutral);
+        rs.relation = 50; CHECK(StandingOf(rs) == Standing::Ally);
+        rs.relation = -30; CHECK(StandingOf(rs) == Standing::Enemy);
+        rs.relation = -29; CHECK(StandingOf(rs) == Standing::Neutral);
+        rs.alliance = true; CHECK(StandingOf(rs) == Standing::Ally);
+        RelationState a, b2; a.relation = 10; b2.relation = 10.6f; b2.trustPositives = 40;
+        CHECK(SamePairRelation(a, b2));            // trust and strength are the AI's: noise between NPC factions
+        b2.relation = 11.2f; CHECK(!SamePairRelation(a, b2));
+        b2.relation = 10; b2.war = true; CHECK(!SamePairRelation(a, b2));
+    }
+    {   // map: markers and pings
+        MapMarkersMsg mm;
+        mm.players = {{1, "Hote"}, {2, "Bob"}};
+        MapChar a; a.netId = 3; a.owner = 2; a.flags = kMapAvatar | kMapDown; a.name = "Bob"; a.pos = {-1000.5f, 12, 77};
+        MapChar b; b.netId = 9; b.owner = 1; b.name = std::string(80, 'x'); b.pos = {1, 2, 3};
+        mm.chars = {a, b};
+        MapThreat t; t.pos = {5, 6, 7}; t.count = 4; t.kind = ThreatKind::Raid; t.label = "Holy Nation";
+        mm.threats = {t};
+        Writer mw; Encode(mw, mm);
+        Reader mr(mw.data(), mw.size()); CHECK(PeekType(mr) == Msg::MapMarkers);
+        MapMarkersMsg mm2; CHECK(Decode(mr, mm2));
+        CHECK(mm2.players == mm.players && mm2.chars.size() == 2 && mm2.chars[0] == a && mm2.threats.size() == 1 && mm2.threats[0] == t);
+        CHECK(mm2.chars[1].name.size() == kMaxMapLabelLen);   // long names are cut
+        mm.threats[0].kind = ThreatKind(9);   // no such kind
+        Writer mw2; Encode(mw2, mm);
+        Reader mr2(mw2.data(), mw2.size()); PeekType(mr2);
+        MapMarkersMsg mm3; CHECK(!Decode(mr2, mm3));
+        MapPingMsg pm; pm.id = 77; pm.owner = 3; pm.kind = PingKind::Loot; pm.pos = {1, 2, -3};
+        Writer pw; Encode(pw, pm);
+        Reader pr(pw.data(), pw.size()); CHECK(PeekType(pr) == Msg::MapPing);
+        MapPingMsg pm2; CHECK(Decode(pr, pm2) && pm2 == pm);
+        pm.kind = PingKind(7);
+        Writer pw2; Encode(pw2, pm);
+        Reader pr2(pw2.data(), pw2.size()); PeekType(pr2);
+        MapPingMsg pm3; CHECK(!Decode(pr2, pm3));
+    }
     {   // lot D: captive characters (a caged one with shackles and a sentence, a freed one)
         CaptivesMsg cm;
         CaptiveState a; a.netId = 7; a.caged = true; a.cageSid = "cage-1"; a.cagePos = {1, 2, 3}; a.chained = true;
@@ -1094,6 +1234,11 @@ static void TestFuzz() {
     { VitalsMsg v; v.entities.resize(2); for (auto& e : v.entities) { e.netId = 4; e.parts.resize(3); } seeds.push_back(EncodeVitals(v)[0]); }
     add([](Writer& w) { ShotsMsg m; ShotEvent e; e.shooterNetId = 2; e.turretSid = "t"; m.shots = {e, e}; Encode(w, m); });   // lot C
     add([](Writer& w) { RangedMsg m; m.aims.resize(2); m.aims[0].netId = 1; m.aims[1].netId = 2; m.turrets = {TurretAim{"t", {}, {}}}; m.stopped = {4}; Encode(w, m); });
+    add([](Writer& w) {   // map
+        MapMarkersMsg m; m.players = {{1, "h"}}; MapChar c; c.netId = 2; c.owner = 1; c.name = "a"; m.chars = {c, c};
+        MapThreat t; t.count = 3; t.label = "f"; m.threats = {t}; Encode(w, m);
+    });
+    add([](Writer& w) { MapPingMsg m; m.id = 4; m.owner = 2; m.kind = PingKind::Help; Encode(w, m); });
     add([](Writer& w) { ContainerOpen m; m.looterNetId = 2; m.sid = "chest"; Encode(w, m); });
     add([](Writer& w) {
         CaptivesMsg m; CaptiveState c; c.netId = 3; c.caged = true; c.cageSid = "cage"; c.chained = true; c.slaveOf = "f"; c.sentence = 2;
@@ -1111,6 +1256,7 @@ static void TestFuzz() {
     add([](Writer& w) { Encode(w, BuildRemove{4, "hut", {}}); });
     add([](Writer& w) { BuildAction m; m.sid = "shop"; Encode(w, m); });
     add([](Writer& w) { Encode(w, StallMsg{90}); });   // fix G6
+    add([](Writer& w) { Encode(w, JoinQueueMsg{2, 3, JoinPhase::Editor, "Joueur2"}); });
     add([](Writer& w) { FloorsMsg m; m.entries = {{3, 10}, {9, 9}}; Encode(w, m); });
     add([](Writer& w) {   // lot B
         FactionsMsg m; FactionRelationEntry e; e.factionSid = "f"; e.hasOurs = true; e.ours.relation = 5; m.factions = {e, e}; Encode(w, m);
@@ -1118,6 +1264,9 @@ static void TestFuzz() {
     add([](Writer& w) {
         BountiesMsg m; CharBounties c; c.netId = 3; c.bounties = {{"f", 10, 1u, false, 2}}; m.chars = {c}; Encode(w, m);
     });
+    add([](Writer& w) { DiplomacyMsg m; m.part = DiploPart::Pairs; m.pairs = {{"a", "b", {}}}; Encode(w, m); });   // diplomacy
+    add([](Writer& w) { DiplomacyMsg m; m.part = DiploPart::Uniques; m.uniques = {{"u", 0, true}}; Encode(w, m); });
+    add([](Writer& w) { DiplomacyMsg m; m.part = DiploPart::Towns; m.towns = {{"t", "f", "o"}}; Encode(w, m); });
     { Snapshot s; s.entities.resize(3); for (auto& e : s.entities) e.netId = 7; seeds.push_back(EncodeSnapshot(s)[0]); }
 
     auto decodeAll = [](const std::vector<uint8_t>& p) {
@@ -1167,14 +1316,18 @@ static void TestFuzz() {
         case Msg::BuildRemove: { BuildRemove m; Decode(r, m); break; }
         case Msg::BuildAction: { BuildAction m; Decode(r, m); break; }
         case Msg::Stall: { StallMsg m; Decode(r, m); break; }
+        case Msg::JoinQueue: { JoinQueueMsg m; if (Decode(r, m) && (m.position < 1 || m.position > m.total)) std::abort(); break; }
         case Msg::Floors: { FloorsMsg m; Decode(r, m); break; }
         case Msg::Shots: { ShotsMsg m; Decode(r, m); break; }      // lot C
         case Msg::Ranged: { RangedMsg m; Decode(r, m); break; }
         case Msg::Captives: { CaptivesMsg m; Decode(r, m); break; }
         case Msg::Factions: { FactionsMsg m; Decode(r, m); break; }
         case Msg::Bounties: { BountiesMsg m; Decode(r, m); break; }
+        case Msg::Diplomacy: { DiplomacyMsg m; Decode(r, m); break; }
         case Msg::Doors: { DoorsMsg m; Decode(r, m); break; }          // lot A
         case Msg::DoorRequest: { DoorRequest m; Decode(r, m); break; } // lot A
+        case Msg::MapMarkers: { MapMarkersMsg m; Decode(r, m); break; }
+        case Msg::MapPing: { MapPingMsg m; Decode(r, m); break; }
         default: break;
         }
     };
@@ -1183,7 +1336,7 @@ static void TestFuzz() {
         if (i % 2) {
             p.resize(rng() % 64);
             for (auto& b : p) b = uint8_t(rng());
-            if (!p.empty()) p[0] = uint8_t(1 + rng() % 55);
+            if (!p.empty()) p[0] = uint8_t(1 + rng() % 82);
         } else {
             p = seeds[rng() % seeds.size()];
             const int muts = 1 + rng() % 4;
@@ -1655,6 +1808,67 @@ static void TestInventories() {
     Run({{&host, &hw}, {&cli, &cw}}, 5.0, [&] { return hw.chars[21].items.empty() && cw.chars[2].items == hw.chars[2].items; });
     CHECK(hw.chars[21].items.empty());
     CHECK(hw.chars[2].items.size() == 2 && cw.chars[2].items == hw.chars[2].items);
+}
+
+static void TestGroundDrops() {
+    std::printf("session: a client's drop to the ground (its character, a chest it has open) is done by the host; others' refused\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    auto item = [](const char* sid, int q, const char* sec, int x, int y) {
+        ItemState i; i.templateSid = sid; i.quantity = q; i.section = sec; i.x = int16_t(x); i.y = int16_t(y); return i;
+    };
+    hw.chars[1].items = {item("bread", 2, "main", 0, 0)};
+    hw.chars[2].items = {item("ore", 12, "main", 0, 0), item("sword", 1, "main", 2, 0)};
+    hw.boxes[700] = {"chest", {210, 0, 5}, {item("ore", 5, "main", 0, 0)}};
+    AtMenu(cw);
+    cw.boxes = hw.boxes;
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    host.Assign(FakeWorld::H(2), 2);
+    Run({{&host, &hw}, {&cli, &cw}}, 1.5);
+    // from its own character: the host's game drops it (the stack leaves the host's inventory)
+    cw.localDrops.push_back({FakeWorld::H(2), item("ore", 12, "main", 0, 0)});
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return hw.chars[2].items.size() == 1; });
+    CHECK(hw.chars[2].items.size() == 1 && hw.chars[2].items[0].templateSid == "sword");
+    CHECK(hw.drops == 1 && hw.lastDropper == FakeWorld::H(2));
+    // from a chest it opened: dropped by its character standing by the chest
+    cw.containerReqs.push_back({FakeWorld::H(2), "chest", {210, 0, 5}});
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return cli.entityCount() == 4; });
+    CHECK(cli.entityCount() == 4);
+    cw.localDrops.push_back({FakeWorld::B(700), item("ore", 5, "main", 0, 0)});
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return hw.boxes[700].items.empty(); });
+    CHECK(hw.boxes[700].items.empty());
+    CHECK(hw.drops == 2 && hw.lastDropper == FakeWorld::H(2));
+    // from the host's own character: refused, nothing leaves it
+    cw.localDrops.push_back({FakeWorld::H(1), item("bread", 2, "main", 0, 0)});
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0);
+    CHECK(hw.chars[1].items.size() == 1 && hw.drops == 2);
+    // actor safety: a drop from a chest names the character that drops it; forged ones are refused
+    std::map<Handle, uint32_t, bool (*)(const Handle&, const Handle&)> net([](const Handle& a, const Handle& b) { return a.serial < b.serial || (a.serial == b.serial && a.type < b.type); });
+    host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { net[h] = id; });
+    CHECK(net.count(FakeWorld::B(700)) && net.count(FakeWorld::H(1)) && net.count(FakeWorld::H(2)));
+    hw.boxes[700].items = {item("ore", 5, "main", 0, 0)};
+    const uint8_t me = cli.localId();
+    auto forge = [&](uint32_t actor) {
+        InvOp op; op.kind = InvOpKind::Drop; op.fromNetId = net[FakeWorld::B(700)]; op.toNetId = actor; op.item = item("ore", 5, "main", 0, 0);
+        Writer w; Encode(w, op); CHECK(host.InjectForTest(me, w));
+        Run({{&host, &hw}, {&cli, &cw}}, 0.5);
+    };
+    const uint32_t refused0 = host.actorRefusals();
+    forge(net[FakeWorld::H(1)]);   // the host's character
+    forge(0);                      // nobody
+    CHECK(hw.drops == 2 && hw.boxes[700].items.size() == 1 && host.actorRefusals() == refused0 + 2);
+    forge(net[FakeWorld::H(2)]);   // ours, standing by it: dropped by it
+    CHECK(hw.drops == 3 && hw.lastDropper == FakeWorld::H(2) && hw.boxes[700].items.empty());
+    hw.boxes[700].items = {item("ore", 5, "main", 0, 0)};
+    hw.chars[2].pos = {5000, 0, 5000};   // ours, but far from the chest
+    hw.chars[2].dest = hw.chars[2].pos;
+    forge(net[FakeWorld::H(2)]);
+    CHECK(hw.drops == 3 && hw.boxes[700].items.size() == 1);
 }
 
 // ---- fix G2: swaps, merges and refusals in looting
@@ -2164,6 +2378,89 @@ static void TestFactions() {
     CHECK(cw.factions == hw.factions && cli.factionsView().corrected > before);
 }
 
+// diplomacy: relations between factions, leaders, towns; French news for players
+static bool ChatHas(const Session& s, const std::string& part) {
+    for (const auto& l : s.chatLog()) if (l.find(part) != std::string::npos) return true;
+    return false;
+}
+static const FactionPairRelation* PairOf(const FakeWorld& w, const std::string& a, const std::string& b) {
+    for (const auto& p : w.diplo.pairs) if (p.from == a && p.to == b) return &p;
+    return nullptr;
+}
+static void TestDiplomacy() {
+    std::printf("session: diplomacy (wars between factions, leaders, towns) is the host's, everywhere, with news in French\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    // the save both games start from
+    DiplomacyState start;
+    RelationState calm; calm.relation = 10;
+    for (const char* a : {"holy", "shek", "bandits"})
+        for (const char* b : {"holy", "shek", "bandits"})
+            if (std::string(a) != b) start.pairs.push_back({a, b, calm});
+    start.uniques = {{"phoenix", kUniqueAlive, false}, {"tinfist", kUniqueAlive, false}};   // in id order, as games list them
+    start.towns = {{"squin", "shek", ""}, {"stoat", "holy", ""}};
+    hw.diplo = start;
+    FactionRelationEntry holy; holy.factionSid = "holy"; holy.hasOurs = holy.hasTheirs = true; holy.ours.relation = 0; holy.theirs.relation = 0;
+    hw.factions.factions = {holy};
+    hw.bounties[1].bounties = {};
+    AtMenu(cw);
+    cw.diplo = start;   // the host's save, loaded
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port;
+    SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    Run({{&host, &hw}, {&cli, &cw}}, 8.0, [&] { return cli.diplomacyView().received >= 3; });
+    CHECK(cli.diplomacyView().received >= 3);   // the three parts, once (nothing changed yet)
+    CHECK(cli.hostDiplomacy().pairs.empty() && cli.hostDiplomacy().uniques.size() == 2 && cli.hostDiplomacy().towns.size() == 2);
+    CHECK(cw.diplo == start);
+    CHECK(!ChatHas(cli, "Monde") && !ChatHas(cli, "Diplomatie"));   // the state as it was is not news
+    // the Shek chief dies by the players' hand: the Shek go to war with the Holy Nation, Squin is
+    // taken over; the Holy Nation turns on the players; a bounty is put on one of them
+    hw.diplo.uniques[1] = {"tinfist", kUniqueDead, true};
+    for (auto& p : hw.diplo.pairs)
+        if ((p.from == "shek" && p.to == "holy") || (p.from == "holy" && p.to == "shek")) { p.rel.war = true; p.rel.relation = -100; }
+    hw.diplo.towns[0] = {"squin", "holy", "squin-occupied"};
+    hw.factions.factions[0].theirs.relation = -60;
+    hw.bounties[1].bounties = {{"holy", 3000, 8u, false, 5}};
+    Run({{&host, &hw}, {&cli, &cw}}, 8.0, [&] {
+        const auto* p = PairOf(cw, "shek", "holy");
+        return p && p->rel.war && cw.diplo.uniques == hw.diplo.uniques && cw.diplo.towns == hw.diplo.towns && cw.bounties[1] == hw.bounties[1];
+    });
+    CHECK(PairOf(cw, "shek", "holy") && PairOf(cw, "shek", "holy")->rel.war && PairOf(cw, "holy", "shek")->rel.war);
+    CHECK(PairOf(cw, "bandits", "holy") && !PairOf(cw, "bandits", "holy")->rel.war);
+    CHECK(cw.diplo.uniques == hw.diplo.uniques && cw.diplo.towns == hw.diplo.towns);
+    CHECK(cli.hostDiplomacy().pairs.size() == 2);   // only the pairs that changed travel
+    for (const Session* s : {&host, &cli}) {         // the same news on both sides, in French
+        CHECK(ChatHas(*s, "Diplomatie : guerre entre"));
+        CHECK(ChatHas(*s, "Monde : tinfist est mort (de la main des joueurs)"));
+        CHECK(ChatHas(*s, "Monde : squin appartient maintenant à holy"));
+        CHECK(ChatHas(*s, "Monde : squin a changé"));
+        CHECK(ChatHas(*s, "Diplomatie : holy vous considère maintenant comme ennemi"));
+        CHECK(ChatHas(*s, "Prime : "));
+    }
+    // peace comes back: the pair is sent again (it moved since the host started), clients follow
+    for (auto& p : hw.diplo.pairs)
+        if (p.from == "shek" && p.to == "holy") { p.rel.war = false; p.rel.relation = 5; }
+    hw.bounties[1].bounties.clear();
+    Run({{&host, &hw}, {&cli, &cw}}, 8.0, [&] { const auto* p = PairOf(cw, "shek", "holy"); return p && !p->rel.war && cw.bounties[1].bounties.empty(); });
+    CHECK(!PairOf(cw, "shek", "holy")->rel.war && PairOf(cw, "holy", "shek")->rel.war);
+    CHECK(ChatHas(cli, "n'est plus recherché par holy"));
+    // the client's game changes them by itself: put back to the host's within a few seconds
+    for (auto& p : cw.diplo.pairs) if (p.from == "holy" && p.to == "shek") p.rel.war = false;
+    cw.diplo.uniques[1].state = kUniqueAlive;
+    const size_t before = cli.diplomacyView().corrected;
+    Run({{&host, &hw}, {&cli, &cw}}, 8.0, [&] { return PairOf(cw, "holy", "shek")->rel.war && cw.diplo.uniques == hw.diplo.uniques; });
+    CHECK(PairOf(cw, "holy", "shek")->rel.war && cw.diplo.uniques == hw.diplo.uniques && cli.diplomacyView().corrected > before);
+    // float noise in the host's relations between NPC factions is not news, nor sent again
+    const size_t sent = host.diplomacyView().sent;
+    for (auto& p : hw.diplo.pairs) p.rel.relation += 0.3f;
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0);
+    CHECK(host.diplomacyView().sent == sent);
+}
+
 // lot D: prisons
 static void TestCaptives() {
     std::printf("session: captive characters (cage, shackles, slavery, sentence) follow the host, and their release\n");
@@ -2209,6 +2506,73 @@ static void TestCaptives() {
     const int applies = cw.captiveApplies;
     Run({{&host, &hw}, {&cli, &cw}}, 2.5);
     CHECK(cw.captiveApplies == applies);
+}
+
+static void TestMap() {
+    std::printf("session: map markers (players' characters, hostile squads) and pings reach every player\n");
+    FakeWorld hw;
+    SetupHost(hw);
+    hw.threats = {MapThreat{{150, 0, 40}, 5, ThreatKind::Attacking, "Bandits"}};
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; hc.name = "Hote";
+    Session host(hw, hc, Now, Quiet("host"));
+    std::string err;
+    CHECK(host.Host(&err));
+    FakeWorld w1, w2;
+    AtMenu(w1); AtMenu(w2);
+    SessionConfig c1; c1.port = hc.port; c1.name = "Un";
+    SessionConfig c2; c2.port = hc.port; c2.name = "Deux";
+    Session s1(w1, c1, Now, Quiet("c1")), s2(w2, c2, Now, Quiet("c2"));
+    CHECK(s1.Join("127.0.0.1", hc.port, &err));
+    CHECK(s2.Join("127.0.0.1", hc.port, &err));
+    std::vector<std::pair<Session*, FakeWorld*>> all{{&host, &hw}, {&s1, &w1}, {&s2, &w2}};
+    Run(all, 15.0, [&] { return s1.state() == SessionState::Connected && s2.state() == SessionState::Connected && s1.entityCount() == 3 && s2.entityCount() == 3; });
+    CHECK(s1.state() == SessionState::Connected && s2.state() == SessionState::Connected);
+    host.Assign(FakeWorld::H(2), s1.localId());
+    host.Assign(FakeWorld::H(3), s2.localId());
+    Run(all, 3.0, [&] {
+        const auto& m = s2.mapMarkers();
+        return m.chars.size() == 3 && m.players.size() == 3 && m.chars[2].owner == s2.localId() && !m.threats.empty();
+    });
+    const MapMarkersMsg& m = s2.mapMarkers();
+    CHECK(m.chars.size() == 3 && m.players.size() == 3);
+    CHECK(s2.mapMarkersAge() < 2.0);
+    CHECK(m == host.mapMarkers() || m.chars.size() == host.mapMarkers().chars.size());
+    if (m.chars.size() == 3) {
+        CHECK(m.chars[0].owner == 1 && m.chars[1].owner == s1.localId() && m.chars[2].owner == s2.localId());
+        // every player has one character marked as their own (here: their first one)
+        CHECK((m.chars[0].flags & kMapAvatar) && (m.chars[1].flags & kMapAvatar) && (m.chars[2].flags & kMapAvatar));
+        CHECK(Dist(m.chars[1].pos, hw.chars[2].pos) < 1.0f);
+        Handle h; CHECK(s2.netIdHandle(m.chars[1].netId, h) && h == FakeWorld::H(2));
+    }
+    CHECK(m.threats.size() == 1 && m.threats[0].label == "Bandits" && m.threats[0].kind == ThreatKind::Attacking && m.threats[0].count == 5);
+    // characters far from a client are on its map too: positions follow the host's
+    hw.chars[3].pos = hw.chars[3].dest = {90000, 0, -90000};
+    Run(all, 2.0, [&] { return s1.mapMarkers().chars.size() == 3 && Dist(s1.mapMarkers().chars[2].pos, hw.chars[3].pos) < 1.0f; });
+    CHECK(s1.mapMarkers().chars.size() == 3 && Dist(s1.mapMarkers().chars[2].pos, hw.chars[3].pos) < 1.0f);
+    // a client pings: the host and the other client show it, in the pinger's name
+    CHECK(s1.PlaceMapPing({10, 0, 20}, PingKind::Danger));
+    CHECK(!s1.PlaceMapPing({11, 0, 20}, PingKind::Go));   // too soon
+    Run(all, 2.0, [&] { return host.pings().size() == 1 && s2.pings().size() == 1 && s1.pings().size() == 1; });
+    CHECK(host.pings().size() == 1 && s2.pings().size() == 1 && s1.pings().size() == 1);
+    if (s2.pings().size() == 1) {
+        CHECK(s2.pings()[0].ping.owner == s1.localId() && s2.pings()[0].ping.kind == PingKind::Danger && s2.pings()[0].ping.pos.z == 20);
+        CHECK(host.pings()[0].ping.id == s2.pings()[0].ping.id);
+    }
+    // the host's own ping, and the cap of 5 alive per player
+    CHECK(host.PlaceMapPing({1, 0, 1}, PingKind::Help));
+    for (int i = 0; i < 6; ++i) {
+        Run(all, Session::kPingInterval + 0.05);
+        s1.PlaceMapPing({float(100 + i), 0, 0}, PingKind::Go);
+    }
+    Run(all, 1.0);
+    size_t ofS1 = 0;
+    for (const auto& p : s2.pings()) ofS1 += p.ping.owner == s1.localId() ? 1 : 0;
+    CHECK(ofS1 == Session::kPingsPerPlayer);
+    CHECK(s2.pings().size() == Session::kPingsPerPlayer + 1);
+    // they fade away
+    Run(all, Session::kPingLife + 0.5, [&] { return host.pings().empty() && s2.pings().empty(); });
+    CHECK(host.pings().empty() && s2.pings().empty());
+    CHECK(hw.threatCalls > 0);
 }
 
 static void TestJobs() {   // fix G5
@@ -2369,6 +2733,486 @@ static void TestAdmin() {
     CHECK(host.chatLog().size() == hostLines);   // not a chat line of the host's
 }
 
+// ---------------------------------------------------------------- actor safety
+// What every task accepts as its subject: the table the host checks before the game's order
+// functions get an order (a BUILD order aimed at an NPC crashed the host in Character::addJob).
+static void TestTaskTargets() {
+    std::printf("actor safety: every task id is checked against what its subject is\n");
+    struct Kind { const char* name; uint32_t f; };
+    const uint32_t F = kTgtNamed | kTgtFound;
+    const Kind kinds[] = {
+        {"none", 0},
+        {"self", F | kTgtCharacter | kTgtSelf | kTgtConscious | kTgtSquad},
+        {"npc standing", F | kTgtCharacter | kTgtConscious},
+        {"npc down", F | kTgtCharacter | kTgtDown},
+        {"npc dead", F | kTgtCharacter | kTgtDead | kTgtDown},
+        {"squad mate standing", F | kTgtCharacter | kTgtConscious | kTgtSquad},
+        {"item", F | kTgtItem},
+        {"container", F | kTgtContainer | kTgtBuilding},
+        {"site of ours", F | kTgtBuilding | kTgtUnfinished | kTgtOurs},
+        {"finished building of ours", F | kTgtBuilding | kTgtOurs},
+        {"site of an NPC faction", F | kTgtBuilding | kTgtUnfinished},
+        {"bed", F | kTgtBuilding | kTgtBed},
+        {"cage", F | kTgtBuilding | kTgtCage},
+        {"machine", F | kTgtBuilding | kTgtMachine},
+        {"door", F | kTgtBuilding | kTgtDoor},
+        {"stale handle", kTgtNamed},
+    };
+    // the kinds each task accepts, for the orders the UI gives
+    const std::map<int, std::set<std::string>> expect = {
+        {2, {"site of ours"}},
+        {12, {"npc standing"}},
+        {98, {"bed"}}, {258, {"bed"}},
+        {87, {"machine"}},
+        {3, {"item"}},
+        {4, {"npc standing", "npc down", "squad mate standing"}},
+        {26, {"npc standing", "npc down", "npc dead", "squad mate standing", "container"}},
+        {25, {"self", "npc standing", "npc down", "squad mate standing"}},
+        {44, {"npc standing", "npc down", "squad mate standing"}},
+        {225, {"npc down", "npc dead"}},
+        {72, {"door"}},
+        {107, {"cage"}},
+        {6, {"none", "self"}},
+        {96, {"site of ours", "finished building of ours"}},
+    };
+    for (const auto& [task, ok] : expect)
+        for (const auto& k : kinds) {
+            const bool want = ok.count(k.name) > 0;
+            for (TaskVia via : {TaskVia::AddOrder, TaskVia::NewTask, TaskVia::TaskNearest, TaskVia::AddJob}) {
+                std::string why;
+                const bool got = TaskTargetAllowed(via, task, k.f, &why);
+                if (got != want) std::printf("    task %d on %s: %s (%s)\n", task, k.name, got ? "allowed" : "refused", why.c_str());
+                CHECK(got == want);
+                CHECK(got || !why.empty());
+            }
+        }
+    // every task id: a stale or unknown subject never reaches the game; unknown ids are refused
+    std::set<int> known;
+    for (int task = -5; task < 600; ++task) {
+        CHECK(!TaskTargetAllowed(TaskVia::AddJob, task, kTgtNamed, nullptr));
+        CHECK(!TaskTargetAllowed(TaskVia::TaskNearest, task, kTgtNamed, nullptr));
+        bool any = false;
+        for (const auto& k : kinds) any |= TaskTargetAllowed(TaskVia::AddOrder, task, k.f, nullptr);
+        if (any) known.insert(task);
+    }
+    CHECK(!known.count(0) && !known.count(1) && !known.count(55) && !known.count(118) && !known.count(124) && !known.count(599));
+    CHECK(known.count(2) && known.count(12) && known.count(258) && known.count(87));
+    // the squad bar and the Tâches panel act on the actor itself
+    CHECK(TaskTargetAllowed(TaskVia::SetOrder, 13, 0, nullptr) && !TaskTargetAllowed(TaskVia::SetOrder, 18, 0, nullptr) &&
+          !TaskTargetAllowed(TaskVia::SetOrder, -1, 0, nullptr));
+    CHECK(TaskTargetAllowed(TaskVia::RemovePermajob, 87, 0, nullptr) && !TaskTargetAllowed(TaskVia::RemoveJob, -3, 0, nullptr));
+    CHECK(!TaskTargetAllowed(TaskVia(99), 2, kTgtNamed | kTgtFound | kTgtBuilding | kTgtUnfinished | kTgtOurs, nullptr));
+    // the rules table: the requests naming an actor check it; host->client messages have no rule
+    size_t n = 0;
+    const MessageRule* rules = MessageRules(n);
+    CHECK(n >= 10);
+    for (Msg m : {Msg::Command, Msg::ContainerOpen, Msg::Appearance}) CHECK(MessageRuleFor(m) && MessageRuleFor(m)->subject == AuthSubject::OwnCharacter);
+    CHECK(MessageRuleFor(Msg::DialogReply)->subject == AuthSubject::OwnConversation);
+    CHECK(MessageRuleFor(Msg::InvOp)->subject == AuthSubject::Inventory);
+    for (Msg m : {Msg::Snapshot, Msg::Bind, Msg::Welcome, Msg::Result, Msg::Resync}) CHECK(MessageRuleFor(m) && MessageRuleFor(m)->role == AuthRole::HostOnly);
+    for (size_t i = 0; i < n; ++i) CHECK(rules[i].name && *rules[i].name);
+    // Result round trip
+    Result r;
+    r.request = Msg::Command; r.seq = 77; r.netId = 5; r.state = ResultState::Rejected; r.reason = ResultReason::WrongTarget; r.text = "Action refusée";
+    Writer w;
+    Encode(w, r);
+    Reader rd(w.data(), w.size());
+    Result back;
+    CHECK(PeekType(rd) == Msg::Result && Decode(rd, back) && back.seq == 77 && back.netId == 5 && back.state == ResultState::Rejected &&
+          back.reason == ResultReason::WrongTarget && back.text == r.text);
+}
+
+// Forged requests naming a character the sender does not own (the host's, another player's, an NPC,
+// none, unknown) are refused on the host for every request type; the client's own pass; the client
+// refuses to send them in the first place; orders aimed at the wrong kind of target are refused.
+static void TestActorSafety() {
+    std::printf("actor safety: a client never makes a character it does not own act\n");
+    FakeWorld hw, cw, cw2;
+    SetupHost(hw);
+    FakeChar npc; npc.squad = false; npc.pos = {120, 0, 10}; npc.dest = npc.pos;
+    hw.chars[10] = npc;
+    AtMenu(cw);
+    AtMenu(cw2);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port;
+    SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    SessionConfig cc2; cc2.port = hc.port; cc2.name = "D";
+    std::vector<std::string> hostLog;
+    Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
+    Session cli(cw, cc, Now, Quiet("cli"));
+    Session cli2(cw2, cc2, Now, Quiet("cli2"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 4));
+    CHECK(cli2.Join("127.0.0.1", hc.port, &err));
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}, {&cli2, &cw2}};
+    Run(all, 10.0, [&] { return cli2.state() == SessionState::Connected && cli2.entityCount() == 4; });
+    host.Assign(FakeWorld::H(2), cli.localId());    // the client's character
+    host.Assign(FakeWorld::H(3), cli2.localId());   // another player's
+    Run(all, 1.5);
+    std::map<uint32_t, uint32_t> net;   // serial -> netId
+    host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { net[h.serial] = id; });
+    CHECK(net.size() == 4 && net.count(1) && net.count(2) && net.count(3) && net.count(10));
+    const uint8_t me = cli.localId();
+    CHECK(host.CheckActor(me, net[2]) == Session::ActorVerdict::Ok);
+    CHECK(host.CheckActor(me, net[1]) == Session::ActorVerdict::NotOwned);    // the host's
+    CHECK(host.CheckActor(me, net[3]) == Session::ActorVerdict::NotOwned);    // another player's
+    CHECK(host.CheckActor(me, net[10]) == Session::ActorVerdict::NotSquad);   // an NPC
+    CHECK(host.CheckActor(me, 0) == Session::ActorVerdict::Missing);
+    CHECK(host.CheckActor(me, 9999) == Session::ActorVerdict::Unknown);
+    CHECK(host.CheckActor(1, net[1]) == Session::ActorVerdict::NotOwned);     // nobody acts "as the host" from the network
+    auto rejectedFor = [&](uint32_t seq, ResultReason why) {
+        for (const auto& r : cli.results()) if (r.seq == seq && r.state == ResultState::Rejected && r.reason == why) return true;
+        return false;
+    };
+    // 1. forged orders, one per order kind and way of giving it, naming every actor that is not ours
+    const Vec3 far{5000, 0, 5000};
+    uint32_t seq = 1000;
+    uint32_t forged = 0;
+    for (uint32_t actor : {net[1], net[3], net[10], 0u, 9999u}) {
+        for (int kind = 0; kind < 7; ++kind) {
+            Command c;
+            c.seq = ++seq;
+            c.netId = actor;
+            c.pos = far;
+            if (kind == 0) c.kind = CommandKind::MoveTo;
+            else if (kind == 1) c.kind = CommandKind::Stop;
+            else if (kind == 2) { c.kind = CommandKind::PickUp; c.itemSid = "x"; }
+            else if (kind == 3) { c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = 258; }   // sleep in a bed
+            else if (kind == 4) { c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = 12; c.subject = FakeWorld::H(10); }   // talk
+            else if (kind == 5) { c.kind = CommandKind::Task; c.via = TaskVia::SetOrder; c.task = 13; }
+            else { c.kind = CommandKind::SquadMove; }
+            Writer w;
+            Encode(w, c);
+            CHECK(host.InjectForTest(me, w));
+            ++forged;
+        }
+    }
+    hw.orderedSerials.clear();
+    Run(all, 1.5);
+    CHECK(hw.orderedSerials.empty());   // nothing ran, on anyone
+    CHECK(Dist(hw.chars[1].dest, far) > 1 && Dist(hw.chars[3].dest, far) > 1 && Dist(hw.chars[10].dest, far) > 1);
+    CHECK(host.actorRefusals() >= forged);
+    CHECK(rejectedFor(1001, ResultReason::NotYourCharacter));   // the host's character, answered by seq
+    bool anyNoActor = false;
+    for (const auto& r : cli.results()) anyNoActor |= r.reason == ResultReason::NoActor;
+    CHECK(anyNoActor);
+    bool logged = false;
+    for (const auto& l : hostLog) logged |= l.find("refused: actor " + std::to_string(net[1]) + " not owned by player " + std::to_string(me)) != std::string::npos;
+    CHECK(logged);
+    bool noticed = false;
+    for (const auto& l : cli.chatLog()) noticed |= l.find("Action refusée") != std::string::npos;
+    CHECK(noticed);
+    // 2. the other request types naming a character that is not ours: looking into a container, new
+    //    looks, dropping an item, answering someone else's conversation
+    const uint32_t r0 = host.actorRefusals();
+    { ContainerOpen m; m.looterNetId = net[1]; m.sid = "chest"; Writer w; Encode(w, m); CHECK(host.InjectForTest(me, w)); }
+    { AppearanceMsg m; m.netId = net[1]; m.name = "Hacked"; Writer w; Encode(w, m); CHECK(host.InjectForTest(me, w)); }
+    { InvOp op; op.kind = InvOpKind::Drop; op.fromNetId = net[1]; op.item.templateSid = "sword"; op.item.quantity = 1; Writer w; Encode(w, op); CHECK(host.InjectForTest(me, w)); }
+    { DialogReply a; a.dialogId = 4242; a.index = 0; Writer w; Encode(w, a); CHECK(host.InjectForTest(me, w)); }
+    { ContainerOpen m; m.looterNetId = net[3]; m.sid = "chest"; Writer w; Encode(w, m); CHECK(host.InjectForTest(me, w)); }
+    Run(all, 1.0);
+    CHECK(host.actorRefusals() >= r0 + 5);
+    CHECK(host.recentRefusals(me) > 5.0);
+    // 3. the client's own character: obeyed, answered Done
+    hw.orderedSerials.clear();
+    { Command c; c.seq = 5000; c.netId = net[2]; c.kind = CommandKind::MoveTo; c.pos = {222, 0, 0}; Writer w; Encode(w, c); CHECK(host.InjectForTest(me, w)); }
+    Run(all, 1.5, [&] { return Dist(hw.chars[2].dest, {222, 0, 0}) < 1e-3f; });
+    CHECK(Dist(hw.chars[2].dest, {222, 0, 0}) < 1e-3f);
+    CHECK((hw.orderedSerials == std::vector<uint32_t>{2}));
+    Run(all, 0.5);
+    bool done = false;
+    for (const auto& r : cli.results()) done |= r.seq == 5000 && r.state == ResultState::Done;
+    CHECK(done);
+    // 4. the client refuses to send an order for a character it does not own (French notice)
+    const uint32_t r1 = host.actorRefusals();
+    const size_t chat0 = cli.chatLog().size();
+    Command mv; mv.kind = CommandKind::MoveTo; mv.pos = far;
+    cw.localOrders.push_back({FakeWorld::H(1), mv});
+    cw.localOrders.push_back({FakeWorld::H(3), mv});
+    Run(all, 3.0);   // past the notice's rate limit
+    CHECK(host.actorRefusals() == r1);   // never sent
+    CHECK(cli.chatLog().size() > chat0);
+    CHECK(Dist(hw.chars[1].dest, far) > 1 && Dist(hw.chars[3].dest, far) > 1);
+    // ... and one sent as is anyway (forged) is refused by the host
+    Command forgedRaw = mv;
+    forgedRaw.netId = net[1];
+    CHECK(cli.SendRawCommandForTest(forgedRaw));
+    Run(all, 1.0);
+    CHECK(host.actorRefusals() == r1 + 1 && Dist(hw.chars[1].dest, far) > 1);
+    // 5. orders of our own character aimed at the wrong kind of target: refused, nothing runs
+    hw.subjectFlags[10] = kTgtCharacter | kTgtConscious;   // the NPC
+    hw.subjectFlags[1] = kTgtCharacter | kTgtConscious | kTgtSquad;
+    const int run0 = hw.tasksRun;
+    uint32_t s2 = 6000;
+    for (int task : {2, 87, 98, 258, 72, 107, 3, 284}) {   // build, operate, sleep, door, cage, pick up, loot a container: on an NPC
+        Command c; c.seq = ++s2; c.netId = net[2]; c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = task; c.subject = FakeWorld::H(10);
+        Writer w; Encode(w, c); CHECK(host.InjectForTest(me, w));
+    }
+    { Command c; c.seq = ++s2; c.netId = net[2]; c.kind = CommandKind::Task; c.via = TaskVia::AddJob; c.task = 2; c.subject = FakeWorld::H(77); Writer w; Encode(w, c); CHECK(host.InjectForTest(me, w)); }   // stale
+    { Command c; c.seq = ++s2; c.netId = net[2]; c.kind = CommandKind::Task; c.via = TaskVia::AddJob; c.task = 2; Writer w; Encode(w, c); CHECK(host.InjectForTest(me, w)); }   // no subject at all
+    { Command c; c.seq = ++s2; c.netId = net[2]; c.kind = CommandKind::Task; c.via = TaskVia::AddOrder; c.task = 12; c.subject = FakeWorld::H(1); Writer w; Encode(w, c); CHECK(host.InjectForTest(me, w)); }   // talk to a squad mate
+    Run(all, 1.5);
+    CHECK(hw.tasksRun == run0);
+    for (uint32_t q = 6001; q <= s2; ++q) CHECK(rejectedFor(q, ResultReason::WrongTarget));
+    // ... while the right target is obeyed
+    hw.subjectFlags[50] = kTgtBuilding | kTgtUnfinished | kTgtOurs;
+    { Command c; c.seq = 7000; c.netId = net[2]; c.kind = CommandKind::Task; c.via = TaskVia::NewTask; c.task = 2; c.subject = FakeWorld::B(50); Writer w; Encode(w, c); CHECK(host.InjectForTest(me, w)); }
+    { Command c; c.seq = 7001; c.netId = net[2]; c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = 25; c.subject = FakeWorld::H(1); Writer w; Encode(w, c); CHECK(host.InjectForTest(me, w)); }   // first aid on the host's character: the actor is ours
+    Run(all, 1.5);
+    CHECK(hw.tasksRun == run0 + 2);
+    CHECK(cli.rejectedCount() > 0);
+    CHECK(host.state() == SessionState::Hosting && cli.state() == SessionState::Connected);   // everyone alive
+}
+
+// Every message has exactly one authority rule; PeekType accepts exactly the messages; host->client
+// messages sent by a client are refused; a client's map pings are rate-limited by their rule.
+static void TestMessageRules() {
+    std::printf("authority: every message type has its rule; host-only ones refused from clients; pings rate-limited\n");
+    size_t n = 0;
+    const MessageRule* rules = MessageRules(n);
+    std::set<int> ruled;
+    for (size_t i = 0; i < n; ++i) {
+        CHECK(ruled.insert(int(rules[i].type)).second);   // one rule per message
+        CHECK(MsgName(rules[i].type) != nullptr);          // ... and only for messages
+        CHECK(rules[i].name && *rules[i].name);
+    }
+    int messages = 0;
+    for (int t = 0; t < 256; ++t) {   // every Msg value (MsgName has a case for each enumerator)
+        const Msg m = Msg(t);
+        const bool isMsg = MsgName(m) != nullptr;
+        const MessageRule* r = MessageRuleFor(m);
+        if (isMsg) {
+            ++messages;
+            if (!r) std::printf("    no authority rule for message %d (%s)\n", t, MsgName(m));
+            CHECK(r != nullptr && r->type == m);
+        } else {
+            CHECK(r == nullptr);
+        }
+        const uint8_t b = uint8_t(t);
+        Reader rd(&b, 1);
+        CHECK(PeekType(rd).has_value() == isMsg);
+    }
+    CHECK(messages == int(n) && messages >= 59);
+    // the ids of the messages merged together (protocol 33): no clash, the right direction
+    static_assert(uint8_t(Msg::JoinQueue) == 72 && uint8_t(Msg::BagBind) == 80 && uint8_t(Msg::MapMarkers) == 82 && uint8_t(Msg::MapPing) == 83 &&
+                  uint8_t(Msg::Diplomacy) == 85 && uint8_t(Msg::Result) == 90, "message ids of protocol 33");
+    for (Msg m : {Msg::Diplomacy, Msg::MapMarkers, Msg::JoinQueue, Msg::BagBind, Msg::Result, Msg::Welcome, Msg::Pong})
+        CHECK(MessageRuleFor(m)->role == AuthRole::HostOnly);
+    CHECK(MessageRuleFor(Msg::Hello)->role == AuthRole::Handshake);
+    CHECK(MessageRuleFor(Msg::MapPing)->role == AuthRole::InGame && MessageRuleFor(Msg::MapPing)->minInterval == Session::kPingInterval);
+    for (size_t i = 0; i < n; ++i)
+        if (rules[i].type != Msg::MapPing) CHECK(rules[i].minInterval == 0);
+    // on a host: a client sending host->client messages is refused; its pings pass at most once per interval
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    AtMenu(cw);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    const uint8_t me = cli.localId();
+    const uint32_t r0 = host.actorRefusals();
+    const size_t ents0 = host.entityCount();
+    { DiplomacyMsg m; m.part = DiploPart::Towns; m.towns = {{"town-1", "holy", "town-1-destroyed"}}; Writer w; Encode(w, m); CHECK(host.InjectForTest(me, w)); }
+    { MapMarkersMsg m; m.players = {{me, "C"}}; Writer w; Encode(w, m); CHECK(host.InjectForTest(me, w)); }
+    { JoinQueueMsg m; m.position = 1; m.total = 1; m.current = "C"; Writer w; Encode(w, m); CHECK(host.InjectForTest(me, w)); }
+    { BagBind m{77, 1, "backpack"}; Writer w; Encode(w, m); CHECK(host.InjectForTest(me, w)); }
+    { Result m; m.state = ResultState::Done; Writer w; Encode(w, m); CHECK(host.InjectForTest(me, w)); }
+    CHECK(host.actorRefusals() == r0 + 5);
+    CHECK(host.entityCount() == ents0);   // the forged BagBind made nothing
+    const size_t pings0 = host.pings().size();
+    const uint32_t limited0 = host.rateLimited();
+    for (int i = 0; i < 5; ++i) {
+        MapPingMsg p; p.kind = PingKind::Danger; p.pos = {float(i), 0, 0};
+        Writer w; Encode(w, p); CHECK(host.InjectForTest(me, w));
+    }
+    CHECK(host.pings().size() == pings0 + 1 && host.rateLimited() == limited0 + 4);
+    CHECK(host.actorRefusals() == r0 + 5);   // too fast is not a refusal
+    Run({{&host, &hw}, {&cli, &cw}}, Session::kPingInterval + 0.2);
+    { MapPingMsg p; p.kind = PingKind::Go; p.pos = {9, 0, 9}; Writer w; Encode(w, p); CHECK(host.InjectForTest(me, w)); }
+    CHECK(host.pings().size() == pings0 + 2);
+    Run({{&host, &hw}, {&cli, &cw}}, 1.0, [&] { return cli.pings().size() >= 2; });
+    CHECK(cli.pings().size() == 2);
+}
+
+// Players join one at a time; the others wait in a queue and are told their place.
+static void TestJoinQueue() {
+    std::printf("session: join queue: 3 near-simultaneous joins (mid-save, mid-transfer), one at a time through the editor\n");
+    {
+        FakeWorld hw;
+        SetupHost(hw);
+        hw.exportFrames = 30;   // a save that takes a while: the second player arrives during it
+        SessionConfig hc; hc.name = "Host"; hc.port = ++g_port;
+        Session host(hw, hc, Now, Quiet("host"));
+        std::string err;
+        CHECK(host.Host(&err));
+        const char* names[3] = {"Alpha", "Bravo", "Charlie"};
+        std::vector<std::unique_ptr<FakeWorld>> ws;
+        std::vector<std::unique_ptr<Session>> cs;
+        for (int k = 0; k < 3; ++k) {
+            ws.push_back(std::make_unique<FakeWorld>());
+            AtMenu(*ws.back());
+            ws.back()->editorSupported = true;
+            SessionConfig cc; cc.name = names[k]; cc.port = hc.port;
+            cs.push_back(std::make_unique<Session>(*ws.back(), cc, Now, Quiet(names[k])));
+        }
+        auto all = [&] {
+            std::vector<std::pair<Session*, FakeWorld*>> v{{&host, &hw}};
+            for (size_t k = 0; k < cs.size(); ++k) if (cs[k]) v.push_back({cs[k].get(), ws[k].get()});
+            return v;
+        };
+        CHECK(cs[0]->Join("127.0.0.1", hc.port, &err));
+        Run(all(), 2.0, [&] { return host.joinQueue().size() == 1; });
+        CHECK(cs[1]->Join("127.0.0.1", hc.port, &err));   // the host is saving its world for Alpha
+        Run(all(), 10.0, [&] { return cs[0]->state() == SessionState::Loading; });
+        CHECK(cs[0]->state() == SessionState::Loading);
+        CHECK(cs[2]->Join("127.0.0.1", hc.port, &err));   // Alpha is loading the world
+        Run(all(), 10.0, [&] { return ws[0]->editorOpen && cs[2]->queueStatus(); });
+        // Alpha is in the world, making their character; Bravo and Charlie wait their turn
+        CHECK(cs[0]->state() == SessionState::Connected && ws[0]->editorOpen);
+        Run(all(), 3.0, [&] { auto q = cs[2]->queueStatus(); return q && q->phase == JoinPhase::Editor; });
+        for (int k = 1; k < 3; ++k) {
+            const JoinQueueMsg* q = cs[k]->queueStatus();
+            CHECK(q != nullptr);
+            if (!q) continue;
+            CHECK(q->position == k + 1 && q->total == 3 && q->current == "Alpha" && q->phase == JoinPhase::Editor);
+            CHECK(cs[k]->state() == SessionState::Downloading && ws[k]->imports == 0);
+        }
+        auto list = host.joinQueue();
+        CHECK(list.size() == 3);
+        if (list.size() == 3) {
+            CHECK(list[0].name == "Alpha" && !list[0].waiting && list[0].phase == JoinPhase::Editor);
+            CHECK(list[1].name == "Bravo" && list[1].waiting && list[2].name == "Charlie" && list[2].waiting);
+        }
+        CHECK(hw.holding);                              // the game waits for Alpha's editor
+        CHECK(hw.named.size() == 1);                    // only Alpha's character so far
+        // nobody is dropped while waiting, however long the turn ahead lasts
+        Run(all(), 3.0);
+        CHECK(cs[1]->state() == SessionState::Downloading && cs[2]->state() == SessionState::Downloading);
+        // Alpha closes the editor: Bravo's turn
+        ws[0]->editorOpen = false;
+        Run(all(), 10.0, [&] { return ws[1]->editorOpen; });
+        CHECK(cs[1]->state() == SessionState::Connected && ws[1]->editorOpen);
+        Run(all(), 3.0, [&] { auto q = cs[2]->queueStatus(); return q && q->current == "Bravo" && q->phase == JoinPhase::Editor; });
+        {
+            const JoinQueueMsg* q = cs[2]->queueStatus();
+            CHECK(q && q->position == 2 && q->total == 2 && q->current == "Bravo");
+        }
+        // Bravo's save had Alpha's character in it
+        CHECK(hw.named.count("Alpha") && ws[1]->chars.count(hw.named["Alpha"]) == 1);
+        ws[1]->editorOpen = false;
+        Run(all(), 10.0, [&] { return ws[2]->editorOpen; });
+        CHECK(cs[2]->state() == SessionState::Connected && !cs[2]->queueStatus());
+        ws[2]->editorOpen = false;
+        Run(all(), 5.0, [&] { return !hw.holding && host.joinQueue().empty(); });
+        CHECK(!hw.holding && host.joinQueue().empty() && host.joiningPlayers() == 0);
+        CHECK(hw.named.size() == 3);
+        // the ones who came earlier get a stand-in for the later ones' characters
+        Run(all(), 10.0, [&] {
+            for (auto& w : ws) for (auto& [n, serial] : hw.named) if (!w->chars.count(serial)) return false;
+            return true;
+        });
+        for (int k = 0; k < 3; ++k) {
+            CHECK(cs[k]->state() == SessionState::Connected);
+            CHECK(ws[k]->imports == 1 && ws[k]->editorOpened == 1);
+            for (auto& [n, serial] : hw.named) CHECK(ws[k]->chars.count(serial) == 1);   // everyone's character, everywhere
+        }
+        CHECK(ws[2]->fp == hw.fp);   // the last save is the host's current world
+    }
+    std::printf("session: join queue: the player in the editor crashes, a queued player leaves: the queue moves on, renumbered\n");
+    {
+        FakeWorld hw;
+        SetupHost(hw);
+        SessionConfig hc; hc.name = "Host"; hc.port = ++g_port;
+        Session host(hw, hc, Now, Quiet("host"));
+        std::string err;
+        CHECK(host.Host(&err));
+        const char* names[4] = {"Alpha", "Bravo", "Charlie", "Delta"};
+        std::vector<std::unique_ptr<FakeWorld>> ws;
+        std::vector<std::unique_ptr<Session>> cs;
+        for (int k = 0; k < 4; ++k) {
+            ws.push_back(std::make_unique<FakeWorld>());
+            AtMenu(*ws.back());
+            ws.back()->editorSupported = true;
+            SessionConfig cc; cc.name = names[k]; cc.port = hc.port;
+            cs.push_back(std::make_unique<Session>(*ws.back(), cc, Now, Quiet(names[k])));
+        }
+        auto all = [&] {
+            std::vector<std::pair<Session*, FakeWorld*>> v{{&host, &hw}};
+            for (size_t k = 0; k < cs.size(); ++k) if (cs[k]) v.push_back({cs[k].get(), ws[k].get()});
+            return v;
+        };
+        CHECK(cs[0]->Join("127.0.0.1", hc.port, &err));
+        Run(all(), 2.0, [&] { return host.joinQueue().size() == 1; });
+        for (int k = 1; k < 4; ++k) CHECK(cs[k]->Join("127.0.0.1", hc.port, &err));
+        Run(all(), 10.0, [&] { auto q = cs[3]->queueStatus(); return ws[0]->editorOpen && q && q->phase == JoinPhase::Editor; });
+        CHECK(ws[0]->editorOpen && host.joinQueue().size() == 4);
+        // Alpha's game dies with the editor open: Bravo's turn, with a save made after that
+        cs[0].reset();
+        Run(all(), 10.0, [&] { return ws[1]->editorOpen; });
+        CHECK(cs[1]->state() == SessionState::Connected && ws[1]->editorOpen);
+        CHECK(host.players().size() == 3);
+        Run(all(), 3.0, [&] { auto q = cs[3]->queueStatus(); return q && q->position == 3 && q->current == "Bravo" && q->phase == JoinPhase::Editor; });
+        {
+            const JoinQueueMsg* q = cs[2]->queueStatus();
+            CHECK(q && q->position == 2 && q->total == 3 && q->current == "Bravo");
+            q = cs[3]->queueStatus();
+            CHECK(q && q->position == 3 && q->total == 3);
+        }
+        // Charlie gives up while queued: Delta moves up
+        cs[2]->Leave();
+        Run(all(), 3.0, [&] { auto q = cs[3]->queueStatus(); return q && q->position == 2; });
+        {
+            const JoinQueueMsg* q = cs[3]->queueStatus();
+            CHECK(q && q->position == 2 && q->total == 2 && q->current == "Bravo");
+            auto list = host.joinQueue();
+            CHECK(list.size() == 2 && list[0].name == "Bravo" && list[1].name == "Delta");
+        }
+        ws[1]->editorOpen = false;
+        Run(all(), 10.0, [&] { return ws[3]->editorOpen; });
+        CHECK(cs[3]->state() == SessionState::Connected);
+        ws[3]->editorOpen = false;
+        Run(all(), 5.0, [&] { return !hw.holding && host.joinQueue().empty(); });
+        CHECK(!hw.holding && host.joinQueue().empty());
+        CHECK(cs[1]->state() == SessionState::Connected && cs[3]->state() == SessionState::Connected);
+        CHECK(ws[3]->fp == hw.fp && ws[3]->chars.count(hw.named["Bravo"]) == 1);
+    }
+    std::printf("session: several players in the character editor at once: the game waits for the last one\n");
+    {
+        FakeWorld hw, aw, bw;
+        SetupHost(hw);
+        AtMenu(aw); AtMenu(bw);
+        SessionConfig hc; hc.name = "Host"; hc.port = ++g_port;
+        SessionConfig ac; ac.name = "Alpha"; ac.port = hc.port;
+        SessionConfig bc; bc.name = "Bravo"; bc.port = hc.port;
+        Session host(hw, hc, Now, Quiet("host"));
+        Session a(aw, ac, Now, Quiet("a")), b(bw, bc, Now, Quiet("b"));
+        std::string err;
+        CHECK(host.Host(&err));
+        aw.editorSupported = bw.editorSupported = true;
+        CHECK(a.Join("127.0.0.1", hc.port, &err));
+        Run({{&host, &hw}, {&a, &aw}, {&b, &bw}}, 10.0, [&] { return aw.editorOpen; });
+        aw.editorOpen = false;   // Alpha's join turn ends
+        CHECK(b.Join("127.0.0.1", hc.port, &err));
+        Run({{&host, &hw}, {&a, &aw}, {&b, &bw}}, 10.0, [&] { return bw.editorOpen; });
+        bw.editorOpen = false;
+        Run({{&host, &hw}, {&a, &aw}, {&b, &bw}}, 3.0, [&] { return !hw.holding; });
+        CHECK(a.state() == SessionState::Connected && b.state() == SessionState::Connected && !hw.holding);
+        // both reopen their editor (Multijoueur window, "edit my character")
+        CHECK(a.EditOwnCharacter() && b.EditOwnCharacter());
+        Run({{&host, &hw}, {&a, &aw}, {&b, &bw}}, 3.0, [&] { return hw.holding && host.joinQueue().empty(); });
+        CHECK(hw.holding && host.joinQueue().empty());
+        aw.editorOpen = false;   // one closes: still paused for the other
+        Run({{&host, &hw}, {&a, &aw}, {&b, &bw}}, 1.0);
+        CHECK(hw.holding);
+        bw.editorOpen = false;
+        Run({{&host, &hw}, {&a, &aw}, {&b, &bw}}, 3.0, [&] { return !hw.holding; });
+        CHECK(!hw.holding);
+    }
+}
+
 static void TestManyPlayers() {
     std::printf("session: 1 host + 4 clients joining at once, 120 characters\n");
     FakeWorld hw;
@@ -2473,6 +3317,7 @@ int main() {
     TestSpawnReplication();
     TestInventories();
     TestInventorySwaps();
+    TestGroundDrops();
     TestTrade();
     TestTravellingTrade();
     TestCrashRejoin();
@@ -2480,11 +3325,17 @@ int main() {
     TestRanged();   // lot C
     TestCaptives();
     TestFactions();
+    TestDiplomacy();
     TestDoors();   // lot A
     TestFloorsAndStall();   // fix G6
     TestJobs();   // fix G5
     TestAdmin();
+    TestTaskTargets();   // actor safety
+    TestActorSafety();
+    TestMap();
     TestManyPlayers();
+    TestJoinQueue();
+    TestMessageRules();   // the authority table covers every message
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

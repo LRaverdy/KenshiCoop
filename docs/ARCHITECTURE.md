@@ -181,7 +181,7 @@ Ordre dans `Tick()` (`main.cpp`) :
   reviennent à l'hôte et sont arrêtés au tick suivant (`IWorld::HaltCharacter`), mémorisés par
   compte (`leftOwned_`) et rendus s'il revient ; tout ce qui porte son id est effacé (ordres,
   `pendingInvOps_`, apparences, conteneurs demandés ou en route, `openBy`, `trades_`, poses et
-  achats de bâtiments, portes, conversations, `buildSyncedPlayers_`, `factionsServed_`) : l'id
+  achats de bâtiments, portes, conversations, `buildSyncedPlayers_`, `factionsServed_`, `diploServed_`) : l'id
   sera peut-être celui d'un autre joueur. Une nouvelle connexion du même compte (ou, sans compte,
   du même nom sur une connexion muette depuis 2 s) remplace l'ancienne **avant** le choix du nom
   et de l'id.
@@ -267,13 +267,39 @@ Ordre dans `Tick()` (`main.cpp`) :
     ouvert, et va vers ses personnages ou ce contenant ;
   - qu'une réponse vise une conversation de ce joueur ;
   - qu'une apparence est celle de son personnage.
+- **Contrôle central** (`common/src/session_authority.cpp`) : **chaque** message a sa règle dans la
+  table `kMessageRules` (`protocol.cpp` : rôle requis, sujet à contrôler, intervalle minimal). Rôles :
+  `Connected`, `Joining`, `InGame` pour ce qu'un client envoie ; `Handshake` pour `Hello` (lu avant
+  qu'un joueur existe) ; `HostOnly` pour les messages hôte → client (`Diplomacy`, `MapMarkers`,
+  `JoinQueue`, `BagBind`, `Result`...), que l'hôte refuse d'un client. `MapPing` (83) : `InGame`,
+  au plus un toutes les 0,5 s par joueur (`minInterval` : les autres sont ignorés sans refus, compteur
+  `rateLimited`). `MsgName` a un `case` par message, sans `default`, compilé avec l'avertissement
+  C4062 en erreur : un nouveau message ne compile pas sans son nom, et `TestMessageRules` vérifie
+  qu'il a sa règle. `Session::Authorize`
+  l'applique **avant** le gestionnaire (`HostPacket`) ; le client filtre ce qu'il envoie avec la même
+  table (`ClientMaySend`). Sujet `OwnCharacter` (Command, ContainerOpen, Appearance, dépôt d'objet) :
+  l'acteur nommé doit être un membre d'escouade attribué à ce joueur (`CheckActor` ; pour un dépôt
+  depuis un sac à dos porté, son porteur : `DropActor` ; pour un dépôt depuis un coffre ouvert, un
+  corps ou le sac d'un PNJ, le perso du joueur nommé dans `InvOp::toNetId`, qui doit se tenir à moins de
+  `kDropReach` (160) : `DropRequestActor`) ; revérifié au
+  moment de l'exécution (`AdmitActor`). Un refus : une ligne `auth: [nom] <message> refused: <règle>
+  (...)` (et `refused: actor N not owned by player P`), un compteur par joueur et par règle qui
+  décroît (demi-vie 60 s, `recentRefusals`), et un `Result` rejeté avec un texte français.
+- **Cible des ordres** : `KenshiWorld::TargetFlagsOf` décrit le sujet (perso debout / à terre / mort,
+  membre de l'escouade, objet, contenant, bâtiment, chantier, à nous, lit, cage, machine, porte) et
+  `kc::TaskTargetAllowed` (table par numéro de tâche, `protocol.cpp`) décide ; numéro inconnu refusé.
 - **Divergence** : tout état répliqué est réécrit par le message suivant. Le client ne peut pas
   diverger durablement. Une prédiction refusée est annulée, parce que l'hôte renvoie l'état réel.
 
 ## Messages (`common/include/kc/protocol.h`)
 
-Version du protocole : **27** au moment de la rédaction. Elle augmente à chaque changement de
+Version du protocole : **33** (sacs à dos portés : `BagBind` ; sécurité des acteurs : `Result` ; file d'attente des arrivées : `JoinQueue` ; diplomatie : `Diplomacy` ; carte : `MapMarkers`, `MapPing`) au moment de la rédaction. Elle augmente à chaque changement de
 format, et une version différente est refusée à la connexion.
+
+Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51, 56 à 67, 69, 73 à 79, 81, 84,
+86 à 89, 91 et plus) sont refusés par `PeekType`, qui n'accepte que les messages de l'énumération `Msg`
+(`MsgName`). Chaque message a sa règle d'autorité (`kMessageRules`, voir « Contrôle central ») ; sens
+« H→C » : règle `HostOnly`, refusé par l'hôte s'il vient d'un client.
 
 | # | Message | Sens | Rôle |
 |---|---|---|---|
@@ -288,7 +314,7 @@ format, et une version différente est refusée à la connexion.
 | 9 | Snapshot | H→C (non fiable) | position, rotation, destination, drapeaux (bouge, court, à terre, mort), cible de combat, allure, corps porté |
 | 10 | Command | C→H | ordre pour un personnage du joueur (aller, arrêter, ramasser, tâche, changement d'escouade) |
 | 11 | TimeState | H→C | vitesse, pause, heure du jeu |
-| 12 / 13 | Ping / Pong | ⇄ | mesure du ping |
+| 12 / 13 | Ping / Pong | C→H / H→C | mesure du ping (le client envoie `Ping`, l'hôte répond `Pong`) |
 | 14 | Vitals | H→C (non fiable) | sang, minuteur de K.-O., faim, inconscient ou mort, chair, étourdissement et bandage de chaque membre |
 | 15 | WorldBegin | H→C | début du transfert du monde (taille, nombre de fichiers) |
 | 16 | WorldChunk | H→C | morceau d'un fichier de la sauvegarde (16 Ko) |
@@ -296,7 +322,7 @@ format, et une version différente est refusée à la connexion.
 | 18 | Ready | C→H | monde chargé (empreinte vérifiée par l'hôte) |
 | 19 | Weather | H→C | météo de chaque région |
 | 20 | Inventory | H→C | inventaire complet d'une entité |
-| 21 | InvOp | C→H | déplacement ou dépôt d'objet fait dans l'interface d'inventaire |
+| 21 | InvOp | C→H | déplacement ou dépôt d'objet fait dans l'interface d'inventaire (dépôt depuis un coffre ou un corps : `toNetId` = le perso du joueur qui le lâche) |
 | 22 | Effects | H→C | effets météo placés, déplacés ou terminés |
 | 23 | Anim | H→C | début ou fin d'animation (attaque, action, trébuché, modes, arme, chiffres de dégâts) |
 | 24 | AnimFrame | H→C (non fiable) | tout ce que joue chaque personnage proche (nom, temps, poids, vitesse, horloge) |
@@ -314,19 +340,27 @@ format, et une version différente est refusée à la connexion.
 | 36 | ContainerOpen | C→H | mon personnage veut regarder dans ce contenant (type, endroit) |
 | 37 | ContainerOpened | H→C | il y est : netId du contenant (son contenu suit en `Inventory`) |
 | 38 | ContainerClose | ⇄ | fenêtre fermée (client) ou à fermer (hôte : vol repéré, trop loin) |
-| 43 | Factions | H→C | relations de la faction du joueur avec chaque faction, dans les deux sens ; rang et réputation |
-| 44 | Bounties | H→C | primes par faction, crime en cours, peine de prison et laissez-passer de chaque personnage de l'escouade |
+| 39 | TradeOpen | H→C | commerce avec un marchand : ses comptoirs (ou les sacs portés de sa caravane : `ownerNetId`), ses cats ; leurs objets suivent en `Inventory` |
 | 40 | Doors | H→C | portes et serrures près des joueurs : ouverte/fermée, verrouillée, niveau de serrure, cassée (lot A) |
 | 41 | DoorRequest | C→H | le joueur a cliqué un bouton du panneau d'une porte (ouvrir, verrouiller) (lot A) |
-| 49 | Captives | H→C | lot D : personnages en cage, enchaînés, esclaves, évadés, enlevés, en peine de prison (et ceux libérés, une fois) |
+| 43 | Factions | H→C | relations de la faction du joueur avec chaque faction, dans les deux sens ; rang et réputation |
+| 44 | Bounties | H→C | primes par faction, crime en cours, peine de prison et laissez-passer de chaque personnage de l'escouade |
 | 46 | Shots | H→C | (lot C) projectiles tirés par les personnages et tourelles de l'hôte : tireur, cible, point visé, orientation de départ, tourelle |
 | 47 | Ranged | H→C | (lot C) point visé des personnages en combat à distance, tourelles proches des joueurs, fins de combat à distance |
+| 49 | Captives | H→C | lot D : personnages en cage, enchaînés, esclaves, évadés, enlevés, en peine de prison (et ceux libérés, une fois) |
 | 52 | BuildPlace | ⇄ | lot E : une pose du mode construction (client : demande à l'hôte, netId 0 ; hôte : à bâtir par tous, avec son netId) |
 | 53 | BuildState | H→C | lot E : avancement des chantiers suivis (terminé, en pause, en démontage), avec type et endroit |
 | 54 | BuildRemove | H→C | lot E : un bâtiment suivi a été détruit pour de bon chez l'hôte |
 | 55 | BuildAction | ⇄ | lot E : acheter / démonter (client : demande ; hôte : rejeu d'un achat chez tous) |
+| 68 | JobList | H→C | fix G5 : la liste de tâches (panneau Tâches) des persos des joueurs, telle que l'hôte l'a |
 | 70 | Stall | H→C | fix G6 : ton jeu va se figer (TP lointaine, zone à charger), la connexion attend jusqu'à 2 min |
 | 71 | Floors | H→C | fix G6 : groupe d'étage (`CharMovement::floorGroup`) des persos, à chaque changement et toutes les 5 s |
+| 72 | JoinQueue | H→C | file d'attente des arrivées : ta place (1 = ton tour), le total, qui arrive et son étape (sauvegarde, chargement, éditeur) ; à chaque changement et toutes les 2 s |
+| 80 | BagBind | H→C | sac à dos porté par un personnage : son netId, son porteur, son modèle (son contenu suit en `Inventory`) |
+| 82 | MapMarkers | H→C | carte : joueurs, position de chaque perso de l'escouade (joueur, perso du joueur, à terre, mort) et escouades hostiles proches, 3 fois par seconde |
+| 83 | MapPing | ⇄ | ping sur la carte (client : demande à l'hôte, au plus un toutes les 0,5 s ; hôte : à tous, avec son id et son joueur) |
+| 85 | Diplomacy | H→C | diplomatie, une partie par message : paires de factions (hors joueur) changées depuis le début, personnages uniques (mort, vivant, emprisonné, par les joueurs), villes (faction, variante) |
+| 90 | Result | H→C | sécurité des acteurs (protocole 33) : réponse à une demande (type, `seq` du `Command`, acteur) : rejetée (raison, texte français) ou faite ; le client annule ce qu'il avait prédit (tâche ajoutée au panneau) |
 
 ## Les flux, système par système
 
@@ -335,6 +369,9 @@ format, et une version différente est refusée à la connexion.
    - Un nom déjà pris devient « Nom 2 ».
    - Une connexion du même compte Steam remplace l'ancienne.
    - L'hôte répond `Welcome` et annonce `PlayerJoined` aux autres.
+   - Le joueur entre dans la **file d'attente des arrivées** (`joinQueue_`, premier arrivé, premier
+     servi). Les étapes 2 à 6 et l'éditeur se font **pour un seul joueur à la fois**
+     (`joinTurn_`, voir « File d'attente » ci-dessous).
 2. L'hôte **gèle son monde** (`HoldForJoin` : vraie pause, réimposée si quelqu'un appuie sur
    lecture). Avec `own_character=1`, il retrouve ou crée le personnage du joueur
    (`EnsurePlayerCharacter`) **avant** de sauvegarder.
@@ -351,6 +388,31 @@ format, et une version différente est refusée à la connexion.
    - la météo complète, puis les effets une seconde plus tard ;
    - les escouades ;
    - `EditCharacter` si le personnage vient d'être créé.
+
+#### File d'attente des arrivées (`AdvanceJoinQueue`, `SendJoinQueue`)
+- **Pourquoi** : l'empreinte vérifiée à l'étape 6 est l'ensemble des handles de l'escouade. Le
+  personnage d'un nouveau venu la change. Avant la file, plusieurs arrivées partageaient une
+  sauvegarde : quand un joueur arrivait après l'envoi de la sauvegarde aux premiers, l'hôte créait
+  son personnage et sauvegardait de nouveau pour lui seul ; les premiers chargeaient un monde qui
+  ne correspondait plus à celui de l'hôte et restaient bloqués jusqu'au délai de 300 s (essai
+  `join4` du 10/10 : Joueur2 et Joueur3 « joining took too long », seul Joueur4 entré).
+- **Un tour** commence quand le joueur précédent a fini. Le délai de 300 s court à partir du
+  début du tour (puis de l'envoi du monde), jamais pendant l'attente. Le tour se termine quand le
+  joueur est dans le monde **et** a fermé l'éditeur (`EditState`), ou sans éditeur s'il avait déjà
+  son personnage ; aussi s'il part, plante ou est exclu, après 10 min d'éditeur, ou si l'éditeur
+  ne s'est pas ouvert 30 s après son arrivée. Le tour suivant commence aussitôt, avec une
+  **sauvegarde neuve** qui contient tous les joueurs arrivés avant.
+- **Ceux qui attendent** reçoivent `JoinQueue` (position, total, joueur en cours, étape) à chaque
+  changement et toutes les 2 s. Le client reste en « Downloading » : chaque `JoinQueue` repousse
+  son propre délai, la connexion ENet reste vivante. Panneau et fenêtre Multijoueur : « File
+  d'attente : position 2/3 — en attente de Joueur2 (création du personnage)… ». Un joueur qui
+  part de la file est retiré tout de suite (`ForgetPlayer`) et les positions sont renumérotées.
+- **L'hôte** liste la file dans son panneau, sa fenêtre Multijoueur et la commande `status` de la
+  console (« File d'attente des arrivées : 1. Joueur2 — création du personnage, 2. Joueur3 —
+  attend son tour »). Journal : « join queue: … ».
+- Le monde reste gelé du premier tour au dernier. Sur un même PC, les clients partagent le
+  dossier `KenshiCoopJoin` : la file évite aussi qu'un téléchargement écrase celui d'un autre
+  pendant son chargement.
 
 ### Positions (`SendSnapshots`, `KenshiWorld::Apply`)
 - Le client garde 1 s d'instantanés par entité et rend l'état à `heure de l'hôte − 50 ms`. Il
@@ -390,11 +452,16 @@ format, et une version différente est refusée à la connexion.
 1. Le client note par quelle fonction de l'interface l'ordre est passé (`TaskVia`), le numéro de
    tâche, le sujet (handle, plus type et position si ce n'est pas un personnage) et le bâtiment de
    destination (handle, type, position).
-2. L'hôte retrouve le sujet et le bâtiment, par type et endroit s'il le faut.
-3. Il sélectionne **ce seul personnage**, appelle la même fonction d'interface, puis restaure
-   exactement la sélection, l'escouade affichée et le personnage du panneau de détails
-   (`WithSelection`).
-4. Chaque ordre est journalisé : `[nom] order "..." (n) on X -> ok/FAILED`.
+2. L'hôte vérifie l'acteur (`Authorize` puis `AdmitActor` : un perso de ce joueur), retrouve le
+   sujet et le bâtiment (par type et endroit s'il le faut), puis vérifie que la tâche accepte ce
+   sujet (`TaskTargetAllowed`) : sinon refus, rien n'est appelé.
+3. Il sélectionne **exactement ce personnage** (`kenshi::SelectExactly` : `unselectAll` garde le
+   perso principal sélectionné, il en est retiré ; sélection vérifiée, sinon refus), appelle la même
+   fonction d'interface, puis restaure exactement la sélection, l'escouade affichée, le personnage du
+   panneau de détails et le `hand` principal global `0x21345D0` (`WithSelection`). Témoin : si un perso
+   de la sélection de l'hôte reçoit une tâche pendant l'appel, ligne `SAFETY:` et compteur `leaks`.
+4. Chaque ordre est journalisé : `[nom] order "..." (n) on X -> ok/FAILED`, et le client reçoit un
+   `Result` (fait, ou rejeté avec la raison).
 
 ### Dialogues (`SendDialogs`, `KenshiWorld::Note*`)
 - Les bulles de l'hôte partent à tout le monde.
@@ -428,6 +495,25 @@ format, et une version différente est refusée à la connexion.
 4. Les fonctions du jeu qui créent une entrée manquante : `FactionRelations::getRelationData`
    (`0x6B4C60`) et l'`operator[]` de la table des primes (`0x5E7EE0`). Le reste est écrit
    directement (voir [MOTEUR.md](MOTEUR.md), « Factions, relations et primes »).
+5. Les deux côtés comparent chaque nouvelle version à la précédente et ajoutent aux événements du
+   panneau une ligne en français (`NoteFactionChanges`, `NoteBountyChanges`) : faction qui devient
+   alliée / neutre / ennemie (règles du jeu, `StandingOf`), guerre, prime posée ou levée.
+
+### Diplomatie (`common/src/session_diplomacy.cpp`, `plugin/factions.cpp`)
+1. Toutes les 3 s, l'hôte lit (`IWorld::ReadDiplomacy`) les relations de chaque faction envers
+   chaque autre (la faction du joueur exclue), la table des personnages uniques et les villes.
+2. Paires de factions : la première lecture sert de référence (la sauvegarde envoyée aux clients les
+   contient). Une paire qui s'en écarte (drapeaux, ou 1 point de relation : `SamePairRelation`) entre
+   dans la liste des changées et y reste. Seule cette liste part.
+3. Chaque partie (paires, uniques, villes) est encodée à part (au plus 60 Ko, la fin est coupée
+   sinon) et envoyée quand son empreinte change, sinon aux seuls joueurs qui viennent d'arriver.
+4. Le client garde la dernière version de chaque partie et l'impose à son arrivée puis toutes les
+   3 s (`ApplyFactionPairs`, `ApplyUniques`, `ApplyTowns`) ; corrections comptées (`diplosync`).
+5. Nouvelles en français des deux côtés (`NoteDiplomacyChanges`) : guerre, alliance, chef mort ou
+   emprisonné, ville prise ou changée ; rien pour la première version reçue.
+6. Fenêtre Diplomatie (Ctrl+Shift+F, `plugin/overlay.cpp`, remplie par `FillDiplomacy` dans
+   `plugin/main.cpp` une fois par seconde quand elle est ouverte) : `Session::hostFactions`,
+   `hostBounties`, `hostDiplomacy`.
 ### Portes et serrures (`HostDoors`, `ClientDoors`, `common/src/session_doors.cpp`, `plugin/doors.cpp`)
 1. Toutes les 0,5 s, l'hôte lit (`KenshiWorld::ReadDoors`) les portes (`DoorStuff`) et les meubles
    à serrure (`DoorLock`) à moins de 400 unités de chaque membre de l'escouade. Une entrée : type,
@@ -457,6 +543,23 @@ format, et une version différente est refusée à la connexion.
    du jeu (`showTradeWindow`, type 2).
 5. La fermeture vient du client (fenêtre fermée), ou de l'hôte : vol repéré, ou personnage à plus
    de 50 unités.
+
+### Carte, minicarte, repères, pings (`session_map.cpp`, `plugin/map.cpp`, `plugin/overlay_map.cpp`)
+1. L'hôte construit toutes les 1/3 s le flux de carte (`HostMapMarkers`) : joueurs, chaque perso de
+   l'escouade (netId, joueur, « son » perso, à terre, mort, position lue chez l'hôte) et les
+   escouades hostiles (`KenshiWorld::ReadMapThreats` : campagne du jeu contre notre faction,
+   combat contre un des nôtres, « ennemi » d'après `MapScreen::getMarkerColor` dans le rayon) ;
+   il le garde pour lui et l'envoie à tous (`MapMarkers`, fiable).
+2. Chaque image, `UpdateMapScene` (fil du jeu) fait une `MapScene` (`plugin/map_view.h`) : le flux
+   (positions locales quand le perso est chargé ici), l'état de la carte du jeu (rectangle de
+   l'image, partie visible, bornes du monde), la caméra (proj × vue d'Ogre), les cadres de portrait
+   des persos des joueurs (cellules suivies par les hooks `PortraitMainCellView::update` / destructeur),
+   les pings et les réglages ; elle passe à l'overlay.
+3. L'overlay (`MapOverlayDraw`, fil de rendu) dessine carte, minicarte, têtes, cadres et pings ;
+   la procédure de fenêtre (`MapOverlayMessage`) prend la molette et les boutons de la minicarte
+   et les clics de ping ; le filtre DirectInput cache ces clics au jeu.
+4. Ping : `Session::PlaceMapPing` (hôte : ajouté et diffusé ; client : `MapPing` à l'hôte, qui
+   vérifie 0,5 s par joueur, garde 5 pings par joueur et le renvoie à tous) ; 10 s de vie.
 
 ### Captivité (lot D : `HostCaptives`, `ClientCaptives`, `plugin/prisons.cpp`)
 1. L'hôte relit toutes les 0,5 s la captivité de chaque entité (`KenshiWorld::ReadCaptive` :
@@ -542,7 +645,10 @@ format, et une version différente est refusée à la connexion.
 
 ### Éditeur de personnage
 1. `EditCharacter` : le client ouvre l'éditeur sur son personnage.
-2. `EditState` : l'hôte met la partie en pause tant qu'un joueur édite (10 min au plus).
+2. `EditState` : l'hôte met la partie en pause tant qu'au moins un joueur édite (10 min au plus
+   chacun) ; plusieurs éditeurs ouverts en même temps (un nouveau venu et un joueur qui rouvre le
+   sien) : la pause dure jusqu'à la fermeture du dernier (« nobody is in the character editor any
+   more: the game resumes »). Le client envoie `EditState` à l'image même où l'éditeur s'ouvre.
 3. Validation (hook `closeCharacterEditor`) : le client envoie `Appearance` (toutes les valeurs de
    la GameData d'apparence et le nom).
 4. L'hôte l'applique (le jeu reconstruit le corps) et la renvoie aux autres. Les éditions de
@@ -594,6 +700,10 @@ format, et une version différente est refusée à la connexion.
 | `plugin/kenshi.cpp`, `kenshi.h` | table des fonctions, offsets, accès à la mémoire du jeu |
 | `plugin/world.cpp`, `world.h` | `KenshiWorld` (`IWorld`), `HookView` |
 | `plugin/overlay.cpp`, `overlay.h` | overlay ImGui : panneau d'état, fenêtre Multijoueur, console, conversation |
+| `common/include/kc/colors.h` | la couleur de chaque joueur (`kc::PlayerColor`) |
+| `common/src/protocol_map.cpp`, `src/session_map.cpp` | messages et session de la carte : flux de carte, pings |
+| `plugin/map.cpp`, `map.h`, `map_view.h` | carte : escouades hostiles (hôte), scène de chaque image, projections, hooks des portraits |
+| `plugin/overlay_map.cpp`, `overlay_map.h` | dessin de la carte, de la minicarte, des repères, des cadres et des pings ; souris |
 | `plugin/host_console.cpp`, `host_console.h` | console Windows hors du jeu |
 | `plugin/admin.cpp`, `admin.h` | administration de l'hôte : mode dieu par joueur, TP, XP, soins, argent (sur le fil du jeu de l'hôte) |
 | `common/include/kc/admin.h`, `src/admin.cpp` | syntaxe des commandes `admin`, calcul de l'XP du jeu, registre du mode dieu (testés par `TestAdmin`) |
@@ -616,6 +726,14 @@ format, et une version différente est refusée à la connexion.
 | `[sync] interest_radius` | 0 | 0 : tous les personnages actifs sont répliqués |
 | `[coop] own_character` | 1 | un personnage par joueur qui rejoint |
 | `[ui] overlay` | 1 | panneau d'état en haut à droite |
+| `[ui] map_markers` | 1 | joueurs et ennemis sur la carte du jeu |
+| `[ui] head_markers` | 1 | repère au-dessus des persos des joueurs |
+| `[ui] portrait_colours` | 1 | cadre coloré des portraits des joueurs |
+| `[ui] minimap` | 1 | minicarte (Ctrl+Shift+N) |
+| `[ui] minimap_rotate` | 0 | minicarte tournante (sinon nord en haut) |
+| `[ui] minimap_corner` | 1 | coin : 0 haut gauche, 1 haut droite, 2 bas gauche, 3 bas droite |
+| `[ui] minimap_zoom` | 1500 | unités du centre au bord de la minicarte (300 à 30000) |
+| `[ui] pings` | 1 | placer et voir les pings |
 | `[ui] host_console` | 1 | la console hors du jeu s'ouvre seule quand on héberge |
 | `[debug] commands` | 0 | canal de test (voir [TESTS.md](TESTS.md)) : **0 pour jouer** |
 | `[debug] steam_loopback` | 0 | relais « Steam » sur UDP local (tests à deux instances) |

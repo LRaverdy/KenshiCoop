@@ -30,6 +30,9 @@ inline constexpr uintptr_t MouseInventory = 0x2132B58;      // pointer to the it
 inline constexpr uintptr_t GameNew = 0xED6504;              // the game's operator new (its CRT's)
 inline constexpr uintptr_t GameDelete = 0xED64FE;           // the game's operator delete
 inline constexpr uintptr_t VtLektor = 0x168BAF0;            // lektor<RootObject*> (the game's small vector)
+// ---- diplomacy
+inline constexpr uintptr_t UniqueNPCManager = 0x212EB00;    // pointer to UniqueNPCManager (made by its getter 0x354560): boost::unordered_map<GameData*, UniqueCharacterState>
+inline constexpr uintptr_t TownList = 0x2134100;            // pointer to TownList (+0x50 lektor<TownBase*>)
 
 inline constexpr uintptr_t VtCharacter = 0x16f9eb8;
 inline constexpr uintptr_t VtCharacterHuman = 0x16f2848;
@@ -45,6 +48,11 @@ inline constexpr uintptr_t VtEffectGroupPoint = 0x168be10;        // point effec
 inline constexpr uintptr_t VtEffectGroupWandering = 0x168be58;    // wandering storms and gas clouds
 inline constexpr uintptr_t VtEffectHandlerPoint = 0x168c0a8;
 inline constexpr uintptr_t VtEffectHandlerWandering = 0x168c128;
+// ---- map markers
+inline constexpr uintptr_t ManagementScreenSingleton = 0x212F4F8;   // ManagementScreen* (the map, squads, research... window)
+inline constexpr uintptr_t VtManagementScreen = 0x16dcdf0;
+inline constexpr uintptr_t MarkerColourEnemy = 0x212F558;           // MapScreen::MarkerColourEnemy (what getMarkerColor returns for an enemy)
+inline constexpr uintptr_t VtPortraitCell = 0x16d26f8;              // PortraitMainCellView
 } // namespace rva
 
 struct FunctionSig {
@@ -210,6 +218,19 @@ enum Fn : int {
     FnGetNearestTown,           // Town* TownList::getNearestTown(const Vector3&, Faction* owner, Town* except, Faction* mine, TownType)
     FnWithinBordersRange,       // bool TownBase::withinBordersRange(const Vector3&, float mult) const
     FnGetNearestWithinItsRadius,// TownBase* TownList::getNearestWithinItsRadius(const Vector3&, bool skipPlayerTowns) const
+    // ---- diplomacy
+    FnUniqueMapIndex,           // pair<GameData* const, UniqueCharacterState>* UniqueNPCManager's unordered_map<GameData*, UniqueCharacterState>::operator[](GameData* const&)   (creates)
+    FnTownSetOverride,          // void TownBase::setOverride(GameData* override)   (+0x338, type, public, no-foliage range, and the override's faction)
+    FnTownSetFaction,           // void TownBase::setFaction(Faction*, bool)   (vt 0xA0: moves the town to that faction's town list)
+    // ---- map markers (plugin/map.cpp)
+    FnMapWorldToCoords,         // TPoint<int> MapScreen::worldToMapCoords(const Vector3&)   (ret via hidden ptr; the map screen's projection)
+    FnMapMarkerColor,           // static const MyGUI::Colour& MapScreen::getMarkerColor(RootObjectBase*)   (ally / neutral / enemy / player dot)
+    FnWarCurrentCampaign,       // CampaignInstance* FactionWarMgr::getCurrentCampaign(Platoon*)   (the raid or attack wave a squad belongs to, or null)
+    FnPortraitCellUpdate,       // void PortraitMainCellView::update(const IBDrawItemInfo&, PortraitData*)   (a squad bar portrait is (re)drawn)
+    FnPortraitCellDtor,         // PortraitMainCellView::~PortraitMainCellView()
+    // ---- ground drops
+    FnInventoryDropItem,        // void Inventory::dropItem(Item*)   (inventory window drag to the world: callbackObject->dropItem, then removeItemDontDestroy)
+    FnDropItemAnimal,           // void CharacterAnimal::dropItem(RootObject*)   (pack animals)
     // ---- crash report
     FnWriteCrashDump,           // void writeCrashDump(EXCEPTION_POINTERS*, const char* name)   (the game's crash reporter, called from the
                                 //   catch(...) around its main loop: crashDump*.dmp and "Kenshi has crashed"; no unhandled-exception filter sees that crash)
@@ -485,8 +506,16 @@ void SetDialogueShouting(void* dialogue, bool shout);
 bool ReadDialogueWindowText(const void* dialogue, std::string& text, std::vector<std::string>& replies);
 // A std::string the game can read (const&) for as long as `s` lives; 0x28 bytes.
 void GameStringView(const std::string& s, void* out);
-// Orders: make `only` the whole selection, run `fn`, then restore the player's selection.
-void WithSelection(Character* only, const std::function<void()>& fn);
+// Orders: make `actors` the whole selection (exactly them: nothing else), run `fn`, then restore the
+// player's selection, squad bar, details panel and main hand, all within the call. False (and `fn`
+// not run) when the selection could not be made exactly that: the game's unselectAll keeps the
+// main selected character, and an order given then would go to it too.
+bool WithSelection(const std::vector<Character*>& actors, const std::function<void()>& fn, std::string* why);
+bool WithSelection(Character* only, const std::function<void()>& fn);
+// Make `actors` the whole selection (no restore): false, with the reason, when something else stays
+// selected or an actor cannot be selected.
+bool SelectExactly(const std::vector<Character*>& actors, std::string* why);
+int SelectionRestoreFailures();   // times the player's selection could not be put back exactly
 // Run `fn`, then put the player's selection, squad bar and details panel back as they were (fn may
 // select characters: a squad created or joined).
 void KeepSelection(const std::function<void()>& fn);
@@ -639,6 +668,25 @@ void GroundItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out)
 // as a non-physical prop (shop goods, town clutter): what a player can still pick up or steal.
 bool ItemLoose(void* item);
 void LooseItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out);
+// An item object (Item and its 13 subclasses: weapons, armour, money, backpacks, limbs...) put in
+// the world by Item::activate and lying there: out of every inventory, active (+0x190), not in an item
+// group. Unlike ItemOnGround it does not wait for the physics body, which the game may create frames
+// after the drop (Item vt 0x220 builds it only once the item's zone/visual is ready).
+bool IsItemObject(const void* obj);
+bool ItemInWorld(void* item);
+void WorldItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out);
+void* InventoryCallback(void* inventory);      // Inventory +0x80: the object whose dropItem the inventory calls
+void* InventoryOfHolder(void* holder);         // a character's or a building's inventory
+// What an inventory window does when an item held by the mouse is released over the world:
+// Inventory::dropItem on the window's inventory (vt 0x38).
+bool InventoryDrop(void* inventory, void* item);
+bool InventoryRemove(void* inventory, void* item);   // Inventory::removeItemDontDestroy(item, all, true): what dropItem does after the drop
+// Host: an item of a building's inventory (a chest) dropped by a character standing by it: out of
+// the chest, then that character's dropItem (what the game's Building::dropItem does with its user).
+bool DropFromHolder(void* holder, void* item, Character* dropper);
+// tests: an item of that kind in that holder's inventory: "weapon", "armour", "item" (anything
+// else), or a template id / name part. Unequipped ones first; nullptr when none.
+void* FindItemOfKind(void* holder, const std::string& kind);
 // The player's own "pick up" order (PlayerInterface::pickupItem) given to that character alone: it
 // walks there and the game takes the item, as a theft when it belongs to someone.
 bool OrderPickupItem(Character* c, void* item);

@@ -114,6 +114,21 @@ void Encode(Writer& w, const PlayerLeft& m) { w.u8(uint8_t(Msg::PlayerLeft)); w.
 bool Decode(Reader& r, PlayerLeft& m) { m.id = r.u8(); return Done(r); }
 void Encode(Writer& w, const StallMsg& m) { w.u8(uint8_t(Msg::Stall)); w.u16(m.seconds); }
 bool Decode(Reader& r, StallMsg& m) { m.seconds = r.u16(); return Done(r); }
+void Encode(Writer& w, const JoinQueueMsg& m) {
+    w.u8(uint8_t(Msg::JoinQueue));
+    w.u8(m.position);
+    w.u8(m.total);
+    w.u8(uint8_t(m.phase));
+    w.str(m.current);
+}
+bool Decode(Reader& r, JoinQueueMsg& m) {
+    m.position = r.u8();
+    m.total = r.u8();
+    const uint8_t ph = r.u8();
+    m.phase = JoinPhase(ph);
+    m.current = r.str(kMaxNameLen);
+    return Done(r) && ph <= uint8_t(JoinPhase::Editor) && m.position >= 1 && m.position <= m.total && m.total <= kMaxPlayers;
+}
 void Encode(Writer& w, const FloorsMsg& m) {
     w.u8(uint8_t(Msg::Floors));
     w.varint(m.entries.size());
@@ -595,6 +610,262 @@ const char* StandingOrderLabel(int order) {
     }
 }
 
+bool TaskTargetAllowed(TaskVia via, int task, uint32_t t, std::string* why) {
+    auto fail = [&](const char* need) {
+        if (why) *why = "task " + std::to_string(task) + " (" + TaskLabel(task) + ") needs " + need;
+        return false;
+    };
+    // the Tâches panel and the squad bar act on the actor itself, with no subject
+    if (via == TaskVia::RemovePermajob || via == TaskVia::MovePermajob || via == TaskVia::RemoveJob)
+        return task >= 0 && task < 512 ? true : fail("a job kind (0-511)");
+    if (via == TaskVia::SetOrder) return task >= 0 && task <= 17 ? true : fail("a squad bar toggle (0-17)");
+    if (via != TaskVia::AddOrder && via != TaskVia::NewTask && via != TaskVia::TaskNearest && via != TaskVia::AddJob)
+        return fail("a known way of giving orders");
+    const bool named = (t & kTgtNamed) != 0;
+    if (named && !(t & kTgtFound)) return fail("its subject to be found here (unknown, stale or of another kind)");
+    const bool none = !named;
+    const bool self = (t & kTgtSelf) != 0;
+    const bool ch = (t & kTgtCharacter) != 0;
+    const bool dead = ch && (t & kTgtDead);
+    const bool other = ch && !self;                                   // another character
+    const bool living = ch && !dead;                                   // standing or knocked out
+    const bool standing = living && (t & kTgtConscious) && !(t & kTgtDown);
+    const bool lying = ch && (t & (kTgtDown | kTgtDead));             // knocked out or dead
+    const bool bld = !ch && (t & kTgtBuilding);
+    const bool cont = !ch && (t & kTgtContainer);
+    const bool item = !ch && (t & kTgtItem);
+    switch (task) {
+    case 2:   // build: a construction site of the player faction
+        return bld && (t & kTgtUnfinished) && (t & kTgtOurs) ? true : fail("an unfinished building of the player faction");
+    case 95: case 96:   // repair, dismantle
+        return bld && (t & kTgtOurs) ? true : fail("a building of the player faction");
+    case 3: case 259:   // pick up, eat
+        return item || (task == 259 && (none || self)) ? true : fail("an item");
+    case 4: case 5: case 235: case 262: case 263:   // attack, shoot
+        return other && !dead ? true : fail("another living character");
+    case 228: case 229:   // stealth knock out / kill
+        return other && standing ? true : fail("another character standing");
+    case 246:   // kidnap
+        return other && lying && !dead ? true : fail("another character knocked out");
+    case 6: case 7: case 27: case 28: case 30: case 54: case 69: case 116: case 257:   // the actor alone
+        return none || self ? true : fail("no subject");
+    case 29:   // go to
+        return none || self || bld || ch ? true : fail("a place, a building or a character");
+    case 12: case 126:   // talk
+        return other && standing && !(t & kTgtSquad) ? true : fail("a living NPC");
+    case 25: case 57: case 60: case 61: case 249: case 250: case 269:   // first aid, repair a robot, splint, heal legs
+        return living ? true : fail("a living character");
+    case 58:   // medic (job)
+        return none || living ? true : fail("no subject or a living character");
+    case 26:   // loot: a body, a container, or a merchant standing there (the game's trade)
+        return other || cont ? true : fail("a character or a container");
+    case 284:   // loot a container
+        return cont ? true : fail("a container");
+    case 31: case 44:   // follow (job), follow
+        return other && !dead ? true : fail("another living character");
+    case 68: case 225:   // carry someone
+        return other && lying ? true : fail("another character lying on the ground");
+    case 70: case 98: case 258:   // put down in a bed, sleep
+        return (t & kTgtBed) && !ch ? true : fail("a bed");
+    case 99:   // put someone in a bed
+        return ((t & kTgtBed) && !ch) || (other && lying) ? true : fail("a bed or a body");
+    case 72: case 73: case 76: case 77: case 78: case 81: case 226: case 285: case 286: case 290:   // doors and locks
+        return (t & kTgtDoor) && !ch ? true : fail("a door or a lock");
+    case 87: case 146: case 149: case 152: case 234:   // operate a machine, man a turret
+        return (t & kTgtMachine) && !ch ? true : fail("a machine");
+    case 97: case 231: case 255:   // train, eat crops, sit on the throne
+        return bld ? true : fail("a building");
+    case 107:   // get in a cage
+        return (t & kTgtCage) && !ch ? true : fail("a cage");
+    case 108:   // put in a cage
+        return ((t & kTgtCage) && !ch) || (other && lying) ? true : fail("a cage or a body");
+    case 110:   // free a prisoner
+        return ((t & kTgtCage) && !ch) || other ? true : fail("a cage or a prisoner");
+    case 244:   // grab food
+        return cont || item || bld ? true : fail("food (an item or a container)");
+    case 55: case 118: case 119: case 124:
+        return fail("a window the host would open (not available to client players)");
+    default:
+        return fail("a task a client may send (unknown task id)");
+    }
+}
+
+const char* ToString(ResultReason r) {
+    switch (r) {
+    case ResultReason::None: return "none";
+    case ResultReason::NotYourCharacter: return "not your character";
+    case ResultReason::NoActor: return "no actor";
+    case ResultReason::WrongTarget: return "wrong target";
+    case ResultReason::NotAllowed: return "not allowed";
+    case ResultReason::SelectionBusy: return "selection busy";
+    case ResultReason::Failed: return "failed";
+    }
+    return "?";
+}
+void Encode(Writer& w, const Result& m) {
+    w.u8(uint8_t(Msg::Result));
+    w.u8(uint8_t(m.request));
+    w.varint(m.seq);
+    w.varint(m.netId);
+    w.u8(uint8_t(m.state));
+    w.u8(uint8_t(m.reason));
+    w.str(m.text.size() > 400 ? m.text.substr(0, 400) : m.text);
+}
+bool Decode(Reader& r, Result& m) {
+    m.request = Msg(r.u8());
+    m.seq = GetU32Var(r);
+    m.netId = GetU32Var(r);
+    const uint8_t st = r.u8(), why = r.u8();
+    m.text = r.str(400);
+    if (st < 1 || st > 3 || why > uint8_t(ResultReason::Failed)) return false;
+    m.state = ResultState(st);
+    m.reason = ResultReason(why);
+    return Done(r);
+}
+
+namespace {
+const MessageRule kMessageRules[] = {
+    // client -> host (or both ways)
+    {Msg::Hello, AuthRole::Handshake, AuthSubject::None, "hello"},
+    {Msg::Ready, AuthRole::Joining, AuthSubject::None, "ready"},
+    {Msg::Command, AuthRole::InGame, AuthSubject::OwnCharacter, "order"},
+    {Msg::ContainerOpen, AuthRole::InGame, AuthSubject::OwnCharacter, "look into a container"},
+    {Msg::ContainerClose, AuthRole::Connected, AuthSubject::None, "close a container"},
+    {Msg::Appearance, AuthRole::InGame, AuthSubject::OwnCharacter, "new looks"},
+    {Msg::DialogReply, AuthRole::InGame, AuthSubject::OwnConversation, "answer in a conversation"},
+    {Msg::InvOp, AuthRole::InGame, AuthSubject::Inventory, "move an item"},
+    {Msg::BuildPlace, AuthRole::InGame, AuthSubject::None, "place a building"},
+    {Msg::BuildAction, AuthRole::InGame, AuthSubject::None, "buy or dismantle a building"},
+    {Msg::DoorRequest, AuthRole::InGame, AuthSubject::None, "door button"},
+    {Msg::EditState, AuthRole::Connected, AuthSubject::None, "character editor open/closed"},
+    {Msg::ClientLog, AuthRole::Connected, AuthSubject::None, "log lines"},
+    {Msg::ClientReport, AuthRole::Connected, AuthSubject::None, "sync report"},
+    {Msg::Chat, AuthRole::Connected, AuthSubject::None, "chat"},
+    {Msg::Ping, AuthRole::Connected, AuthSubject::None, "ping"},
+    {Msg::MapPing, AuthRole::InGame, AuthSubject::None, "map ping", 0.5},   // = Session::kPingInterval
+    // host -> client only
+    {Msg::Welcome, AuthRole::HostOnly, AuthSubject::None, "welcome"},
+    {Msg::Reject, AuthRole::HostOnly, AuthSubject::None, "reject"},
+    {Msg::PlayerJoined, AuthRole::HostOnly, AuthSubject::None, "player joined"},
+    {Msg::PlayerLeft, AuthRole::HostOnly, AuthSubject::None, "player left"},
+    {Msg::Bind, AuthRole::HostOnly, AuthSubject::None, "bind"},
+    {Msg::Unbind, AuthRole::HostOnly, AuthSubject::None, "unbind"},
+    {Msg::Snapshot, AuthRole::HostOnly, AuthSubject::None, "snapshot"},
+    {Msg::TimeState, AuthRole::HostOnly, AuthSubject::None, "time state"},
+    {Msg::Pong, AuthRole::HostOnly, AuthSubject::None, "pong"},
+    {Msg::Vitals, AuthRole::HostOnly, AuthSubject::None, "vitals"},
+    {Msg::WorldBegin, AuthRole::HostOnly, AuthSubject::None, "world begin"},
+    {Msg::WorldChunk, AuthRole::HostOnly, AuthSubject::None, "world chunk"},
+    {Msg::WorldEnd, AuthRole::HostOnly, AuthSubject::None, "world end"},
+    {Msg::Weather, AuthRole::HostOnly, AuthSubject::None, "weather"},
+    {Msg::Inventory, AuthRole::HostOnly, AuthSubject::None, "inventory"},
+    {Msg::Effects, AuthRole::HostOnly, AuthSubject::None, "effects"},
+    {Msg::Anim, AuthRole::HostOnly, AuthSubject::None, "anim"},
+    {Msg::AnimFrame, AuthRole::HostOnly, AuthSubject::None, "anim frame"},
+    {Msg::Ground, AuthRole::HostOnly, AuthSubject::None, "ground"},
+    {Msg::Progress, AuthRole::HostOnly, AuthSubject::None, "progress"},
+    {Msg::Dialog, AuthRole::HostOnly, AuthSubject::None, "dialog"},
+    {Msg::Squads, AuthRole::HostOnly, AuthSubject::None, "squads"},
+    {Msg::EditCharacter, AuthRole::HostOnly, AuthSubject::None, "edit character"},
+    {Msg::Resync, AuthRole::HostOnly, AuthSubject::None, "resync"},
+    {Msg::ContainerOpened, AuthRole::HostOnly, AuthSubject::None, "container opened"},
+    {Msg::TradeOpen, AuthRole::HostOnly, AuthSubject::None, "trade open"},
+    {Msg::Doors, AuthRole::HostOnly, AuthSubject::None, "doors"},
+    {Msg::Factions, AuthRole::HostOnly, AuthSubject::None, "factions"},
+    {Msg::Bounties, AuthRole::HostOnly, AuthSubject::None, "bounties"},
+    {Msg::Shots, AuthRole::HostOnly, AuthSubject::None, "shots"},
+    {Msg::Ranged, AuthRole::HostOnly, AuthSubject::None, "ranged"},
+    {Msg::Captives, AuthRole::HostOnly, AuthSubject::None, "captives"},
+    {Msg::BuildState, AuthRole::HostOnly, AuthSubject::None, "build state"},
+    {Msg::BuildRemove, AuthRole::HostOnly, AuthSubject::None, "build remove"},
+    {Msg::JobList, AuthRole::HostOnly, AuthSubject::None, "job list"},
+    {Msg::Stall, AuthRole::HostOnly, AuthSubject::None, "stall"},
+    {Msg::Floors, AuthRole::HostOnly, AuthSubject::None, "floors"},
+    {Msg::JoinQueue, AuthRole::HostOnly, AuthSubject::None, "join queue"},
+    {Msg::BagBind, AuthRole::HostOnly, AuthSubject::None, "bag bind"},
+    {Msg::MapMarkers, AuthRole::HostOnly, AuthSubject::None, "map markers"},
+    {Msg::Diplomacy, AuthRole::HostOnly, AuthSubject::None, "diplomacy"},
+    {Msg::Result, AuthRole::HostOnly, AuthSubject::None, "result"},
+};
+} // namespace
+const char* MsgName(Msg type) {
+    // no default: a Msg without its case does not compile (C4062 as an error), so each new message
+    // gets a name here, and TestMessageRules then asks for its rule
+#pragma warning(push)
+#pragma warning(error : 4062)
+    switch (type) {
+    case Msg::Hello: return "Hello";
+    case Msg::Welcome: return "Welcome";
+    case Msg::Reject: return "Reject";
+    case Msg::PlayerJoined: return "PlayerJoined";
+    case Msg::PlayerLeft: return "PlayerLeft";
+    case Msg::Chat: return "Chat";
+    case Msg::Bind: return "Bind";
+    case Msg::Unbind: return "Unbind";
+    case Msg::Snapshot: return "Snapshot";
+    case Msg::Command: return "Command";
+    case Msg::TimeState: return "TimeState";
+    case Msg::Ping: return "Ping";
+    case Msg::Pong: return "Pong";
+    case Msg::Vitals: return "Vitals";
+    case Msg::WorldBegin: return "WorldBegin";
+    case Msg::WorldChunk: return "WorldChunk";
+    case Msg::WorldEnd: return "WorldEnd";
+    case Msg::Ready: return "Ready";
+    case Msg::Weather: return "Weather";
+    case Msg::Inventory: return "Inventory";
+    case Msg::InvOp: return "InvOp";
+    case Msg::Effects: return "Effects";
+    case Msg::Anim: return "Anim";
+    case Msg::AnimFrame: return "AnimFrame";
+    case Msg::Ground: return "Ground";
+    case Msg::Progress: return "Progress";
+    case Msg::Dialog: return "Dialog";
+    case Msg::DialogReply: return "DialogReply";
+    case Msg::Squads: return "Squads";
+    case Msg::Appearance: return "Appearance";
+    case Msg::EditCharacter: return "EditCharacter";
+    case Msg::EditState: return "EditState";
+    case Msg::ClientLog: return "ClientLog";
+    case Msg::ClientReport: return "ClientReport";
+    case Msg::Resync: return "Resync";
+    case Msg::ContainerOpen: return "ContainerOpen";
+    case Msg::ContainerOpened: return "ContainerOpened";
+    case Msg::ContainerClose: return "ContainerClose";
+    case Msg::TradeOpen: return "TradeOpen";
+    case Msg::Doors: return "Doors";
+    case Msg::DoorRequest: return "DoorRequest";
+    case Msg::Factions: return "Factions";
+    case Msg::Bounties: return "Bounties";
+    case Msg::Shots: return "Shots";
+    case Msg::Ranged: return "Ranged";
+    case Msg::Captives: return "Captives";
+    case Msg::BuildPlace: return "BuildPlace";
+    case Msg::BuildState: return "BuildState";
+    case Msg::BuildRemove: return "BuildRemove";
+    case Msg::BuildAction: return "BuildAction";
+    case Msg::JobList: return "JobList";
+    case Msg::Stall: return "Stall";
+    case Msg::Floors: return "Floors";
+    case Msg::JoinQueue: return "JoinQueue";
+    case Msg::BagBind: return "BagBind";
+    case Msg::MapMarkers: return "MapMarkers";
+    case Msg::MapPing: return "MapPing";
+    case Msg::Diplomacy: return "Diplomacy";
+    case Msg::Result: return "Result";
+    }
+#pragma warning(pop)
+    return nullptr;
+}
+const MessageRule* MessageRuleFor(Msg type) {
+    for (const auto& r : kMessageRules) if (r.type == type) return &r;
+    return nullptr;
+}
+const MessageRule* MessageRules(size_t& count) {
+    count = sizeof(kMessageRules) / sizeof(kMessageRules[0]);
+    return kMessageRules;
+}
+
 void EncodeResync(Writer& w) { w.u8(uint8_t(Msg::Resync)); }
 
 // ---- lot A: doors
@@ -765,7 +1036,7 @@ bool Decode(Reader& r, Ping& m) { m.t = r.f64(); return Done(r); }
 
 std::optional<Msg> PeekType(Reader& r) {
     const uint8_t t = r.u8();
-    if (!r.ok() || t < uint8_t(Msg::Hello) || (t > uint8_t(Msg::BuildAction) && t != uint8_t(Msg::JobList) && t != uint8_t(Msg::Stall) && t != uint8_t(Msg::Floors) && t != uint8_t(Msg::BagBind))) return std::nullopt;
+    if (!r.ok() || !MsgName(Msg(t))) return std::nullopt;   // every message of the Msg enum, nothing else
     return Msg(t);
 }
 

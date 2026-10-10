@@ -1,4 +1,4 @@
-// Lot B: wire format of the faction relations and bounties (see protocol.h).
+// Lot B: wire format of the faction relations and bounties, and of the diplomacy (see protocol.h).
 #include "kc/protocol.h"
 
 #include <algorithm>
@@ -124,6 +124,81 @@ bool Decode(Reader& r, BountiesMsg& m) {
         c.accessPassSid = r.str(kMaxSidLen);
         c.accessPassUntil = r.u64();
         if (!r.ok() || c.netId == 0 || c.crime < 0 || c.crime > 64) return false;
+    }
+    return Done(r);
+}
+
+// ---- diplomacy
+void Encode(Writer& w, const DiplomacyMsg& m) {
+    w.u8(uint8_t(Msg::Diplomacy));
+    w.u8(uint8_t(m.part));
+    switch (m.part) {
+    case DiploPart::Pairs: {
+        const size_t n = std::min<size_t>(m.pairs.size(), kMaxDiploPairs);
+        w.varint(n);
+        for (size_t i = 0; i < n; ++i) {
+            w.str(m.pairs[i].from);
+            w.str(m.pairs[i].to);
+            PutRelation(w, m.pairs[i].rel);
+        }
+        break;
+    }
+    case DiploPart::Uniques: {
+        const size_t n = std::min<size_t>(m.uniques.size(), kMaxUniques);
+        w.varint(n);
+        for (size_t i = 0; i < n; ++i) {
+            w.str(m.uniques[i].sid);
+            w.u8(uint8_t(m.uniques[i].state | (m.uniques[i].byPlayer ? 0x80 : 0)));
+        }
+        break;
+    }
+    case DiploPart::Towns: {
+        const size_t n = std::min<size_t>(m.towns.size(), kMaxTowns);
+        w.varint(n);
+        for (size_t i = 0; i < n; ++i) {
+            w.str(m.towns[i].sid);
+            w.str(m.towns[i].ownerSid);
+            w.str(m.towns[i].overrideSid);
+        }
+        break;
+    }
+    }
+}
+
+bool Decode(Reader& r, DiplomacyMsg& m) {
+    m = DiplomacyMsg{};
+    const uint8_t part = r.u8();
+    if (part < uint8_t(DiploPart::Pairs) || part > uint8_t(DiploPart::Towns)) return false;
+    m.part = DiploPart(part);
+    switch (m.part) {
+    case DiploPart::Pairs:
+        m.pairs.resize(r.count(kMaxDiploPairs, 2 + 2 + 17));
+        for (auto& p : m.pairs) {
+            p.from = r.str(kMaxSidLen);
+            p.to = r.str(kMaxSidLen);
+            GetRelation(r, p.rel);
+            if (!r.ok() || p.from.empty() || p.to.empty() || p.from == p.to) return false;
+        }
+        break;
+    case DiploPart::Uniques:
+        m.uniques.resize(r.count(kMaxUniques, 3));
+        for (auto& u : m.uniques) {
+            u.sid = r.str(kMaxSidLen);
+            const uint8_t v = r.u8();
+            u.state = v & 0x7F;
+            u.byPlayer = (v & 0x80) != 0;
+            if (!r.ok() || u.sid.empty() || u.state > kUniqueImprisoned) return false;
+        }
+        break;
+    case DiploPart::Towns:
+        m.towns.resize(r.count(kMaxTowns, 4));
+        for (auto& t : m.towns) {
+            t.sid = r.str(kMaxSidLen);
+            t.ownerSid = r.str(kMaxSidLen);
+            t.overrideSid = r.str(kMaxSidLen);
+            if (!r.ok() || t.sid.empty()) return false;
+        }
+        break;
     }
     return Done(r);
 }
