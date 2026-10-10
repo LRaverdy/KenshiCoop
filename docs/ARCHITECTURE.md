@@ -277,7 +277,7 @@ Ordre dans `Tick()` (`main.cpp`) :
   C4062 en erreur : un nouveau message ne compile pas sans son nom, et `TestMessageRules` vérifie
   qu'il a sa règle. `Session::Authorize`
   l'applique **avant** le gestionnaire (`HostPacket`) ; le client filtre ce qu'il envoie avec la même
-  table (`ClientMaySend`). Sujet `OwnCharacter` (Command, ContainerOpen, Appearance, dépôt d'objet) :
+  table (`ClientMaySend`). Sujet `OwnCharacter` (Command, ContainerOpen, Appearance, ResearchRequest, MachineRequest, dépôt d'objet) :
   l'acteur nommé doit être un membre d'escouade attribué à ce joueur (`CheckActor` ; pour un dépôt
   depuis un sac à dos porté, son porteur : `DropActor` ; pour un dépôt depuis un coffre ouvert, un
   corps ou le sac d'un PNJ, le perso du joueur nommé dans `InvOp::toNetId`, qui doit se tenir à moins de
@@ -293,10 +293,10 @@ Ordre dans `Tick()` (`main.cpp`) :
 
 ## Messages (`common/include/kc/protocol.h`)
 
-Version du protocole : **33** (sacs à dos portés : `BagBind` ; sécurité des acteurs : `Result` ; file d'attente des arrivées : `JoinQueue` ; diplomatie : `Diplomacy` ; carte : `MapMarkers`, `MapPing`) au moment de la rédaction. Elle augmente à chaque changement de
+Version du protocole : **34** (atelier : `Research`, `ResearchRequest`, `Machines`, `MachineRequest` ; 33 : sacs à dos portés : `BagBind` ; sécurité des acteurs : `Result` ; file d'attente des arrivées : `JoinQueue` ; diplomatie : `Diplomacy` ; carte : `MapMarkers`, `MapPing`) au moment de la rédaction. Elle augmente à chaque changement de
 format, et une version différente est refusée à la connexion.
 
-Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51, 56 à 67, 69, 73 à 79, 81, 84,
+Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51, 60 à 67, 69, 73 à 79, 81, 84,
 86 à 89, 91 et plus) sont refusés par `PeekType`, qui n'accepte que les messages de l'énumération `Msg`
 (`MsgName`). Chaque message a sa règle d'autorité (`kMessageRules`, voir « Contrôle central ») ; sens
 « H→C » : règle `HostOnly`, refusé par l'hôte s'il vient d'un client.
@@ -352,6 +352,10 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | 53 | BuildState | H→C | lot E : avancement des chantiers suivis (terminé, en pause, en démontage), avec type et endroit |
 | 54 | BuildRemove | H→C | lot E : un bâtiment suivi a été détruit pour de bon chez l'hôte |
 | 55 | BuildAction | ⇄ | lot E : acheter / démonter (client : demande ; hôte : rejeu d'un achat chez tous) |
+| 56 | Research | H→C | atelier (protocole 34) : la recherche de la faction du joueur : technologies connues (plans lus compris), file dans l'ordre et avancement, niveau du banc |
+| 57 | ResearchRequest | C→H | atelier : mettre en file / retirer une technologie, apprendre un plan (acteur : le perso du joueur ; règle `OwnCharacter`) |
+| 58 | Machines | H→C | atelier : machines des joueurs près d'eux (et celles qu'un perso de joueur travaille) : opérateurs, marche / batterie, énergie, charge, barre de progression, production, ordres de fabrication et « répéter », netId de leur inventaire ; totaux d'énergie de leur ville |
+| 59 | MachineRequest | C→H | atelier : ajouter / retirer un ordre de fabrication, répéter, marche, batterie (acteur nommé ; règle `OwnCharacter`) |
 | 68 | JobList | H→C | fix G5 : la liste de tâches (panneau Tâches) des persos des joueurs, telle que l'hôte l'a |
 | 70 | Stall | H→C | fix G6 : ton jeu va se figer (TP lointaine, zone à charger), la connexion attend jusqu'à 2 min |
 | 71 | Floors | H→C | fix G6 : groupe d'étage (`CharMovement::floorGroup`) des persos, à chaque changement et toutes les 5 s |
@@ -608,6 +612,34 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 4. Les points visés sont réimposés à chaque image, et les tourelles tournées avec `aimAt`.
 5. Le hook de `shoot` refuse chez les clients tout tir qui ne vient pas de KenshiCoop. Les
    dégâts des projectiles du client sont refusés comme tous les autres (`applyDamage`).
+### Atelier : recherche, établis, machines, énergie (`session_workshop.cpp`, `plugin/workshop.cpp`)
+1. Chaque seconde, l'hôte lit la recherche de la faction (`IWorld::ReadResearch` : technologies
+   connues, plans lus compris, file et avancement, niveau du banc) et envoie `Research` si elle a
+   changé, à tous ; en entier toutes les 15 s et à un joueur qui arrive.
+2. Chaque seconde, il lit les machines à moins de 1500 unités des persos de l'escouade
+   (`ReadMachines`) : celles des joueurs, et toute autre qu'un perso de joueur travaille (mine,
+   filon). Opérateurs (en netIds), marche, batterie, énergie, charge, barre de progression, quantité
+   produite, ordres de fabrication et « répéter » ; les totaux d'énergie de leur ville. `Machines`
+   part pour ce qui change, tout toutes les 5 s. L'inventaire d'une machine suivie devient une entité
+   (`Entity::machine`) envoyée à **tous** les joueurs, ouverte ou non ; elle est oubliée quand la
+   machine n'est plus suivie (sauf si un joueur l'a ouverte).
+3. Le client impose tout (`ApplyResearch`, `ApplyMachine`, `ApplyTownPower`), à l'arrivée puis
+   toutes les 3 s (recherche) / 2 s (machines). Son jeu ne recherche, ne paie, ne lit de plan, ne
+   prend ni ne retire d'ordre de fabrication et ne calcule plus l'énergie d'une ville dont il a reçu
+   les totaux (crochets de `plugin/workshop.cpp`, refusés hors `HostCallScope`).
+4. Les boutons de la fenêtre Recherche (ajouter, retirer), « apprendre » d'un plan, les boutons de la
+   fenêtre Fabrication (ajouter, retirer, répéter) et les interrupteurs du panneau d'un bâtiment
+   (marche, batterie) deviennent `ResearchRequest` / `MachineRequest`, avec l'acteur : le porteur du
+   plan, sinon le perso du joueur le plus proche de la machine. `Authorize` les admet (règle
+   `OwnCharacter`), l'hôte les exécute **l'une après l'autre** (`HostWorkshopRequests`) avec les
+   vérifications de son jeu (niveau du banc, artefacts payés une fois, technologie pas déjà en file
+   ni connue, plan dans l'inventaire de l'acteur, machine des joueurs, acteur à moins de 2500 unités)
+   et répond par `Result` (fait, ou refusé avec la raison en français). Deux joueurs sur le même
+   établi : le dernier ordre l'emporte, partout.
+5. Apprendre en travaillant : les gains sont calculés une fois chez l'hôte (`increaseStat` est refusé
+   chez le client) et arrivent par `Progress` ; le client annonce les passages de niveau de ses persos
+   (« * Nom : Science 5 -> 6 »).
+
 ### Bâtiments (lot E : `session_buildings.cpp`, `plugin/buildings.cpp`)
 1. Mode construction : `<PreviewGroup>::createBuildings` (`0x4D72A0`) appelle
    `RootObjectFactory::createBuilding` (`0x57CC70`) pour chaque bâtiment posé. Les hooks captent
@@ -719,6 +751,8 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | `plugin/overlay.cpp`, `overlay.h` | overlay ImGui : panneau d'état, fenêtre Multijoueur, console, conversation |
 | `common/include/kc/colors.h` | la couleur de chaque joueur (`kc::PlayerColor`) |
 | `common/src/protocol_map.cpp`, `src/session_map.cpp` | messages et session de la carte : flux de carte, pings |
+| `common/src/protocol_workshop.cpp`, `src/session_workshop.cpp` | atelier : messages et session de la recherche, des établis, des machines et de l'énergie ; noms français des compétences |
+| `plugin/workshop.cpp` | atelier : lecture et imposition de la recherche, des machines et de l'énergie ; crochets ; commandes de test |
 | `plugin/map.cpp`, `map.h`, `map_view.h` | carte : escouades hostiles (hôte), scène de chaque image, projections, hooks des portraits |
 | `plugin/overlay_map.cpp`, `overlay_map.h` | dessin de la carte, de la minicarte, des repères, des cadres et des pings ; souris |
 | `plugin/host_console.cpp`, `host_console.h` | console Windows hors du jeu |

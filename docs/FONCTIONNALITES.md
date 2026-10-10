@@ -244,6 +244,11 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   d'expérience eux-mêmes : tout gain passe par `increaseStat`, refusé chez eux, et les valeurs de
   l'hôte arrivent chaque seconde.
 - Vérifié par la suite (« XP », « argent »).
+- Apprendre en travaillant (construire, fabriquer, rechercher, miner, cultiver, cuisiner) : le
+  gain est calculé une seule fois, chez l'hôte ; ses 34 compétences arrivent chez le client (science,
+  ingénierie, forge d'armes et d'armures, arbalètes, travail de force, agriculture, cuisine
+  comprises). Le client annonce lui-même les passages de niveau de ses persos (« * Nom : Science 5
+  -> 6 »), son jeu n'en faisant plus. 🟡 annonce à vérifier en jeu.
 
 ---
 
@@ -932,8 +937,45 @@ la fenêtre du client.
 - **Limite connue** : le jeu ne déplace les PNJ lointains que quelques fois par seconde. Ceux qui
   marchent loin des joueurs peuvent être décalés de quelques dizaines de centimètres à 1 ou 2 m.
 
+### Recherche, fabrication, mines et machines, énergie 🟡 (implémenté, protocole 34, tests unitaires ; à vérifier en jeu)
+- **Ce qui existait avant** : rien de propre à la recherche ni à la fabrication. Les ordres
+  (travailler une machine, miner) passaient déjà par l'hôte, et l'inventaire d'un établi n'était
+  synchronisé que pendant qu'un joueur l'avait ouvert. Chez le client, les opérateurs d'une mine
+  restaient à 0/3 (le jeu ne les ajoute que par l'IA, coupée chez lui) et l'énergie était calculée
+  par son propre jeu.
+- **Recherche (arbre technologique)** : une seule recherche pour la faction, celle de l'hôte :
+  technologies connues, plans lus, file dans l'ordre, avancement, niveau du banc. Le client
+  l'impose à son jeu (les technologies terminées le sont aussi chez lui : menu de construction et
+  listes de fabrication débloqués) ; son jeu ne recherche, ne paie et ne termine rien lui-même.
+  Ajouter, retirer une technologie dans la fenêtre Recherche, ou « apprendre » un plan, devient une
+  demande à l'hôte, au nom d'un perso du joueur ; l'hôte vérifie (banc assez grand, artefacts et
+  livres présents, pas déjà en file ni connue ; le plan est dans l'inventaire de ce perso) et son
+  jeu consomme une seule fois. Deux joueurs qui ajoutent la même technologie : une seule fois en
+  file, payée une fois ; le second reçoit « Cette recherche est déjà dans la file. ». Réordonner la
+  file à la souris n'est pas transmis (l'ordre de l'hôte revient).
+- **Établis** (armes, armures, arbalètes, sacs, robotique, forge) : les ordres de fabrication
+  (objet, matériau, répéter) sont ceux de l'hôte ; ajouter, retirer, répéter dans la fenêtre
+  Fabrication devient une demande, exécutée par l'hôte dans l'ordre d'arrivée (deux joueurs sur le
+  même établi : le dernier l'emporte, partout). Avancement de chaque ordre identique. Le
+  personnage qui travaille l'établi est celui du joueur, par un ordre (travail) qui passe par
+  l'hôte.
+- **Inventaires des machines** (établis, banc de recherche, mines, fermes, générateurs…) : celles
+  suivies sont synchronisées chez tous les joueurs, ouvertes ou non (entrées et sorties).
+- **Mines et machines** : qui travaille chaque machine (nombre et noms dans sa fenêtre), barre de
+  progression et quantité produite : ceux de l'hôte. Plus de joueurs que de places : le jeu de
+  l'hôte décide, tout le monde voit le même résultat.
+- **Énergie** des avant-postes : sortie de chaque générateur, marche / arrêt, consommation, charge
+  des batteries, alimenté ou non, totaux du panneau de la base : ceux de l'hôte ; le jeu du client
+  ne calcule plus le réseau d'une ville dont il a reçu les totaux. Interrupteurs marche et batterie
+  du panneau : demande à l'hôte.
+- **Pas fait** : les totaux de stockage et de nourriture / eau de la base (aucun panneau du jeu
+  trouvé pour eux ; ils se déduisent des inventaires, synchronisés) ; le choix du produit d'un
+  bâtiment de production autre qu'un établi (les bâtiments de production de Kenshi ont un produit
+  fixe).
+- Expérience `research` (« recherche : … », « fabrication : … », « mine : … », « energie : … »),
+  test unitaire `TestWorkshop`. Pas encore lancé en jeu.
+
 ### Non vérifiés
 - Recrutement par dialogue.
-- Artisanat et production des machines.
 - Ces actions tournent chez l'hôte, mais rien ne garantit encore que leur résultat apparaît
   correctement chez les clients.

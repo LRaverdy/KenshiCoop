@@ -236,6 +236,27 @@ enum Fn : int {
                                 //   catch(...) around its main loop: crashDump*.dmp and "Kenshi has crashed"; no unhandled-exception filter sees that crash)
     // ---- conversations
     FnDialogueEndDialogue,      // void Dialogue::endDialogue(bool definitelyTheEnd)   (ends the conversation; off the main thread: queued DT_END_DIALOG)
+    // ---- workshop: research, crafting benches, machines, power (plugin/workshop.cpp)
+    FnResearchStart,            // bool Research::startResearch(GameData*)   (level check, payCosts, then queued; the research window's only caller)
+    FnResearchStop,             // void Research::stopResearch(GameData*)   (out of the queue, back in the available list; nothing refunded)
+    FnResearchComplete,         // void Research::completeResearch(GameData*)   (finished set, upgrades, blueprints, enabled buildings and crafts)
+    FnResearchPayCosts,         // bool Research::payCosts(GameData*)   (consumes the artifacts / books; called by startResearch only)
+    FnResearchProgress,         // void Research::progressResearch(float)   (the researchers' work on the first queued tech)
+    FnResearchIsInQueue,        // bool Research::isInQueue(GameData*)
+    FnLearnResearch,            // bool Item::learnResearch()   (a blueprint read from the inventory: completeResearch of its tech)
+    FnCraftAdd,                 // CraftingItem* CraftingBuilding::_addCraft(GameData* base, GameData* material, float progress, YesNoMaybe crit)
+    FnCraftRemove,              // void CraftingBuilding::_removeCraft(int index)
+    FnCraftQueueAdd,            // void CraftingQueue::addCraftButton(MyGUI::Widget*)   (our name: the crafting window's add, reads "id"/"id2", calls _addCraft)
+    FnCraftQueueRemove,         // void CraftingQueue::removeCraftButton(MyGUI::Widget*)   (our name: the X of an order, reads "index", calls _removeCraft)
+    FnCraftQueueRemoved,        // void CraftingQueue::craftRemoved(int, const CraftItemViewData&)   (our name: an order dragged out of the list)
+    FnCraftQueueRepeat,         // void CraftingQueue::repeatButton(MyGUI::Widget*)   (our name: toggles CraftingBuilding +0x4CC)
+    FnStopOperating,            // void UseableStuff::stopOperating(const hand&)   (erases it from the operator set +0x3D0)
+    FnOperatorSetInsert,        // pair* std::set<hand>::insert(pair* ret, const hand&, bool)   (the operator set's insert, as tryOperate calls it)
+    FnUpdatePowerGrid,          // void Town::updatePowerGrid()   (Town vt 0x2B8: generators, batteries and consumers of a town, totals at +0x470)
+    FnTogglePowerButton,        // void UseableStuff::togglePowerButton(DataPanelLine*)   (the building panel's power switch)
+    FnToggleBattButton,         // void UseableStuff::toggleBattButton(DataPanelLine*)   (the building panel's battery switch, +0x3B4)
+    FnRefreshResearchList,      // void ManagementScreen::refreshResearchList()
+    FnResearchCheckRequirements, // bool Research::checkRequirements(GameData*, bool twoLevels, bool checkCost)   (tests: what can be researched now)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -787,6 +808,7 @@ bool GameDataBoolField(const void* gd, const std::string& key, bool& out);
 bool GameDataIntField(const void* gd, const std::string& key, int& out);
 // building templates (itemType BUILDING) whose players' name contains `part` ("sid name" each)
 void BuildingTemplates(const std::string& part, std::vector<std::pair<std::string, std::string>>& out, size_t max);
+void GameDataOfType(int type, std::vector<void*>& out, size_t max);   // every game data record of that itemType (21: research), by sid
 void ItemTemplates(const std::string& part, std::vector<std::pair<std::string, std::string>>& out, size_t max);   // every non-building template by sid/name part
 bool DestroyAnyObject(void* obj);   // GameWorld::destroy for good (any RootObject)
 

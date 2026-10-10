@@ -112,6 +112,11 @@ void DumpCharacter(std::ostream& o, const char* tag, KenshiWorld& w, const kc::H
 std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstream& in, const std::string& cmd) {
     std::string err;
     if (cmd == "echo") return "ok";
+    {   // workshop: research, crafting benches, machines, power (plugin/workshop.cpp)
+        bool handled = false;
+        std::string r = WorkshopCommand(s, w, in, cmd, handled);
+        if (handled) return r;
+    }
     // ---- map markers, minimap, heads, squad bar, pings (exp_map)
     if (cmd == "mapscene") {   // mapscene <carte|minicarte|tetes|barre|pings>: what this machine draws
         std::string what;

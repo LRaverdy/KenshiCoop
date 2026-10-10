@@ -671,6 +671,116 @@ struct FakeWorld : IWorld {
     bool ContainerLocked(const Handle& h) override { return h.type == 0 && lockedBoxes.count(h.serial) != 0; }
     void TakeContainerRequests(std::vector<ContainerRequest>& out) override { out.swap(containerReqs); containerReqs.clear(); }
     // ---- end lot A
+    // ---- workshop: research (techs "tech-*"; one artifact pays a tech once), machines by sid
+    ResearchState research;
+    int artifacts = 0;
+    std::set<std::string> paid;
+    int researchApplies = 0, researchPays = 0;
+    std::vector<LocalResearchAsk> researchAsks;
+    std::vector<LocalMachineAsk> machineAsks;
+    struct FakeMachine { MachineState s; uint32_t box = 0; std::vector<Handle> ops; };
+    std::map<std::string, FakeMachine> machines;
+    std::vector<TownPower> townPower;
+    int machineApplies = 0;
+    std::map<uint32_t, std::vector<float>> skills;   // ReadProgress: stats per character serial
+    bool ReadProgress(const Handle& h, std::vector<float>& stats, uint16_t& modes, uint8_t& style) override {
+        modes = 0; style = 0;
+        auto it = skills.find(h.serial);
+        if (it == skills.end()) { stats.clear(); return false; }
+        stats = it->second;
+        return true;
+    }
+    bool ReadResearch(ResearchState& out) override {
+        out = research;
+        std::sort(out.finished.begin(), out.finished.end());
+        return true;
+    }
+    bool ExecuteResearchRequest(const ResearchRequest& r, const Handle& actor, std::string& why) override {
+        auto inQueue = [&](const std::string& s) { for (auto& q : research.queue) if (q.sid == s) return true; return false; };
+        auto finished = [&](const std::string& s) { return std::find(research.finished.begin(), research.finished.end(), s) != research.finished.end(); };
+        if (r.action == ResearchAction::LearnBlueprint) {
+            auto* items = ItemsOf(actor);
+            if (!items) { why = "pas de personnage"; return false; }
+            for (size_t i = 0; i < items->size(); ++i)
+                if ((*items)[i].templateSid == r.sid) {
+                    items->erase(items->begin() + ptrdiff_t(i));
+                    research.finished.push_back("tech-of-" + r.sid);
+                    return true;
+                }
+            why = "pas de plan";
+            return false;
+        }
+        if (r.action == ResearchAction::Cancel) {
+            for (size_t i = 0; i < research.queue.size(); ++i)
+                if (research.queue[i].sid == r.sid) { research.queue.erase(research.queue.begin() + ptrdiff_t(i)); return true; }
+            why = "pas dans la file";
+            return false;
+        }
+        if (finished(r.sid)) { why = "deja recherchee"; return false; }
+        if (inQueue(r.sid)) { why = "deja dans la file"; return false; }
+        if (!paid.count(r.sid)) {
+            if (artifacts <= 0) { why = "artefacts manquants"; return false; }
+            --artifacts;
+            ++researchPays;
+            paid.insert(r.sid);
+        }
+        research.queue.push_back({r.sid, 0});
+        return true;
+    }
+    size_t ApplyResearch(const ResearchState& s) override {
+        if (s == research) return 0;
+        research = s;
+        ++researchApplies;
+        return 1;
+    }
+    void ReadMachines(const std::vector<Vec3>& centers, float radius, std::vector<WorldMachine>& out, std::vector<TownPower>& towns) override {
+        out.clear();
+        for (auto& [sid, m] : machines)
+            for (auto& c : centers)
+                if (Dist(c, m.s.pos) <= radius) {
+                    WorldMachine w;
+                    w.state = m.s;
+                    w.state.operatorCount = uint8_t(m.ops.size());
+                    w.handle = m.box ? B(m.box) : Handle{};
+                    w.operators = m.ops;
+                    out.push_back(w);
+                    break;
+                }
+        towns = townPower;
+    }
+    bool ExecuteMachineRequest(const MachineRequest& r, const Handle&, std::string& why) override {
+        auto it = machines.find(r.sid);
+        if (it == machines.end()) { why = "introuvable"; return false; }
+        MachineState& s = it->second.s;
+        switch (r.action) {
+        case MachineAction::AddCraft: s.crafts.push_back({r.baseSid, r.materialSid, "item-" + r.baseSid, 0}); return true;
+        case MachineAction::RemoveCraft:
+            if (r.index < 0 || size_t(r.index) >= s.crafts.size()) { why = "plus la"; return false; }
+            s.crafts.erase(s.crafts.begin() + r.index);
+            return true;
+        case MachineAction::SetRepeat: s.flags = uint8_t(r.value ? (s.flags | kMachRepeat) : (s.flags & ~kMachRepeat)); return true;
+        case MachineAction::SetPower: s.flags = uint8_t(r.value ? (s.flags | kMachPowerOn) : (s.flags & ~kMachPowerOn)); return true;
+        case MachineAction::SetBattery: s.flags = uint8_t(r.value ? (s.flags | kMachBatteryOn) : (s.flags & ~kMachBatteryOn)); return true;
+        }
+        return false;
+    }
+    bool ApplyMachine(const MachineState& s, const std::vector<Handle>& operators) override {
+        auto it = machines.find(s.sid);
+        if (it == machines.end()) return false;
+        it->second.s = s;
+        it->second.ops = operators;
+        ++machineApplies;
+        return true;
+    }
+    bool ApplyTownPower(const TownPower& t) override {
+        for (auto& p : townPower) if (p.sid == t.sid) { p = t; return true; }
+        townPower.push_back(t);
+        return true;
+    }
+    void TakeWorkshopAsks(std::vector<LocalResearchAsk>& r, std::vector<LocalMachineAsk>& m) override {
+        r.swap(researchAsks); researchAsks.clear();
+        m.swap(machineAsks); machineAsks.clear();
+    }
     std::vector<RegionWeather> weather;
     void ReadWeather(std::vector<RegionWeather>& out) override { out = weather; }
     void ApplyWeather(const std::vector<RegionWeather>& r) override { weather = r; }
@@ -989,6 +1099,42 @@ static void TestWire() {
         Reader er(ew.data(), ew.size()); CHECK(PeekType(er) == Msg::EditState);
         EditState es; CHECK(Decode(er, es) && es.editing);
         CHECK(std::string(TaskLabel(258)) == "sleep" && std::string(TaskLabel(9999)) == "?");
+    }
+    {   // ---- workshop: research, requests, machines
+        ResearchState rs; rs.deskLevel = 3; rs.finished = {"tech-a", "tech-b"}; rs.queue = {{"tech-c", 12.5f}, {"tech-d", 0}};
+        Writer rsw; Encode(rsw, rs);
+        Reader rsr(rsw.data(), rsw.size()); CHECK(PeekType(rsr) == Msg::Research);
+        ResearchState rs2; CHECK(Decode(rsr, rs2) && rs2 == rs);
+        ResearchRequest rq; rq.seq = 7; rq.actorNetId = 12; rq.action = ResearchAction::LearnBlueprint; rq.sid = "bp-1";
+        rq.item.templateSid = "bp-1"; rq.item.section = "main"; rq.item.x = 2; rq.item.y = 3;
+        Writer qw; Encode(qw, rq);
+        Reader qr(qw.data(), qw.size()); CHECK(PeekType(qr) == Msg::ResearchRequest);
+        ResearchRequest rq2; CHECK(Decode(qr, rq2) && rq2.seq == 7 && rq2.actorNetId == 12 && rq2.action == ResearchAction::LearnBlueprint &&
+                                   rq2.item.section == "main" && rq2.item.x == 2 && rq2.item.y == 3);
+        rq.actorNetId = 0;   // no actor named: refused
+        Writer qw2; Encode(qw2, rq);
+        Reader qr2(qw2.data(), qw2.size()); PeekType(qr2);
+        ResearchRequest rq3; CHECK(!Decode(qr2, rq3));
+        MachinesMsg mm; mm.full = true;
+        MachineState ms; ms.sid = "bench"; ms.pos = {1, 2, 3}; ms.netId = 44; ms.flags = kMachCrafting | kMachPowerOn; ms.maxOperators = 3; ms.operatorCount = 2;
+        ms.operators = {5, 6}; ms.power = 1.5f; ms.stored = 20; ms.progress = 0.25f; ms.production = 3;
+        ms.crafts = {{"sword", "iron", "item-sword", 0.5f}};
+        mm.machines = {ms};
+        TownPower tp; tp.sid = "bench"; tp.pos = {1, 2, 3}; tp.values[0] = 10; tp.values[7] = 4; tp.onBattery = true;
+        mm.towns = {tp};
+        Writer mw; Encode(mw, mm);
+        Reader mr(mw.data(), mw.size()); CHECK(PeekType(mr) == Msg::Machines);
+        MachinesMsg mm2; CHECK(Decode(mr, mm2) && mm2.full && mm2.machines.size() == 1 && mm2.machines[0].sameState(ms) && mm2.machines[0].sid == "bench" &&
+                               mm2.towns.size() == 1 && mm2.towns[0] == tp);
+        MachineRequest mq; mq.seq = 3; mq.actorNetId = 9; mq.action = MachineAction::AddCraft; mq.sid = "bench"; mq.pos = {1, 2, 3}; mq.baseSid = "sword";
+        Writer xw; Encode(xw, mq);
+        Reader xr(xw.data(), xw.size()); CHECK(PeekType(xr) == Msg::MachineRequest);
+        MachineRequest mq2; CHECK(Decode(xr, mq2) && mq2.action == MachineAction::AddCraft && mq2.baseSid == "sword" && mq2.actorNetId == 9);
+        mq.baseSid.clear();   // an order for nothing
+        Writer xw2; Encode(xw2, mq);
+        Reader xr2(xw2.data(), xw2.size()); PeekType(xr2);
+        MachineRequest mq3; CHECK(!Decode(xr2, mq3));
+        CHECK(std::string(StatNameFr(3)) == "Science" && std::string(StatNameFr(999)) == "?");
     }
     {   // ---- lot A: doors and locks
         DoorsMsg dm; dm.full = true;
@@ -3202,6 +3348,155 @@ static void TestDialogue() {
 
 // Every message has exactly one authority rule; PeekType accepts exactly the messages; host->client
 // messages sent by a client are refused; a client's map pings are rate-limited by their rule.
+// Workshop: the research, the crafting benches, the machines and the towns' power are the host's;
+// a client's requests run on the host (in order, paid once, last writer wins) and everyone follows.
+static void TestWorkshop() {
+    std::printf("session: research, crafting benches, machines and power follow the host; requests run there once\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);   // squad at x = 100, 200, 300
+    auto item = [](const char* sid, int qty) { ItemState s; s.templateSid = sid; s.quantity = qty; s.section = "main"; return s; };
+    hw.research.deskLevel = 2;
+    hw.research.finished = {"tech-a"};
+    hw.research.queue = {{"tech-b", 5.0f}};
+    hw.boxes[800] = {"bench", {150, 0, 0}, {item("iron plates", 4)}};
+    FakeWorld::FakeMachine bench;
+    bench.s.sid = "bench"; bench.s.pos = {150, 0, 0}; bench.s.flags = kMachCrafting | kMachPowerOn; bench.s.maxOperators = 3;
+    bench.s.crafts = {{"sword", "iron", "item-sword", 0.25f}};
+    bench.box = 800;
+    bench.ops = {FakeWorld::H(1), FakeWorld::H(2)};
+    hw.machines["bench"] = bench;
+    FakeWorld::FakeMachine far = bench;
+    far.s.sid = "far-bench"; far.s.pos = {9000, 0, 9000}; far.box = 0; far.ops.clear();
+    hw.machines["far-bench"] = far;
+    TownPower tp; tp.sid = "bench"; tp.pos = {150, 0, 0}; tp.values[0] = 12; tp.values[3] = 7; tp.onBattery = false;
+    hw.townPower = {tp};
+    std::vector<float> st(kStatCount, 1.0f);
+    st[3] = 5.5f;   // science
+    hw.skills[2] = st;
+    AtMenu(cw);
+    cw.boxes = hw.boxes;
+    cw.boxes[800].items = {item("iron plates", 1)};   // the client's copy of the bench is behind
+    cw.machines["bench"].s.sid = "bench";
+    cw.machines["bench"].s.pos = bench.s.pos;
+    cw.machines["far-bench"].s.sid = "far-bench";
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    std::vector<std::string> hostLog;
+    Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    host.Assign(FakeWorld::H(2), cli.localId());
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}};
+    Run(all, 3.0, [&] { return cw.research == hw.research && cw.machineApplies > 0 && cw.boxes[800].items == hw.boxes[800].items; });
+    // 1. the research, the machine (operators, crafts, power) and its inventory: the host's, unopened
+    CHECK(cw.research == hw.research);
+    CHECK(cw.machines["bench"].s.operatorCount == 2 && cw.machines["bench"].ops.size() == 2 && cw.machines["bench"].s.crafts.size() == 1 &&
+          cw.machines["bench"].s.crafts[0].progress == 0.25f);
+    CHECK(cw.machines["far-bench"].s.crafts.empty());   // far from every player: not sent
+    CHECK(cw.boxes[800].items == hw.boxes[800].items);
+    CHECK(!cw.townPower.empty() && cw.townPower[0] == tp);
+    // a worker leaves: everyone sees it
+    hw.machines["bench"].ops = {FakeWorld::H(1)};
+    Run(all, 3.0, [&] { return cw.machines["bench"].ops.size() == 1; });
+    CHECK(cw.machines["bench"].s.operatorCount == 1 && cw.machines["bench"].ops.size() == 1 && cw.machines["bench"].ops[0] == FakeWorld::H(1));
+    // 2. a client queues a tech without the artifacts: refused, nothing paid, the reason in French
+    auto ask = [&](ResearchAction a, const std::string& sid) {
+        IWorld::LocalResearchAsk r;
+        r.req.action = a;
+        r.req.sid = sid;
+        cw.researchAsks.push_back(r);
+    };
+    size_t refusedBefore = host.workshopView().requestsRefused;
+    ask(ResearchAction::Queue, "tech-c");
+    Run(all, 2.0, [&] { return host.workshopView().requestsRefused > refusedBefore; });
+    CHECK(host.workshopView().requestsRefused == refusedBefore + 1 && hw.research.queue.size() == 1);
+    // 3. with one artifact, the same tech asked twice at once: queued once, paid once
+    hw.artifacts = 1;
+    ask(ResearchAction::Queue, "tech-c");
+    ask(ResearchAction::Queue, "tech-c");
+    Run(all, 3.0, [&] { return cw.research.queue.size() == 2; });
+    CHECK(hw.research.queue.size() == 2 && hw.researchPays == 1 && hw.artifacts == 0 && cw.research == hw.research);
+    // cancelled, then asked again: back in the queue without paying a second time
+    ask(ResearchAction::Cancel, "tech-c");
+    Run(all, 3.0, [&] { return cw.research.queue.size() == 1; });
+    ask(ResearchAction::Queue, "tech-c");
+    Run(all, 3.0, [&] { return cw.research.queue.size() == 2; });
+    CHECK(hw.researchPays == 1 && cw.research == hw.research);
+    // a local change on the client is undone by the host's research
+    cw.research.queue.clear();
+    Run(all, 5.0, [&] { return cw.research == hw.research; });
+    CHECK(cw.research == hw.research);
+    // 4. a blueprint the client's character carries: learnt on the host, used up, known everywhere
+    hw.chars[2].items.push_back(item("bp-forge", 1));
+    Run(all, 2.0, [&] { return !cw.chars[2].items.empty(); });
+    IWorld::LocalResearchAsk bp;
+    bp.req.action = ResearchAction::LearnBlueprint;
+    bp.req.sid = "bp-forge";
+    bp.req.item = item("bp-forge", 1);
+    bp.actor = FakeWorld::H(2);
+    cw.researchAsks.push_back(bp);
+    Run(all, 3.0, [&] { return std::count(cw.research.finished.begin(), cw.research.finished.end(), "tech-of-bp-forge") == 1 && cw.chars[2].items.empty(); });
+    CHECK(std::count(hw.research.finished.begin(), hw.research.finished.end(), "tech-of-bp-forge") == 1 && hw.chars[2].items.empty() && cw.chars[2].items.empty());
+    // 5. a blueprint "carried" by the host's character: refused by the central check, nothing learnt
+    hw.chars[1].items.push_back(item("bp-other", 1));
+    const uint64_t refusals = host.actorRefusals();
+    bp.actor = FakeWorld::H(1);
+    bp.req.sid = "bp-other";
+    bp.req.item = item("bp-other", 1);
+    cw.researchAsks.push_back(bp);
+    Run(all, 2.0);
+    CHECK(hw.chars[1].items.size() == 1 && host.actorRefusals() == refusals);   // never sent: the client's own check (ClientMaySend)
+    ResearchRequest forged; forged.seq = 99; forged.actorNetId = 0; forged.action = ResearchAction::LearnBlueprint; forged.sid = "bp-other";
+    host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { if (h == FakeWorld::H(1)) forged.actorNetId = id; });
+    forged.item = item("bp-other", 1);
+    Writer fw; Encode(fw, forged);
+    CHECK(host.InjectForTest(cli.localId(), fw));
+    Run(all, 1.0);
+    CHECK(hw.chars[1].items.size() == 1 && host.actorRefusals() == refusals + 1);
+    // 6. crafting orders: added by the client, run on the host, seen by everyone; two orders at once
+    //    on the same bench: the last one wins everywhere
+    auto order = [&](MachineAction a, const std::string& base, int index, bool value) {
+        IWorld::LocalMachineAsk m;
+        m.req.action = a; m.req.sid = "bench"; m.req.pos = {150, 0, 0}; m.req.baseSid = base; m.req.index = index; m.req.value = value;
+        cw.machineAsks.push_back(m);
+    };
+    order(MachineAction::AddCraft, "helmet", 0, false);
+    Run(all, 3.0, [&] { return cw.machines["bench"].s.crafts.size() == 2; });
+    CHECK(hw.machines["bench"].s.crafts.size() == 2 && hw.machines["bench"].s.crafts[1].baseSid == "helmet" && cw.machines["bench"].s.crafts.size() == 2);
+    order(MachineAction::SetRepeat, "", 0, true);
+    order(MachineAction::SetRepeat, "", 0, false);
+    Run(all, 3.0, [&] { return host.workshopView().requestsDone >= 7; });
+    Run(all, 1.5);
+    CHECK(!(hw.machines["bench"].s.flags & kMachRepeat) && !(cw.machines["bench"].s.flags & kMachRepeat));
+    order(MachineAction::RemoveCraft, "", 0, false);
+    order(MachineAction::RemoveCraft, "", 5, false);   // gone already: refused, nothing else touched
+    Run(all, 3.0, [&] { return cw.machines["bench"].s.crafts.size() == 1; });
+    CHECK(hw.machines["bench"].s.crafts.size() == 1 && hw.machines["bench"].s.crafts[0].baseSid == "helmet" && cw.machines["bench"].s.crafts.size() == 1);
+    // 7. power: switched off by the client, off everywhere; the town panel follows the host
+    order(MachineAction::SetPower, "", 0, false);
+    hw.townPower[0].values[0] = 0;
+    Run(all, 3.0, [&] { return !(cw.machines["bench"].s.flags & kMachPowerOn) && cw.townPower[0].values[0] == 0; });
+    CHECK(!(hw.machines["bench"].s.flags & kMachPowerOn) && !(cw.machines["bench"].s.flags & kMachPowerOn) && cw.townPower[0].values[0] == 0);
+    // 8. a request from a character far from the machine: refused
+    hw.chars[2].pos = {5000, 0, 5000};
+    hw.chars[2].dest = hw.chars[2].pos;
+    const size_t crafts = hw.machines["bench"].s.crafts.size();
+    order(MachineAction::AddCraft, "axe", 0, false);
+    Run(all, 2.0);
+    CHECK(hw.machines["bench"].s.crafts.size() == crafts);
+    // 9. learning by doing: the host's level up is told to the player (its game gains nothing itself)
+    const size_t chat0 = cli.chatLog().size();
+    hw.skills[2][3] = 6.25f;
+    Run(all, 4.0, [&] { for (auto& l : cli.chatLog()) if (l.find("Science 5 -> 6") != std::string::npos) return true; return false; });
+    bool told = false;
+    for (size_t i = chat0; i < cli.chatLog().size(); ++i) told |= cli.chatLog()[i].find("Science 5 -> 6") != std::string::npos;
+    CHECK(told);
+    bool logged = false;
+    for (auto& l : hostLog) logged |= l.find("research: queue tech-c") != std::string::npos;
+    CHECK(logged);
+}
+
 static void TestMessageRules() {
     std::printf("authority: every message type has its rule; host-only ones refused from clients; pings rate-limited\n");
     size_t n = 0;
@@ -3573,6 +3868,7 @@ int main() {
     TestMap();
     TestManyPlayers();
     TestJoinQueue();
+    TestWorkshop();   // research, crafting benches, machines, power
     TestMessageRules();   // the authority table covers every message
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

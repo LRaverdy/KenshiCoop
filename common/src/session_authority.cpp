@@ -132,6 +132,16 @@ bool Session::Authorize(RemotePlayer& pl, Msg type, Reader r) {
             AppearanceMsg m;
             if (!Decode(r, m)) return malformed();
             actor = m.netId;
+        } else if (type == Msg::ResearchRequest) {   // workshop: the character asking (a blueprint: the one carrying it)
+            ResearchRequest m;
+            if (!Decode(r, m)) return malformed();
+            actor = m.actorNetId;
+            seq = m.seq;
+        } else if (type == Msg::MachineRequest) {
+            MachineRequest m;
+            if (!Decode(r, m)) return malformed();
+            actor = m.actorNetId;
+            seq = m.seq;
         }
         return AdmitActor(pl.id, actor, rule->name, type, seq);
     }

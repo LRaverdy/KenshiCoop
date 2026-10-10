@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 33;   // 33: BagBind (travelling merchants), Result (actor safety), JoinQueue, Diplomacy, MapMarkers and MapPing (map)
+constexpr uint16_t kProtocolVersion = 34;   // 34: Research, ResearchRequest, Machines, MachineRequest (workshop); 33: BagBind (travelling merchants), Result (actor safety), JoinQueue, Diplomacy, MapMarkers and MapPing (map)
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -102,6 +102,11 @@ enum class Msg : uint8_t {
     MapPing = 83,         // both  a marker on a spot (client: asks the host; host: shows it to everyone)
     // ---- diplomacy
     Diplomacy = 85,       // S->C  the world beyond the player faction: relations between factions, faction leaders, towns
+    // ---- workshop: research, crafting benches, machines and power (56-59)
+    Research = 56,        // S->C  the player faction's research: finished techs (blueprints read too), queue and progress
+    ResearchRequest = 57, // C->S  queue / cancel a tech in the research window, learn a blueprint (actor: the player's character)
+    Machines = 58,        // S->C  player machines near the players: operators, power, battery, crafting orders; town power totals
+    MachineRequest = 59,  // C->S  a crafting order (add, remove, repeat) or a power / battery switch on a machine (actor named)
     // ---- actor safety
     Result = 90,          // S->C  the host's answer to a request: rejected (with the reason) or done
 };
@@ -327,6 +332,7 @@ struct VitalsMsg {
 
 // Skill levels: the integer part is the level, the fraction the progress to the next one.
 constexpr size_t kStatCount = 34;   // every stat with a field of its own (see kenshi.cpp kStatOffsets)
+const char* StatNameFr(size_t index);   // the skill's name as the French game shows it (protocol_workshop.cpp)
 // Standing orders a character keeps (the squad bar's toggles): bit per order.
 enum ModeBits : uint16_t {
     kModeStealth = 1 << 0, kModeDefensive = 1 << 1, kModeRanged = 1 << 2, kModeTaunt = 1 << 3, kModeHold = 1 << 4,
@@ -1214,5 +1220,102 @@ struct MapPingMsg {
 };
 void Encode(Writer& w, const MapPingMsg& m);
 bool Decode(Reader& r, MapPingMsg& m);
+
+// ---- workshop: research, crafting benches, machines and power (common/src/protocol_workshop.cpp)
+// The research state of the player faction, decided by the host's game alone. Techs are game data
+// string ids; a blueprint read becomes a finished tech (Item::learnResearch completes it).
+struct ResearchQueued {
+    std::string sid;
+    float progress = 0;          // the ResearchItem's progress (game units, not 0..1)
+    bool operator==(const ResearchQueued& o) const { return sid == o.sid && progress == o.progress; }
+};
+struct ResearchState {
+    int32_t deskLevel = 0;                 // best research bench level the faction has
+    std::vector<std::string> finished;     // sorted
+    std::vector<ResearchQueued> queue;     // in order: the first one is being researched
+    bool operator==(const ResearchState& o) const { return deskLevel == o.deskLevel && finished == o.finished && queue == o.queue; }
+};
+constexpr uint32_t kMaxResearchFinished = 4096, kMaxResearchQueue = 64;
+void Encode(Writer& w, const ResearchState& m);
+bool Decode(Reader& r, ResearchState& m);
+
+enum class ResearchAction : uint8_t { Queue = 1, Cancel = 2, LearnBlueprint = 3 };
+struct ResearchRequest {
+    uint32_t seq = 0;
+    uint32_t actorNetId = 0;     // the player's character asking (OwnCharacter rule); a blueprint: the one carrying it
+    ResearchAction action = ResearchAction::Queue;
+    std::string sid;             // the tech (Queue, Cancel); the blueprint item's template (LearnBlueprint)
+    ItemState item;              // LearnBlueprint: the blueprint in the actor's inventory (section, place)
+};
+void Encode(Writer& w, const ResearchRequest& m);
+bool Decode(Reader& r, ResearchRequest& m);
+
+// One crafting order of a crafting bench (weapon, armour, crossbow, backpack, robotics...).
+struct CraftOrder {
+    std::string baseSid;         // what the crafting window asked for (the blueprint's item)
+    std::string materialSid;     // its material / second id (may be empty)
+    std::string itemSid;         // the template of the item being made (what both sides compare)
+    float progress = 0;          // 0..1
+    bool operator==(const CraftOrder& o) const { return baseSid == o.baseSid && materialSid == o.materialSid && itemSid == o.itemSid && progress == o.progress; }
+};
+enum MachineFlags : uint8_t {
+    kMachPowerOn = 1,            // UseableStuff::powerOn
+    kMachBatteryOn = 2,          // receives battery power
+    kMachCrafting = 4,           // a crafting bench (crafts and repeat below mean something)
+    kMachRepeat = 8,             // the bench repeats its orders
+    kMachGenerator = 16,
+    kMachBattery = 32,
+};
+struct MachineState {
+    std::string sid;             // kind and place: buildings have another handle on every machine
+    Vec3 pos;
+    uint32_t netId = 0;          // its inventory (an entity the host keeps synced to everyone; 0: none)
+    uint8_t flags = 0;
+    uint8_t maxOperators = 0;
+    uint8_t operatorCount = 0;   // every operator, NPCs too
+    std::vector<uint32_t> operators;   // those known to the client (netIds of replicated characters)
+    float power = 0;             // currentPower given this frame
+    float stored = 0;            // battery charge (powerTimeStored)
+    float progress = 0;          // the progress bar of the machine (UseableStuff +0x3A4)
+    float production = 0;        // the production item's amount (ProductionBuilding)
+    std::vector<CraftOrder> crafts;
+    bool sameState(const MachineState& o) const {
+        return flags == o.flags && maxOperators == o.maxOperators && operatorCount == o.operatorCount && operators == o.operators &&
+               netId == o.netId && power == o.power && stored == o.stored && progress == o.progress && production == o.production && crafts == o.crafts;
+    }
+};
+// The power panel of a player town (outpost): totals the game computes in Town::updatePowerGrid.
+struct TownPower {
+    std::string sid;             // a building of that town (kind and place): how the client finds the town
+    Vec3 pos;
+    float values[8] = {0, 0, 0, 0, 0, 0, 0, 0};   // Town +0x474 .. +0x490
+    bool onBattery = false;      // Town +0x470
+    bool operator==(const TownPower& o) const {
+        for (int i = 0; i < 8; ++i) if (values[i] != o.values[i]) return false;
+        return sid == o.sid && onBattery == o.onBattery;
+    }
+};
+struct MachinesMsg {
+    bool full = false;
+    std::vector<MachineState> machines;
+    std::vector<TownPower> towns;
+};
+constexpr uint32_t kMaxMachinesPerMsg = 128, kMaxMachineOperators = 16, kMaxCraftOrders = 32, kMaxTownPower = 32;
+void Encode(Writer& w, const MachinesMsg& m);
+bool Decode(Reader& r, MachinesMsg& m);
+
+enum class MachineAction : uint8_t { AddCraft = 1, RemoveCraft = 2, SetRepeat = 3, SetPower = 4, SetBattery = 5 };
+struct MachineRequest {
+    uint32_t seq = 0;
+    uint32_t actorNetId = 0;     // the player's character (OwnCharacter rule)
+    MachineAction action = MachineAction::AddCraft;
+    std::string sid;             // the machine, by kind and place
+    Vec3 pos;
+    std::string baseSid, materialSid;   // AddCraft
+    int32_t index = 0;           // RemoveCraft
+    bool value = false;          // SetRepeat, SetPower, SetBattery
+};
+void Encode(Writer& w, const MachineRequest& m);
+bool Decode(Reader& r, MachineRequest& m);
 
 } // namespace kc
