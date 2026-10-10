@@ -105,6 +105,12 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   ou plus dans ce monde, donc il ne lui ouvre pas l'éditeur ; Geoffrey entre sans aucun perso.
   À corriger : si le perso mémorisé n'est pas dans le monde (ou n'est plus un perso du joueur),
   le traiter comme un nouveau joueur (éditeur de perso). Contournement : l'hôte lui donne un perso.
+- **rob ne voyait plus les dégâts** (sang, chiffres, barres de vie / blessures qui ne bougeaient
+  plus) ; l'hôte l'a « spec » (regardé avec la caméra sur lui) et il les a revus. Comme les autres
+  désyncs de rob : quelque chose dans le flux vers ce client s'arrête (vitals / effets de
+  combat ?) jusqu'à un événement qui le relance. À chercher dans les bilans `[rob] sync:` et les
+  envois de vitals par client : priorité ou zone d'intérêt calculée autour de l'hôte / de sa
+  caméra au lieu des persos du joueur concerné ?
 - **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
