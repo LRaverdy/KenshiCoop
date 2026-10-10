@@ -68,6 +68,18 @@ void KenshiWorld::BeginFrame(bool live) {
             Log("new world (generation %u): every per-world state reset", generation_);
         }
         lastSquadPtrs_ = std::move(now);
+        // Same world, but the game ran frames we did not see (it opened a trade window, loaded a
+        // zone): handle lookups and stand-ins are matched again. Keeping the stand-ins across such a
+        // frame (fix G6) made a client's trade window lose the shop's stock and crash in
+        // ShopTraderInventory (bisected: trade 13/13 before G6, crash after, 12/13 with this back).
+        resolved_.clear();
+        kenshi::ResetLookupCaches();
+        alias_.clear();
+        pendingLoot_.clear();
+        strangerSince_.clear();
+        lastTarget_.clear();
+        fallPrep_.clear();
+        fellAt_.clear();
     }
     wasReady_ = ready;
     lastPlayer_ = player;
@@ -398,9 +410,7 @@ bool KenshiWorld::Exists(const kc::Handle& h) {
         }
         // The stand-in is gone (killed and cleaned up, or dropped with its zone by the local game):
         // the alias must go too, or Spawn and Reconcile would skip this character forever.
-        // ResolveObject, not Resolve: aliases also name containers (shop counters of a trade), and
-        // Resolve only finds characters, so a live counter looked gone and its trade window lost
-        // its items (then the client crashed in ShopTraderInventory).
+        // ResolveObject: an alias may name any object, not only a character.
         if (!kenshi::ResolveObject(a->second)) {
             Log("stand-in %s for the host's %s is gone here: it can be recreated", KeyOf(a->second).c_str(), KeyOf(h).c_str());
             alias_.erase(a);
