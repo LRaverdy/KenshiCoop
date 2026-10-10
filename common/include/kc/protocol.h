@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 32;
+constexpr uint16_t kProtocolVersion = 33;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -93,6 +93,8 @@ enum class Msg : uint8_t {
     Floors = 71,          // S->C  the floor characters are on inside buildings (it drives the floor shown)
     // ---- fix G5
     JobList = 68,         // S->C  the job list (Tâches panel) of the players' characters, as the host has it
+    // ---- travelling merchants: worn backpacks
+    BagBind = 80,         // S->C  a character's worn backpack: its netId (its items follow as an Inventory)
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -202,6 +204,14 @@ struct Bind {
 };
 struct Unbind {
     uint32_t netId = 0;
+};
+// A worn backpack (the game's ContainerItem in an inventory section of type 12): its items are
+// synced like a character's, under its own netId. The character wearing it is ownerNetId; sid is the
+// backpack's template (the client finds the same backpack on its copy of that character).
+struct BagBind {
+    uint32_t netId = 0;
+    uint32_t ownerNetId = 0;
+    std::string sid;
 };
 
 enum EntityFlags : uint8_t {
@@ -599,6 +609,7 @@ void Encode(Writer& w, const FloorsMsg& m);
 void Encode(Writer& w, const Chat& m);
 void Encode(Writer& w, const Bind& m);
 void Encode(Writer& w, const Unbind& m);
+void Encode(Writer& w, const BagBind& m);
 void Encode(Writer& w, const Command& m);
 void Encode(Writer& w, const TimeState& m);
 void EncodePing(Writer& w, const Ping& m, bool pong);
@@ -649,6 +660,7 @@ struct TradeCounter {
     uint32_t netId = 0;
     std::string sid;
     Vec3 pos;
+    uint32_t ownerNetId = 0;       // 0: shop furniture (found by sid and pos); else the worn backpack of that character
 };
 struct TradeOpen {
     uint32_t traderNetId = 0;
@@ -833,6 +845,7 @@ bool Decode(Reader& r, FloorsMsg& m);
 bool Decode(Reader& r, Chat& m);
 bool Decode(Reader& r, Bind& m);
 bool Decode(Reader& r, Unbind& m);
+bool Decode(Reader& r, BagBind& m);
 bool Decode(Reader& r, Snapshot& m);
 bool Decode(Reader& r, Command& m);
 bool Decode(Reader& r, TimeState& m);

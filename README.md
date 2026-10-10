@@ -129,7 +129,7 @@ Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui
 ## Limites connues
 
 - **Pas encore synchronisés** :
-  - commerce (en cours) ;
+  - commerce : vérifié en ville ; avec les caravanes (marchands ambulants, sacs à dos portés) à vérifier en jeu ;
   - achat de bâtiments, construction et pose de meubles ;
   - état des portes et crochetage ;
   - prisons et esclavage ;

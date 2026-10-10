@@ -82,6 +82,8 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | Expérience | Ce qu'elle vérifie |
 |---|---|
 | `doors` (`kctest_town`, lot A) | portes ouvertes / fermées / verrouillées comme chez l'hôte ; le jeu du client ne les change pas seul ; bouton et ordres du client exécutés chez l'hôte ; crochetage ; coffre verrouillé fermé pour le client |
+| `caravan` (sauvegarde avec une caravane près de l'escouade) | marchand ambulant : même caravane partout (pas de double chez le client), sac de la bête identique partout, fenêtre ouverte chez le client avec le stock, achat et vente pendant que la caravane marche (payés chez l'hôte, même argent et même stock partout), fenêtre fermée quand la bête est tuée, pillage de son sac (rien de créé ni perdu), vol dans le sac d'une bête vivante (même prime partout) |
+| `pets` (sauvegarde avec un animal dans l'escouade) | animaux de l'escouade : mêmes animaux partout, animal donné au client (il lui appartient), ses ordres passent par l'hôte (position, santé, inventaire identiques), inventaire partagé sans doublon quand hôte et client y déposent en même temps, sac porté identique |
 | `suite` | **tout en une session, RÉUSSI / ÉCHEC point par point** (ci-dessous) |
 | `four` (`--clients 3`) | 1 hôte + 3 clients : chaque client comparé à l'hôte **et aux autres clients** ; chacun ne commande que son personnage |
 | `run` (`--quick`) | scénario complet avec rapport de désynchronisation |
@@ -283,7 +285,7 @@ l'escouade triée par handle.
 | `drop <index>` | ce membre pose un objet non équipé (répond avec son handle) |
 | `pickup <index> <clé>` / `pickupreq <index> <modèle> <x,y,z>` | ramasser (hôte) ; ce qu'envoie le « ramasser » d'un client |
 | `groundnear <rayon>` / `ground <clé de l'hôte>` | objets au sol autour ; cet objet est-il au sol ici ? |
-| `invmove <de> <vers> <rang\|main\|worn> [qté] [x] [y] [section]` | ce que fait un glisser-déposer d'inventaire |
+| `invmove <de> <vers> <rang\|main\|worn> [qté] [x] [y] [section]` | ce que fait un glisser-déposer d'inventaire ; `bag:<qui>` désigne le sac porté par ce personnage |
 | `loot <cible> [index]` / `lootorder <cible>` | fouille d'un corps telle qu'un client la fait ; le chemin du clic droit |
 | `containerreq <sélection> <nom>` | clic droit sur le contenant le plus proche de ce nom |
 | `contake <sélection> <nom>` | dans la fenêtre ouverte, prend le premier objet |
@@ -292,6 +294,11 @@ l'escouade triée par handle.
 | `strand <dx> <dy> <dz>` | (client) déplace la copie locale du PNJ le plus proche (dans un mur, sous le sol) |
 | `bedreq <i>` | ce membre seul reçoit l'ordre de dormir dans le lit libre le plus proche (tâche 258) |
 | `minereq <i>` | ce membre seul reçoit l'ordre d'exploiter la mine la plus proche (tâche 87) |
+| `caravan [i]` | caravane la plus proche du membre `i` : marchand sans bâtiment dont l'escouade a des bêtes de somme ; `trader=` `key=` `members=` `animals=` `stock=` (piles de chaque membre) `back=` (piles dans les sacs portés d'où il vend) `packs=` (membres qui en portent un) |
+| `bag <qui>` | le sac porté par ce personnage (`squadN`, `spawned` ou clé) : `ok <modèle> <piles> sid:qté...` |
+| `caravanbeast [i]` | sa première bête de somme vivante devient la cible de `kill` / `npcstate` |
+| `caravanopen [i]` | le membre `i` va près du marchand ambulant et ouvre le commerce (appel du jeu) |
+| `squadanimals` | membres de l'escouade qui sont des animaux : `index:clé:piles` |
 | `tradegui` | type de fenêtre de commerce en attente dans l'interface (0 = aucune) |
 | `cage <i> [off]` | (hôte, lot D) met le membre `i` dans la cage la plus proche (300 m), ou l'en sort |
 | `chain <i> [off]` | (hôte, lot D) l'enchaîne à la manière du jeu (menottes créées) / le libère |

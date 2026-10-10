@@ -49,6 +49,10 @@ struct FakeChar {
     std::vector<ItemState> items;
     CaptiveState cap;      // lot D: cage, shackles, slavery (netId unused)
     std::vector<int32_t> jobs;   // fix G5: its job list (Tâches panel), by kind
+    bool animal = false;
+    std::string bagSid;          // the backpack it wears (empty: none); its handle serial is local
+    uint32_t bagSerial = 0;
+    std::vector<ItemState> bag;
 };
 
 struct FakeWorld : IWorld {
@@ -251,8 +255,15 @@ struct FakeWorld : IWorld {
     struct FakeBox { std::string sid; Vec3 pos; std::vector<ItemState> items; };
     std::map<uint32_t, FakeBox> boxes;
     static Handle B(uint32_t serial) { Handle h; h.type = 0; h.index = serial; h.serial = serial; return h; }
+    static constexpr uint32_t kBagType = 0x2E;   // a worn backpack (an item handle)
+    static Handle Pk(uint32_t serial) { Handle h; h.type = kBagType; h.index = serial; h.serial = serial; return h; }
     std::vector<ItemState>* ItemsOf(const Handle& h) {
         if (h.type == 0) { auto b = boxes.find(h.serial); return b == boxes.end() ? nullptr : &b->second.items; }
+        if (h.type == kBagType) {
+            for (auto& [s, c] : chars)
+                if (!c.bagSid.empty() && c.bagSerial == h.serial) return &c.bag;
+            return nullptr;
+        }
         auto it = chars.find(h.serial);
         return it == chars.end() ? nullptr : &it->second.items;
     }
@@ -372,6 +383,31 @@ struct FakeWorld : IWorld {
         return true;
     }
     bool OpenTradeWindow(const Handle&, const Handle&) override { tradeWindow = true; ++tradeWindowOpens; return true; }
+    // travelling merchants: their squads (merchant serial -> wearers), worn backpacks, animals
+    std::map<uint32_t, std::vector<uint32_t>> caravans;
+    std::vector<std::pair<uint32_t, uint32_t>> joins;   // JoinSquadOf(who, leader) asked
+    int thefts = 0;
+    bool WornBackpack(const Handle& wearer, Handle& bag, std::string& sid) override {
+        auto it = chars.find(wearer.serial);
+        if (wearer.type == kBagType || it == chars.end() || it->second.bagSid.empty()) return false;
+        bag = Pk(it->second.bagSerial);
+        sid = it->second.bagSid;
+        return true;
+    }
+    bool TravellingCounters(const Handle& trader, std::vector<Handle>& wearers) override {
+        wearers.clear();
+        auto c = caravans.find(trader.serial);
+        if (c == caravans.end()) return false;
+        for (uint32_t s : c->second) if (chars.count(s) && !chars[s].bagSid.empty()) wearers.push_back(Hc(s));
+        return !wearers.empty();
+    }
+    bool IsAnimal(const Handle& h) override { auto it = chars.find(h.serial); return h.type != kBagType && it != chars.end() && it->second.animal; }
+    bool JoinSquadOf(const Handle& who, const Handle& leader) override { joins.emplace_back(who.serial, leader.serial); return true; }
+    int TheftCheck(const Handle& thief, const Handle& from, const ItemState& item) override {
+        (void)thief; (void)from; (void)item;
+        ++thefts;
+        return 1;   // unseen
+    }
     bool ContainerWindowOpen() override { return tradeWindow; }
     void CloseContainerWindows() override { tradeWindow = false; }
     // ---- lot E: buildings (handle type 0, serials from bldgSerial: they differ between machines)
@@ -854,6 +890,22 @@ static void TestWire() {
         TradeOpen to2; CHECK(Decode(tr, to2));
         CHECK(to2.traderNetId == 40 && to2.looterNetId == 7 && to2.traderMoney == -3 && to2.counters.size() == 2 &&
               to2.counters[1].netId == 42 && to2.counters[1].sid == "box-b" && to2.counters[1].pos.z == 6 && to2.note.empty());
+        {   // a travelling merchant: its counters are worn backpacks, known by their wearer
+            TradeOpen tb; tb.traderNetId = 40; tb.looterNetId = 7;
+            tb.counters = {{43, "bull-pack", {}, 44}};
+            Writer bw2; Encode(bw2, tb);
+            Reader br2(bw2.data(), bw2.size()); PeekType(br2);
+            TradeOpen tb2; CHECK(Decode(br2, tb2) && tb2.counters.size() == 1 && tb2.counters[0].ownerNetId == 44 && tb2.counters[0].sid == "bull-pack");
+            CHECK(to2.counters[0].ownerNetId == 0);
+            BagBind bb; bb.netId = 43; bb.ownerNetId = 44; bb.sid = "bull-pack";
+            Writer gw; Encode(gw, bb);
+            Reader gr(gw.data(), gw.size()); CHECK(PeekType(gr) == Msg::BagBind);
+            BagBind bb2; CHECK(Decode(gr, bb2) && bb2.netId == 43 && bb2.ownerNetId == 44 && bb2.sid == "bull-pack");
+            BagBind bad; bad.netId = 43; bad.ownerNetId = 44;   // no template: refused
+            Writer xw; Encode(xw, bad);
+            Reader xr(xw.data(), xw.size()); PeekType(xr);
+            BagBind bad2; CHECK(!Decode(xr, bad2));
+        }
         TradeOpen none; none.traderNetId = 40; none.note = "pas d'etal";
         Writer nw; Encode(nw, none);
         Reader nr(nw.data(), nw.size()); PeekType(nr);
@@ -1048,7 +1100,8 @@ static void TestFuzz() {
     });
     add([](Writer& w) { ContainerOpened m; m.netId = 9; m.looterNetId = 2; m.sid = "chest"; Encode(w, m); });
     add([](Writer& w) { Encode(w, ContainerClose{9, "trop loin"}); });
-    add([](Writer& w) { TradeOpen m; m.traderNetId = 4; m.looterNetId = 2; m.counters = {{5, "box", {1, 2, 3}}}; Encode(w, m); });
+    add([](Writer& w) { TradeOpen m; m.traderNetId = 4; m.looterNetId = 2; m.counters = {{5, "box", {1, 2, 3}}, {6, "pack", {}, 3}}; Encode(w, m); });
+    add([](Writer& w) { BagBind m; m.netId = 6; m.ownerNetId = 3; m.sid = "pack"; Encode(w, m); });
     add([](Writer& w) { DoorsMsg m; DoorState d; d.sid = "door"; d.flags = kDoorHasLock; d.lockLevel = 3; m.doors = {d, d}; Encode(w, m); });   // lot A
     add([](Writer& w) { DoorRequest m; m.sid = "door"; Encode(w, m); });   // lot A
     add([](Writer& w) { InvOp m; m.fromNetId = 5; m.toNetId = 2; m.item.templateSid = "x"; m.traderNetId = 4; m.price = 12; Encode(w, m); });
@@ -1107,6 +1160,7 @@ static void TestFuzz() {
         case Msg::ContainerOpened: { ContainerOpened m; Decode(r, m); break; }
         case Msg::ContainerClose: { ContainerClose m; Decode(r, m); break; }
         case Msg::TradeOpen: { TradeOpen m; Decode(r, m); break; }
+        case Msg::BagBind: { BagBind m; Decode(r, m); break; }
         case Msg::BuildPlace: { BuildPlace m; Decode(r, m); break; }
         case Msg::BuildState: { BuildStateMsg m; Decode(r, m); break; }
         case Msg::BuildRemove: { BuildRemove m; Decode(r, m); break; }
@@ -1862,6 +1916,89 @@ static void TestTrade() {
     CHECK(!cli.tradeView().open && !cli.tradeView().pending && host.hostTrades() == 0);
 }
 
+static void TestTravellingTrade() {
+    std::printf("session: travelling merchants sell from their squad's worn backpacks; backpacks synced; pack beasts robbed and given\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    auto item = [](const char* sid, int q, const char* sec, int x, int y) {
+        ItemState i; i.templateSid = sid; i.quantity = q; i.section = sec; i.x = int16_t(x); i.y = int16_t(y); return i;
+    };
+    FakeChar trader; trader.squad = false; trader.pos = {10, 0, -20}; trader.dest = trader.pos;
+    FakeChar beast = trader; beast.pos = {14, 0, -24}; beast.dest = beast.pos; beast.animal = true;
+    hw.chars[60] = trader;
+    hw.chars[61] = beast;
+    hw.money = 1000;
+    hw.merchantMoney[60] = 500;
+    AtMenu(cw);
+    SessionConfig hc; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 6));
+    const uint32_t me = 5000;
+    // the caravan's bull carries the stock in its pack; the client's game has the same pack (another
+    // local handle), empty for now
+    hw.chars[61].bagSid = "bull-pack"; hw.chars[61].bagSerial = 7001;
+    hw.chars[61].bag = {item("bread", 5, "main", 0, 0), item("sword", 1, "main", 2, 0)};
+    hw.caravans[60] = {61};
+    cw.chars[61].bagSid = "bull-pack"; cw.chars[61].bagSerial = 9001;
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return cw.chars[61].bag == hw.chars[61].bag; });
+    CHECK(cw.chars[61].bag == hw.chars[61].bag);
+    // the trader asks the client's character to trade: its window sells from the pack
+    hw.tradeReqs.push_back({FakeWorld::H(me), FakeWorld::H(60)});
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return cli.tradeView().open; });
+    CHECK(cli.tradeView().open && cli.tradeView().counters == 1 && host.hostTrades() == 1 && cw.tradeWindow);
+    // a purchase while the caravan walks on: 2 breads for 60 cats, paid on the host
+    hw.chars[60].dest = {40, 0, -20};
+    hw.chars[61].dest = {44, 0, -24};
+    cw.chars[61].bag[0].quantity = 3;
+    cw.chars[me].items.push_back(item("bread", 2, "main", 4, 1));
+    cw.money -= 60;
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return hw.money == 940 && cw.money == 940 && cw.chars[61].bag == hw.chars[61].bag; });
+    CHECK(hw.money == 940 && hw.merchantMoney[60] == 560 && hw.chars[61].bag.size() == 2 && hw.chars[61].bag[0].quantity == 3);
+    CHECK(cw.money == 940 && cw.chars[61].bag == hw.chars[61].bag && cw.chars[me].items == hw.chars[me].items);
+    // the bull is knocked out mid-trade: the window closes everywhere, nothing else moves
+    hw.chars[61].vit.flags = kVitUnconscious;
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return host.hostTrades() == 0 && !cli.tradeView().open && !cw.tradeWindow; });
+    CHECK(host.hostTrades() == 0 && !cli.tradeView().open && !cw.tradeWindow && hw.money == 940);
+    // it wakes up; the client steals the sword from the NPC's pack: the host's crime check decides
+    hw.chars[61].vit.flags = 0;
+    Run({{&host, &hw}, {&cli, &cw}}, 1.5);
+    {
+        auto& b = cw.chars[61].bag;
+        b.erase(std::remove_if(b.begin(), b.end(), [](const ItemState& i) { return i.templateSid == "sword"; }), b.end());
+    }
+    cw.chars[me].items.push_back(item("sword", 1, "main", 0, 3));
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return hw.chars[me].items.size() == 2 && cw.chars[61].bag == hw.chars[61].bag; });
+    CHECK(hw.thefts == 1 && hw.chars[me].items.size() == 2 && hw.chars[61].bag.size() == 1 && cw.chars[61].bag == hw.chars[61].bag);
+    // the client's own backpack: synced, and its player moves things in and out of it
+    hw.chars[me].bagSid = "small-pack"; hw.chars[me].bagSerial = 7002;
+    cw.chars[me].bagSid = "small-pack"; cw.chars[me].bagSerial = 9002;
+    hw.chars[me].bag = {item("ration", 3, "main", 0, 0)};
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return cw.chars[me].bag == hw.chars[me].bag; });
+    CHECK(cw.chars[me].bag == hw.chars[me].bag);
+    cw.chars[me].bag.clear();
+    cw.chars[me].items.push_back(item("ration", 3, "main", 5, 5));
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return hw.chars[me].bag.empty() && hw.chars[me].items.size() == 3; });
+    CHECK(hw.chars[me].bag.empty() && hw.chars[me].items.size() == 3 && cw.chars[me].items == hw.chars[me].items);
+    // a backpack swapped for another one (a new local item): it is bound again and refilled
+    hw.chars[me].bagSid = "big-pack"; hw.chars[me].bagSerial = 7003; hw.chars[me].bag = {item("ration", 1, "main", 1, 1)};
+    cw.chars[me].bagSid = "big-pack"; cw.chars[me].bagSerial = 9003; cw.chars[me].bag.clear();
+    Run({{&host, &hw}, {&cli, &cw}}, 5.0, [&] { return cw.chars[me].bag == hw.chars[me].bag; });
+    CHECK(cw.chars[me].bag == hw.chars[me].bag);
+    // a pack beast given to the client's player joins the squad of its own character
+    FakeChar pet; pet.squad = true; pet.animal = true; pet.pos = {0, 0, -25}; pet.dest = pet.pos;
+    hw.chars[62] = pet;
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0);
+    host.Assign(FakeWorld::H(62), cli.localId());
+    CHECK(!hw.joins.empty() && hw.joins.back().first == 62 && hw.joins.back().second == me);
+    // the wearer goes: its backpack is no longer followed
+    hw.chars.erase(61);
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return cli.entityCount() == host.entityCount(); });
+    CHECK(cli.entityCount() == host.entityCount());
+}
+
 static void TestCrashRejoin() {
     std::printf("session: a client whose game froze, then restarted (same Steam account): replaced cleanly, same character, nothing left open\n");
     FakeWorld hw, cw, cw2;
@@ -2245,6 +2382,7 @@ int main() {
     TestInventories();
     TestInventorySwaps();
     TestTrade();
+    TestTravellingTrade();
     TestCrashRejoin();
     TestBuildings();
     TestRanged();   // lot C

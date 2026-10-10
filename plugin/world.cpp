@@ -942,6 +942,38 @@ bool KenshiWorld::ShopCounters(const kc::Handle& trader, std::vector<ShopCounter
 
 bool KenshiWorld::MoneyOf(const kc::Handle& who, int32_t& money) { return kenshi::MoneyOf(Find(who), money); }
 
+bool KenshiWorld::WornBackpack(const kc::Handle& wearer, kc::Handle& bag, std::string& sid) {
+    void* b = kenshi::WornBackpack(Find(wearer));
+    return b && kenshi::ObjectHandle(b, bag) && kenshi::ObjectTemplate(b, sid);
+}
+
+// The host's handles of the squad members a travelling merchant sells from (their worn backpacks).
+bool KenshiWorld::TravellingCounters(const kc::Handle& trader, std::vector<kc::Handle>& wearers) {
+    wearers.clear();
+    std::vector<kenshi::Character*> found;
+    if (!kenshi::TravellingWearers(Find(trader), found)) return false;
+    for (kenshi::Character* c : found) {
+        kc::Handle h;
+        if (kenshi::GetHandle(c, h)) wearers.push_back(HostHandleOf(h));
+    }
+    return !wearers.empty();
+}
+
+bool KenshiWorld::IsAnimal(const kc::Handle& h) { return kenshi::IsAnimal(Find(h)); }
+
+bool KenshiWorld::JoinSquadOf(const kc::Handle& who, const kc::Handle& leader) {
+    kenshi::Character* c = Find(who);
+    kenshi::Character* l = Find(leader);
+    void* target = l ? kenshi::SquadOf(l) : nullptr;
+    if (!c || !target || kenshi::SquadOf(c) == target) return false;
+    std::vector<kenshi::Character*> members;
+    kenshi::SquadMembers(target, members);
+    bool ok = false;
+    HostCallScope scope;
+    kenshi::KeepSelection([&] { ok = kenshi::MoveToSquad(target, c, int(members.size())); });
+    return ok;
+}
+
 void KenshiWorld::SetMoneyOf(const kc::Handle& who, int32_t money) { kenshi::SetMoneyOf(Find(who), money); }
 
 // The price of a purchase: the buyer's cats (the player faction's) go to the merchant; a sale
@@ -1694,7 +1726,8 @@ void KenshiWorld::UpdatePendingLoot() {
         kenshi::Character* me = FindSquad(it->looter);
         kenshi::Character* target = kenshi::Resolve(it->target);
         kc::Vec3 lp, tp;
-        const bool valid = me && target && (kenshi::IsDown(target) || kenshi::IsDead(target) || kenshi::IsRagdoll(target)) && now < it->until;
+        const bool valid = me && target && (kenshi::IsDown(target) || kenshi::IsDead(target) || kenshi::IsRagdoll(target) || kenshi::IsAnimal(target)) &&
+                           now < it->until;
         if (valid && kenshi::GetPosition(me, lp) && kenshi::GetPosition(target, tp) && Dist(lp, tp) <= kLootRange) {
             kenshi::OpenLootWindow(me, target);
             it = pendingLoot_.erase(it);
@@ -2382,7 +2415,11 @@ std::string KenshiWorld::EffectsReport() {
 // The object holding an inventory: one of the characters, or a container (furniture).
 void* KenshiWorld::InventoryHolder(const kc::Handle& h) {
     if (kenshi::Character* c = Find(h)) return c;
-    return h.type == 0 ? kenshi::ResolveObject(h) : nullptr;   // type 0: a building
+    if (h.type == 0) return kenshi::ResolveObject(h);   // type 0: a building
+    if (h.type == 1 || h.type == 0x5B) return nullptr;   // a character not here
+    // an item with an inventory of its own: a worn backpack (RootObject::getInventory, vt 0x160)
+    void* item = kenshi::ResolveItem(h);
+    return item && kenshi::HasInventory(item) ? item : nullptr;
 }
 
 bool KenshiWorld::ReadInventory(const kc::Handle& h, std::vector<kc::ItemState>& out) {

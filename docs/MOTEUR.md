@@ -926,8 +926,24 @@ Recherche faite le 9 octobre 2026 pour le commerce. Fiabilité de chaque fait :
   - s'il en a un : `Building+0x1F0` (`myInterior`) → `0x54ACB0(intérieur, lektor&)` remplit la liste
     des meubles de boutique (un ensemble de `hand` de l'intérieur, sinon ses meubles) ; pour chacun,
     l'inventaire (vt 0x160) donne une section ;
-  - sinon (marchand ambulant) : les sacs à dos (objet de fonction 12) des membres de son escouade ;
-  - le mod refait la même chose (`kenshi::ShopCounters`) pour savoir quels contenants envoyer.
+  - sinon (marchand ambulant : `hand` de type 0xB, ou qui ne se résout pas) : les sacs à dos portés
+    par les membres de son escouade, lus ainsi [D] :
+    - `0x791B10(marchand)` : `Character+0x658` (`ActivePlatoon*`) ; ses membres sont la
+      `lektor<Character*>` en +0x50 (nombre +0x58, données +0x60) ;
+    - pour chacun, son inventaire (vt 0x160), puis `Inventory::getSection(type)` `0x745EF0` avec le
+      type 12 : parcourt `Inventory+0x68` (`lektor<InventorySection*>`, nombre +0x70, données +0x78)
+      et compare `InventorySection+0xB8` au type ;
+    - `0x746880` (section vide : `+0x40 == +0x48`) ; sinon le premier `SectionItem` (+0x40 → `Item*`) ;
+    - l'inventaire de cet objet (vt 0x160), et **sa première section** (`+0x78[0]`) s'ajoute à la
+      fenêtre ;
+  - le mod refait la même chose (`kenshi::ShopCounters`, et `kenshi::WornBackpack` /
+    `TravellingWearers` pour les sacs) pour savoir quels contenants envoyer.
+- **Sacs à dos** [D] : un sac est un `ContainerItem` (vtables `0x170F4F8`, et `0x170F4D8` pour sa
+  seconde base). `RootObject::getInventory` est l'emplacement vt 0x160 de tout objet : `Item` le
+  laisse à `0xD2280` (renvoie null), `ContainerItem` le remplace par `0x76BE60` (renvoie
+  `this+0x290`). vt 0x2C8 vaut `0x76BE50` (renvoie 0x2E) pour un `ContainerItem`. `HandleTable::resolve`
+  (`0x2676E0`) résout les `hand` d'objets (types 2 à 0x5A, sauf quelques-uns) par la liste générique
+  en +0x50 : le `hand` d'un sac porté se résout comme celui d'un objet au sol.
 - `0x953F90` (appelé par `showTraderInventory`) **détruit le `ShopTrader` précédent et en crée un
   neuf** à chaque ouverture : rouvrir la fenêtre suffit à montrer un stock changé.
 - `lektor<T*>` du jeu : vtable, `uint32` nombre (+8), `uint32` capacité (+0xC), données (+0x10) ;

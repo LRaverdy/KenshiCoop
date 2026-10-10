@@ -75,7 +75,8 @@ Traités dans `session.cpp` sauf mention contraire. S→C : hôte vers client ; 
 | 33 / 34 | ClientLog / ClientReport | C→S | journal et rapport du client |
 | 35 | Resync | S→C | recharger le monde |
 | 36–38 | ContainerOpen / Opened / Close | C→S / S→C / ↔ | contenants |
-| 39 | TradeOpen | S→C | fenêtre de commerce |
+| 39 | TradeOpen | S→C | fenêtre de commerce (comptoirs, ou sacs portés : `ownerNetId`) |
+| 80 | BagBind | S→C | sac à dos porté par un personnage : son netId, son porteur, son modèle (contenu en `Inventory`) |
 | 40 / 41 | Doors / DoorRequest | S→C / C→S | portes (`ClientDoorsPacket` :2452, `HostDoorPacket` :1436) |
 | 43 | Factions | S→C | relations (`ClientFactionsPacket` :2091) |
 | 44 | Bounties | S→C | primes (ignorées par le client, voir §7) |

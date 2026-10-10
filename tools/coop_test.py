@@ -3226,6 +3226,163 @@ def exp_dead(host, cli):
     log("inventory_mismatch", r["inventory_mismatch"], "down_bodies", r["down_bodies_worst"])
 
 
+def exp_caravan(host, cli):
+    """Travelling merchants (caravans): a trader without a home building walking with pack animals.
+    The game builds such a trader's window from the worn backpacks of its squad (ShopTrader's
+    constructor); the mod syncs every worn backpack (BagBind) and the host sells from them. Checked:
+    the caravan is the host's everywhere, its packs hold the same stock everywhere, the client buys and
+    sells while it walks (paid on the host, same cats and stock everywhere), the window closes when a
+    pack animal is killed, the client steals from a living NPC pack animal (the host's crime check)
+    and loots the dead one (items conserved).
+    No caravan template is spawned (spawnnpc only copies a nearby NPC): run it on a save where a
+    caravan walks near the squad; the debug command 'caravan' finds the nearest one."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    ch, cc = cmd(host, f"caravan {own}"), cmd(cli, f"caravan {own}")
+    log("caravan host:", ch, "/ client:", cc)
+    check("marchand ambulant : une caravane est en vue chez l'hote", ch[0], ch[1])
+    if not ch[0]:
+        summary()
+        return
+    hk = re.search(r"key=(\S+)", ch[1])
+    ck = re.search(r"key=(\S+)", cc[1]) if cc[0] else None
+    check("marchand ambulant : le client voit la meme caravane", bool(hk and ck and hk.group(1) == ck.group(1)), f"hote {ch[1]} / client {cc[1]}")
+    hm = re.search(r"members=(\d+) animals=(\d+)", ch[1])
+    cm = re.search(r"members=(\d+) animals=(\d+)", cc[1]) if cc[0] else None
+    check("marchand ambulant : pas de caravane en double chez le client", bool(hm and cm and hm.groups() == cm.groups()), f"hote {ch[1]} / client {cc[1]}")
+    log("where the stock lives (host): members' own stacks / stacks in worn packs:", ch[1])
+    beast = cmd(host, f"caravanbeast {own}")
+    log("pack animal:", beast)
+    key = beast[1].split()[1] if beast[0] else None
+    if key:
+        bh, bc = cmd(host, f"bag {key}"), cmd(cli, f"bag {key}")
+        log("its pack host:", bh[1][:200], "/ client:", bc[1][:200])
+        check("marchand ambulant : sac de la bete identique partout", bh == bc, f"hote {bh[1][:120]} / client {bc[1][:120]}")
+    rep = compare(dump(host, "h_car0"), dump(cli, "c_car0"), "caravan0")
+    check("marchand ambulant : inventaires de la caravane identiques", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    # trade with the walking caravan
+    log("client opens trade with the walking caravan:", cmd(cli, f"caravanopen {own}"))
+    state = "?"
+    for _ in range(40):
+        time.sleep(0.5)
+        state = cmd(cli, "tradestate")[1]
+        if "open=1" in state:
+            break
+    hs = cmd(host, "tradestate")[1]
+    log("client trade state:", state, "/ host:", hs)
+    check("marchand ambulant : la fenetre s'ouvre chez le client", "open=1" in state, state)
+    check("marchand ambulant : l'hote suit ce commerce", "hosttrades=1" in hs, hs)
+    stock_c = cmd(cli, "tradelist merchant")[1]
+    log("client sees the stock:", stock_c[:300])
+    check("marchand ambulant : le stock de la caravane est la chez le client", stock_c.startswith("ok") and stock_c.split()[1] != "0", stock_c[:120])
+    cats0_h, cats0_c = cmd(host, "money")[1], cmd(cli, "money")[1]
+    log("client buys:", cmd(cli, "tradebuy 0"))
+    time.sleep(3)
+    cats1_h, cats1_c = cmd(host, "money")[1], cmd(cli, "money")[1]
+    check("marchand ambulant : achat paye chez l'hote", cats1_h != cats0_h, f"hote {cats0_h} -> {cats1_h}")
+    check("marchand ambulant : meme argent partout apres l'achat", cats1_h == cats1_c, f"hote {cats1_h} / client {cats1_c}")
+    if key:
+        bh, bc = cmd(host, f"bag {key}"), cmd(cli, f"bag {key}")
+        check("marchand ambulant : stock identique apres l'achat", bh == bc, f"hote {bh[1][:120]} / client {bc[1][:120]}")
+    log("client sells:", cmd(cli, "tradesell 0"))
+    time.sleep(3)
+    cats2_h, cats2_c = cmd(host, "money")[1], cmd(cli, "money")[1]
+    check("marchand ambulant : vente payee chez l'hote", cats2_h != cats1_h, f"hote {cats1_h} -> {cats2_h}")
+    check("marchand ambulant : meme argent partout apres la vente", cats2_h == cats2_c, f"hote {cats2_h} / client {cats2_c}")
+    rep = compare(dump(host, "h_car1"), dump(cli, "c_car1"), "caravan1")
+    check("marchand ambulant : inventaires identiques apres achat et vente", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    if not key:
+        summary()
+        return
+    # the pack animal is killed mid-trade: the window closes everywhere
+    log("host kills the pack animal:", cmd(host, "kill"))
+    time.sleep(6)
+    hs, cs = cmd(host, "tradestate")[1], cmd(cli, "tradestate")[1]
+    check("marchand ambulant : la fenetre se ferme quand la bete meurt", "hosttrades=0" in hs and "open=0" in cs, f"hote {hs} / client {cs}")
+    cmd(cli, "closewindows")
+    bh, bc = cmd(host, f"bag {key}"), cmd(cli, f"bag {key}")
+    check("marchand ambulant : la bete morte garde son stock, identique partout", bh == bc, f"hote {bh[1][:120]} / client {bc[1][:120]}")
+
+    def total(pid):
+        n = 0
+        for who in (f"bag {key}", f"bag squad{own}"):
+            r = cmd(pid, who)[1]
+            n += sum(int(q) for q in re.findall(r":(\d+)", r))
+        d = dump(pid, "car_total")
+        sq = sorted(d["squad"])[own] if len(d["squad"]) > own else None
+        for it in (d["squad"].get(sq, {}).get("inv") or []):
+            m = re.search(r":(\d+)", str(it))
+            n += int(m.group(1)) if m else 1
+        return n
+    before = total(host)
+    for _ in range(3):
+        log("client loots the dead animal's pack:", cmd(cli, f"invmove bag:{key} squad{own} 0"))
+        time.sleep(3)
+    after = total(host)
+    bh, bc = cmd(host, f"bag {key}"), cmd(cli, f"bag {key}")
+    check("marchand ambulant : pillage du sac, identique partout", bh == bc, f"hote {bh[1][:120]} / client {bc[1][:120]}")
+    check("marchand ambulant : pillage du sac, rien de cree ni perdu", before == after, f"objets {before} -> {after}")
+    rep = compare(dump(host, "h_car3"), dump(cli, "c_car3"), "caravan looted")
+    check("marchand ambulant : inventaires identiques apres le pillage", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    # stealing from another, living, pack animal of the caravan
+    beast2 = cmd(host, f"caravanbeast {own}")
+    if beast2[0]:
+        key2 = beast2[1].split()[1]
+        b0 = cmd(host, f"bounty {own}")[1]
+        log("client steals from a living pack animal:", cmd(cli, f"invmove bag:{key2} squad{own} 0"))
+        time.sleep(4)
+        bh, bc = cmd(host, f"bag {key2}"), cmd(cli, f"bag {key2}")
+        check("marchand ambulant : vol dans le sac d'une bete, identique partout", bh == bc, f"hote {bh[1][:120]} / client {bc[1][:120]}")
+        b1h, b1c = cmd(host, f"bounty {own}")[1], cmd(cli, f"bounty {own}")[1]
+        log("bounty before / after (host):", b0, "/", b1h, "client:", b1c)
+        check("marchand ambulant : prime eventuelle identique partout", b1h == b1c, f"hote {b1h} / client {b1c}")
+    summary()
+
+
+def exp_pets(host, cli):
+    """Animals of the player's squad (pack beasts, dogs, goats...): ordinary squad characters, the
+    host's until given to a player (then they join the squad of that player's own character, so they
+    follow it); their position, health, hunger and inventory are the host's everywhere, a client's own
+    animal obeys its orders through the host, and items moved into it at once by host and client are
+    never duplicated. A client leaving gives its animals to the host; joining again (same Steam id)
+    gives them back (not automated here: it needs a new join). An animal a client buys in a
+    conversation becomes that client's (not automated: it needs an animal trader)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    ah, ac = cmd(host, "squadanimals"), cmd(cli, "squadanimals")
+    log("squad animals host:", ah, "/ client:", ac)
+    check("animaux : memes animaux dans l'escouade partout", ah == ac, f"hote {ah[1]} / client {ac[1]}")
+    if not ah[0] or ah[1].split()[1] == "0":
+        log("no animal in the squad: buy or tame one on the save first")
+        summary()
+        return
+    idx = int(ah[1].split()[2].split(":")[0])
+    akey = ah[1].split()[2].split(":", 1)[1].rsplit(":", 1)[0]
+    own = own_index(host)
+    log("host gives the animal to the client:", cmd(host, f"give 2 {idx}"))
+    time.sleep(4)
+    d = dump(host, "h_pet0")
+    owner = d["entity"].get(akey, {}).get("owner")
+    check("animaux : l'animal donne appartient au client", owner == "2", f"proprietaire {owner}")
+    log("client moves its animal:", cmd(cli, f"moverel {idx} 20 0"))
+    time.sleep(8)
+    rep = compare(dump(host, "h_pet1"), dump(cli, "c_pet1"), "pet moved")
+    check("animaux : position, sante et inventaire de l'animal identiques", rep["inventory_mismatch"] == 0 and rep["pos_err_over_tol"] == 0,
+          f"{rep['inventory_mismatch_sample']} pos>tol {rep['pos_err_over_tol']}")
+    log("client moves an item into its animal:", cmd(cli, f"invmove squad{own} squad{idx} main"))
+    log("host moves an item into it at once:", cmd(host, f"invmove squad0 squad{idx} main"))
+    time.sleep(4)
+    rep = compare(dump(host, "h_pet2"), dump(cli, "c_pet2"), "pet inventory")
+    check("animaux : inventaire partage, pas de doublon", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    bh, bc = cmd(host, f"bag squad{idx}"), cmd(cli, f"bag squad{idx}")
+    if bh[0] or bc[0]:
+        check("animaux : sac porte par l'animal identique partout", bh == bc, f"hote {bh[1][:120]} / client {bc[1][:120]}")
+    summary()
+
+
 def exp_carry(host, cli):
     """The host carries a knocked out NPC, walks, puts it down: the client shows it on the shoulder,
     then lying where the host's landed, without throwing it."""
@@ -4064,6 +4221,11 @@ def main():
     fl_.add_argument("--save", default="kctest_base")
     fl_.add_argument("--keep", action="store_true")
     fl_.add_argument("--seconds", type=int, default=300, help="time spent far away")
+    for name_, hlp_ in (("caravan", "travelling merchant: packs synced, buy/sell while it walks, window closed on a kill, theft and loot of pack animals"),
+                        ("pets", "squad animals: ownership, owner's squad, orders through the host, shared inventory")):
+        sp_ = sub.add_parser(name_, help=hlp_)
+        sp_.add_argument("--save", default="kctest_town")
+        sp_.add_argument("--keep", action="store_true")
     td = sub.add_parser("trade", help="a client trades with a merchant: purchase, sale, stock everywhere")
     td.add_argument("--save", default="kctest_town")
     td.add_argument("--keep", action="store_true")
@@ -4242,6 +4404,10 @@ def main():
             exp_mine(host, cli)
         elif a.what == "admin":
             exp_admin(host, cli)
+        elif a.what == "caravan":
+            exp_caravan(host, cli)
+        elif a.what == "pets":
+            exp_pets(host, cli)
         elif a.what == "trade":
             exp_trade(host, cli, a.merchant)
         elif a.what == "passive":

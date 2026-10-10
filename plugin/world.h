@@ -89,6 +89,10 @@ public:
     void TakeTradeRequests(std::vector<TradeRequest>& out) override;
     bool ShopCounters(const kc::Handle& trader, std::vector<ShopCounter>& out) override;
     bool MoneyOf(const kc::Handle& who, int32_t& money) override;
+    bool WornBackpack(const kc::Handle& wearer, kc::Handle& bag, std::string& sid) override;
+    bool TravellingCounters(const kc::Handle& trader, std::vector<kc::Handle>& wearers) override;
+    bool IsAnimal(const kc::Handle& h) override;
+    bool JoinSquadOf(const kc::Handle& who, const kc::Handle& leader) override;
     bool PayTrade(const kc::Handle& buyer, const kc::Handle& trader, int32_t price) override;
     void RefreshTradeWindow(const kc::Handle& trader) override;
     bool OpenTradeWindow(const kc::Handle& looter, const kc::Handle& trader) override;
