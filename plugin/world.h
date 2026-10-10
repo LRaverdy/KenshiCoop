@@ -101,6 +101,16 @@ public:
     size_t ApplyFactions(const kc::FactionsMsg& m) override;
     bool ReadBounties(const kc::Handle& h, kc::CharBounties& out) override;
     size_t ApplyBounties(const kc::Handle& h, const kc::CharBounties& b) override;
+    // ---- diplomacy (plugin/factions.cpp): relations between factions, unique characters, towns
+    bool ReadDiplomacy(kc::DiplomacyState& out) override;
+    size_t ApplyFactionPairs(const std::vector<kc::FactionPairRelation>& pairs) override;
+    size_t ApplyUniques(const std::vector<kc::UniqueState>& uniques) override;
+    size_t ApplyTowns(const std::vector<kc::TownState>& towns) override;
+    // tests (debug commands): one faction toward another, set both ways; a unique character's state; a
+    // town's owner (the host's game, as the game itself would change them)
+    bool SetFactionPair(const std::string& fromSid, const std::string& toSid, const kc::RelationState& rel);
+    bool SetUniqueState(const std::string& sid, uint8_t state, bool byPlayer);
+    bool SetTownOwner(const std::string& townSid, const std::string& factionSid);
     // ---- lot A: doors and locks (plugin/doors.cpp)
     void ReadDoors(const std::vector<kc::Vec3>& centers, float radius, std::vector<kc::DoorState>& out) override;
     bool ContainerLocked(const kc::Handle& container) override;

@@ -185,6 +185,9 @@ Les signatures sont celles du commentaire du code.
 | fix G5 | `FnCharRemoveJob` | `Character::removeJob(TaskType)` | `0x5C8EB0` | oui | `removeJobSelectedCharacters` (`0x7F5C80`) |
 | fix G5 | `FnCharGetPermajob` | `Character::getPermajob(int) const` | `0x5C8EF0` | — | type de la tâche d'un emplacement |
 | fix G5 | `FnCharPermajobCount` | `Character::getPermajobCount() const` | `0x5C8F30` | — | nombre de tâches |
+| diplomatie | `FnUniqueMapIndex` | `operator[]` de la table de `UniqueNPCManager` | `0x349950` | — | paire `<GameData* const, UniqueCharacterState>` créée si absente (comme au chargement `0x9AA270`) |
+| diplomatie | `FnTownSetOverride` | `TownBase::setOverride(GameData*)` | `0x9FE7A0` | — | applique une variante de ville (voir « Diplomatie ») |
+| diplomatie | `FnTownSetFaction` | `TownBase::setFaction(Faction*, bool)` | `0x9287D0` | — | vt 0xA0 de `Town` / `TownBase` : change la faction d'une ville |
 
 Les cinq passent par `Character::ai` (+0x650) puis `AI::orders` (+0x20, `OrdersReceiver`, tâches
 à +0x90 nombre et +0x98 tableau de `Tasker*`). `Character::clearPermajobs` (`0x5C8FE0`) n'a aucun
@@ -220,6 +223,8 @@ commentaire de son énumérateur.
 | `0x2011F78` | `lektor<CombatTechniqueData*>` : toutes les techniques de combat |
 | `0x1E3A5F8` | le `hand` vide que le jeu donne à un objet posé au sol |
 | `0x2247DA0` | pointeur vers `Quaternion::IDENTITY` |
+| `0x212EB00` | pointeur vers `UniqueNPCManager` (créé par son accesseur `0x354560`) |
+| `0x2134100` | pointeur vers `TownList` (créé en `0x15D5B77`) |
 
 Vtables (pour reconnaître un objet) :
 
@@ -637,6 +642,51 @@ Tâches par défaut d'un clic droit sur un meuble, selon la recherche :
   montant à 0.
 - Adresses de KenshiLib (1.0.65) pour `BountyManager` : décalage de +0x1590 dans cette zone
   (`setCrime` 0x8516F0 → `0x852C80`).
+
+### Diplomatie : factions entre elles, personnages uniques, villes [D]
+Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
+- **`UniqueNPCManager`** (`*0x212EB00`) : l'objet est une `boost::unordered_map<GameData*,
+  UniqueCharacterState>` (nombre de seaux +0x18, taille +0x20, seaux +0x38). Nœud : suivant +0,
+  empreinte +8, clé `GameData*` +0x10, valeur +0x18 = `{ GameData* data ; hand escouade (0x20 octets,
+  type 0xB) ; int état ; bool joueur }`, soit `data` +0x18, `hand` +0x20, **état +0x40**, **joueur
+  +0x44** (dans la paire de `operator[]` `0x349950` : +8, +0x10, +0x30, +0x34).
+  - États : **0 mort, 1 vivant, 2 emprisonné**. `getState` (`0x5E87F0`) renvoie 1 pour une entrée
+    absente ; `isPlayerInvolved` (`0x9B0D00`) renvoie l'octet « joueur » (faux si absente).
+  - Écrivains : `Character::declareDead` (`0x7A6200`, à `0x7A6405`) met 0 et « joueur » si la faction
+    du perso est celle du joueur (`Faction`+0x250) ; `0x5CF470` (mise à jour d'un prisonnier :
+    `Character`+0x3D4, son geôlier) met 2 (« joueur » si le geôlier est la faction du joueur) puis 1 à
+    la libération ; `0x7CD570` met 0 ; `0x5E87A0` remet 1 ; `0x34AE20` met 2 ou 1.
+  - Sauvegarde `0x9A8660` / chargement `0x9AA270` : clés `usedUniques`, `usedUniquesState`,
+    `usedUniquesPlayer` (le chargement crée l'entrée par `operator[]` puis écrit `data` = la clé).
+- **États du monde** : `WorldEventStateQuery::evaluate` (`0x9A7E00`) ne lit que : l'état de
+  personnages uniques (`getState`, et `isPlayerInvolved` si la requête +0x140 le demande), et
+  `FactionRelations::isAlly` / `isEnemy` de factions envers la faction du joueur. Avec les mêmes
+  uniques et les mêmes relations du joueur, un client évalue les mêmes états du monde.
+- **`FactionRelations::isAlly(Faction*)`** `0x6B2630` : soi-même, ou `alliance`, ou relation ≥ 50
+  (relation par défaut +0x60 si pas d'entrée). **`isEnemy`** `0x6B26D0` : relation ≤ −30.
+- **`FactionRelations::declareWar(Faction*)`** `0x6B3000` (pas d'appel direct : vtable ou pointeur) :
+  `war` = 1, relation ramenée à −35 si elle était au-dessus, message « War breaks out between {1}
+  and {2} » ; `FactionRelations`+8 = sa faction. Non détournée : ses appelants n'ont pas été
+  retrouvés ; s'ils sont les actions de dialogue ou les campagnes, ils sont déjà refusés chez le client.
+- **`TownList`** (`*0x2134100`, hérite de `RootObjectContainer`) : +0x50 `lektor<TownBase*>`
+  (nombre +0x58, tableau +0x60). `TownList::getNearestTown` `0x927F10` la parcourt.
+- **`TownBase`** (`Town` : vtable `0x1735BA8`, `TownBase` : `0x1734F48`, hérite de `RootObject`) :
+  +0x10 faction propriétaire, +0x18 nom, +0x40 `GameData*`, +0x48 / +0x50 position x / z, +0xD8 type
+  (`getNearestTown` traite 8 à part), +0x110 drapeau remis à 0 par `setOverride`, **+0x338 variante appliquée
+  (`GameData*`)**, +0x380 « is public », +0x384 « no-foliage range ».
+  - `setOverride` `0x9FE7A0` : écrit +0x338, recopie de la variante `no-foliage range`, `type`,
+    `is public`, cherche sa référence `faction` et, si elle diffère, appelle `setFaction` (vt 0xA0).
+  - `setFaction` `0x9287D0` : retire la ville de la liste de son ancienne faction (`Faction`+0x88 → +0x10),
+    l'ajoute à la nouvelle (sauf faction factice +0x1D0), écrit +0x10. Une faction nulle prend celle
+    par défaut.
+- **Choix de la variante d'une ville** : au chargement d'une zone (`0x9FFAD0`, objets de type 0xD),
+  `0x9FF5A0(gestionnaire de zones *0x21349C0, ville)` : rien pour une ville du joueur ; sinon, si la
+  ville n'est pas déjà dans la table du gestionnaire (+0x168148), parcourt les références
+  `override town` de la ville, garde celles dont tous les `world state` sont vrais et différentes de
+  la variante actuelle, prend **la plus lourde** (`0x5778D0` garde le maximum : déterministe), appelle
+  `setOverride` et note la ville dans la table. Puis la zone applique les listes `0-buildinglist` /
+  `1-itemlist` de la variante. La table n'est pas sauvegardée : la décision est reprise à chaque
+  chargement de partie.
 
 ## 6. Comportements observés
 

@@ -179,7 +179,7 @@ Ordre dans `Tick()` (`main.cpp`) :
   reviennent à l'hôte et sont arrêtés au tick suivant (`IWorld::HaltCharacter`), mémorisés par
   compte (`leftOwned_`) et rendus s'il revient ; tout ce qui porte son id est effacé (ordres,
   `pendingInvOps_`, apparences, conteneurs demandés ou en route, `openBy`, `trades_`, poses et
-  achats de bâtiments, portes, conversations, `buildSyncedPlayers_`, `factionsServed_`) : l'id
+  achats de bâtiments, portes, conversations, `buildSyncedPlayers_`, `factionsServed_`, `diploServed_`) : l'id
   sera peut-être celui d'un autre joueur. Une nouvelle connexion du même compte (ou, sans compte,
   du même nom sur une connexion muette depuis 2 s) remplace l'ancienne **avant** le choix du nom
   et de l'id.
@@ -314,6 +314,7 @@ format, et une version différente est refusée à la connexion.
 | 38 | ContainerClose | ⇄ | fenêtre fermée (client) ou à fermer (hôte : vol repéré, trop loin) |
 | 43 | Factions | H→C | relations de la faction du joueur avec chaque faction, dans les deux sens ; rang et réputation |
 | 44 | Bounties | H→C | primes par faction, crime en cours, peine de prison et laissez-passer de chaque personnage de l'escouade |
+| 85 | Diplomacy | H→C | diplomatie, une partie par message : paires de factions (hors joueur) changées depuis le début, personnages uniques (mort, vivant, emprisonné, par les joueurs), villes (faction, variante) |
 | 40 | Doors | H→C | portes et serrures près des joueurs : ouverte/fermée, verrouillée, niveau de serrure, cassée (lot A) |
 | 41 | DoorRequest | C→H | le joueur a cliqué un bouton du panneau d'une porte (ouvrir, verrouiller) (lot A) |
 | 49 | Captives | H→C | lot D : personnages en cage, enchaînés, esclaves, évadés, enlevés, en peine de prison (et ceux libérés, une fois) |
@@ -426,6 +427,25 @@ format, et une version différente est refusée à la connexion.
 4. Les fonctions du jeu qui créent une entrée manquante : `FactionRelations::getRelationData`
    (`0x6B4C60`) et l'`operator[]` de la table des primes (`0x5E7EE0`). Le reste est écrit
    directement (voir [MOTEUR.md](MOTEUR.md), « Factions, relations et primes »).
+5. Les deux côtés comparent chaque nouvelle version à la précédente et ajoutent aux événements du
+   panneau une ligne en français (`NoteFactionChanges`, `NoteBountyChanges`) : faction qui devient
+   alliée / neutre / ennemie (règles du jeu, `StandingOf`), guerre, prime posée ou levée.
+
+### Diplomatie (`common/src/session_diplomacy.cpp`, `plugin/factions.cpp`)
+1. Toutes les 3 s, l'hôte lit (`IWorld::ReadDiplomacy`) les relations de chaque faction envers
+   chaque autre (la faction du joueur exclue), la table des personnages uniques et les villes.
+2. Paires de factions : la première lecture sert de référence (la sauvegarde envoyée aux clients les
+   contient). Une paire qui s'en écarte (drapeaux, ou 1 point de relation : `SamePairRelation`) entre
+   dans la liste des changées et y reste. Seule cette liste part.
+3. Chaque partie (paires, uniques, villes) est encodée à part (au plus 60 Ko, la fin est coupée
+   sinon) et envoyée quand son empreinte change, sinon aux seuls joueurs qui viennent d'arriver.
+4. Le client garde la dernière version de chaque partie et l'impose à son arrivée puis toutes les
+   3 s (`ApplyFactionPairs`, `ApplyUniques`, `ApplyTowns`) ; corrections comptées (`diplosync`).
+5. Nouvelles en français des deux côtés (`NoteDiplomacyChanges`) : guerre, alliance, chef mort ou
+   emprisonné, ville prise ou changée ; rien pour la première version reçue.
+6. Fenêtre Diplomatie (Ctrl+Shift+F, `plugin/overlay.cpp`, remplie par `FillDiplomacy` dans
+   `plugin/main.cpp` une fois par seconde quand elle est ouverte) : `Session::hostFactions`,
+   `hostBounties`, `hostDiplomacy`.
 ### Portes et serrures (`HostDoors`, `ClientDoors`, `common/src/session_doors.cpp`, `plugin/doors.cpp`)
 1. Toutes les 0,5 s, l'hôte lit (`KenshiWorld::ReadDoors`) les portes (`DoorStuff`) et les meubles
    à serrure (`DoorLock`) à moins de 400 unités de chaque membre de l'escouade. Une entrée : type,

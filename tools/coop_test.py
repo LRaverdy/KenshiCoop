@@ -1267,6 +1267,92 @@ def exp_factions(host, cli):
     check("factions : le client ne garde pas ses propres relations", rh == rc and "ours=50.0" not in rc, f"hote {rh} / client {rc} | {before} -> {after}")
     fh, fc = cmd(host, "factions")[1], cmd(cli, "factions")[1]
     check("factions : memes relations a la fin", fh == fc, f"hote {fh} / client {fc}")
+def exp_diplomacy(host, cli):
+    """Diplomacy: relations between two NPC factions (war, alliance), unique characters (faction
+    leaders dead or imprisoned) and towns (owner, override) are the host's on every machine; the
+    client's game cannot keep its own. Self-contained: everything changed is put back."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+
+    def fields(t):
+        out = {}
+        for e in t.split()[1:]:
+            if "=" in e:
+                k, v = e.split("=", 1)
+                out[k] = v
+        return out
+
+    def same_world(tag):
+        dh, dc = cmd(host, "diplo")[1], cmd(cli, "diplo")[1]
+        fh, fc = fields(dh), fields(dc)
+        log("diplo", tag, "host:", dh, "/ client:", dc)
+        ok = dh.startswith("ok") and dc.startswith("ok") and all(fh.get(k) == fc.get(k) for k in ("ph", "uh", "th"))
+        check("diplomatie : memes guerres, chefs et villes " + tag, ok, f"hote {dh} / client {dc}")
+
+    same_world("au depart")
+    # 1. a war between two factions that are not the player's, declared on the host
+    pair = None
+    for a, b in (("Nation_Sainte", "Shek"), ("Shek", "Bandit"), ("Nation", "Ville"), ("Shinobi", "Ville"), ("a", "e")):
+        r = cmd(host, f"diplopair {a} {b}")
+        if r[0]:
+            pair = (a, b, r[1])
+            break
+    check("diplomatie : deux factions trouvees", pair is not None, pair)
+    if pair:
+        a, b, before = pair
+        orig = "0"
+        for e in before.split():
+            if e.startswith("ab="):
+                orig = e[3:].split(",")[0]
+        log("host declares war:", cmd(host, f"setdiplopair {a} {b} -100 war"))
+        time.sleep(8)
+        ph, pc = cmd(host, f"diplopair {a} {b}")[1], cmd(cli, f"diplopair {a} {b}")[1]
+        check("diplomatie : guerre entre deux factions visible chez le client", "war" in ph and ph == pc, f"hote {ph} / client {pc}")
+        # 2. the client's game changes it by itself: back to the host's
+        log("client makes peace on its own:", cmd(cli, f"setdiplopair {a} {b} 50 none"))
+        time.sleep(8)
+        ph, pc = cmd(host, f"diplopair {a} {b}")[1], cmd(cli, f"diplopair {a} {b}")[1]
+        check("diplomatie : le client ne garde pas sa propre paix", ph == pc and "war" in pc, f"hote {ph} / client {pc}")
+        log("host restores the pair:", cmd(host, f"setdiplopair {a} {b} {orig} none"))
+    # 3. a faction leader killed by the players, on the host
+    uniq = None
+    for part in ("Tinfist", "Esata", "Phoenix", "Seto", "Longen", "Valamon", "Bayan", "Moll", "a"):
+        r = cmd(host, f"unique {part}")
+        if r[0]:
+            uniq = (part, r[1])
+            break
+    check("diplomatie : un personnage unique trouve", uniq is not None, uniq)
+    if uniq:
+        part, before = uniq
+        f0 = fields(before)
+        log("host: the leader dies by the players' hand:", cmd(host, f"setunique {part} 0 player"))
+        time.sleep(8)
+        uh, uc = cmd(host, f"unique {part}")[1], cmd(cli, f"unique {part}")[1]
+        check("diplomatie : chef tue (etat unique) identique chez le client", "state=0" in uh and uh == uc, f"hote {uh} / client {uc}")
+        log("host: put back:", cmd(host, f"setunique {part} {f0.get('state', '1')} {'player' if f0.get('player') == '1' else ''}"))
+    # 4. a town taken over by another faction, on the host
+    town = None
+    for part in ("Squin", "Stack", "Hub", "Admag", "Mongrel", "Shark", "Stoat", "a"):
+        r = cmd(host, f"town {part}")
+        if r[0] and "owner=-" not in r[1]:
+            town = (part, r[1])
+            break
+    check("diplomatie : une ville trouvee", town is not None, town)
+    if town and pair:
+        part, before = town
+        owner = before.split("owner=", 1)[1].split(" override=")[0]
+        target = pair[0] if pair[0].replace("_", " ") not in owner else pair[1]
+        log("host: town taken over:", cmd(host, f"settownowner {part} {target}"))
+        time.sleep(8)
+        th, tc = cmd(host, f"town {part}")[1], cmd(cli, f"town {part}")[1]
+        check("diplomatie : changement de proprietaire d'une ville identique", th != before and th == tc, f"avant {before} / hote {th} / client {tc}")
+        log("host: town given back:", cmd(host, f"settownowner {part} {owner.replace(' ', '_')}"))
+    time.sleep(8)
+    log("diplosync host:", cmd(host, "diplosync")[1], "/ client:", cmd(cli, "diplosync")[1])
+    same_world("a la fin")
+
+
 def exp_buildstate(host, cli):
     """Construction state of the buildings already there (save, towns, the bought one in kctest_mine):
     every building both games see near the squad has the same state (finished or site, progress)."""
@@ -3918,6 +4004,9 @@ def main():
     fa_ = sub.add_parser("factions", help="lot B: relations, bounties and crimes the host's everywhere")
     fa_.add_argument("--save", default="kctest_base")
     fa_.add_argument("--keep", action="store_true")
+    dp_ = sub.add_parser("diplomacy", help="wars between factions, faction leaders, towns: the host's everywhere")
+    dp_.add_argument("--save", default="kctest_town")
+    dp_.add_argument("--keep", action="store_true")
     tk = sub.add_parser("talk")
     tk.add_argument("--save", default="kctest_base")
     tk.add_argument("--keep", action="store_true")
@@ -4065,6 +4154,8 @@ def main():
             exp_floor(host, cli)
         elif a.what == "factions":
             exp_factions(host, cli)
+        elif a.what == "diplomacy":
+            exp_diplomacy(host, cli)
         elif a.what == "doors":
             exp_doors(host, cli)
         elif a.what == "prison":

@@ -74,6 +74,7 @@ void Session::SendFactions(double now) {
                 }
                 if (fm.playerRank != hostFactions_.playerRank) log_("relations: player faction rank now " + std::to_string(fm.playerRank));
             }
+            if (factionsHash_ != 0 && h != factionsHash_) NoteFactionChanges(hostFactions_, fm);
             BroadcastReliable(w, true);
             factionsHash_ = h;
             hostFactions_ = std::move(fm);
@@ -116,6 +117,7 @@ void Session::SendFactions(double now) {
                     log_("prison: " + who + (c.prisonSentence > 0 ? " sentenced, " + std::to_string(int(c.prisonSentence)) + " h to serve" : std::string(" free")));
             }
         }
+        if (bountiesHash_ != 0 && h != bountiesHash_) NoteBountyChanges(hostBounties_, bm);
         BroadcastReliable(w, true);
         bountiesHash_ = h;
         hostBounties_ = std::move(bm);
@@ -131,12 +133,14 @@ bool Session::ClientFactionsPacket(Msg type, Reader& r) {
     if (type == Msg::Factions) {
         FactionsMsg m;
         if (!Decode(r, m)) return true;
+        if (haveFactions_) NoteFactionChanges(hostFactions_, m);
         hostFactions_ = std::move(m);
         haveFactions_ = true;
         ++factionsView_.received;
     } else {
         BountiesMsg m;
         if (!Decode(r, m)) return true;
+        if (haveBounties_) NoteBountyChanges(hostBounties_, m);
         hostBounties_ = std::move(m);
         haveBounties_ = true;
         ++factionsView_.bountiesReceived;

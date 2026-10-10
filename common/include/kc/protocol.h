@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 32;
+constexpr uint16_t kProtocolVersion = 33;
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -93,6 +93,8 @@ enum class Msg : uint8_t {
     Floors = 71,          // S->C  the floor characters are on inside buildings (it drives the floor shown)
     // ---- fix G5
     JobList = 68,         // S->C  the job list (Tâches panel) of the players' characters, as the host has it
+    // ---- diplomacy
+    Diplomacy = 85,       // S->C  the world beyond the player faction: relations between factions, faction leaders, towns
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -971,5 +973,62 @@ void Encode(Writer& w, const FactionsMsg& m);
 bool Decode(Reader& r, FactionsMsg& m);
 void Encode(Writer& w, const BountiesMsg& m);
 bool Decode(Reader& r, BountiesMsg& m);
+
+// ---- diplomacy: what the world thinks beyond the player faction, the host's everywhere.
+// - relations between two factions that are not the player's (wars, alliances: the game changes them
+//   after a leader's death, a dialogue, a campaign). The host sends only the pairs that changed since
+//   it started hosting: every client loaded the host's save, which holds the rest;
+// - unique characters (faction leaders, named NPCs): dead, alive, imprisoned, and whether the player
+//   did it (UniqueNPCManager). World states (and the town overrides, dialogues and campaigns that
+//   test them) are computed from these and from the player faction's relations;
+// - towns: owner faction and the override the world states put on them (taken over, destroyed...).
+struct FactionPairRelation {
+    std::string from, to;   // what `from` feels about `to` (faction game data ids)
+    RelationState rel;
+    bool operator==(const FactionPairRelation&) const = default;
+};
+enum : uint8_t { kUniqueDead = 0, kUniqueAlive = 1, kUniqueImprisoned = 2 };   // UniqueNPCManager states
+struct UniqueState {
+    std::string sid;        // the character's game data id
+    uint8_t state = kUniqueAlive;
+    bool byPlayer = false;  // the player killed / imprisoned it (or it is the player's)
+    bool operator==(const UniqueState&) const = default;
+};
+struct TownState {
+    std::string sid;            // the town's game data id
+    std::string ownerSid;       // its faction ("" none)
+    std::string overrideSid;    // the override applied ("" none: the town as the game data makes it)
+    bool operator==(const TownState&) const = default;
+};
+struct DiplomacyState {         // everything, as one side's game has it
+    std::vector<FactionPairRelation> pairs;
+    std::vector<UniqueState> uniques;
+    std::vector<TownState> towns;
+    bool operator==(const DiplomacyState&) const = default;
+};
+enum class DiploPart : uint8_t { Pairs = 1, Uniques = 2, Towns = 3 };
+struct DiplomacyMsg {           // one part at a time (each fits in a packet)
+    DiploPart part = DiploPart::Pairs;
+    std::vector<FactionPairRelation> pairs;
+    std::vector<UniqueState> uniques;
+    std::vector<TownState> towns;
+    bool operator==(const DiplomacyMsg&) const = default;
+};
+constexpr uint32_t kMaxDiploPairs = 4096, kMaxUniques = 8192, kMaxTowns = 2048;
+constexpr size_t kDiplomacyBudget = 60 * 1024;   // bytes per Diplomacy message (kMaxPacketSize leaves room)
+// Two factions' relation as the game uses it between NPC factions: the flags, and the value to the point.
+inline bool SamePairRelation(const RelationState& a, const RelationState& b) {
+    return a.alliance == b.alliance && a.peace == b.peace && a.war == b.war && a.coexists == b.coexists && CloseEnough(a.relation, b.relation, 1.0f);
+}
+// What a faction thinks of another, as the game decides it (FactionRelations::isAlly 0x6B2630:
+// alliance or relation >= 50; isEnemy 0x6B26D0: relation <= -30).
+enum class Standing : uint8_t { Neutral = 0, Ally = 1, Enemy = 2 };
+inline Standing StandingOf(const RelationState& r) {
+    if (r.alliance || r.relation >= 50.0f) return Standing::Ally;
+    if (r.relation <= -30.0f) return Standing::Enemy;
+    return Standing::Neutral;
+}
+void Encode(Writer& w, const DiplomacyMsg& m);
+bool Decode(Reader& r, DiplomacyMsg& m);
 
 } // namespace kc

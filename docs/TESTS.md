@@ -9,7 +9,7 @@ Deux niveaux de tests :
 
 ```powershell
 .\build.ps1                            # compile aussi kc_tests
-.\build\bin\Release\kc_tests.exe       # dernière ligne : "775 checks, 0 failed" (10 octobre 2026)
+.\build\bin\Release\kc_tests.exe       # dernière ligne : "819 checks, 0 failed" (10 octobre 2026)
 .\build.ps1 -Asan                      # variante AddressSanitizer, dans build-asan\
 ```
 
@@ -28,6 +28,8 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `TestWorldAuthority` | le client n'exécute rien lui-même, ses ordres passent par l'hôte |
 | `TestSpawnReplication` | personnages créés chez l'hôte puis recréés chez le client |
 | `TestInventories` | inventaires identiques, fouille rejouée par l'hôte |
+| `TestFactions` | relations de la faction du joueur et primes de l'hôte identiques chez le client, changements suivis, dérive du client corrigée |
+| `TestDiplomacy` | diplomatie : seules les paires de factions changées depuis le début voyagent ; guerre, chef tué, ville prise suivis par le client ; nouvelles en français identiques des deux côtés (guerre, mort, ville, relation, prime) ; dérive du client corrigée ; le bruit des relations n'est pas renvoyé |
 | `TestCrashRejoin` | client figé 7 s (gardé), puis relancé avec le même compte avant la coupure : remplacé, même nom, même perso, pas de doublon, fenêtre de commerce fermée, perso arrêté |
 | `TestManyPlayers` | 1 hôte + 4 clients arrivant ensemble, 120 personnages |
 
@@ -93,6 +95,7 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `tpdown` | TP admin du perso du client mis K.-O. |
 | `talk` | un PNJ parle au personnage du client : la conversation tourne chez l'hôte, la fenêtre s'ouvre chez le client |
 | `factions` | lot B : mêmes relations au départ ; relation changée par l'hôte identique chez le client ; prime donnée puis levée par l'hôte visible chez le client ; une relation changée par le jeu du client revient à celle de l'hôte |
+| `diplomacy` (`kctest_town`) | diplomatie : mêmes guerres entre factions, chefs et villes au départ (empreintes `diplo`) ; guerre déclarée par l'hôte entre deux factions identique chez le client ; paix faite par le jeu du client remise à la guerre de l'hôte ; un chef tué par les joueurs chez l'hôte l'est aussi chez le client ; une ville prise par une autre faction chez l'hôte l'est aussi chez le client ; tout est remis comme avant ; mêmes empreintes à la fin. Vérifications « diplomatie : … » |
 | `ranged` (`--shooter <clé>`) | (lot C) 3 tirs d'un arbalétrier de l'hôte sur l'escouade sont refaits chez le client, sur la même trajectoire ; même point visé ; une tourelle proche tournée chez l'hôte tourne pareil chez le client ; santé et inventaires identiques ensuite |
 | `build` (lot E) | une pose du client bâtie par l'hôte puis par tous au même endroit, celle de l'hôte aussi ; avancement et fin du chantier ; démontage demandé par le client ; achat d'un bâtiment à vendre (avec `--save kctest_town`) |
 | `construct` (`--material`, `--task`) | vraie construction : argent et matériaux donnés aux deux joueurs ; le client pose un chantier et ordonne à son perso de le bâtir (clic droit : `newPlayerTaskSelectedCharacters`), puis l'hôte, puis les deux en même temps ; avancement des deux côtés, matériaux qui baissent pareil, chantier terminé identique. Le numéro de tâche « construire » n'est pas connu : sans `--task`, le test essaie 1 à 99 jusqu'à ce que l'avancement bouge chez l'hôte |
@@ -251,6 +254,11 @@ l'escouade triée par handle.
 | `bounty <index>` | primes de ce membre de l'escouade (`faction:montant`), total, crime en cours, heures de prison |
 | `givebounty <index> <nom> <montant>` | (hôte) met cette prime sur ce membre |
 | `factionsync` | messages de relations / primes reçus et valeurs corrigées (client), envois (hôte) |
+| `diplo` | diplomatie de ce jeu : paires de factions (hors joueur), celles en guerre / alliance / paix et leur empreinte `ph`, personnages uniques morts / emprisonnés et empreinte `uh`, villes, variantes et empreinte `th` (identiques hôte / client = synchro) |
+| `diplopair <A> <B>` / `setdiplopair <A> <B> <valeur> [war\|ally\|peace\|none]` | relation de A envers B et l'inverse ; la fixer dans les deux sens (chez l'hôte : comme le jeu ; chez un client : simule une dérive locale) |
+| `unique <nom>` / `setunique <nom> <0\|1\|2> [player]` | état d'un personnage unique (0 mort, 1 vivant, 2 emprisonné ; `player=1` : par les joueurs) ; le fixer |
+| `town <nom>` / `settownowner <ville> <faction>` | faction et variante d'une ville ; changer sa faction (`TownBase::setFaction`) |
+| `diplosync` | parties `Diplomacy` reçues et valeurs corrigées (client), envois (hôte), paires changées suivies, uniques, villes |
 | `look <nom>` / `lookset <nom> <clé> <valeur>` | résumé de l'apparence ; changer un curseur |
 | `editchar` / `editdone` | (client) ouvrir l'éditeur sur son personnage ; valider comme le bouton |
 

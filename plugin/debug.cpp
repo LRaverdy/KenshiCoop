@@ -465,6 +465,121 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         return "ok received=" + std::to_string(v.received) + " bounties=" + std::to_string(v.bountiesReceived) + " corrected=" +
                std::to_string(v.corrected) + " sent=" + std::to_string(v.sent);
     }
+    // ---- diplomacy: relations between factions, unique characters, towns
+    if (cmd == "diplo" || cmd == "diplopair" || cmd == "setdiplopair" || cmd == "unique" || cmd == "setunique" || cmd == "town" ||
+        cmd == "settownowner" || cmd == "diplosync") {
+        // diplo: wars/alliances between factions, unique characters, towns: counts and fingerprints
+        // diplopair <A> <B>: A toward B and back; setdiplopair <A> <B> <value> [war|ally|peace|none]: both ways
+        // unique <name part>: state (0 dead, 1 alive, 2 imprisoned) and by-player flag; setunique <part> <state> [player]
+        // town <name part>: owner and override; settownowner <town part> <faction part>
+        // diplosync: Diplomacy parts received, values corrected (client), sent (host)
+        if (cmd == "diplosync") {
+            const auto v = s.diplomacyView();
+            return "ok received=" + std::to_string(v.received) + " corrected=" + std::to_string(v.corrected) + " sent=" + std::to_string(v.sent) +
+                   " pairs=" + std::to_string(v.pairs) + " uniques=" + std::to_string(v.uniques) + " towns=" + std::to_string(v.towns);
+        }
+        kc::DiplomacyState d;
+        if (!w.ReadDiplomacy(d)) return "err no world";
+        auto fnv = [](uint64_t h, const std::string& t) {
+            for (unsigned char c : t) { h ^= c; h *= 1099511628211ull; }
+            h ^= 0xFF;
+            return h * 1099511628211ull;
+        };
+        auto nameOf = [](const std::string& sid) {
+            std::string n;
+            kenshi::TemplateDisplayName(sid, n);
+            return n.empty() ? sid : n;
+        };
+        auto matches = [&](const std::string& sid, const std::string& part) {
+            return sid.find(part) != std::string::npos || nameOf(sid).find(part) != std::string::npos;
+        };
+        if (cmd == "diplo") {
+            uint64_t ph = 1469598103934665603ull, uh = ph, th = ph;
+            size_t flagged = 0, wars = 0, dead = 0, jailed = 0, overridden = 0;
+            for (const auto& p : d.pairs) {
+                if (!p.rel.war && !p.rel.alliance && !p.rel.peace) continue;
+                ++flagged;
+                wars += p.rel.war;
+                ph = fnv(ph, p.from + ">" + p.to + (p.rel.war ? "w" : "") + (p.rel.alliance ? "a" : "") + (p.rel.peace ? "p" : ""));
+            }
+            for (const auto& u : d.uniques) {
+                if (u.state == kc::kUniqueAlive && !u.byPlayer) continue;   // what a missing entry means too
+                dead += u.state == kc::kUniqueDead;
+                jailed += u.state == kc::kUniqueImprisoned;
+                uh = fnv(uh, u.sid + char('0' + u.state) + (u.byPlayer ? "p" : ""));
+            }
+            for (const auto& t : d.towns) {
+                overridden += !t.overrideSid.empty();
+                th = fnv(th, t.sid + "|" + t.ownerSid + "|" + t.overrideSid);
+            }
+            char b[300];
+            snprintf(b, sizeof(b), "ok pairs=%zu flagged=%zu wars=%zu ph=%016llx uniques=%zu dead=%zu jailed=%zu uh=%016llx towns=%zu overridden=%zu th=%016llx",
+                     d.pairs.size(), flagged, wars, (unsigned long long)ph, d.uniques.size(), dead, jailed, (unsigned long long)uh, d.towns.size(),
+                     overridden, (unsigned long long)th);
+            return b;
+        }
+        std::string a, b2, extra;
+        in >> a;
+        std::replace(a.begin(), a.end(), '_', ' ');
+        if (cmd == "diplopair" || cmd == "setdiplopair") {
+            float value = 0;
+            in >> b2 >> value >> extra;
+            std::replace(b2.begin(), b2.end(), '_', ' ');
+            // factions by name part, from every faction the game knows (the pairs list them all)
+            std::string sa, sb;
+            for (const auto& p : d.pairs) {
+                if (sa.empty() && matches(p.from, a)) sa = p.from;
+                if (sb.empty() && matches(p.from, b2)) sb = p.from;
+            }
+            if (sa.empty() || sb.empty() || sa == sb) return "err no such factions";
+            if (cmd == "setdiplopair") {
+                kc::RelationState r;
+                for (const auto& p : d.pairs) if (p.from == sa && p.to == sb) r = p.rel;
+                r.relation = value;
+                r.war = extra == "war";
+                r.alliance = extra == "ally";
+                r.peace = extra == "peace";
+                return w.SetFactionPair(sa, sb, r) ? "ok " + nameOf(sa) + " / " + nameOf(sb) + " set" : "err not set";
+            }
+            std::string out = "ok " + nameOf(sa) + " / " + nameOf(sb);
+            for (const auto& p : d.pairs) {
+                if (!((p.from == sa && p.to == sb) || (p.from == sb && p.to == sa))) continue;
+                char t[96];
+                snprintf(t, sizeof(t), " %s=%.0f%s%s%s", p.from == sa ? "ab" : "ba", double(p.rel.relation), p.rel.war ? ",war" : "",
+                         p.rel.alliance ? ",ally" : "", p.rel.peace ? ",peace" : "");
+                out += t;
+            }
+            return out;
+        }
+        if (cmd == "unique" || cmd == "setunique") {
+            int state = -1;
+            in >> state >> extra;
+            for (const auto& u : d.uniques) {
+                if (!matches(u.sid, a)) continue;
+                if (cmd == "setunique") {
+                    if (state < 0 || state > 2) return "err state 0..2";
+                    return w.SetUniqueState(u.sid, uint8_t(state), extra == "player") ? "ok " + nameOf(u.sid) + " set" : "err not set";
+                }
+                return "ok " + nameOf(u.sid) + " sid=" + u.sid + " state=" + std::to_string(u.state) + " player=" + (u.byPlayer ? "1" : "0");
+            }
+            return "err no such unique character";
+        }
+        // towns
+        in >> b2;
+        std::replace(b2.begin(), b2.end(), '_', ' ');
+        for (const auto& t : d.towns) {
+            if (!matches(t.sid, a)) continue;
+            if (cmd == "settownowner") {
+                std::string fs;
+                for (const auto& p : d.pairs) if (fs.empty() && matches(p.from, b2)) fs = p.from;
+                if (fs.empty()) return "err no such faction";
+                return w.SetTownOwner(t.sid, fs) ? "ok " + nameOf(t.sid) + " now " + nameOf(fs) : "err not set";
+            }
+            return "ok " + nameOf(t.sid) + " sid=" + t.sid + " owner=" + (t.ownerSid.empty() ? "-" : nameOf(t.ownerSid)) +
+                   " override=" + (t.overrideSid.empty() ? "-" : t.overrideSid);
+        }
+        return "err no such town";
+    }
     if (cmd == "money") {   // money [set]: the player faction's cats (host: set them)
         int32_t m = 0;
         std::string set;

@@ -51,7 +51,7 @@ std::recursive_mutex g_imguiMutex;
 HWND g_hwnd = nullptr;
 WNDPROC g_oldWndProc = nullptr;
 
-std::atomic<bool> g_mpOpen{false}, g_consoleOpen{false};
+std::atomic<bool> g_mpOpen{false}, g_consoleOpen{false}, g_diploOpen{false};
 std::atomic<bool> g_mpOpened{false};            // reset the window's fields from the settings
 std::atomic<bool> g_wantKeyboard{false}, g_wantMouse{false};
 
@@ -69,7 +69,7 @@ void PushAction(OverlayAction a) {
 }
 
 std::atomic<bool> g_dialogOpen{false};
-bool Interactive() { return g_mpOpen.load() || g_consoleOpen.load() || g_dialogOpen.load(); }
+bool Interactive() { return g_mpOpen.load() || g_consoleOpen.load() || g_dialogOpen.load() || g_diploOpen.load(); }
 
 void ReleaseRTV() {
     if (g_rtv) { g_rtv->Release(); g_rtv = nullptr; }
@@ -168,6 +168,54 @@ void DrawDialog(const OverlayModel& m, float w, float h) {
     ImGui::EndDisabled();
     if (m.dialogReplies.empty()) ImGui::TextDisabled("(la conversation continue...)");
     ImGui::End();
+}
+
+// The host's diplomacy: the player faction's relations, the squad's bounties, the world's changes.
+void DrawDiplomacy(const OverlayModel& m, float w, float h) {
+    bool open = true;
+    ImGui::SetNextWindowPos(ImVec2(w * 0.5f, h * 0.15f), ImGuiCond_Appearing, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(std::min(560.0f, w - 32.0f), std::min(620.0f, h - 64.0f)), ImGuiCond_Appearing);
+    if (!ImGui::Begin("Diplomatie (Ctrl+Shift+F)", &open, ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::End();
+        if (!open) g_diploOpen = false;
+        return;
+    }
+    if (!m.diploHave) {
+        ImGui::TextDisabled("Pas encore de valeurs de l'hôte (rejoins ou héberge une partie).");
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s", m.diploHeader.c_str());
+        if (ImGui::CollapsingHeader("Relations de ta faction", ImGuiTreeNodeFlags_DefaultOpen) &&
+            ImGui::BeginTable("kcrel", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_BordersInnerV, ImVec2(0.0f, 260.0f))) {
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableSetupColumn("Faction");
+            ImGui::TableSetupColumn("Relation", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableSetupColumn("État", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+            ImGui::TableHeadersRow();
+            for (const auto& r : m.diploRelations) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(r.name.c_str());
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%d", r.relation);
+                ImGui::TableSetColumnIndex(2);
+                if (r.war) ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.3f, 1.0f), "en guerre");
+                else if (r.standing == 2) ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "ennemi");
+                else if (r.standing == 1) ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "allié");
+                else ImGui::TextUnformatted("neutre");
+            }
+            ImGui::EndTable();
+        }
+        if (ImGui::CollapsingHeader("Primes de l'escouade", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (m.diploBounties.empty()) ImGui::TextDisabled("Personne n'est recherché.");
+            for (const auto& l : m.diploBounties) ImGui::BulletText("%s", l.c_str());
+        }
+        if (ImGui::CollapsingHeader("Monde (chefs, guerres, villes)")) {
+            if (m.diploWorld.empty()) ImGui::TextDisabled("Rien n'a changé.");
+            for (const auto& l : m.diploWorld) ImGui::BulletText("%s", l.c_str());
+        }
+    }
+    ImGui::End();
+    if (!open) g_diploOpen = false;
 }
 
 void DrawMultiplayer(const OverlayModel& m, float w, float h) {
@@ -382,6 +430,7 @@ void Render(IDXGISwapChain* swap) {
     DrawStatus(m, io.DisplaySize.x, io.DisplaySize.y);
     if (g_mpOpen) DrawMultiplayer(m, io.DisplaySize.x, io.DisplaySize.y);
     if (g_consoleOpen) DrawConsole(m, io.DisplaySize.x, io.DisplaySize.y);
+    if (g_diploOpen) DrawDiplomacy(m, io.DisplaySize.x, io.DisplaySize.y);
     if (m.dialogOpen) DrawDialog(m, io.DisplaySize.x, io.DisplaySize.y);
     io.MouseDrawCursor = interactive && io.WantCaptureMouse;   // the game may hide the system cursor
     ImGui::Render();
@@ -621,6 +670,9 @@ void OverlayToggleConsole() {
     g_consoleOpen = open;
 }
 
+void OverlayToggleDiplomacy() { g_diploOpen = !g_diploOpen.load(); }
+bool OverlayDiplomacyOpen() { return g_diploOpen.load(); }
+
 void OverlayOpenMultiplayer() {
     if (g_mpOpen.load()) return;
     g_mpOpened = true;
@@ -632,6 +684,7 @@ bool OverlayTyping() { return g_wantKeyboard.load(); }
 void OverlayShutdown() {
     g_mpOpen = false;
     g_consoleOpen = false;
+    g_diploOpen = false;
     g_wantKeyboard = false;
     g_wantMouse = false;
     if (g_presentTarget) MH_DisableHook(g_presentTarget);

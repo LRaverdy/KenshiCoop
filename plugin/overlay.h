@@ -44,6 +44,17 @@ struct OverlayModel {
     std::string dialogName, dialogText;
     std::vector<std::string> dialogReplies;
     bool dialogWaiting = false;
+    // "Diplomatie" window: the host's relations, bounties and world, ready to show (French)
+    struct DiploRelation {
+        std::string name;
+        int relation = 0;
+        int standing = 0;               // kc::Standing: 0 neutral, 1 ally, 2 enemy
+        bool war = false;
+    };
+    bool diploHave = false;             // the host's values are known here
+    std::string diploHeader;            // rank, reputation
+    std::vector<DiploRelation> diploRelations;
+    std::vector<std::string> diploBounties, diploWorld;
 };
 
 // What the player did in our windows; carried out on the game thread.
@@ -59,6 +70,8 @@ void OverlayPublish(OverlayModel model);    // game thread -> render thread
 std::vector<OverlayAction> OverlayTakeActions();
 void OverlayToggleMultiplayer();
 void OverlayToggleConsole();
+void OverlayToggleDiplomacy();
+bool OverlayDiplomacyOpen();
 void OverlayOpenMultiplayer();
 bool OverlayTyping();                       // a text field of ours has the keyboard
 void OverlayShutdown();
