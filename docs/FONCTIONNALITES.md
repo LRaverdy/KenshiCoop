@@ -413,8 +413,24 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   puis elle se rouvre. Un personnage montré par une fenêtre n'est jamais supprimé sous elle. Ces
   deux cas faisaient planter le client.
 - **Limites** :
-  - les marchands ambulants (sans bâtiment) ne sont pas encore gérés : le joueur en est prévenu ;
+  - les marchands ambulants (caravanes, nomades : sans bâtiment) ne sont pas encore gérés : l'hôte
+    refuse le commerce et le joueur en est prévenu. Le jeu construit leur fenêtre à partir des sacs à
+    dos (objets de fonction 12) des membres de leur escouade, pas de comptoirs ; le contenu d'un sac à
+    dos porté n'est pas synchronisé par le mod, donc aucune fenêtre n'est ouverte avec un faux stock
+    (pas de comptoirs de remplacement, cause du plantage dans `ShopTraderInventory`). La caravane
+    elle-même (marchand, gardes, bêtes de somme) est un groupe de PNJ de l'hôte comme les autres :
+    positions et inventaires des personnages suivis, pas de caravane créée par le jeu du client.
+    Une bête de somme tuée garde son inventaire et se pille comme un corps ;
   - la détection des objets volés à la revente n'est tirée que par le jeu du client.
+
+### Animaux de l'escouade 🟡 (à vérifier en jeu)
+- Bêtes de somme, chiens, chèvres... achetés ou apprivoisés sont des membres de l'escouade comme les
+  autres : à l'hôte tant qu'ils ne sont pas donnés à un joueur (commande `give`), leurs ordres,
+  position, santé et inventaire sont ceux de l'hôte partout.
+- Un joueur qui part rend ses personnages à l'hôte ; **quand il revient (même nom), l'hôte lui rend
+  ceux qu'il avait** (animaux et recrues compris), s'ils sont encore à l'hôte.
+- **Limites** : un animal acheté par un client n'est pas donné automatiquement à ce client (il
+  reste à l'hôte jusqu'à un `give`) ; le contenu d'un sac à dos porté n'est pas synchronisé.
 
 ### Construction, meubles, achat et démontage de bâtiments 🟡 (implémenté, à vérifier en jeu)
 - **Le joueur** (hôte comme client) construit comme d'habitude : mode construction, il pose un

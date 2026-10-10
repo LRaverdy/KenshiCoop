@@ -348,6 +348,10 @@ void* FindItemIn(void* container, const kc::ItemState& s);   // the stack in its
 // Trade with merchants. A merchant with a home sells from its shop's counters (furniture of its home
 // building); its trade window shows them merged.
 bool ShopCounters(Character* trader, std::vector<void*>& out);
+// A merchant without a home building (a travelling trader, a caravan): the game then sells from the
+// backpacks of its squad, which the mod does not sync as trade counters (the trade is refused).
+bool HasHomeBuilding(Character* trader);
+bool IsAnimal(const void* obj);   // a CharacterAnimal (pack beast, dog, goat...)
 bool MoneyOf(Character* c, int32_t& out);           // the player faction's cats for ours, a merchant's own
 bool SetMoneyOf(Character* c, int32_t money);
 bool TakeMoney(Character* c, int32_t amount);       // Character::takeMoney (negative gives; false: cannot pay)

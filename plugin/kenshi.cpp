@@ -2326,6 +2326,14 @@ bool ShopCounters(Character* trader, std::vector<void*>& out) {
     return !out.empty();
 }
 
+bool HasHomeBuilding(Character* trader) {
+    void* own = IsCharacter(trader) ? OwnershipsSeh(trader) : nullptr;
+    kc::Handle home;
+    return own && ReadHandle(reinterpret_cast<uint8_t*>(own) + OW_home, home) && home.type == 0 && home.valid();
+}
+
+bool IsAnimal(const void* obj) { return obj && Vtable(obj) == Addr(rva::VtCharacterAnimal); }
+
 bool MoneyOf(Character* c, int32_t& out) {
     void* own = IsCharacter(c) ? OwnershipsSeh(c) : nullptr;
     return own && Rd(own, OW_cats, out);

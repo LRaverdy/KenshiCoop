@@ -557,6 +557,9 @@ private:
     std::unordered_map<uint32_t, Entity> entities_;  // netId -> entity
     std::unordered_map<Handle, uint32_t, HandleHash> byHandle_;  // handle -> netId
     std::vector<std::pair<Handle, uint8_t>> owners_;  // host: explicit squad assignments
+    // host: the squad characters a player had when they left (their recruits, animals, pack beasts),
+    // by player name: given back when they join again
+    std::map<std::string, std::vector<Handle>> leftOwned_;
     std::unordered_map<uint64_t, uint32_t> byIdentity_;   // host: IWorld::Identity -> netId
     uint32_t nextNetId_ = 1;
     uint32_t tick_ = 0;

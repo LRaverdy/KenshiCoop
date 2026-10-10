@@ -71,6 +71,8 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | Expérience | Ce qu'elle vérifie |
 |---|---|
 | `doors` (`kctest_town`, lot A) | portes ouvertes / fermées / verrouillées comme chez l'hôte ; le jeu du client ne les change pas seul ; bouton et ordres du client exécutés chez l'hôte ; crochetage ; coffre verrouillé fermé pour le client |
+| `caravan` (sauvegarde avec une caravane près de l'escouade) | marchand ambulant : même caravane partout (pas de double chez le client), inventaires identiques, commerce avec la caravane en marche refusé par l'hôte sans plantage ni chat déplacé, bête de somme tuée puis pillée par le client (inventaires identiques) |
+| `pets` (sauvegarde avec un animal dans l'escouade) | animaux de l'escouade : mêmes animaux partout, animal donné au client, ses ordres passent par l'hôte, inventaire partagé sans doublon quand hôte et client y déposent en même temps |
 | `suite` | **tout en une session, RÉUSSI / ÉCHEC point par point** (ci-dessous) |
 | `four` (`--clients 3`) | 1 hôte + 3 clients : chaque client comparé à l'hôte **et aux autres clients** ; chacun ne commande que son personnage |
 | `run` (`--quick`) | scénario complet avec rapport de désynchronisation |
@@ -277,6 +279,10 @@ l'escouade triée par handle.
 | `strand <dx> <dy> <dz>` | (client) déplace la copie locale du PNJ le plus proche (dans un mur, sous le sol) |
 | `bedreq <i>` | ce membre seul reçoit l'ordre de dormir dans le lit libre le plus proche (tâche 258) |
 | `minereq <i>` | ce membre seul reçoit l'ordre d'exploiter la mine la plus proche (tâche 87) |
+| `caravan [i]` | caravane la plus proche du membre `i` : marchand sans bâtiment dont l'escouade a des bêtes de somme ; `trader=` `key=` `members=` `animals=` `stock=` (piles de chaque membre) `back=` (objets en section sac à dos) |
+| `caravanbeast [i]` | sa première bête de somme vivante devient la cible de `kill` / `npcstate` |
+| `caravanopen [i]` | le membre `i` va près du marchand ambulant et ouvre le commerce (appel du jeu) |
+| `squadanimals` | membres de l'escouade qui sont des animaux : `index:clé:piles` |
 | `tradegui` | type de fenêtre de commerce en attente dans l'interface (0 = aucune) |
 | `cage <i> [off]` | (hôte, lot D) met le membre `i` dans la cage la plus proche (300 m), ou l'en sort |
 | `chain <i> [off]` | (hôte, lot D) l'enchaîne à la manière du jeu (menottes créées) / le libère |

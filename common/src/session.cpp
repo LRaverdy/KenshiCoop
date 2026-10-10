@@ -420,6 +420,16 @@ void Session::HostJoinFlow(double now, bool live) {
                     if (world_.EnsurePlayerCharacter(players_[id].name, players_[id].steamId, s.own, created)) {
                         Assign(s.own, id);
                         s.ownCreated = created;
+                        // what they had when they left (pets, pack beasts, recruits) comes back to them
+                        if (auto k = leftOwned_.find(players_[id].name); k != leftOwned_.end()) {
+                            size_t back = 0;
+                            for (const Handle& h : k->second) {
+                                Entity* e = entityByHandle(h);
+                                if (e && e->squad && e->owner == hostId_ && !(h == s.own)) { Assign(h, id); ++back; }
+                            }
+                            if (back) log_(players_[id].name + " gets back " + std::to_string(back) + " squad characters they had before leaving");
+                            leftOwned_.erase(k);
+                        }
                     }
                     else log_("no character of their own for " + players_[id].name);
                 }
@@ -2663,7 +2673,13 @@ void Session::OnDisconnect(PeerId peer) {
              "): the world is no longer held for them");
     players_.erase(id);
     sync_.erase(id);
-    // the leaver's characters go back to the host so they are never left uncontrolled
+    // the leaver's characters go back to the host so they are never left uncontrolled; remembered
+    // so that a rejoin gives them back (animals and recruits too, not only their own character)
+    {
+        auto& kept = leftOwned_[name];
+        kept.clear();
+        for (auto& [nid, e] : entities_) if (e.squad && e.owner == id) kept.push_back(e.handle);
+    }
     for (auto& o : owners_) if (o.second == id) o.second = hostId_;
     for (auto& [nid, e] : entities_) {
         if (e.owner != id) continue;
