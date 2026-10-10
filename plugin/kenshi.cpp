@@ -175,6 +175,8 @@ const FunctionSig kFunctions[FnCount] = {
     {"TownList::getNearestTown", 0x927F10, {0x48, 0x8B, 0xC4, 0x4C, 0x89, 0x48, 0x20, 0x48, 0x89, 0x50, 0x10, 0x55}},
     {"TownBase::withinBordersRange", 0x926D50, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x83, 0xB9}},
     {"TownList::getNearestWithinItsRadius", 0x928890, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55}},
+    // ---- crash report (main loop's catch(...) funclets 0x1373AB0 / 0x1373A20 call it)
+    {"writeCrashDump", 0x744D20, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x8D, 0xAC, 0x24}},
 };
 
 namespace {
@@ -434,6 +436,15 @@ bool Init(std::string* err) {
 
 uintptr_t Base() { return g_base; }
 uintptr_t Addr(uintptr_t r) { return g_base + r; }
+bool InGameImage(const void* p) {
+    static const uintptr_t size = [] {
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(g_base);
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(g_base + dos->e_lfanew);
+        return uintptr_t(nt->OptionalHeader.SizeOfImage);
+    }();
+    const auto a = reinterpret_cast<uintptr_t>(p);
+    return g_base && a >= g_base && a < g_base + size;
+}
 void* FnAddr(Fn f) { return reinterpret_cast<void*>(g_base + kFunctions[f].rva); }
 
 GameWorld* World() {
@@ -1179,6 +1190,20 @@ bool IsStatOfCharacter(const void* statField) {
 }
 
 namespace {
+// A platoon the player still has (the squad of one of the player's characters). The squad bar's
+// platoon saved before a call that moves characters (MoveToSquad, an order) may be deleted with its
+// last member by then: showing it again would build the squad bar from freed memory.
+bool PlayerHasPlatoon(void* platoon) {
+    if (!platoon) return false;
+    std::vector<Character*> all;
+    PlayerCharacters(all);
+    for (Character* c : all) {
+        void* sq = SquadOf(c);
+        void* p = nullptr;
+        if (sq && Rd(sq, AP_platoon, p) && p == platoon) return true;
+    }
+    return false;
+}
 void ShowPlatoonSeh(void* pi, void* platoon) {
     using FnShow = bool (*)(void*, void*);
     __try { reinterpret_cast<FnShow>(FnAddr(FnSetCurrentPlatoon))(pi, platoon); } __except (EXCEPTION_EXECUTE_HANDLER) {}
@@ -1211,7 +1236,7 @@ void WithSelection(Character* only, const std::function<void()>& fn) {
         if (o) sel(pi, o, true);
     }
     void* nowPlatoon = nullptr;
-    if (Rd(pi, PI_currentPlatoon, nowPlatoon) && nowPlatoon != savedPlatoon && savedPlatoon) {
+    if (Rd(pi, PI_currentPlatoon, nowPlatoon) && nowPlatoon != savedPlatoon && savedPlatoon && PlayerHasPlatoon(savedPlatoon)) {
         ShowPlatoonSeh(pi, savedPlatoon);
     }
     for (size_t k = 0; k < sizeof(savedHand); ++k) Wr(reinterpret_cast<uint8_t*>(pi) + PI_selectedCharacter, k, savedHand[k]);
@@ -3808,7 +3833,8 @@ void KeepSelection(const std::function<void()>& fn) {
         if (!o) o = ResolveItem(h);
         if (o) reinterpret_cast<FnSel>(FnAddr(FnObjectSelected))(pi, o, true);
     }
-    if (savedPlatoon && Rd(pi, PI_currentPlatoon, nowPlatoon) && nowPlatoon != savedPlatoon) ShowPlatoonSeh(pi, savedPlatoon);
+    if (savedPlatoon && Rd(pi, PI_currentPlatoon, nowPlatoon) && nowPlatoon != savedPlatoon && PlayerHasPlatoon(savedPlatoon))
+        ShowPlatoonSeh(pi, savedPlatoon);
     for (size_t k = 0; k < sizeof(savedHand); ++k) Wr(reinterpret_cast<uint8_t*>(pi) + PI_selectedCharacter, k, savedHand[k]);
 }
 

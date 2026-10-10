@@ -163,7 +163,7 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 ### Plantages et erreurs
 | Ligne | Sens |
 |---|---|
-| `CRASH code=… at … (module+0x…) …`, puis `stack[i] module+0x…` | plantage du jeu, avec le module fautif et la pile. Toujours dans le journal **de la machine qui a planté** |
+| `CRASH (game crash reporter\|unhandled) code=… at … (module+0x…) … phase='…'`, puis les registres et `stack[i] module+0x…` | plantage du jeu, avec le module fautif, la pile et ce que faisait le mod (`game main loop …` : dans la frame du jeu lui-même ; `tick: …` : dans un appel du mod). `game crash reporter` : le plantage que le jeu rapporte (« Kenshi has crashed », crashDump*.zip) ; `unhandled` : un plantage hors de sa boucle (souvent à la sortie, après le premier). Un seul par processus. Toujours dans le journal **de la machine qui a planté** |
 | `tick: access violation caught (code …)` / `tick exception: …` | erreur rattrapée dans le mod, sans plantage. À signaler |
 
 ## Diagnostiquer

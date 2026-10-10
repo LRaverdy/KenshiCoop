@@ -36,4 +36,9 @@ bool Sha256File(const std::wstring& path, std::string& hexOut);
 uint64_t HashFile(const std::wstring& path);      // FNV-1a of file contents (0 if missing)
 double NowSeconds();                               // monotonic
 
+// What the game thread is doing (a string literal: "game frame", "tick: debug commands"...), for
+// the crash report: tells a crash inside the game's own frame from one inside a KenshiCoop call.
+void SetCrashPhase(const char* phase);
+const char* CrashPhase();
+
 } // namespace kcp

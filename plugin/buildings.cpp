@@ -51,10 +51,12 @@ bool Rd(const void* p, uintptr_t off, T& out) { return kenshi::ReadRaw(p, off, &
 template <class T>
 bool Wr(void* p, uintptr_t off, const T& v) { return kenshi::WriteRaw(p, off, &v, sizeof(T)); }
 
+// A virtual function of a game object: only when its vtable and the function are the game's own
+// (a stale or wrong pointer must not lead to a call into anything).
 void* Slot(const void* obj, uintptr_t slot) {
     void* vt = nullptr;
     void* fn = nullptr;
-    return obj && Rd(obj, 0, vt) && vt && Rd(vt, slot, fn) ? fn : nullptr;
+    return obj && Rd(obj, 0, vt) && kenshi::InGameImage(vt) && Rd(vt, slot, fn) && kenshi::InGameImage(fn) ? fn : nullptr;
 }
 
 void* CreateSeh(void* fn, void* factory, void* data, const float* pos, void* town, void* faction, const float* rot, void* cb, void* layout,
@@ -178,7 +180,7 @@ void* TownTooClose(const float p[3], bool createsPlayerTown) {
     void* list = nullptr;
     if (!Rd(reinterpret_cast<void*>(kenshi::Addr(kTownList)), 0, list) || !list) return nullptr;
     void* town = NearestTownSeh(list, p);
-    if (!town) return nullptr;
+    if (!town || !Slot(town, TBV_isTown)) return nullptr;   // a game object only
     int type = 0;
     Rd(town, TB_type, type);
     const float mult = (type == 4 || type == 9) ? 1.0f : 2.5f;
@@ -396,7 +398,9 @@ bool KenshiWorld::CheckPlacement(const kc::BuildPlace& p, std::string& why, std:
     }
     if (!p.parentSid.empty()) return true;   // furniture
     float ground = 0, withWater = 0;
-    if (!GroundAt(p.pos.x, p.pos.z, ground, withWater)) {
+    // a loaded world only (towns, terrain); the debug channel and the session call this from the
+    // game thread's tick, never from another thread
+    if (!kenshi::Player() || !GroundAt(p.pos.x, p.pos.z, ground, withWater)) {
         why = "no game loaded";
         whyFr = "partie pas chargée.";
         return false;

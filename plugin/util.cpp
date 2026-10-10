@@ -6,6 +6,7 @@
 #include <share.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <deque>
@@ -227,6 +228,13 @@ uint64_t HashFile(const std::wstring& path) {
     fclose(f);
     return h;
 }
+
+namespace {
+std::atomic<const char*> g_crashPhase{"start"};
+} // namespace
+
+void SetCrashPhase(const char* phase) { g_crashPhase.store(phase, std::memory_order_relaxed); }
+const char* CrashPhase() { return g_crashPhase.load(std::memory_order_relaxed); }
 
 double NowSeconds() {
     static LARGE_INTEGER freq = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return f; }();

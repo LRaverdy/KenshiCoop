@@ -17,6 +17,8 @@ void RemoveHooks();
 // Runs the tick with exception barriers; never lets an exception reach game code.
 void RunTick(bool live);
 double LastLiveTick();   // NowSeconds() of the last main-loop tick
+// Logs a crash once per process (main.cpp): `exceptionPointers` is an EXCEPTION_POINTERS*.
+void ReportCrash(void* exceptionPointers, const char* source);
 
 bool InHostCall();   // a HostCallScope is alive on this thread (hooks in other files)
 

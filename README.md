@@ -114,6 +114,9 @@ fais Échap, puis Charger, ou utilise le bouton « Quitter le jeu ».
 quelques secondes, ses personnages s'arrêtent sur place et l'attendent. Il relance Kenshi et
 rejoint : il retrouve ses personnages tels qu'ils sont. Pendant une session, le jeu du client ne
 sauvegarde pas (tes propres parties ne sont jamais écrasées par le monde de l'hôte).
+Pour signaler un plantage, joins le `KenshiCoop.log` de la machine qui a planté : sa ligne `CRASH`
+dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plus du
+`crashDump*.zip` du jeu.
 
 ## Ce qui est synchronisé
 

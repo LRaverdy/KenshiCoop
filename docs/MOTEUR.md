@@ -1226,3 +1226,28 @@ Lu dans le 1.0.68 (désassemblage), pour que l'hôte refuse ce que le mode const
   pente (normale du terrain à ±2 sous 0,2). Pas refait : collision des empreintes, personnages
   dans le passage, nœuds d'usage, étage, prospection, aimantation. Terrain inconnu chez l'hôte
   (-99) : refusé (« réessaie »).
+
+## 11. Barre d'escouade et rapport de plantage du jeu [D]
+- **Barre d'escouade** : `MainBarGUI` (objet à `*(0x21337C0)` ; `PlayerInterface::setCurrentPlatoon`
+  `0x7F2800` écrit `PlayerInterface+0x2A8` puis l'appelle, `ActivePlatoon::addCharacterAt` aussi).
+  Une `unordered_map<ActivePlatoon*, MainTabPortraitPlatoon>` ; chaque onglet a un
+  `PortraitMainItemBox` (vtable `0x16D2828`, construit par `0x415E00` sur `item_box_v.layout`, son
+  `MyGUI::ItemBox` à +0x08 et +0xF0), cases `PortraitMainCellView` (vtable `0x16D26F8`). La donnée
+  d'une case est un `MyGUI::Any` contenant un `PortraitData*` (`Holder` vtable `0x16D1FB0`) ; le
+  jeu tient aussi `unordered_map<hand, PortraitData*>` et `PortraitData*` → (`PortraitMainItemBox*`,
+  bool). `PortraitData` : `hand` du personnage à +0x38 (type à +0x40). Dessin d'une case :
+  `requestDrawItem` `0x426C10` → `0x415150` → `0x412D90` (hand → `Character*` : type 1 ou 0x5B,
+  par la table des handles `0x2133F98`). Les infobulles médicales des portraits (« Votre Poitrine
+  est en train de guérir. ») sont des chaînes du même tas.
+- **Boutons de vitesse** (`0x724880`) : chaque bouton porte sa vitesse en float, allumé si elle est
+  `==` à la vitesse courante ; une vitesse non entière (ClockSync, 0,01 avant une pause) n'en
+  allume aucun, sans autre effet. `GameWorld::setFrameSpeedMultiplier` (`0x787CB0`) range la
+  vitesse (+0x700) et la passe, sous verrou, à la physique.
+- **Rapporteur de plantage** : la boucle principale du jeu (`0x745490`) est dans un `catch(...)`
+  (compilé /EHa : il prend aussi les violations d'accès) dont les funclets `0x1373AB0` et
+  `0x1373A20` appellent `writeCrashDump(EXCEPTION_POINTERS*, const char* nom)` (`0x744D20` :
+  `crashDump1.0.68_x64.dmp`, boîte « Kenshi has crashed »). Un tel plantage ne passe donc jamais
+  par `SetUnhandledExceptionFilter` ; le processus sort ensuite et ses destructeurs statiques
+  plantent souvent à leur tour (`0x86D6D6` appelle un destructeur par une vtable morte), et c'est
+  ce second plantage que voyait le filtre du mod. Dans le dump, la pile au-dessus de `rsp` est
+  déjà en partie réécrite (déroulement C++ et écriture du dump).

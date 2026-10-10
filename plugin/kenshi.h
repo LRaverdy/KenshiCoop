@@ -210,6 +210,9 @@ enum Fn : int {
     FnGetNearestTown,           // Town* TownList::getNearestTown(const Vector3&, Faction* owner, Town* except, Faction* mine, TownType)
     FnWithinBordersRange,       // bool TownBase::withinBordersRange(const Vector3&, float mult) const
     FnGetNearestWithinItsRadius,// TownBase* TownList::getNearestWithinItsRadius(const Vector3&, bool skipPlayerTowns) const
+    // ---- crash report
+    FnWriteCrashDump,           // void writeCrashDump(EXCEPTION_POINTERS*, const char* name)   (the game's crash reporter, called from the
+                                //   catch(...) around its main loop: crashDump*.dmp and "Kenshi has crashed"; no unhandled-exception filter sees that crash)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -324,6 +327,7 @@ enum UpdatePriority : int { LOW_PRIORITY = 0, MED_PRIORITY = 1, HIGH_PRIORITY = 
 bool Init(std::string* err);   // resolves module base, verifies prologues
 uintptr_t Base();
 uintptr_t Addr(uintptr_t rva);
+bool InGameImage(const void* p);   // inside kenshi_x64.exe's image (its code, vtables and globals)
 void* FnAddr(Fn f);
 
 struct Character;  // opaque game objects

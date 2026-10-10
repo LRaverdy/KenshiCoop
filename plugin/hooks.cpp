@@ -115,6 +115,8 @@ using CombatMoveFn = void (*)(void* mov, float ft, const float* pos, const float
 CombatMoveFn o_combatMove = nullptr;
 VoidFn o_sheatheWeapon = nullptr;
 VoidFn o_seasonGetNewWeather = nullptr;
+using WriteCrashDumpFn = void (*)(void* exceptionPointers, const char* name);
+WriteCrashDumpFn o_writeCrashDump = nullptr;
 
 void SafeTick(bool live) {
     // C++ exceptions must never unwind into game code.
@@ -137,6 +139,7 @@ void TickSEH(bool live) {
 }
 
 void hk_mainLoop(void* gw, float t) {
+    SetCrashPhase("game main loop (its own frame: AI, GUI, physics)");
     o_mainLoop(gw, t);
     g_lastLiveTick.store(NowSeconds());
     RunTick(true);
@@ -1072,6 +1075,14 @@ void hk_effectStop(void* handler) {
         if (KenshiWorld* w = TheWorld()) w->NoteEffectStop(handler, reinterpret_cast<uintptr_t>(_ReturnAddress()) - kenshi::Base());
     o_effectStop(handler);
 }
+// The game's crash reporter, called from the catch(...) around its main loop: a crash in the
+// game's frame never reaches an unhandled-exception filter (the 20-minute soak's client crash was
+// only logged at exit, 2.5 min later, with an unrelated stack). Report it here first.
+void hk_writeCrashDump(void* exceptionPointers, const char* name) {
+    ReportCrash(exceptionPointers, "game crash reporter");
+    o_writeCrashDump(exceptionPointers, name);
+}
+
 void hk_seasonGetNewWeather(void* season) {
     if (KenshiWorld::ClientActive() && !g_hostCall) return;
     o_seasonGetNewWeather(season);
@@ -1449,6 +1460,8 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnAddDismantleProgress, reinterpret_cast<void*>(&hk_addDismantle), reinterpret_cast<void**>(&o_addDismantle)},
         {kenshi::FnWorldDestroy, reinterpret_cast<void*>(&hk_worldDestroy), reinterpret_cast<void**>(&o_worldDestroy)},
         {kenshi::FnSaveManagerSave, reinterpret_cast<void*>(&hk_saveManagerSave), reinterpret_cast<void**>(&o_saveManagerSave)},
+        // ---- crash report
+        {kenshi::FnWriteCrashDump, reinterpret_cast<void*>(&hk_writeCrashDump), reinterpret_cast<void**>(&o_writeCrashDump)},
     };
     const MH_STATUS init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {

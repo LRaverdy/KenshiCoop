@@ -37,7 +37,9 @@ chaque fonctionnalité dans [FONCTIONNALITES.md](FONCTIONNALITES.md).
 2. `dllStartPlugin` (`plugin/main.cpp`) épingle la DLL en mémoire, pour qu'elle reste chargée
    jusqu'à la fin du processus, puis appelle `Start()`, qui :
    - ouvre le journal `KenshiCoop.log` et archive le précédent ;
-   - installe un filtre de plantage, qui écrit `CRASH ...` et la pile dans le journal ;
+   - installe un filtre de plantage, qui écrit `CRASH ...` et la pile dans le journal (un plantage dans la
+     frame du jeu est rattrapé par le `catch(...)` de sa boucle principale : il est rapporté par le crochet
+     sur le rapporteur du jeu, `writeCrashDump`, voir `plugin/hooks.cpp`) ;
    - calcule le **SHA-256 de `kenshi_x64.exe`**. Seule la version 1.0.68 Steam est acceptée
      (`kenshi::kSupportedExeSha256`) ; sinon le mod se désactive et l'écrit dans le journal ;
    - lance `kenshi::Init` : base du module et **vérification des premiers octets (prologue) de

@@ -664,6 +664,7 @@ void AfterLeavingHostWorld() {
 }
 
 void Tick(bool live) {
+    SetCrashPhase("tick: begin frame");
     g_world->BeginFrame(live);
     for (auto& t : g_world->TakeToasts()) Toast(t);
 
@@ -676,6 +677,7 @@ void Tick(bool live) {
         g_wasReady = false;
         Log("world unloaded (menu or loading)");
     }
+    SetCrashPhase("tick: hotkeys and overlay");
     HandleHotkeys();
     HandleOverlayActions();
     if (!live && !g_menuWindowShown && !g_wasReady && g_session->state() == kc::SessionState::Idle && NowSeconds() - g_startedAt > 5.0) {
@@ -683,16 +685,23 @@ void Tick(bool live) {
         OverlayOpenMultiplayer();
     }
     if (live) g_menuWindowShown = true;
+    SetCrashPhase("tick: debug commands");
     if (g_cfg.debugCommands) DebugPoll(*g_session, *g_world, live);
+    SetCrashPhase("tick: steam");
     SteamUpkeep();
     if (live) g_session->CountFrame();
+    SetCrashPhase("tick: admin");
     if (live || !g_session->isHost()) AdminUpkeep(*g_session, *g_world);   // god modes follow their players
     LogAndConsoleUpkeep();
+    SetCrashPhase("tick: session");
     g_session->Tick(live);
+    SetCrashPhase("tick: resync");
     ResyncUpkeep();
     AfterLeavingHostWorld();
+    SetCrashPhase("tick: end frame");
     if (live) g_world->EndFrame();
     PublishOverlay();
+    SetCrashPhase("game (outside KenshiCoop's tick)");
 }
 
 void TickEntry(bool live) { Tick(live); }
@@ -758,26 +767,39 @@ std::string ModuleOf(uintptr_t addr) {
 }
 
 LPTOP_LEVEL_EXCEPTION_FILTER g_prevFilter = nullptr;
-LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep) {
+
+} // namespace
+
+// Last-chance crash report (once per process): where the game died, the registers, the return
+// addresses on the stack and what KenshiCoop was doing, written to KenshiCoop.log.
+void ReportCrash(void* exceptionPointers, const char* source) {
     static std::atomic<int> once{0};
-    if (once.fetch_add(1) == 0 && ep && ep->ExceptionRecord && ep->ContextRecord) {
-        const auto* er = ep->ExceptionRecord;
-        const auto* cx = ep->ContextRecord;
-        Log("CRASH code=%08lx at %p (%s) thread=%lu access=%llu addr=%p", er->ExceptionCode, er->ExceptionAddress,
-            ModuleOf(reinterpret_cast<uintptr_t>(er->ExceptionAddress)).c_str(), GetCurrentThreadId(),
-            er->NumberParameters > 0 ? (unsigned long long)er->ExceptionInformation[0] : 0ull,
-            er->NumberParameters > 1 ? reinterpret_cast<void*>(er->ExceptionInformation[1]) : nullptr);
-        // Return addresses on the stack that land in a loaded module: enough to see who jumped where.
-        const auto* sp = reinterpret_cast<const uintptr_t*>(cx->Rsp);
-        int shown = 0;
-        for (int i = 0; i < 256 && shown < 24; ++i) {
-            uintptr_t v = 0;
-            if (IsBadReadPtr(sp + i, sizeof(v))) break;
-            v = sp[i];
-            const std::string m = ModuleOf(v);
-            if (m != "?") { Log("  stack[%d] %s", i, m.c_str()); ++shown; }
-        }
+    const auto* ep = static_cast<const EXCEPTION_POINTERS*>(exceptionPointers);
+    if (once.fetch_add(1) != 0 || !ep || !ep->ExceptionRecord || !ep->ContextRecord) return;
+    const auto* er = ep->ExceptionRecord;
+    const auto* cx = ep->ContextRecord;
+    Log("CRASH (%s) code=%08lx at %p (%s) thread=%lu access=%llu addr=%p phase='%s'", source, er->ExceptionCode, er->ExceptionAddress,
+        ModuleOf(reinterpret_cast<uintptr_t>(er->ExceptionAddress)).c_str(), GetCurrentThreadId(),
+        er->NumberParameters > 0 ? (unsigned long long)er->ExceptionInformation[0] : 0ull,
+        er->NumberParameters > 1 ? reinterpret_cast<void*>(er->ExceptionInformation[1]) : nullptr, CrashPhase());
+    Log("  rax=%llx rbx=%llx rcx=%llx rdx=%llx rsi=%llx rdi=%llx r8=%llx r9=%llx rsp=%llx", cx->Rax, cx->Rbx, cx->Rcx, cx->Rdx, cx->Rsi, cx->Rdi,
+        cx->R8, cx->R9, cx->Rsp);
+    // Return addresses on the stack that land in a loaded module: enough to see who jumped where.
+    const auto* sp = reinterpret_cast<const uintptr_t*>(cx->Rsp);
+    int shown = 0;
+    for (int i = 0; i < 512 && shown < 32; ++i) {
+        uintptr_t v = 0;
+        if (IsBadReadPtr(sp + i, sizeof(v))) break;
+        v = sp[i];
+        const std::string m = ModuleOf(v);
+        if (m != "?") { Log("  stack[%d] %s", i, m.c_str()); ++shown; }
     }
+}
+
+namespace {
+
+LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep) {
+    ReportCrash(ep, "unhandled");
     return g_prevFilter ? g_prevFilter(ep) : EXCEPTION_CONTINUE_SEARCH;
 }
 
