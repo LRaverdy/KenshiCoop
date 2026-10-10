@@ -111,6 +111,14 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   combat ?) jusqu'à un événement qui le relance. À chercher dans les bilans `[rob] sync:` et les
   envois de vitals par client : priorité ou zone d'intérêt calculée autour de l'hôte / de sa
   caméra au lieu des persos du joueur concerné ?
+- **Geoffrey : chutes de FPS, l'écran se fige par moments.** Ses bilans : 104-133 images/s avec
+  179-195 persos suivis, 65 images/s quand ça monte à 300 persos (23:42). Il recrée beaucoup de
+  persos (199 lignes « stand-in … gone » / « cannot recreate host character » en quelques minutes,
+  la fabrique échoue en boucle sur des persos uniques comme 'Cat', 'Ruka', 'Kang' : chaque essai
+  coûte), et sa console reçoit des centaines de lignes « anim … » (journalisation coûteuse). Pistes :
+  ne plus réessayer sans fin un perso que la fabrique refuse (liste noire par modèle) ; couper les
+  journaux par image ; étaler les créations de persos sur plusieurs images (les gels = beaucoup de
+  persos créés d'un coup à l'arrivée dans une zone).
 - **Vue des étages chez le client** : le client doit forcer lui-même la vue des étages (toit /
   étages cachés) ; elle ne suit pas automatiquement quand son perso entre dans un bâtiment ou
   change d'étage, comme en solo. À voir avec le niveau d'étage (floorGroup, écritures
