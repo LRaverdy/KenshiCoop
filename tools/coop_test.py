@@ -7116,6 +7116,127 @@ def move_squad_out_of_town(host):
     return False
 
 
+# ---- 0.3.2: recruits passed from hand to hand, two characters talking, copies never rebound
+def exp_recruits(host, clis):
+    """docs/A_FAIRE.md 3d, 3e, 3j, 3m (sandbox, 1 host + 2 clients or more). The host makes a recruit of a
+    Dialogue.mod template (unique: the clients used to fail to recreate it, 'factory did not return a
+    character'), recruits it and passes it with G (give) host -> each player, six times in two seconds;
+    the first client then moves it into its own character's squad. On every machine: the recruit is
+    there and in the player faction (squadcheck outside=0 missing=0), same squads as the host, no copy
+    bound to another host character (conflicts=0). The first client then selects two of its characters
+    and orders "talk": one talks, the host refuses the other silently (dialogs same=, busy unchanged).
+    Last, a stress: 20 gives in a row while the client moves the recruit between squads."""
+    clis = clis if isinstance(clis, (list, tuple)) else [clis]
+    time.sleep(6)
+    for c in clis:
+        cmd(c, "editdone")
+    time.sleep(3)
+    ids = {}
+    for c in clis:
+        t = cmd(c, "status")[1]
+        m = re.search(r" id=(\d+)", t)
+        ids[c] = int(m.group(1)) if m else None
+    log("client ids:", ids)
+    own_h = (own_indices(host) or [0])[0]
+
+    def kvs(text):
+        return dict(p.split("=", 1) for p in text.split(" | ")[0].split()[1:] if "=" in p)
+
+    # 1. a client recreates a unique Dialogue.mod template itself (3e, directly)
+    templates = ("41370-Dialogue.mod", "41299-Dialogue.mod")
+    for t in templates:
+        r = cmd(clis[0], f"spawncreature {t} 25 25")
+        log("client spawncreature", t, r)
+        if "unknown template" in r[1]:
+            log("   (Dialogue.mod is not installed here: that part is skipped)")
+            continue
+        check(f"recrues : un client cree un perso du modele unique {t}", r[0], r[1])
+
+    # 2. the host makes the recruit (that template when there, else a copy of a nearby NPC) and recruits it
+    made = None
+    for t in templates:
+        r = cmd(host, f"spawncreature {t} 20 0 {own_h}")
+        log("host spawncreature", t, r)
+        if r[0]:
+            made = r
+            break
+    if not made:
+        made = cmd(host, f"spawnnpc 20 0 {own_h}")
+        log("host spawnnpc (no Dialogue.mod)", made)
+    if not made[0]:
+        check("recrues : l'hote cree une recrue", False, made[1])
+        return
+    time.sleep(4)
+    r = cmd(host, "recruitnpc")
+    log("host recruitnpc", r)
+    check("recrues : l'hote recrute le PNJ", r[0], r[1])
+    if not r[0]:
+        return
+    name = r[1].split(" ", 1)[1].replace(" ", "_")
+    time.sleep(3)
+    idx = cmd(host, f"squadidx {name}")
+    log("host squadidx", name, idx)
+    if not idx[0]:
+        check("recrues : la recrue est dans l'escouade de l'hote", False, idx[1])
+        return
+    hi = int(idx[1].split()[1])
+
+    # 3. G cycling: host -> each player, fast (2 s for the six gives), ends with the first client
+    order = [1] + [ids[c] for c in clis if ids[c]]
+    for k in range(6):
+        for pid in order:
+            cmd(host, f"give {pid} {hi}")
+            time.sleep(0.1)
+    cmd(host, f"give {ids[clis[0]]} {hi}")
+    time.sleep(3)
+    own_c = cmd(clis[0], "squadcheck")[1]
+    log("client 1 squadcheck after the gives:", own_c)
+    me = "Joueur2"   # the first client's own character (setup_multi names the players Joueur2, Joueur3...)
+    log("client 1: the recruit into its own character's squad", cmd(clis[0], f"squadmove {name} {me}"))
+    time.sleep(8)
+
+    def compare(label):
+        hs = cmd(host, "squads")[1]
+        for i, c in enumerate(clis):
+            sc = cmd(c, "squadcheck")[1]
+            cs = cmd(c, "squads")[1]
+            bar = cmd(c, "squadbar")[1]
+            d = kvs(sc)
+            log(f"{label} client {i + 1}: {sc}")
+            log(f"    squads host  : {hs}")
+            log(f"    squads client: {cs}   squadbar {bar}")
+            check(f"recrues ({label}) : client {i + 1}, la recrue est la et dans la faction", d.get("missing") == "0" and d.get("outside") == "0", sc)
+            check(f"recrues ({label}) : client {i + 1}, aucune copie liee a un autre perso de l'hote", d.get("conflicts") == "0", sc)
+            check(f"recrues ({label}) : client {i + 1}, memes escouades que l'hote", cs == hs, cs)
+            check(f"recrues ({label}) : client {i + 1}, {name} dans les escouades", name.replace("_", " ") in cs, cs)
+    compare("apres G et deplacement")
+
+    # 4. two of the first client's characters selected, one "talk" (3d)
+    ci = [int(x) for x in cmd(clis[0], f"squadidx {name}")[1].split()[1:]] + own_indices(clis[0])[:1]
+    d0 = kvs(cmd(host, "dialogs")[1])
+    log("client 1 selectset", ci, cmd(clis[0], "selectset " + " ".join(map(str, ci))))
+    log("client 1 talksel 0", cmd(clis[0], "talksel 0"))
+    time.sleep(15)
+    d1 = kvs(cmd(host, "dialogs")[1])
+    dl = cmd(clis[0], "dialog")[1]
+    log("host dialogs before/after:", d0, d1, "| client dialog:", dl)
+    check("parler a deux : aucun refus 'occupe' pour le meme joueur", d1.get("busy") == d0.get("busy"), (d0, d1))
+    check("parler a deux : la conversation s'ouvre chez le client", "open=1" in dl, dl)
+    cmd(clis[0], "answer leave")
+    time.sleep(3)
+
+    # 5. stress (3m): 20 gives in a row while the client moves the recruit between squads
+    for k in range(20):
+        cmd(host, f"give {order[k % len(order)]} {hi}")
+        if k % 5 == 0:
+            cmd(clis[0], f"squadmove {name} {'new' if k % 10 == 0 else me}")
+        time.sleep(0.1)
+    cmd(host, f"give {ids[clis[0]]} {hi}")
+    time.sleep(10)
+    compare("apres le stress")
+    r = cmd(clis[0], f"taskreq {cmd(clis[0], f'squadidx {name}')[1].split()[-1]} 1 0")
+    log("client 1 orders the recruit after the stress:", r)
+
 def exp_research(host, cli):
     """Workshop: the research (tech tree), the crafting benches, the mines and machines and the power of
     the players' outpost are the host's. The client researches, builds what it unlocked and crafts
@@ -7429,6 +7550,10 @@ def main():
     bh = sub.add_parser("buyhouse", help="buying a building for sale: price, owner, doors and containers, refusal, simultaneous purchase")
     bh.add_argument("--save", default="kctest_town")
     bh.add_argument("--keep", action="store_true")
+    rc_ = sub.add_parser("recruits", help="0.3.2: a Dialogue.mod recruit given around with G and moved by a client, two characters talking, copies never rebound")
+    rc_.add_argument("--save", default="kctest_town")
+    rc_.add_argument("--keep", action="store_true")
+    rc_.add_argument("--clients", type=int, default=2)
     fw_ = sub.add_parser("faraway", help="0.3.1: the client's character in another town (> 30000) while the host never looks: sync, smooth NPCs, "
                                          "fight and damage numbers, loot, talk, trade, ground items, a third town")
     fw_.add_argument("--save", default="kctest_town")
@@ -7601,6 +7726,16 @@ def main():
         try:
             exp_faraway(host, clis)
         finally:
+            if not a.keep:
+                kill_launched()
+        return
+    if a.what == "recruits":
+        host, clis, _ids = setup_multi(a.save, max(1, a.clients))
+        tile([host] + clis)
+        try:
+            exp_recruits(host, clis)
+        finally:
+            summary()
             if not a.keep:
                 kill_launched()
         return

@@ -392,7 +392,9 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         kc::Handle h;
         if (!c || !kenshi::GetHandle(c, h)) return "err " + e;
         lastSpawned_ = h;
-        return "ok " + Key(h) + " " + sid + (kenshi::IsAnimal(c) ? " animal" : " human");
+        bool unique = false;   // 0.3.2: made although its template is unique (kenshi::CreateCharacter)
+        kenshi::GameDataBoolField(kenshi::GameDataBySid(sid), "unique", unique);
+        return "ok " + Key(h) + " " + sid + (kenshi::IsAnimal(c) ? " animal" : " human") + " unique=" + (unique ? "1" : "0");
     }
     if (cmd == "bodysize") {   // bodysize <target|spawned>: a character's race, scale, body radius and loot reach (kc::loot)
         std::string k;
@@ -1960,7 +1962,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         std::ostringstream o;
         const auto list = w.RemoteDialogList();
         o << "ok n=" << list.size() << " open=" << s.openDialogs() << " busy=" << w.dialogsBusyRefused << " orderbusy=" << s.dialogBusyRefusals()
-          << " swept=" << w.dialogsSwept << " unpaused=" << w.hostDialogUnpaused << " |";
+          << " swept=" << w.dialogsSwept << " unpaused=" << w.hostDialogUnpaused << " same=" << w.dialogsSameOwnerRefused << " |";
         for (const auto& d : list) o << " " << d.id << ":" << d.pc << ">" << d.other;
         return o.str();
     }
@@ -2010,6 +2012,75 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         void* d = kenshi::CharacterDialogue(npc);
         const bool talking = d && !kenshi::DialogueEnded(d) && kenshi::DialogueTarget(d) == me;
         return (ok ? "ok " : "err ") + name + " talking=" + (talking ? "1" : "0");
+    }
+    if (cmd == "talksel") {   // talksel <k|name:part>: the current selection (selectset) is ordered to talk to the k-th nearest NPC of its first member, as one right click does (0.3.2)
+        std::string which;
+        in >> which;
+        std::vector<kc::Handle> sel;
+        kenshi::SelectedHandles(sel);
+        kenshi::Character* me = sel.empty() ? nullptr : w.FindSquad(sel.front());
+        kc::Vec3 mp, p;
+        if (!me || !kenshi::GetPosition(me, mp)) return "err no selection";
+        std::string part;
+        if (which.rfind("name:", 0) == 0) { part = which.substr(5); std::replace(part.begin(), part.end(), '_', ' '); }
+        const size_t k = which.empty() || !part.empty() ? 0 : std::strtoul(which.c_str(), nullptr, 10);
+        std::vector<kenshi::Character*> all;
+        kenshi::ActiveCharacters(all);
+        std::vector<std::pair<float, kenshi::Character*>> nearby;
+        for (kenshi::Character* c : all) {
+            kc::Handle h;
+            if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsDown(c) || kenshi::IsAnimal(c) || !kenshi::GetPosition(c, p)) continue;
+            if (std::string nm; !part.empty() && (!kenshi::CharacterName(c, nm) || nm.find(part) == std::string::npos)) continue;
+            nearby.emplace_back((p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z), c);
+        }
+        std::sort(nearby.begin(), nearby.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        if (k >= nearby.size()) return "err no such NPC";
+        kenshi::Character* npc = nearby[k].second;
+        std::string name;
+        kenshi::CharacterName(npc, name);
+        const bool ok = kenshi::CallAddTaskNearest(kc::kTaskTalk, npc);
+        return (ok ? "ok " : "err ") + std::to_string(sel.size()) + " " + name;
+    }
+    if (cmd == "recruitnpc") {   // recruitnpc [key]: (host) the last spawned NPC (or that one) joins the player faction, the game's recruit (0.3.2 tests: a newcomer the host gives with G)
+        if (s.isClient()) return "err host only";
+        kenshi::Character* c = w.Find(SpawnedOr(in));
+        if (!c) return "err no such NPC";
+        bool ok = false;
+        {
+            HostCallScope scope;
+            ok = kenshi::RecruitCharacter(c);
+        }
+        std::string name;
+        kenshi::CharacterName(c, name);
+        return (ok && kenshi::InPlayerSquad(c) ? "ok " : "err ") + name;
+    }
+    if (cmd == "squadidx") {   // squadidx <name>: (0.3.2) the squad index (this machine's order, as give/taskreq take it) of that character ('_' for spaces)
+        std::string name;
+        in >> name;
+        std::replace(name.begin(), name.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        for (size_t i = 0; i < squad.size(); ++i) {
+            std::string n;
+            if (kenshi::Character* c = w.FindSquad(squad[i]); c && kenshi::CharacterName(c, n) && n == name) return "ok " + std::to_string(i);
+        }
+        return "err not in the squad";
+    }
+    if (cmd == "squadcheck") {   // squadcheck: (0.3.2) every squad character of the session: name:owner:present:inFaction(here), and the counts
+        std::ostringstream o;
+        int n = 0, missing = 0, outside = 0;
+        std::string list;
+        s.ForEachEntity([&](uint32_t, const kc::Handle& h, uint8_t owner, bool squad, bool present) {
+            if (!squad) return;
+            ++n;
+            const bool in = present && w.InPlayerFactionHere(h);
+            missing += !present;
+            outside += present && !in;
+            std::string nm = w.CharacterNameOf(h);
+            std::replace(nm.begin(), nm.end(), ' ', '_');
+            list += " " + nm + ":" + std::to_string(owner) + ":" + (present ? "1" : "0") + ":" + (in ? "1" : "0");
+        });
+        o << "ok n=" << n << " missing=" << missing << " outside=" << outside << " conflicts=" << w.AliasConflicts() << " |" << list;
+        return o.str();
     }
     if (cmd == "talkto") {   // talkto <selectIndex> <k|npc|dlg|name:part>: select that squad member alone, order it to talk to the k-th nearest NPC (npc: the last spawned; dlg: the NPC of the last client conversation, host; name:part the nearest whose name has that part, '_' for spaces)
         size_t sel = 0;

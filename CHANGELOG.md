@@ -29,6 +29,26 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
   les achats. Test unitaire `TestStackMerge`.
 - Tests : expérience `backpack` (`coop_test.py`), commandes `baginv`, `invitems`, `wearbag`, `objjob`,
   `uidrop bag:N`.
+- **Recrues des dialogues absentes chez les clients (Streak, Stone).** Les recrues de Dialogue.mod sont
+  des modèles « uniques » : la fabrique du jeu (`createRandomCharacter` 0x5836E0) refuse d'en faire un
+  second quand le monde l'a déjà, ce qui est le cas chez un client. `CreateCharacter` lève ce drapeau le
+  temps de l'appel. L'hôte envoie aussi l'apparence (race comprise) de chaque nouveau perso d'escouade.
+- **Recrues sans portrait (Nei, Skinner, Kihaku).** Un membre d'une escouade de l'hôte dont la copie est
+  encore un PNJ chez un client entre dans la faction du joueur à la prochaine mise à jour des
+  escouades, quels que soient l'ordre et la vitesse des dons (G) ; un échec réessaie après une minute.
+- **Stone pris pour la copie d'un autre perso de l'hôte** (ordres de nass4 refusés, ~900 lignes par
+  minute). Le suivi d'un perso dont le jeu a changé le handle ne prend plus jamais un perso qui est
+  lui-même un perso de l'hôte ; un tel lien déjà fait est défait. Refus d'ordres limités à 3 lignes
+  par 10 s.
+- **Perso d'éditeur abandonné devenu recrue d'un autre joueur (rob1).** Le perso fait pour l'éditeur
+  d'un joueur n'est jamais pris pour une recrue ; il est supprimé s'il reste hors des escouades quand
+  son joueur part sans l'avoir fini ou qu'un nouveau perso est fait pour lui.
+- **Parler avec deux persos sélectionnés** : un seul ordre « parler » part ; chez l'hôte, l'autre perso
+  du même joueur est refusé sans message (plus de « X est occupé » dans sa propre conversation, plus
+  de refus comptés ni de rafales dans le journal).
+- Tests : `coop_test.py recruits` ; commandes de debug `squadcheck`, `talksel`, `recruitnpc`,
+  `squadidx`, `dialogs same=`, `spawncreature … unique=`. Test unitaire : un seul ordre « parler »
+  pour deux persos sélectionnés. Rien n'est encore vérifié en jeu. Protocole inchangé (35).
 
 ## v0.3.1 (11 octobre 2026)
 

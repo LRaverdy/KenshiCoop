@@ -211,8 +211,8 @@ Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui
 - Autour des joueurs, les positions sont exactes. Les PNJ éloignés qui marchent peuvent être
   décalés de quelques dizaines de centimètres à 1 ou 2 m : le jeu ne met à jour leur position que
   quelques fois par seconde.
-- Quelques PNJ uniques ne peuvent pas être recréés chez le client s'il ne les a pas déjà (le
-  panneau l'indique : « N not spawned here yet »).
+- Les PNJ uniques (recrues de Dialogue.mod, persos nommés) sont recréés chez le client même s'il
+  ne les a pas (0.3.2, à vérifier en jeu).
 - Le TP de l'hôte ne déplace pas un personnage au sol (assommé, en ragdoll).
 
 ## Dépannage

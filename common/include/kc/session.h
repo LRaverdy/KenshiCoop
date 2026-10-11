@@ -189,6 +189,20 @@ public:
     // Client: our copy of a character the host recruited is still the NPC it was here: it joins our
     // player faction too (the game's own recruit, without the editor). True once it is in it.
     virtual bool AdoptRecruit(const Handle& h) { (void)h; return true; }
+    // Client (0.3.2): is our copy of that host squad character one of our player faction's squad
+    // members here? A recruit still an NPC here has no portrait in the squad bar and cannot be put in
+    // a squad: the session adopts it. A dead one, or one not here, counts as in (nothing to do).
+    virtual bool InPlayerFactionHere(const Handle& h) { (void)h; return true; }
+    // Client (0.3.2): the session tells the world which handles are host characters it follows. A
+    // local character whose handle is one of them is that character's copy, never another's
+    // (KenshiWorld::FindMoved: Stone taken for the copy of another host character, 11 October).
+    virtual void SetHostKnows(std::function<bool(const Handle&)> knows) { (void)knows; }
+    // Host (0.3.2): the player owning each squad character (conversations: the second character of
+    // one player's selection is refused silently, not as "another player's").
+    virtual void SetSquadOwners(const std::vector<std::pair<Handle, uint8_t>>& owners) { (void)owners; }
+    // Host (0.3.2): remove a character the game keeps outside the player's squads (a character made
+    // for a player's character editor that was never finished). Never a squad member. True: removed.
+    virtual bool RemoveStrayCharacter(const Handle& h) { (void)h; return false; }
     // Squads of the player faction. Host: each squad's name and members (in squad order).
     // Client: split the local characters the same way.
     struct WorldSquad {
@@ -722,6 +736,7 @@ private:
         bool machine = false;                // a player machine's inventory (also `container`): synced to every player while tracked
         bool adopt = false;                  // client: a recruit announced with its NPC handle: our copy joins the player faction
         uint8_t adoptTries = 0;
+        double adoptRetryAt = 0;             // client (0.3.2): not before then (a recruit that could not join)
         uint32_t bagOwner = 0;
         std::string bagSid;
         std::set<uint8_t> openBy;            // host: players who have it open
@@ -805,6 +820,7 @@ private:
     // Host: an NPC already followed joined the player faction (recruited in a conversation): it is a
     // squad character now, the host's until it is given to a player (a newcomer).
     void JoinSquad(Entity& e, std::vector<Handle>& newcomers, const Handle* previous = nullptr);
+    void BroadcastLooks(const Entity& e);   // host (0.3.2): a new squad character's looks to everyone
     void SendInventories(double now, bool force, PeerId onlyTo);
     void ClientInventoryDiff(double now);
     void SendLocalDrops();
@@ -918,6 +934,9 @@ private:
     // Host: shows that conversation again on its player's screen (the window and its current line).
     void ResendDialog(uint32_t dialogId);
     std::map<uint32_t, double> talkToldAt_;   // client: when we last said "goes to talk to" that NPC (by its handle)
+    LogLimiter unknownOrderLog_{3, 10.0};     // client (0.3.2): "order for a character the host does not know" (900 a minute on 11/10)
+    LogLimiter refusedOrderLog_{3, 10.0};     // client (0.3.2): "refused locally: ... does not own"
+    LogLimiter adoptLog_{4, 30.0};            // client (0.3.2): host squad characters still NPCs here
     std::vector<IWorld::WorldDialog> scratchDialogs_;
     std::vector<DialogReply> pendingAnswers_;   // host
     struct PendingContainer { uint8_t player; uint32_t looter; uint32_t netId; double until; };
@@ -1267,6 +1286,14 @@ private:
     uint8_t editorTurn_ = 0;          // the player making their character now (0: none)
     std::deque<uint8_t> editorQueue_; // in the world, waiting for their turn in the editor, first come first served
     std::set<std::string> editorOwed_;          // players (PlayerKey) whose character was made for them and never through the editor
+    // host (0.3.2): the character made for each player's editor (PlayerKey -> netId and the handle it
+    // had), while that editor is owed. Never taken for a recruit (JoinSquad); one left behind when a
+    // new one is made for that player is removed (RemoveStrayCharacter).
+    struct EditorChar { uint32_t netId = 0; Handle handle; std::string name; };
+    std::map<std::string, EditorChar> editorChars_;
+    const EditorChar* EditorCharOf(const Entity& e, std::string* key = nullptr) const;
+    void RetireEditorChar(const std::string& key, const std::string& why, bool leaving = false);
+    std::vector<std::pair<std::string, std::string>> retireQueue_;   // host: (PlayerKey, why), on the next live tick
     std::unordered_map<uint32_t, double> looksAt_;   // host: when a squad character's looks last changed (netId)
     std::unordered_map<uint32_t, AppearanceMsg> looksWaiting_;   // client: looks for a character not here yet (netId)
     std::string queueSig_;            // what the waiting players were last told

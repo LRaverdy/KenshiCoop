@@ -199,8 +199,11 @@ bool Session::ClientMaySend(Msg type, uint32_t netId, const char* what) {
     std::string owner;
     if (auto it = entities_.find(netId); it != entities_.end() && it->second.squad)
         owner = it->second.owner == hostId_ ? " (the host's character)" : " (another player's character)";
-    log_(std::string("refused locally: ") + what + " for a character this player does not own: " + VerdictText(v) + owner);
     const double now = clock_();
+    uint32_t held = 0;
+    if (refusedOrderLog_.Allow(now, &held))
+        log_(std::string("refused locally: ") + what + " for a character this player does not own: " + VerdictText(v) + owner +
+             (held ? " [" + std::to_string(held) + " more such lines not written]" : std::string()));
     if (now >= nextResultNote_) {
         nextResultNote_ = now + 2.0;
         AddChat("* Action refusée : ce personnage n'est pas le tien.", "local request refused: not this player's character");

@@ -78,9 +78,11 @@ Session::Session(IWorld& world, SessionConfig cfg, ClockFn clock, LogFn log)
     };
     cb_.onDisconnect = [this](PeerId p) { OnDisconnect(p); };
     cb_.onPacket = [this](PeerId p, uint8_t c, const uint8_t* d, size_t n) { OnPacket(p, c, d, n); };
+    world_.SetHostKnows([this](const Handle& h) { return byHandle_.count(h) != 0; });
 }
 
 Session::~Session() {
+    world_.SetHostKnows(nullptr);
     Leave();
     Net::GlobalShutdown();
 }
@@ -141,6 +143,8 @@ void Session::Leave() {
     editorTurn_ = 0;
     editorQueue_.clear();
     editorOwed_.clear();
+    editorChars_.clear();
+    retireQueue_.clear();
     looksAt_.clear();
     looksWaiting_.clear();
     queueSig_.clear();
@@ -256,6 +260,11 @@ void Session::HostTick(double now, bool live) {
     }
     if (controllableDirty_) PushControllable();
 
+    for (const auto& [key, why] : std::exchange(retireQueue_, {})) {   // 0.3.2: unfinished editor characters of players gone
+        bool back = false;   // (back already: theirs again)
+        for (const auto& [pid, p] : players_) back |= PlayerKey(p) == key;
+        if (!back) RetireEditorChar(key, why, true);
+    }
     for (const Handle& h : haltQueue_) {   // characters of a player gone: they stay put
         Entity* e = entityByHandle(h);
         if (e && e->squad) world_.HaltCharacter(h);   // (even if already theirs again: they are still loading)
@@ -503,6 +512,7 @@ void Session::AdvanceEditorQueue(double now) {
                 PlayerSync& s = sit->second;
                 s.editorWanted = false;
                 editorOwed_.erase(PlayerKey(pit->second));
+                editorChars_.erase(PlayerKey(pit->second));
                 log_("character editor: " + name + "'s turn is over (" + over + ") after " + Secs(now - s.editorSentAt) +
                      (editorQueue_.empty() ? "" : ", " + std::to_string(editorQueue_.size()) + " still waiting"));
                 log_("join timings for " + name + ": " + Secs(now - s.joinedAt) + " in all (waiting for a save " +
@@ -659,9 +669,16 @@ void Session::HostSaves(double now, bool live) {
                 bool created = false;
                 if (world_.EnsurePlayerCharacter(p.name, p.steamId, s.own, created)) {
                     Assign(s.own, p.id);
-                    if (created) editorOwed_.insert(key);
-                    else if (editorOwed_.count(key))
+                    if (created) {
+                        // one made for them before and never finished (0.3.2), no longer theirs: removed
+                        // when the game keeps it outside the squads, else kept as the host's
+                        if (auto old = editorChars_.find(key); old != editorChars_.end()) RetireEditorChar(key, "a new character was made for them");
+                        editorOwed_.insert(key);
+                        const Entity* ne = entityByHandle(s.own);
+                        editorChars_[key] = EditorChar{ne ? ne->netId : 0u, s.own, p.name};
+                    } else if (editorOwed_.count(key)) {
                         log_(p.name + " never finished making their character (gone before closing the editor): the editor opens again for them");
+                    }
                     s.ownCreated = created || editorOwed_.count(key);
                 } else {
                     log_("no character of their own for " + p.name);
@@ -947,6 +964,8 @@ void Session::UpdateInterest() {
         Entity& ref = entities_[e.netId] = std::move(e);
         for (auto& [pid, p] : players_) if (p.inGame) SendBind(ref, p.peer, rec ? rec->before : Handle{});
         if (squad) controllableDirty_ = true;
+        for (auto& [k, ec] : editorChars_) if (!ec.netId && ec.handle == h) ec.netId = ref.netId;   // made for an editor: its netId now
+        if (squad && squadKnown_ && !EditorCharOf(ref)) BroadcastLooks(ref);
         if (rec) RecruitJoined(ref, *rec);
         else if (squad && !assigned && squadKnown_) newcomers.push_back(h);
         return ref;
@@ -1925,6 +1944,19 @@ void Session::JoinSquad(Entity& e, std::vector<Handle>& newcomers, const Handle*
     e.owner = hostId_;
     for (const auto& [oh, pid] : owners_)
         if (oh == e.handle && (pid == hostId_ || players_.count(pid))) e.owner = pid;
+    // A character made for a player's character editor (0.3.2): never a recruit of whoever was
+    // talking (11 October: "NPC rob1 joined the player faction" during the resync, then in nass4's
+    // squad). Its own player's if they are in the game, else the host's.
+    std::string editorKey;
+    if (const EditorChar* ec = EditorCharOf(e, &editorKey)) {
+        for (const auto& [pid, p] : players_)
+            if (p.inGame && PlayerKey(p) == editorKey) e.owner = pid;
+        log_("NPC " + world_.CharacterNameOf(e.handle) + " joined the player faction: the character made for " + ec->name +
+             "'s editor, never a recruit (" + (e.owner == hostId_ ? std::string("the host's") : ec->name + "'s") + ")");
+        for (auto& [pid, p] : players_) if (p.inGame) SendBind(e, p.peer, previous ? *previous : Handle{});
+        controllableDirty_ = true;
+        return;
+    }
     const PendingRecruit* rec = squadKnown_ ? RecruitOf(e.handle) : nullptr;
     if (rec && e.owner == hostId_) {
         e.owner = rec->player;
@@ -1932,9 +1964,57 @@ void Session::JoinSquad(Entity& e, std::vector<Handle>& newcomers, const Handle*
     }
     log_("NPC " + world_.CharacterNameOf(e.handle) + " joined the player faction: a squad character now");
     for (auto& [pid, p] : players_) if (p.inGame) SendBind(e, p.peer, previous ? *previous : (rec ? rec->before : Handle{}));
+    BroadcastLooks(e);
     controllableDirty_ = true;
     if (rec) RecruitJoined(e, *rec);
     else if (e.owner == hostId_ && squadKnown_) newcomers.push_back(e.handle);
+}
+
+// Host (0.3.2): a new squad character's looks (race included) to everyone. A client that does not
+// have it (a recruit of Dialogue.mod made after its save) recreates it from its template: with these
+// looks it is the host's character, not a random one of that kind (applied once it is there).
+void Session::BroadcastLooks(const Entity& e) {
+    AppearanceMsg m;
+    if (!world_.ReadAppearance(e.handle, m)) return;
+    m.netId = e.netId;
+    looksAt_[e.netId] = clock_();
+    Writer w;
+    Encode(w, m);
+    BroadcastReliable(w, true);
+}
+
+// Host (0.3.2): the character made for a player's editor, left behind (its player left before
+// finishing it, or a new one was made for them). Removed when the game keeps it outside the player's
+// squads (nobody's: it would later join the faction as someone's recruit). A squad member is never
+// deleted by the mod (its portrait): a player leaving keeps it for when they come back; replaced by a
+// new one, it stays in the squad as the host's, still never taken for a recruit (EditorCharOf).
+void Session::RetireEditorChar(const std::string& key, const std::string& why, bool leaving) {
+    auto it = editorChars_.find(key);
+    if (it == editorChars_.end()) return;
+    const EditorChar ec = it->second;
+    Handle h = ec.handle;
+    if (auto e = ec.netId ? entities_.find(ec.netId) : entities_.end(); e != entities_.end()) h = e->second.handle;
+    if (world_.RemoveStrayCharacter(h)) {
+        log_("the character made for " + ec.name + "'s editor is removed (" + why + "): it was in no player squad");
+        editorChars_.erase(it);
+        return;
+    }
+    if (leaving) return;   // in the squad: theirs again when they come back
+    log_("the character made for " + ec.name + "'s editor stays in the squad as the host's (" + why + "): never a recruit");
+    editorChars_.erase(it);
+    if (editorChars_.size() < 64) editorChars_["retired:" + key + ":" + std::to_string(ec.netId) + ":" + std::to_string(h.serial)] = ec;
+}
+
+// Host (0.3.2): the character made for a player's editor that this entity is, if any (by netId,
+// else by the handle it had when it was made; the netId is noted then).
+const Session::EditorChar* Session::EditorCharOf(const Entity& e, std::string* key) const {
+    for (const auto& [k, ec] : editorChars_) {
+        if ((ec.netId && ec.netId == e.netId) || (!ec.netId && ec.handle == e.handle)) {
+            if (key) *key = k;
+            return &ec;
+        }
+    }
+    return nullptr;
 }
 
 // The game's recruitments in a client's conversation (seen by the plugin's recruit hook): who gets
@@ -2051,8 +2131,14 @@ void Session::ResendDialog(uint32_t dialogId) {
 void Session::PushControllable() {
     controllableDirty_ = false;
     std::vector<Handle> mine;
-    for (auto& [id, e] : entities_) if (e.squad && e.owner == localId_) mine.push_back(e.handle);
+    std::vector<std::pair<Handle, uint8_t>> owners;
+    for (auto& [id, e] : entities_) {
+        if (!e.squad || e.container) continue;
+        if (e.owner == localId_) mine.push_back(e.handle);
+        owners.emplace_back(e.handle, e.owner);
+    }
     world_.SetControllable(mine);
+    world_.SetSquadOwners(owners);
 }
 
 void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
@@ -3011,7 +3097,8 @@ void Session::ClientTick(double now, bool live) {
                 log_("recruit " + name + " joined the player faction here too");
             } else if (++e.adoptTries >= 5) {
                 e.adopt = false;
-                log_("recruit " + name + " could not join the player faction here");
+                e.adoptRetryAt = now + 60.0;   // 0.3.2: tried again later (ClientSquads), never every frame
+                log_("recruit " + name + " could not join the player faction here (tried again in a minute)");
             }
         }
     }
@@ -3105,14 +3192,28 @@ void Session::ClientTick(double now, bool live) {
     // result comes back through snapshots.
     scratchOrders_.clear();
     world_.TakeLocalOrders(scratchOrders_);
+    std::vector<Handle> talkSubjects;   // 0.3.2: NPCs a "talk" order went to in this batch
     for (auto& [h, cmd] : scratchOrders_) {
         Entity* e = entityByHandle(h);
         // not one of ours (the host's character, another player's, one the host does not know): never
         // sent, with a French notice (the host would refuse it anyway: Session::Authorize)
         const bool sharedSettings = e && IsSettingsCommand(cmd) && MaySetSettings(localId_, e->netId);   // nobody's character: anyone's settings
         if (!e || (!sharedSettings && !ClientMaySend(Msg::Command, e->netId, "order"))) {
-            if (!e) log_("refused locally: order for a character the host does not know");
+            uint32_t held = 0;
+            // (0.3.2: ~900 a minute on 11 October, our game re-giving an order every frame)
+            if (!e && unknownOrderLog_.Allow(clock_(), &held))
+                log_("refused locally: order for a character the host does not know (" + world_.CharacterNameOf(h) + ")" +
+                     (held ? " [" + std::to_string(held) + " more such lines not written]" : std::string()));
             continue;
+        }
+        // "talk" with several of our characters selected (0.3.2): one of them talks, as in the game;
+        // the others' orders would only make the host's game retry for them, refused, every frame
+        if (cmd.kind == CommandKind::Task && (cmd.task == kTaskTalk || cmd.task == kTaskTalkNearest) && cmd.subject.valid()) {
+            if (std::find(talkSubjects.begin(), talkSubjects.end(), cmd.subject) != talkSubjects.end()) {
+                log_("talk order of a second selected character (" + world_.CharacterNameOf(h) + ") not sent: one character talks");
+                continue;
+            }
+            talkSubjects.push_back(cmd.subject);
         }
         Command c = cmd;
         c.seq = ++cmdSeq_;
@@ -3908,6 +4009,9 @@ void Session::ForgetPlayer(uint8_t id) {
     }
     if (wasInGame && !owned.empty()) leftOwned_[key] = owned;
     while (leftOwned_.size() > 64) leftOwned_.erase(leftOwned_.begin());
+    // their character never finished in the editor (0.3.2): if the game keeps it outside the player's
+    // squads it is nobody's and would later "join" the faction as someone's recruit (rob1, 11 October)
+    if (editorOwed_.count(key) && editorChars_.count(key)) retireQueue_.push_back({key, leaverName + " left before finishing it"});
     controllableDirty_ = true;
     // nothing they asked for runs any more (their id may soon be someone else's)
     auto drop = [id](auto& v) { v.erase(std::remove_if(v.begin(), v.end(), [id](const auto& x) { return x.first == id; }), v.end()); };

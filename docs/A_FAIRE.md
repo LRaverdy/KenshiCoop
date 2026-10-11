@@ -294,6 +294,13 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
      commerce marche (livres achetés et vendus sans souci).
 
 3d. **Conversations : refus en rafale, et rob ne peut pas parler au « Barman sacré » (22:30-22:35)**
+   - **Refus en rafale : corrigé dans le code, à tester en jeu** (0.3.2, `coop_test.py recruits`, étape 4) :
+     l'hôte connaît le propriétaire de chaque perso d'escouade (`IWorld::SetSquadOwners`, publié dans
+     `HookView::squadOwner`) ; `ConversationAllowed` refuse **sans message ni compte** un autre perso
+     du même joueur (`same=` dans `dialogs`), et les lignes de refus sont limitées (`LogLimiter`). Le
+     client n'envoie plus qu'un ordre « parler » par PNJ et par lot d'ordres : avec deux persos
+     sélectionnés, un seul part (« talk order of a second selected character … not sent »). Le Barman
+     sacré de rob reste à regarder (journal de rob).
    - `dialogs` sur l'hôte à 22:33 : 1784 refus « occupé » (`dialogsBusyRefused`) depuis le début de la
      session.
    - Cas vu en direct (22:34:16, nass4 et Streak) :
@@ -320,6 +327,16 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
        la cible.
 
 3e. **Recrues des dialogues absentes chez les clients : Streak et Stone (22:34-22:39)**
+   - **Corrigé dans le code, à tester en jeu** (0.3.2, `coop_test.py recruits`). Cause lue dans le
+     désassemblage de `createRandomCharacter` (0x5836E0) : le jeu lit le booléen `unique` du modèle ;
+     si le registre des uniques du monde l'a déjà (c'est le cas chez un client, qui a chargé la
+     sauvegarde de l'hôte), il prend la liste « unique replacement spawn » du modèle, et rend null si
+     elle est vide. Les recrues de Dialogue.mod sont des modèles uniques. L'embauche par dialogue ne
+     crée rien : elle recrute le PNJ de la conversation (`PlayerInterface::recruit`) ; c'est sa copie
+     chez le client qui ne pouvait pas être faite. `kenshi::CreateCharacter` met `unique` à faux le
+     temps de l'appel (même valeur que lit la fabrique), puis le remet. En plus, l'hôte envoie à tous
+     l'apparence (race comprise) de chaque nouveau perso d'escouade (`Session::BroadcastLooks`),
+     appliquée dès que la copie existe.
    - nass4 recrute Streak (`41370-Dialogue.mod`, « hire engineer wall man », payé 5000 cats), puis Stone
      (`41299-Dialogue.mod`, « Sword for hire ex-slave »).
    - Chez l'hôte : « a new squad character (Streak) goes to nass4 » et « 1 character(s) now controlled
@@ -420,6 +437,11 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
      on vérifie la fenêtre chez le client, l'argent et l'animal dans son escouade chez tous.
 
 3j. **Portraits absents chez rob et nass4 : Nei, Skinner, Kihaku (signalé à 22:55)**
+   - **Corrigé dans le code, à tester en jeu** (0.3.2, `coop_test.py recruits`, étapes 3 et 5) : à chaque
+     application des escouades (`ClientSquads`), un membre d'une escouade de l'hôte dont la copie est
+     encore un PNJ ici (`IWorld::InPlayerFactionHere` faux) est remis en adoption (`adopt`), quel que
+     soit l'ordre ou la vitesse des `Bind` (G en boucle) ; un échec réessaie après une minute au lieu
+     d'abandonner pour toujours. `squadcheck` donne `outside=` (doit être 0).
    - Ce sont des recrues de nass4, des PNJ de bar recrutés par dialogue : Kihaku à 22:32:19, Skinner à
      22:33:23, Nei à 22:33:42. Contrairement à Streak et Stone, ces persos existent chez les clients
      (primes, vue d'étage « follows our 'Nei' » chez nass4).
@@ -444,6 +466,14 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
      escouades).
 
 3k. **`resync` de 22:56:38**
+   - **Perso parasite : corrigé dans le code, à tester en jeu** (0.3.2). L'hôte retient le perso fait pour
+     l'éditeur de chaque joueur (`editorChars_`) tant que l'éditeur est dû. Jamais pris pour une recrue
+     (`JoinSquad` : à son joueur s'il est là, sinon à l'hôte). Supprimé (`IWorld::RemoveStrayCharacter`)
+     quand son joueur part sans l'avoir fini, ou quand un nouveau perso est fait pour lui, **si le jeu le
+     garde hors des escouades du joueur** ; un membre d'escouade n'est jamais supprimé par le mod (son
+     portrait) : il reste à l'hôte. Le renvoi d'un perso hors faction par le jeu (bouton « renvoyer »,
+     `SquadManagementScreen::dismissCharacter` 0x48FA30) n'est pas utilisé. À vérifier en jeu : un
+     client quitte pendant l'éditeur, revient, puis `resync`.
    - Les 3 joueurs reviennent : rob1 en 26 s, Geoffrey en 31 s, nass4 en 39 s. Monde envoyé : 1,7 MB
      chacun, 12 persos de joueur.
    - Geoffrey : « 1 squad members missing » juste après son retour. nass4 : 45 PNJ « not there yet »
@@ -477,6 +507,13 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
      se cacher.
 
 3m. **nass4 ne peut plus diriger Stone (23:27, nouvelle partie)**
+   - **Corrigé dans le code, à tester en jeu** (0.3.2, `coop_test.py recruits`, étape 5). Le suivi
+     « changed squads here » (`KenshiWorld::FindMoved`) cherche un perso de même type et même numéro
+     de série : Stone et l'ancien handle de l'hôte avaient le même. Il refuse maintenant tout perso dont
+     le handle est celui d'un perso que la session suit (`IWorld::SetHostKnows`) : c'est la copie de
+     celui-là. Un lien déjà fait vers un membre d'escouade qui est lui-même un perso de l'hôte est
+     défait (`Exists`). Les refus « order for a character the host does not know » et « refused
+     locally … does not own » sont limités à 3 lignes par 10 s.
    - 23:27:26-27, chez les 3 clients : « our copy of the host's 1:317:56274416:1:1129150336 changed squads
      here (now 1:46:853759744:6:1129150336): followed ». `1:46:853759744:6` est le handle de Stone, le
      6e de l'escouade fasme (c'était le focus du monde chargé à 23:08, et l'hôte téléporte ce handle à

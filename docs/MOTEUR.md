@@ -1056,6 +1056,25 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
 - `startConversation` / `startPlayerConversation` sont appelés sur le `Dialogue` de l'un ou l'autre
   des deux personnages : le mod regarde les deux côtés (propriétaire du dialogue et cible).
 
+**Fabrique de persos et modèles uniques (0.3.2) [D]**
+- `RootObjectFactory::createRandomCharacter` (`0x5836E0`) lit le booléen `unique` du modèle
+  (table des booléens du `GameData`, +0xF8). S'il est vrai, il demande au registre des uniques
+  (`0x1C84B` puis `0x50E5C`) si ce modèle existe déjà dans le monde : si oui, il prend un modèle de la
+  liste « unique replacement spawn » du modèle, et **rend null** si elle est vide ; si non, il inscrit
+  le modèle au registre. Puis il appelle `RootObjectFactory::create` (`0x583400`) et `vt 0x308` du
+  perso.
+- Les recrues de Dialogue.mod (`41370-Dialogue.mod` « hire engineer wall man », `41299-Dialogue.mod`
+  « Sword for hire ex-slave ») et les persos nommés (Cat, Ruka, Kang) sont uniques. Un client qui a
+  chargé la sauvegarde de l'hôte les a déjà au registre : il ne pouvait pas en faire la copie
+  (« factory did not return a character (template type 1 …) »). `kenshi::CreateCharacter` met
+  `unique` à faux le temps de l'appel puis le remet.
+- L'embauche par dialogue ne crée pas de perso : elle recrute le PNJ de la conversation
+  (`PlayerInterface::recruit`).
+- Renvoyer un perso de la faction (fenêtre d'escouade) : `SquadManagementScreen::dismissCharacter`
+  (`0x48FA30`, KenshiLib `0x48F2B0` + 0x780) : `setFaction` (vt 0xA0) vers une faction trouvée par
+  nom, puis une nouvelle escouade et son IA. Le mod ne l'appelle pas (jamais de perso d'escouade
+  supprimé ou renvoyé par le mod).
+
 **Sauvegarde**
 - `SaveManager` efface sa demande avant que tous les fichiers soient écrits : il recopie son
   dossier de travail dans l'emplacement ensuite.

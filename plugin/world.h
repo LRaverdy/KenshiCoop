@@ -42,6 +42,9 @@ struct HookView {
     // host (0.3.1): characters near a client player's own characters: their damage numbers are made
     // even when the host's camera does not see them (hk_addWound)
     std::shared_ptr<const std::unordered_set<const void*>> remoteNear;
+    // host (0.3.2): the player owning each squad character (Session::ownerOf), for the conversation
+    // hooks: a second character of the same player is refused silently (ConversationAllowed)
+    std::unordered_map<const void*, uint8_t> squadOwner;
 };
 
 class KenshiWorld final : public kc::IWorld {
@@ -296,6 +299,10 @@ public:
     bool BeginWorldImport(const std::vector<kc::WorldFile>& files, std::string* err) override;
     void SetRole(bool client, bool active) override;
     void SetControllable(const std::vector<kc::Handle>& handles) override;
+    bool InPlayerFactionHere(const kc::Handle& h) override;                                // 0.3.2
+    void SetHostKnows(std::function<bool(const kc::Handle&)> knows) override { hostKnows_ = std::move(knows); }   // 0.3.2
+    void SetSquadOwners(const std::vector<std::pair<kc::Handle, uint8_t>>& owners) override;   // 0.3.2
+    bool RemoveStrayCharacter(const kc::Handle& h) override;                               // 0.3.2
     // ---- squad window and AI settings (plugin/squads.cpp)
     void ReadSquadViews(std::vector<SquadView>& out) override;
     bool SquadMove(const kc::Handle& who, const kc::Handle& squad, int index, bool swap, const std::string& name, kc::Handle& created) override;
@@ -331,6 +338,13 @@ public:
         return local;
     }
     size_t CharacterCount() const { return squad_.size(); }
+    // tests (0.3.2, "squadcheck"): host characters linked to a local character whose own handle is
+    // another host character (Stone taken for the copy of another one): always 0
+    size_t AliasConflicts() const {
+        size_t n = 0;
+        for (const auto& [host, local] : alias_) n += local != host && HostKnows(local);
+        return n;
+    }
     kc::Handle traceHandle;   // tests: log what Apply does to this character for traceFrames frames
     int traceFrames = 0;
 
@@ -373,6 +387,7 @@ public:
     // starting a conversation with `target` would take an NPC out of another player's conversation
     // (one conversation at a time per NPC); the character asking is told "occupé".
     bool ConversationAllowed(void* dialogue, void* target);
+    static bool SameOwner(const void* a, const void* b);   // host (0.3.2): two squad characters of one player
     // Host (tests): conversations shown on clients' screens, and talks refused because the NPC was busy.
     struct RemoteDialogInfo { uint32_t id; std::string pc, other; kc::Handle otherH; };
     std::vector<RemoteDialogInfo> RemoteDialogList();
@@ -439,6 +454,11 @@ private:
     bool sharedOrder_ = false;                                      // host: Order runs a settings order on a nobody's character
     // client: host handle -> handle of the local stand-in we created for it
     std::unordered_map<kc::Handle, kc::Handle, HandleHash> alias_;
+    // client (0.3.2): is that handle a host character the session follows (Session::SetHostKnows)
+    std::function<bool(const kc::Handle&)> hostKnows_;
+    bool HostKnows(const kc::Handle& h) const { return hostKnows_ && hostKnows_(h); }
+    std::unordered_map<kc::Handle, uint8_t, HandleHash> squadOwners_;   // host (0.3.2): squad character -> owner (SetSquadOwners)
+    kc::LogLimiter followLog_{4, 10.0};   // client (0.3.2): "followed" / "not followed" lines of Exists
     std::unordered_set<std::string> factoryFaulted_;   // client: templates whose factory call faulted (not recreated again)
     // client (0.3.1): templates the factory refused (unique characters already in this world...):
     // tried again after 30 s, 1, 2, 4... min (at most 10 min), not every 2 to 15 s
@@ -694,6 +714,11 @@ private:
     uint32_t nextDialogId_ = 1;
     double nextDialogSweep_ = 0;
     std::unordered_map<const void*, double> busyToldAt_;   // host: character -> last "occupé" (rate limit)
+    kc::LogLimiter busyLog_{4, 10.0};                        // host (0.3.2): "conversation refused" lines (under dialogMutex_)
+    kc::LogLimiter sameOwnerTalkLog_{2, 30.0};               // host (0.3.2): second character of one player's selection (under dialogMutex_)
+public:
+    int dialogsSameOwnerRefused = 0;   // host (0.3.2, tests "dialogs"): refused silently, the same player's other character
+private:
     // host (game thread): conversations whose game side ended without a Close (a fight, a teleport, a
     // knock out, a character gone) are ended and closed
     void SweepDialogs();
