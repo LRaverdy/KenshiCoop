@@ -686,6 +686,46 @@ bool InView(const Character* c) {
     return IsCharacter(c) && Rd(c, CH_inView, v) && v != 0;
 }
 
+bool ReadMoveProbe(const Character* c, MoveProbe& out) {
+    out = MoveProbe{};
+    uint8_t view = 0, every = 0;
+    if (!IsCharacter(c) || !Rd(c, CH_inView, view) || !Rd(c, CH_everyFrame, every)) return false;
+    out.inView = view != 0;
+    out.everyFrame = every != 0;
+    void* m = Movement(c);
+    void* havok = nullptr;
+    if (!m || !Rd(m, off::CM_havok, havok) || !havok) return true;
+    int32_t key = -1, state = -1, path = -1;
+    if (Rd(havok, off::HC_faceKey, key)) {
+        out.faceKey = key;
+        out.onNavmesh = key != -1;
+    }
+    if (Rd(havok, off::HC_state, state)) out.state = state;
+    if (Rd(havok, off::HC_pathState, path)) out.pathState = path;
+    return true;
+}
+
+Character* MovementOwner(const void* movement) {
+    Character* c = nullptr;
+    return movement && Rd(movement, off::CM_character, c) && IsCharacter(c) ? c : nullptr;
+}
+
+namespace {
+constexpr uintptr_t kNavMeshPtr = 0x21345C0;     // NavMesh* (GameWorld::navmesh, as buildings.cpp)
+constexpr uintptr_t kNavPositionValid = 0x3A2930;   // bool NavMesh::getPositionValid(const Vector3&) (KenshiLib 0x3A2410)
+using FnNavValid = bool (*)(void* nav, const float* p);
+int NavValidSeh(void* nav, const float* p) {
+    __try { return reinterpret_cast<FnNavValid>(Addr(kNavPositionValid))(nav, p) ? 1 : 0; } __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+}
+} // namespace
+
+int NavPositionValid(const kc::Vec3& p) {
+    void* nav = nullptr;
+    if (!Finite(p) || !Rd(reinterpret_cast<void*>(Addr(kNavMeshPtr)), 0, nav) || !nav) return -1;
+    const float v[3] = {p.x, p.y, p.z};
+    return NavValidSeh(nav, v);
+}
+
 bool SetFarTalk(bool on) {
     static int state = -1;   // -1 unknown, 0 game's bytes, 1 patched, 2 unexpected bytes (left alone)
     if (state == 2) return false;

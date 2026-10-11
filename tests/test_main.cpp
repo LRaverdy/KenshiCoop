@@ -110,6 +110,8 @@ struct FakeWorld : IWorld {
     int resyncs = 0;                          // client: ResyncCharacter calls
     void SetRemoteInterest(const std::vector<Handle>& handles) override { remoteInterest = handles; }
     void ResyncCharacter(const Handle&) override { ++resyncs; }
+    std::vector<Handle> farChars;             // client: SetFarCharacters's last list (3b)
+    void SetFarCharacters(const std::vector<Handle>& handles) override { farChars = handles; }
 
     static Handle H(uint32_t serial) { Handle h; h.type = 3; h.index = serial; h.serial = serial; return h; }
 
@@ -6040,6 +6042,27 @@ static void TestPerPlayerStreaming() {
     Run(all, 8.0, [&] { return bw.chars.count(70) && Dist(bw.chars[70].pos, hw.chars[70].pos) < 1e-3f && bw.chars[70].vit.blood == 50; });
     CHECK(host.streamsTo(FakeWorld::H(70), idB));
     CHECK(bw.chars.count(70) == 1 && bw.chars[70].vit.blood == 50);
+
+    std::printf("streaming (3b): an NPC the host stops sending us is left to our game's far update, never a squad member\n");
+    auto inFar = [&](FakeWorld& w, uint32_t s) {
+        for (const Handle& h : w.farChars) if (h.serial == s) return true;
+        return false;
+    };
+    CHECK(!inFar(aw, 70));   // sent to us: full update
+    hw.chars[70].pos = hw.chars[70].dest = {-9000, 0, 0};   // away from every player's characters
+    Run(all, 9.0, [&] { return inFar(aw, 70); });
+    CHECK(aw.chars.count(70) == 1 && inFar(aw, 70));   // still here, where it was last sent
+    CHECK(!host.streamsTo(FakeWorld::H(70), idA));
+    for (const Handle& h : aw.farChars) CHECK(!(h.serial == first || h.serial == second || h.serial <= 3));
+    {
+        const Session::StandInStats st = cliA.standInStats();
+        CHECK(st.leftFar >= 1 && st.dormant >= st.leftFar && st.present >= st.leftFar && st.squad >= 2);
+        CHECK(st.nearUs + st.farFromUs == st.present);
+    }
+    hw.chars[70].pos = hw.chars[70].dest = {150, 0, 30};   // back next to the first player
+    Run(all, 6.0, [&] { return !inFar(aw, 70) && Dist(aw.chars[70].pos, hw.chars[70].pos) < 1.0f; });
+    CHECK(!inFar(aw, 70));   // sent again: back on the full update at once
+    CHECK(aw.chars.count(70) == 1 && Dist(aw.chars[70].pos, hw.chars[70].pos) < 1.0f);
 
     std::printf("streaming: a crowd appearing at once is created a few characters per frame, nearest first\n");
     const int peakBefore = cliA.spawnPeak();

@@ -195,6 +195,8 @@ void Session::Leave() {
     pendingAnswers_.clear();
     missingSquad_ = 0;
     myCentres_.clear();
+    farGiven_ = 0;
+    farRefreshAt_ = 0;
     lastReconcile_ = -1e9;
     standInsLost_ = 0;
     zoneHealth_ = ZoneHealth{};
@@ -3273,6 +3275,7 @@ void Session::ClientTick(double now, bool live) {
                 e.carryReapply = now + 1.0;
             }
         }
+        UpdateFarCharacters(now);   // 3b: the dormant ones get our game's far update
     }
     ClientBags(now);
     ClientInventoryDiff(now);

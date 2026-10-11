@@ -1049,6 +1049,36 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         for (size_t i = 0; i < out.size() && i < 40; ++i) o << ' ' << out[i].second;
         return o.str();
     }
+    if (cmd == "wallsnear") {   // wallsnear <squadIndex> <radius>: buildings around it with their box, nearest first: sid|cx,cy,cz|hx,hy,hz (3f)
+        size_t idx = 0;
+        float r = 3000;
+        in >> idx >> r;
+        auto squad = SortedSquad(w);
+        kc::Vec3 p;
+        if (idx >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[idx]), p)) return "err";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(p, r, objs);
+        std::vector<std::pair<float, std::string>> out;
+        for (void* o : objs) {
+            kc::Handle bh;
+            std::string sid;
+            float box[6] = {};   // Building +0x27C centre, +0x288 half size (as RefreshNavmesh reads it)
+            if (kenshi::IsCharacter(o) || !kenshi::ObjectHandle(o, bh) || bh.type != 0 || !kenshi::ObjectTemplate(o, sid) ||
+                !kenshi::ReadRaw(o, 0x27C, box, sizeof(box)))
+                continue;
+            bool finite = true;
+            for (float v : box) finite = finite && std::isfinite(v) && std::fabs(v) < 1e7f;
+            if (!finite || std::max(box[3], box[5]) < 50.0f) continue;   // furniture and small things
+            char b[200];
+            snprintf(b, sizeof(b), "%s|%.0f,%.0f,%.0f|%.0f,%.0f,%.0f", sid.c_str(), box[0], box[1], box[2], box[3], box[4], box[5]);
+            out.emplace_back((box[0] - p.x) * (box[0] - p.x) + (box[2] - p.z) * (box[2] - p.z), b);
+        }
+        std::sort(out.begin(), out.end());
+        std::ostringstream o;
+        o << "ok " << out.size();
+        for (size_t i = 0; i < out.size() && i < 40; ++i) o << ' ' << out[i].second;
+        return o.str();
+    }
     // ---- squad window and AI settings (experiment squadui). Characters by name, '_' for spaces.
     auto squadChar = [&](std::string n) -> kenshi::Character* {
         std::replace(n.begin(), n.end(), '_', ' ');
@@ -1898,7 +1928,57 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
     if (cmd == "towns") return w.TownPositions();   // towns: every town, "sid|name|x,y,z|owner" each
     if (cmd == "campos") return DescribeCamera();   // campos: this machine's camera eye, world units "ok x,y,z fwd=fx,fz"
     if (cmd == "inview")   // inview: character updates switched to the game's in-view (full) path by hk_charUpdateView since the start
-        return "ok forced=" + std::to_string(w.charsForcedInView.load());
+        return "ok forced=" + std::to_string(w.charsForcedInView.load()) + " leftfar=" + std::to_string(w.charsLeftFar.load());
+    if (cmd == "farleave") {   // farleave 0|1: client, leave the host characters it no longer streams to us to the game's far update (3b; 1 by default)
+        int on = 1;
+        in >> on;
+        w.farLeaveEnabled = on != 0;
+        return std::string("ok farleave=") + (w.farLeaveEnabled ? "1" : "0");
+    }
+    if (cmd == "perf")   // perf: our per-frame work and the frame time since the previous "perf" (3b)
+        return "ok " + FramePerfReport();
+    if (cmd == "standins") {   // standins: client, the host's characters here near / far from ours (3b)
+        if (!s.isClient()) return "err client only";
+        const kc::Session::StandInStats st = s.standInStats();
+        std::ostringstream o;
+        o << "ok followed=" << st.followed << " present=" << st.present << " squad=" << st.squad << " near=" << st.nearUs << " far=" << st.farFromUs
+          << " dormant=" << st.dormant << " leftfar=" << st.leftFar << " farset=" << w.FarCharacterCount() << " standins_near=" << st.standInsNear
+          << " standins_far=" << st.standInsFar << " radius=" << st.radius;
+        return o.str();
+    }
+    if (cmd == "movestats")   // movestats: host, movement updates of characters near a client player since the start (3f)
+        return "ok full=" + std::to_string(w.moveNearFull.load()) + " outofview=" + std::to_string(w.moveNearOutOfView.load()) +
+               " split=" + std::to_string(w.moveNearSplit.load()) + " longstep=" + std::to_string(w.moveNearLongStep.load()) +
+               " maxstepms=" + std::to_string(w.moveNearMaxStepMs.load());
+    if (cmd == "navcheck") {   // navcheck <key|squadIndex>...: how the game moves them here (3f): in view, every frame, on the navmesh, navmesh under them
+        std::ostringstream o;
+        o << "ok";
+        auto squad = SortedSquad(w);
+        for (std::string k; in >> k;) {
+            kc::Handle h;
+            if (k.find(':') == std::string::npos) {
+                const size_t i = size_t(std::strtoul(k.c_str(), nullptr, 10));
+                if (i < squad.size()) h = squad[i];
+            } else {
+                sscanf(k.c_str(), "%u:%u:%u:%u:%u", &h.type, &h.container, &h.containerSerial, &h.index, &h.serial);
+            }
+            kenshi::Character* c = h.valid() ? w.Find(h) : nullptr;
+            kenshi::MoveProbe m;
+            kc::Vec3 p;
+            if (!c || !kenshi::ReadMoveProbe(c, m) || !kenshi::GetPosition(c, p)) {
+                o << " " << k << "|absent";
+                continue;
+            }
+            o << " " << Key(h) << "|view=" << m.inView << "|every=" << m.everyFrame << "|nav=" << m.onNavmesh << "|face=" << m.faceKey << "|state=" << m.state
+              << "|path=" << m.pathState << "|posvalid=" << kenshi::NavPositionValid(p) << "|at=" << int(p.x) << "," << int(p.y) << "," << int(p.z);
+        }
+        return o.str();
+    }
+    if (cmd == "navat") {   // navat <x> <y> <z>: is there navmesh under that point here (1/0, -1 unreadable) (3f)
+        kc::Vec3 p;
+        if (!(in >> p.x >> p.y >> p.z)) return "err usage: navat <x> <y> <z>";
+        return "ok " + std::to_string(kenshi::NavPositionValid(p));
+    }
     if (cmd == "floaters")   // floaters: damage numbers made and sent (host), made off the host's camera for a client's zone, shown here (client)
         return "ok made=" + std::to_string(w.floatersMade.load()) + " forced=" + std::to_string(w.woundsForcedInView.load()) +
                " shown=" + std::to_string(w.floatersShown.load());

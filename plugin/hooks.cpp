@@ -1022,11 +1022,14 @@ uint8_t hk_charUpdateView(void* chr) {
         bool forced = false;
         if (*f == 0) {
             auto v = KenshiWorld::View();
-            forced = v->active && (v->client ? v->replicated.count(chr) > 0 : (v->remoteNear && v->remoteNear->count(chr) > 0));
-            if (forced) {
-                *f = 1;
-                if (KenshiWorld* w = TheWorld()) ++w->charsForcedInView;
-            }
+            // client (3b): not the host's characters it no longer streams to us (HookView::farAway): far
+            // from our characters, nobody sees them here, and 200 of them in full update cost a client
+            // most of its frame rate when the players spread out (11 October evening)
+            const bool leftFar = v->active && v->client && v->farAway && v->farAway->count(chr) > 0;
+            forced = v->active && !leftFar && (v->client ? v->replicated.count(chr) > 0 : (v->remoteNear && v->remoteNear->count(chr) > 0));
+            if (forced || leftFar)
+                if (KenshiWorld* w = TheWorld()) ++(forced ? w->charsForcedInView : w->charsLeftFar);
+            if (forced) *f = 1;
         }
         // Host: the world's update loop (0x786EF0) updates a character every frame only when its
         // +0xE4 byte is set; the others, 6 per frame in turn, catching up their time in one go
@@ -1329,7 +1332,47 @@ void hk_singleAnimUpdate(void* single, float masterTime, float frameTime, bool s
 // put back right after it (fights: hk_combatMove).
 using MoveUpdateFn = void (*)(void* mov, float dt);
 MoveUpdateFn o_moveUpdate = nullptr;
+// Host (3f, 11 October evening: nass4's squad and the enemies walked through walls in a fight far from
+// the host's camera, the client in sync). CharMovement::update takes the full movement update
+// (HavokCharacter::update: the path, and the navmesh's edges as walls) only for a character in view
+// AND for a step under 0.5 s of game time (0x660A3D / 0x660A47); a longer step goes through the
+// cut-down moveAlongPath (0x148AC0) in one go. hk_charUpdateView puts the characters near a client
+// player in view and on the every-frame list, but a long frame on the host (a far zone loading, the
+// host's own hitches) at x2/x3 is still a step of 0.5 s or more. Such a step is split here into
+// pieces the full update takes, for those characters only. Counted for "movestats" and the host's
+// "host perf" line (the in-game test tells which kind of step those fights had).
+void HostNearMove(void* mov, kenshi::Character* c, float dt) {
+    KenshiWorld* w = TheWorld();
+    if (w && std::isfinite(dt)) {
+        const int ms = int(std::min(dt, 600.0f) * 1000.0f);
+        int seen = w->moveNearMaxStepMs.load(std::memory_order_relaxed);
+        while (ms > seen && !w->moveNearMaxStepMs.compare_exchange_weak(seen, ms, std::memory_order_relaxed)) {}
+    }
+    if (!kenshi::InView(c)) {
+        if (w) ++w->moveNearOutOfView;
+        o_moveUpdate(mov, dt);
+        return;
+    }
+    constexpr float kPiece = 0.4f;   // under kFullMoveMaxStep
+    constexpr int kMaxPieces = 8;    // 3.2 s: beyond, a frozen game; the game's own step
+    if (!(dt >= kenshi::off::kFullMoveMaxStep) || !(dt <= kPiece * kMaxPieces)) {
+        if (w) ++(dt >= kenshi::off::kFullMoveMaxStep ? w->moveNearLongStep : w->moveNearFull);
+        o_moveUpdate(mov, dt);
+        return;
+    }
+    const int n = int(std::ceil(dt / kPiece));
+    for (int i = 0; i < n; ++i) o_moveUpdate(mov, dt / float(n));
+    if (w) ++w->moveNearSplit;
+}
 void hk_moveUpdate(void* mov, float dt) {
+    if (mov && !KenshiWorld::ClientActive()) {
+        auto v = KenshiWorld::View();
+        if (v->active && v->remoteNear && !v->remoteNear->empty())
+            if (kenshi::Character* c = kenshi::MovementOwner(mov); c && v->remoteNear->count(c)) {
+                HostNearMove(mov, c, dt);
+                return;
+            }
+    }
     o_moveUpdate(mov, dt);
     if (!mov || !KenshiWorld::ClientActive()) return;
     auto v = KenshiWorld::View();

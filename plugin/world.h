@@ -45,6 +45,9 @@ struct HookView {
     // host (0.3.2): the player owning each squad character (Session::ownerOf), for the conversation
     // hooks: a second character of the same player is refused silently (ConversationAllowed)
     std::unordered_map<const void*, uint8_t> squadOwner;
+    // client (3b): host characters present here that the host no longer streams to us (dormant, far
+    // from our characters): hk_charUpdateView leaves them to the game's far update
+    std::shared_ptr<const std::unordered_set<const void*>> farAway;
 };
 
 class KenshiWorld final : public kc::IWorld {
@@ -78,6 +81,7 @@ public:
     void ApplyVitals(const kc::Handle& h, const kc::EntityVitals& v) override;
     void SetRemoteInterest(const std::vector<kc::Handle>& handles) override;   // 0.3.1
     void ResyncCharacter(const kc::Handle& h) override;                        // 0.3.1
+    void SetFarCharacters(const std::vector<kc::Handle>& handles) override;    // 3b
     // Client (GameWorld::destroy hook, any thread): the local game dropped that character with its
     // zone (justUnloaded) or destroyed it; told when a stand-in of ours is found gone.
     void NoteCharacterDestroyed(void* chr, bool justUnloaded, const char* info);
@@ -411,6 +415,17 @@ public:
     std::atomic<int> floatersMade{0}, woundsForcedInView{0}, floatersShown{0};
     // tests ("inview"): character updates switched to the in-view (full) path by hk_charUpdateView
     std::atomic<long long> charsForcedInView{0};
+    // tests ("standins", "sync perf" line), client (3b): updates of host characters left to the game's
+    // far update because the host no longer streams them to us (hk_charUpdateView)
+    std::atomic<long long> charsLeftFar{0};
+    size_t FarCharacterCount() const { return farSet_ ? farSet_->size() : 0; }
+    bool farLeaveEnabled = true;   // tests ("farleave 0": the 0.3.1 behaviour, every host character in full update, to compare)
+    // Host (3f, tests "movestats" and the "far movement" line): movement updates of characters near a
+    // client player's own (HookView::remoteNear), by kind: the full one (navmesh walls), the game's
+    // cut-down one because out of view or because the step was too long (>= 0.5 s of game time), and
+    // steps split by hk_moveUpdate so that they stay on the full path. Any thread (atomics).
+    std::atomic<long long> moveNearFull{0}, moveNearOutOfView{0}, moveNearLongStep{0}, moveNearSplit{0};
+    std::atomic<int> moveNearMaxStepMs{0};
     std::string lastSay;
     // Client: the player dropped it from that character or that building's inventory (any thread).
     void QueueLocalDrop(void* holder, void* item);
@@ -478,6 +493,7 @@ private:
     std::unordered_map<kc::Handle, std::string, HandleHash> destroyed_;   // client: why the game removed a character (under destroyedMutex_)
     std::unordered_set<kc::Handle, HandleHash> resyncSnap_;               // client: put exactly on the host's spot at the next Apply
     std::shared_ptr<const std::unordered_set<const void*>> remoteNear_;   // host: see HookView::remoteNear
+    std::shared_ptr<const std::unordered_set<const void*>> farSet_;       // client: see HookView::farAway
     bool farTalk_ = false;   // kenshi::SetFarTalk applied (while hosting)
     std::unordered_set<kc::Handle, kc::HandleHash> navRefreshed_;   // finished buildings whose navigation mesh was regenerated (buildings.cpp)
     // Characters the game destroyed or unloaded with their zone since the last frame (any thread,

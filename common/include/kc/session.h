@@ -99,6 +99,10 @@ public:
     // Host (0.3.1): the characters near a client player's own characters (every 0.5 s). The game shows
     // damage numbers only for characters near its camera; these get them anyway, for those players.
     virtual void SetRemoteInterest(const std::vector<Handle>& handles) { (void)handles; }
+    // Client (3b): the host's characters present here that the host no longer streams to us (dormant:
+    // far from our characters, never squad members). Our game may give them its cheap far update
+    // instead of the full one Apply's characters get. Called whenever that set changes.
+    virtual void SetFarCharacters(const std::vector<Handle>& handles) { (void)handles; }
     // Client (0.3.1): the host sent that character again (a zone resync): put it exactly where the
     // host has it on the next Apply, whatever the offset.
     virtual void ResyncCharacter(const Handle& h) { (void)h; }
@@ -582,6 +586,15 @@ public:
     size_t zoneResyncs() const { return zoneResyncs_; }       // host: automatic zone resyncs done
     size_t resyncedHere() const { return resyncedHere_; }     // client: characters the host sent again
     int spawnPeak() const { return spawnPeak_; }              // client: most stand-ins made in one frame
+    // Client (3b, diagnostics): the host's characters known here and where they are from our own
+    // characters (myCentres_, standInRadius): near or far, dormant (no longer sent to us), stand-ins
+    // (made or adopted here), and those left to the game's far update (IWorld::SetFarCharacters).
+    struct StandInStats {
+        size_t followed = 0, present = 0, squad = 0, nearUs = 0, farFromUs = 0, dormant = 0;
+        size_t standInsNear = 0, standInsFar = 0, leftFar = 0;
+        float radius = 0;
+    };
+    StandInStats standInStats() const;
     // Host: everyone on their way in: the player in the character editor first, then those saving /
     // loading (phase), then those in the world waiting for their editor turn (waiting).
     struct QueueEntry { uint8_t id = 0; std::string name; bool waiting = true; JoinPhase phase = JoinPhase::Saving; };
@@ -740,6 +753,7 @@ private:
         int losses = 0;                      // client: its stand-in vanished this many times in a row
         double presentSince = -1;            // client: here since
         double dormantApplyAt = 0;           // client: a dormant one is driven only now and then
+        bool farGiven = false;               // client: in the last IWorld::SetFarCharacters list
         uint32_t streamMask = 0;             // host: players (bit = id) it is streamed to
         // host
         bool keep = false;                   // scratch flag for interest updates
@@ -815,6 +829,9 @@ private:
     bool FightsSquad(const Entity& e, double now) const;   // client: still sent, and fighting a squad member (any player's)
     bool Dormant(const Entity& e, double now) const;    // client: the host stopped sending it
     std::vector<Vec3> myCentres_;            // client
+    void UpdateFarCharacters(double now);    // client (3b): IWorld::SetFarCharacters when the set changed
+    size_t farGiven_ = 0;                    // client: size of the last list given
+    double farRefreshAt_ = 0;                // client: and given again now and then (stand-ins remade)
     double lastReconcile_ = -1e9;            // client: Reconcile last ran
     uint32_t standInsLost_ = 0;              // client: since the last summary line
     LogLimiter lostLog_{1, 30.0};            // client: that summary, at most every 30 s

@@ -1133,6 +1133,12 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
   clics droits, si (avec un léger mouvement relatif).
 - Le jeu lit clavier et souris par DirectInput, via OIS.
 
+### Déplacement loin de la caméra, murs et navmesh (3f, lu au désassemblage) [D]
+- `CharMovement::update` (`0x65FFA0`) ne prend la mise à jour complète `HavokCharacter::update` (`0x147FD0` : chemin, arêtes du navmesh comme murs) en `0x660A3D` que si le perso est dans la vue (`Character`+0x1A9) **et** si le pas fait moins de 0,5 s de temps de jeu (`0x660A47`, flottant en `0x167E8D8`) ; sinon `HavokCharacter::moveAlongPath` (`0x148AC0`) d'un coup. Un perso hors de la liste « chaque image » (+0xE4) rattrape son temps en un seul pas (souvent plus de 0,5 s), et un long gel de l'hôte à x2/x3 fait de même pour tous.
+- `CharMovement` : +0x320 `HavokCharacter*`, +0x3A8 le perso. `HavokCharacter` : +0x14 clé de face du navmesh (-1 : hors navmesh, `isOnNavmesh` `0x6646B0`), +0x88 état (`0x664690`), +0x90 état du chemin (`0x6646A0`). `NavMesh::getPositionValid(const Vector3&)` : `0x3A2930` (KenshiLib `0x3A2410`, +0x520 ici).
+- **Aucune règle de caméra trouvée pour le navmesh ni la physique des bâtiments.** Le navmesh d'une zone est créé (`NavMesh::create(ZoneMap*)`, `0x3AC040`) à l'activation de la zone (`0xA0E740`, `0xA0EC1B`, `0xA0F052`, `0xA0F3AD`), sous la seule condition `0x25068` sur `[0x2134128]`, que la zone soit activée par la caméra ou par un perso du joueur (`ZoneManager::playerActivate` `0xA0F640`, type 1). `RootObject::loadUnloadCheck` (`0x594350`) crée ou détruit la physique d'un bâtiment (vt +0x200 / +0x208) selon que sa zone est chargée, pas selon la caméra. Le générateur (`validateBuildingStates` `0x3C7560`) attend seulement que les bâtiments soient créés (vt +0x488 `isCreated`). Le seul décalage lié à la caméra : `NavMesh::update` (`0x3AE490`) recentre le monde Havok (`shiftWorld`) sur la zone de la caméra, sans rien décharger.
+- `CharMovement::combatMovementUpdate` (`0x2AF1E0`) écrit l'octet +0xE4 **de `CharMovement`** (pas celui du perso) : ce n'est pas la liste « chaque image ».
+
 ## 7. Recherche : commerce, fouille et contenants
 
 Recherche faite le 9 octobre 2026 pour le commerce. Fiabilité de chaque fait :

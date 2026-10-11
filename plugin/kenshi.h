@@ -385,6 +385,16 @@ inline constexpr uintptr_t HP_bandage = 0x48;
 inline constexpr uintptr_t CM_currentlyMoving = 0x24;  // bool
 inline constexpr uintptr_t CM_currentSpeed = 0xB8;     // float
 inline constexpr uintptr_t CM_destination = 0xDC;      // Ogre::Vector3
+// 3f [D]: CharMovement::update (0x65FFA0) runs HavokCharacter::update (0x147FD0: path, the navmesh's
+// edges as walls) through 0x660A3D only when the character is in view (+0x1A9) AND the step is
+// under 0.5 s of game time (0x660A47, float at 0x167E8D8); otherwise the cut-down
+// HavokCharacter::moveAlongPath (0x148AC0)
+inline constexpr uintptr_t CM_havok = 0x320;           // HavokCharacter*
+inline constexpr uintptr_t CM_character = 0x3A8;       // Character* (its owner)
+inline constexpr float kFullMoveMaxStep = 0.5f;        // the 0x660A47 limit (seconds of game time)
+// HavokCharacter (KenshiLib RVAs + 0x780 in 0x66xxxx): +0x14 navmesh face key, -1 off the navmesh
+// (isOnNavmesh 0x6646B0); +0x88 state (getState 0x664690); +0x90 path state (getPathState 0x6646A0)
+inline constexpr uintptr_t HC_faceKey = 0x14, HC_state = 0x88, HC_pathState = 0x90;
 
 // AI
 inline constexpr uintptr_t AI_me = 0x2F8;  // Character*
@@ -791,8 +801,8 @@ inline constexpr uintptr_t kAddWoundBegin = 0x6508D0, kAddWoundEnd = 0x651FF1;
 inline constexpr uintptr_t CH_inView = 0x1A9;
 // Character +0xE4: the world's update loop (GameWorld, 0x786EF0) runs Character::update (vtable +0xE0)
 // every frame for those with it set; the others 6 per frame in turn, their time summed in +0xC0 and
-// caught up at once (0x787053). Written by 0x5CA1CF (with the floor visibility byte +0xE5) and
-// 0x2AF1E0 from where the camera is.
+// caught up at once (0x787053). Written by updateView 0x5C9F60 (with the floor visibility byte +0xE5).
+// (combatMovementUpdate 0x2AF1E0 writes +0xE4 of its CharMovement, not this one: 3f, disassembly.)
 inline constexpr uintptr_t CH_everyFrame = 0xE4;
 bool InView(const Character* c);   // CH_inView as the game (and hk_charUpdateView) left it this frame
 bool IndoorsOf(const Character* c, kc::Handle& building);   // the building it is inside (RootObject +0x80), type 0xB: none
@@ -809,6 +819,15 @@ bool SetFarTalk(bool on);
 // 0x651359 -> 0x651F69). hk_addWound lifts it for the call, for characters near a client player's
 // own (faraway test, 11 October: forced in view, no damage number made). Game thread only.
 bool SetFarWoundVisuals(bool on);
+// 3f (diagnostics): the movement state of a character, as CharMovement::update sees it, and the
+// navmesh under a point. False when unreadable.
+struct MoveProbe {
+    bool inView = false, everyFrame = false, onNavmesh = false;
+    int faceKey = -1, state = -1, pathState = -1;
+};
+bool ReadMoveProbe(const Character* c, MoveProbe& out);
+Character* MovementOwner(const void* movement);           // CharMovement +0x3A8
+int NavPositionValid(const kc::Vec3& p);                  // NavMesh::getPositionValid (0x3A2930): 1 / 0, -1 unreadable
 Character* CharacterOfHand(const void* hand);
 // Items on the ground
 bool ItemOnGround(void* item);                             // in the world, not in an inventory

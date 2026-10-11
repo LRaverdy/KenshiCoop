@@ -3683,6 +3683,217 @@ def exp_faraway(host, clis):
     summary()
 
 
+# ---- 3b / 3f (11 October evening): far from the host, the clients' frame rate and the walls
+def perf_of(pid):
+    """Debug "perf" (our work and the frame since the previous call): {'work', 'worst', 'frame', 'fps', 'text'}."""
+    ok, t = cmd(pid, "perf")
+    out = {"text": t}
+    m = re.search(r"our work ([\d.]+) ms per frame .*?worst ([\d.]+) ms\), frame ([\d.]+) ms \((\d+) fps", t or "")
+    if ok and m:
+        out.update(work=float(m.group(1)), worst=float(m.group(2)), frame=float(m.group(3)), fps=int(m.group(4)))
+    return out
+
+
+def kv_of(pid, command):
+    """A debug answer "ok a=1 b=2 ..." as a dict of numbers (or strings)."""
+    ok, t = cmd(pid, command)
+    out = {}
+    for tok in (t.split()[1:] if ok else []):
+        if "=" in tok:
+            k, v = tok.split("=", 1)
+            try:
+                out[k] = float(v)
+            except ValueError:
+                out[k] = v
+    return out
+
+
+def perf_window(pids, seconds, label):
+    """Every game measured over the same window: {pid: (perf, standins)}."""
+    for pid in pids:
+        perf_of(pid)   # starts the window
+    time.sleep(seconds)
+    out = {}
+    for pid in pids:
+        out[pid] = (perf_of(pid), kv_of(pid, "standins"))
+        log(f"[{label}] {pid}: {out[pid][0].get('text', '')[:260]} | {out[pid][1]}")
+    return out
+
+
+def exp_farfps(host, clis, seconds=60):
+    """3b: the clients' frame rate when the players spread out. Every client next to the host first, then
+    each in its own far town (> 30000 from the host and 15000 from each other) while the host's camera
+    stays at home. Measured each time over `seconds` on every game: our own per-frame work ("perf"),
+    the frame rate, and the host characters each client has (near / far, dormant, left to the game's far
+    update: "standins"). Far apart, the same window twice: with the 0.3.1 behaviour ("farleave 0": every
+    host character in full update) and with the fix ("farleave 1"). NPCs near each client stay smooth
+    (far_motion_step) and in sync (far_zone_sync)."""
+    clis = clis if isinstance(clis, (list, tuple)) else [clis]
+    time.sleep(6)
+    for c in clis:
+        cmd(c, "editdone")
+    time.sleep(3)
+    players = [FarPlayer(host, c, i) for i, c in enumerate(clis)]
+    h0 = dump(host, "h_farfps_home", 3000)
+    keys_h = sorted(h0["squad"], key=lambda k: (int(k.split(":")[3]), int(k.split(":")[4])))
+    for p in players:
+        p.own_key = keys_h[p.own_h] if p.own_h < len(keys_h) else None
+    hidx = (own_indices(host) or [0])[0]
+    home = where_vec(host, hidx)
+    FAR_HOME[0] = home or (0.0, 0.0, 0.0)
+    log("god mode:", cmd(host, "admin god all on"), "| host camera home:", cmd(host, f"camto {hidx}"))
+    pids = [host] + clis
+
+    # 1. everyone together (the 0.3.1 game's case with ~95 characters followed)
+    together = perf_window(pids, seconds, "ensemble")
+
+    # 2. everyone in a far town of their own
+    towns = town_list(host)
+    cands = far_town_candidates(towns, FAR_HOME[0])
+    check("fps loin : des villes a plus de 30000 de l'hote", bool(cands), len(towns))
+    taken, taken_lock = [], threading.Lock()
+    run_parallel(players, lambda p: far_go(p, cands, "fps", False, taken, taken_lock), "voyage")
+    there = [p for p in players if p.town]
+    check("fps loin : chaque client est dans sa ville", len(there) == len(players), [p.town and p.town["name"] for p in players])
+    if not there:
+        summary()
+        return
+    time.sleep(20)   # every game streams its zones in
+    for c in clis:
+        cmd(c, "farleave 0")
+    before = perf_window(pids, seconds, "loin, comportement 0.3.1")
+    for c in clis:
+        cmd(c, "farleave 1")
+    time.sleep(3)
+    after = perf_window(pids, seconds, "loin, correctif 3b")
+
+    log("host status:", status(host), "| host movement near clients:", cmd(host, "movestats")[1])
+    for p in players:
+        t, b, a = together.get(p.cli, ({}, {})), before.get(p.cli, ({}, {})), after.get(p.cli, ({}, {}))
+        p.log(f"fps together {t[0].get('fps')} | far 0.3.1 {b[0].get('fps')} | far fixed {a[0].get('fps')}; "
+              f"our work {t[0].get('work')} / {b[0].get('work')} / {a[0].get('work')} ms; followed {t[1].get('followed')} / {b[1].get('followed')} / "
+              f"{a[1].get('followed')}; left far {a[1].get('leftfar')} (far {a[1].get('far')}, dormant {a[1].get('dormant')})")
+        if not p.town:
+            continue
+        p.check("fps : les mesures se lisent (perf, standins)", all(x[0].get("fps") is not None for x in (t, b, a)) and a[1].get("followed") is not None,
+                f"{t[0].get('text', '')[:80]} | {a[0].get('text', '')[:80]}")
+        p.check("fps : loin des autres, des persos de l'hote laisses a la mise a jour lointaine du jeu", (a[1].get("leftfar") or 0) > 0 and (a[1].get("farset") or 0) > 0,
+                a[1])
+        p.check("fps : jamais un membre d'escouade laisse au loin (farset <= persos hors escouade)", (a[1].get("farset") or 0) <= (a[1].get("present") or 0) - (a[1].get("squad") or 0), a[1])
+        p.check("fps : le correctif ne fait pas baisser les images par seconde (loin, >= 95 % du 0.3.1)",
+                (a[0].get("fps") or 0) >= 0.95 * (b[0].get("fps") or 0), f"{b[0].get('fps')} -> {a[0].get('fps')}")
+        p.check("fps : notre travail par image reste sous 4 ms loin des autres", (a[0].get("work") or 99) < 4.0, a[0].get("text", "")[:120])
+    # 3. near each client, NPCs stay smooth and in sync with the fix on
+    run_parallel(there, far_motion_step, "mouvement")
+    far_zone_sync(there, "synchro_fps", 2, 10)
+    for p in players:
+        st = status(p.cli)
+        p.check("le client est toujours connecte", st.get("state") == "connected", st)
+    log("host god mode off:", cmd(host, "admin god all off"))
+    summary()
+
+
+def exp_farwalls(host, clis, seconds=40):
+    """3f: a client's character fights next to a building in a town far from the host's camera. The
+    bonedog is spawned on the far side of the building (its box from "wallsnear"), so that the
+    shortest way between them goes through it. Recorded on the host (motionrec, 10 Hz) for both, plus
+    "navcheck" (in view, every frame, on the navmesh, navmesh under them) and the host's "movestats".
+    Pass: neither crosses the building's box (no sample deeper than 20 units inside it). Then the same
+    with the host's camera on the fight: if only the first run fails, the cause is a camera rule."""
+    clis = clis if isinstance(clis, (list, tuple)) else [clis]
+    time.sleep(6)
+    for c in clis:
+        cmd(c, "editdone")
+    time.sleep(3)
+    p = FarPlayer(host, clis[0], 0)
+    h0 = dump(host, "h_farwalls_home", 3000)
+    keys_h = sorted(h0["squad"], key=lambda k: (int(k.split(":")[3]), int(k.split(":")[4])))
+    p.own_key = keys_h[p.own_h] if p.own_h < len(keys_h) else None
+    hidx = (own_indices(host) or [0])[0]
+    FAR_HOME[0] = where_vec(host, hidx) or (0.0, 0.0, 0.0)
+    log("god mode:", cmd(host, "admin god all on"), "| host camera home:", cmd(host, f"camto {hidx}"))
+    towns = town_list(host)
+    cands = far_town_candidates(towns, FAR_HOME[0])
+    taken, taken_lock = [], threading.Lock()
+    far_go(p, cands, "murs", False, taken, taken_lock)
+    p.check("murs : le perso du client est dans une ville loin de l'hote", bool(p.town), p.town and p.town["name"])
+    if not p.town:
+        summary()
+        return
+
+    def inside(q, box, margin):
+        c, h = box
+        return abs(q[0] - c[0]) < h[0] - margin and abs(q[2] - c[2]) < h[2] - margin
+
+    def one_fight(label):
+        me = p.me()
+        ok, t = cmd(host, f"wallsnear {p.own_h} 2500")
+        boxes = []
+        for tok in (t.split()[2:] if ok else []):
+            parts = tok.split("|")
+            if len(parts) == 3:
+                c, h = tuple(map(float, parts[1].split(","))), tuple(map(float, parts[2].split(",")))
+                if 150 <= max(h[0], h[2]) <= 1500 and min(h[0], h[2]) >= 100 and abs(c[1] - me[1]) < 300:
+                    boxes.append((c, h))
+        p.check(f"murs [{label}] : un batiment pres du perso du client (wallsnear)", bool(boxes), t[:200])
+        if not boxes:
+            return None
+        c, h = boxes[0]
+        # the client's character on one side of it, the beast right behind it on the other (x axis)
+        side = 1.0 if me[0] >= c[0] else -1.0
+        mx, bx = c[0] + side * (h[0] + 120), c[0] - side * (h[0] + 120)
+        g = ground_at(host, mx, c[2])
+        y = (g[0] + 60) if g and g[2] == "land" else me[1] + 50
+        p.log(f"[{label}] building {c} half {h}: client's character to {mx:.0f},{c[2]:.0f}", cmd(host, f"teleport {p.own_h} {mx:.0f} {y:.0f} {c[2]:.0f}"))
+        time.sleep(4)
+        m2 = p.me()
+        # spawncreature takes world offsets from the character: right behind the building, same height
+        sp = cmd(host, f"spawncreature {FAR_FIGHT_BEAST} {bx - m2[0]:.0f} {c[2] - m2[2]:.0f} {p.own_h}")
+        if not sp[0]:
+            p.check(f"murs [{label}] : bete creee", False, sp)
+            return None
+        beast = sp[1].split()[1]
+        p.log(f"   bonedog {beast} behind the building at", where_vec(host, beast))
+        time.sleep(3)
+        mv0 = kv_of(host, "movestats")
+        p.log("   client orders the attack:", cmd(p.cli, f"attackreq {p.own_c} {beast}"))
+        walk = {}
+        nav = []
+
+        def rec():
+            walk.update(record_walk([host], f"{p.own_key} {beast}", seconds, f"walls_{label}_{p.tag}") if p.own_key else {})
+        th = threading.Thread(target=rec, daemon=True)
+        th.start()
+        for _ in range(seconds // 5):
+            time.sleep(5)
+            nav.append(cmd(host, f"navcheck {p.own_h} {beast}")[1])
+        th.join(seconds + 30)
+        mv1 = kv_of(host, "movestats")
+        p.log(f"   navcheck: {nav[:4]}")
+        p.log(f"   movestats {mv0} -> {mv1}")
+        samples = walk.get(host, [])
+        deep = [(round(t_, 1), tuple(round(v) for v in q)) for t_, q in samples if inside(q, (c, h), 20)]
+        p.check(f"murs [{label}] : des positions enregistrees pendant le combat", len(samples) >= seconds * 5, len(samples))
+        p.check(f"murs [{label}] : personne ne traverse le batiment (aucune position a plus de 20 unites dedans)", not deep, deep[:6])
+        p.check(f"murs [{label}] : les combattants sont sur le navmesh chez l'hote", all("nav=0" not in n for n in nav), nav[:3])
+        log("kill the bonedog:", cmd(host, f"kill {beast}"))
+        time.sleep(2)
+        return not deep
+
+    far_cam = one_fight("camera de l'hote a la maison")
+    log("host camera on the client's character:", cmd(host, f"camto {p.own_h}"))
+    time.sleep(8)
+    near_cam = one_fight("camera de l'hote sur le combat")
+    log(f"walls kept far from the host's camera: {far_cam}, with the host's camera there: {near_cam}")
+    if far_cam is False and near_cam:
+        log("=> only far from the host's camera: a camera rule of the host's game (see docs/A_FAIRE.md 3f)")
+    cmd(host, f"camto {hidx}")
+    st = status(p.cli)
+    p.check("le client est toujours connecte", st.get("state") == "connected", st)
+    log("host god mode off:", cmd(host, "admin god all off"))
+    summary()
+
+
 def arrival_facing(p, tag, seconds=20):
     """Right after the client's character arrived somewhere: every second, how many walkers around it
     are drawn facing backwards on the client (rotation against the way they move) and how far its
@@ -7858,6 +8069,15 @@ def main():
     fw_.add_argument("--save", default="kctest_town")
     fw_.add_argument("--keep", action="store_true")
     fw_.add_argument("--clients", type=int, default=1, help="client players, each in its own far town (3: the 4-player run)")
+    ff_ = sub.add_parser("farfps", help="3b: clients' fps and followed characters, together then each in a far town (0.3.1 behaviour, then the fix)")
+    ff_.add_argument("--save", default="kctest_town")
+    ff_.add_argument("--keep", action="store_true")
+    ff_.add_argument("--clients", type=int, default=3)
+    ff_.add_argument("--seconds", type=int, default=60, help="each measuring window")
+    fwl_ = sub.add_parser("farwalls", help="3f: a client fights next to a building far from the host's camera: nobody crosses it (then with the camera there)")
+    fwl_.add_argument("--save", default="kctest_town")
+    fwl_.add_argument("--keep", action="store_true")
+    fwl_.add_argument("--seconds", type=int, default=40)
     fp_ = sub.add_parser("farprobe", help="short diagnosis: talk and a client-ordered fight far from the host's camera, then with it")
     fp_.add_argument("--save", default="kctest_town")
     fp_.add_argument("--keep", action="store_true")
@@ -8059,6 +8279,18 @@ def main():
             exp_recruits(host, clis)
         finally:
             summary()
+            if not a.keep:
+                kill_launched()
+        return
+    if a.what in ("farfps", "farwalls"):
+        host, clis, _ids = setup_multi(a.save, max(1, a.clients) if a.what == "farfps" else 1)
+        tile([host] + clis)
+        try:
+            if a.what == "farfps":
+                exp_farfps(host, clis, a.seconds)
+            else:
+                exp_farwalls(host, clis, a.seconds)
+        finally:
             if not a.keep:
                 kill_launched()
         return

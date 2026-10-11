@@ -283,6 +283,9 @@ Ordre dans `Tick()` (`main.cpp`) :
     compté manquant) ; doublures créées seulement à moins de `[sync] standin_radius` (3000) de nos
     persos ou des membres de l'escouade près d'eux (mêmes centres que l'hôte), `spawns_per_frame` (2) par image au plus, les plus proches d'abord ; une doublure perdue
     revient après 2 s, 10 s, 30 s, 1 min, 2 min ; un modèle refusé par la fabrique attend 30 s à 10 min.
+  - Client (3b) : les persos en sommeil (pas squad, présents) sont donnés au monde (`IWorld::SetFarCharacters`, à chaque changement et toutes les 5 s) ; `HookView::farAway` les retire des persos que `hk_charUpdateView` met « dans la vue » : le jeu leur donne sa mise à jour lointaine (déplacement réduit, pas d'animation complète) au lieu de la complète. Un perso que l'hôte renvoie en sort dans la même image. Pas de changement de protocole.
+  - Hôte (3f) : `hk_moveUpdate` coupe en morceaux de 0,4 s au plus (8 au plus) un pas de 0,5 s ou plus d'un perso proche d'un joueur client et dans la vue, pour qu'il reste sur la mise à jour complète (murs du navmesh) ; compteurs `movestats`.
+  - Mesure (3b) : `main.cpp` chronomètre chaque tick vivant (session, `EndFrame`, hors canal de test) ; une ligne par minute `sync perf` (client) ou `host perf` (hôte) ; commande `perf`.
   - Resync automatique de zone (`kc::ZoneHealth`, `Session::ZoneResync`) : trois rapports de suite
     (15 s) avec 5 PNJ manquants ou 3 persos décalés : l'hôte relie et renvoie tout ce qu'il envoie à ce
     joueur seul (sans pause), au plus une fois par minute.
