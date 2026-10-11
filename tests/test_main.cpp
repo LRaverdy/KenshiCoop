@@ -4600,6 +4600,18 @@ static void TestTalkAndRecruit() {
     cw.localOrders.push_back({FakeWorld::H(2), [] { Command c; c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = kTaskTalk; c.subject = FakeWorld::H(10); return c; }()});
     Run(all, 0.5);
     CHECK(cli.chatLog().size() == chat0);   // once per NPC every few seconds
+    // 4b. (0.3.2) "talk" with two of the client's characters selected: one order goes to the host,
+    //     the second one's is not sent (the host's game would retry it, refused, every frame)
+    {
+        auto talkOrder = [](uint32_t npc) { Command c; c.kind = CommandKind::Task; c.via = TaskVia::TaskNearest; c.task = kTaskTalk; c.subject = FakeWorld::H(npc); return c; };
+        const size_t mark = hostLog.size();
+        cw.localOrders.push_back({FakeWorld::H(2), talkOrder(13)});
+        cw.localOrders.push_back({FakeWorld::H(4), talkOrder(13)});
+        Run(all, 1.0);
+        int sent = 0;
+        for (size_t i = mark; i < hostLog.size(); ++i) sent += hostLog[i].rfind("[C] order", 0) == 0 && hostLog[i].find("(12)") != std::string::npos;
+        CHECK(sent == 1);
+    }
 
     // 5. a recruit in the client's conversation with NPC 19 (a "join with edit" line): the host's game
     //    recruits it without the editor (the hook), the newcomer joins the squad under a new handle (20),

@@ -353,6 +353,9 @@ void KenshiWorld::EndFrame() {
             v->controllable.insert(a != alias_.end() ? a->second : h);
         }
         for (auto& [h, c] : squad_) if (!v->controllable.count(h)) v->squadForeign.insert(c);
+        if (!client_)
+            for (auto& [h, c] : squad_)
+                if (auto o = squadOwners_.find(h); o != squadOwners_.end()) v->squadOwner[c] = o->second;
         for (const kc::Handle& h : shared_) {
             auto a = alias_.find(h);
             v->shared.insert(a != alias_.end() ? a->second : h);
@@ -577,6 +580,17 @@ float KenshiWorld::NearestSquadDistance(const kc::Vec3& p) {
 
 bool KenshiWorld::Exists(const kc::Handle& h) {
     auto a = alias_.find(h);
+    if (a != alias_.end() && a->second != h && squad_.count(a->second) && HostKnows(a->second)) {
+        // One of our squad members linked to another host character than its own (0.3.2, the
+        // Stone case above, made before this check existed or by a handle change): the link goes,
+        // the member stays its own host character's copy, and the other one is looked for again.
+        Log("our squad member %s was linked to the host's %s, but it is the host's %s itself: link dropped", KeyOf(a->second).c_str(),
+            KeyOf(h).c_str(), KeyOf(a->second).c_str());
+        spawned_.erase(a->second);
+        alias_.erase(a);
+        resolved_.erase(h);
+        a = alias_.end();
+    }
     if (a != alias_.end()) {
         // The real character streamed in after all (its zone loaded later here than on the
         // host): it replaces the stand-in, otherwise there would be two of them.
@@ -666,6 +680,17 @@ bool KenshiWorld::FindMoved(const kc::Handle& stale, kc::Handle& now) {
     if (n != 1 || !kenshi::Resolve(found)) return false;
     // never one already standing in for another host character
     for (const auto& [host, local] : alias_) if (local == found) return false;
+    // never one whose handle is a host character the session follows (0.3.2): it is that
+    // character's own copy (11 October: the host's 1:317:...:1, gone, followed onto Stone, a squad
+    // member of nass4 under its own handle; the owner's orders on Stone then named 1:317 and were
+    // refused, ~900 lines a minute). Same serial, but conflicts go by handle.
+    if (HostKnows(found)) {
+        uint32_t held = 0;
+        if (followLog_.Allow(NowSeconds(), &held))
+            Log("our %s is the copy of the host's character with that handle: not taken for the host's %s [%u more such lines not written]",
+                KeyOf(found).c_str(), KeyOf(stale).c_str(), held);
+        return false;
+    }
     now = found;
     return true;
 }
@@ -2251,6 +2276,14 @@ bool KenshiWorld::NoteDialogText(void* dialogue) {
     return true;
 }
 
+// Host, any thread: both characters belong to the same player (the published view: squadOwner).
+bool KenshiWorld::SameOwner(const void* a, const void* b) {
+    if (!a || !b) return false;
+    auto v = View();
+    auto x = v->squadOwner.find(a), y = v->squadOwner.find(b);
+    return x != v->squadOwner.end() && y != v->squadOwner.end() && x->second == y->second;
+}
+
 bool KenshiWorld::ConversationAllowed(void* dialogue, void* target) {
     kenshi::Character* me = kenshi::DialogueOwner(dialogue);
     kenshi::Character* t = kenshi::IsCharacter(target) ? static_cast<kenshi::Character*>(target) : nullptr;
@@ -2260,10 +2293,21 @@ bool KenshiWorld::ConversationAllowed(void* dialogue, void* target) {
         const bool npcIn = r.other && (r.other == me || r.other == t);
         const bool pcIn = r.pc && (r.pc == me || r.pc == t);
         if (!npcIn || pcIn) continue;   // its own conversation going on (a leader taking over...) stays allowed
-        // the NPC is in another player's conversation: refused, the one asking is told
         kenshi::Character* asker = r.other == me ? t : me;
-        ++dialogsBusyRefused;
         const double now = NowSeconds();
+        // Another character of the same player (two of theirs selected for one "talk": 11 October,
+        // nass4 and Logan, 1784 refusals and "Streak est occupé" in nass4's own conversation): refused
+        // without a word, as in the game the second one just does not talk. Not counted as busy.
+        if (asker && SameOwner(asker, r.pc)) {
+            ++dialogsSameOwnerRefused;
+            uint32_t held = 0;
+            if (sameOwnerTalkLog_.Allow(now, &held))
+                Log("conversation %u: another character of the same player asked to talk with that NPC: refused silently [%u more such refusals]",
+                    r.id, held);
+            return false;
+        }
+        // the NPC is in another player's conversation: refused, the one asking is told
+        ++dialogsBusyRefused;
         auto& told = busyToldAt_[asker];
         if (asker && now - told > 3.0) {
             told = now;
@@ -2273,8 +2317,11 @@ bool KenshiWorld::ConversationAllowed(void* dialogue, void* target) {
             d.speaker = r.otherH;
             kenshi::CharacterName(r.other, d.text);
             if (dialogEvents_.size() < 512) dialogEvents_.push_back(std::move(d));
-            Log("conversation refused: that NPC is in conversation %u with another player's character", r.id);
+            uint32_t held = 0;
+            if (busyLog_.Allow(now, &held))
+                Log("conversation refused: that NPC is in conversation %u with another player's character [%u more such lines not written]", r.id, held);
         }
+        if (busyToldAt_.size() > 256) busyToldAt_.clear();
         return false;
     }
     return true;
@@ -3616,6 +3663,41 @@ void KenshiWorld::SetRole(bool client, bool active) {
 void KenshiWorld::SetControllable(const std::vector<kc::Handle>& handles) {
     controllable_.clear();
     controllable_.insert(handles.begin(), handles.end());
+}
+
+void KenshiWorld::SetSquadOwners(const std::vector<std::pair<kc::Handle, uint8_t>>& owners) {
+    squadOwners_.clear();
+    for (const auto& [h, id] : owners) {
+        auto a = alias_.find(h);
+        squadOwners_[a != alias_.end() ? a->second : h] = id;
+    }
+}
+
+// Client (0.3.2): our copy of a host squad character is in one of our player squads (it has a
+// portrait in the squad bar and can be put in a squad). Not here, dead or down: nothing to do.
+bool KenshiWorld::InPlayerFactionHere(const kc::Handle& h) {
+    if (FindSquad(h)) return true;
+    kenshi::Character* c = Find(h);
+    if (!c || kenshi::IsDead(c)) return true;
+    return kenshi::InPlayerSquad(c);
+}
+
+// Host (0.3.2): a character outside the player's squads, removed (a character made for a player's
+// editor and left behind). kenshi::DestroyObject never deletes a squad member (its portrait).
+bool KenshiWorld::RemoveStrayCharacter(const kc::Handle& h) {
+    kenshi::Character* c = Find(h);
+    if (!c || !kenshi::IsCharacter(c) || kenshi::InPlayerSquad(c)) return false;
+    std::string name;
+    kenshi::CharacterName(c, name);
+    bool ok = false;
+    {
+        HostCallScope scope;
+        if (kenshi::InventoryWindowShows(c)) kenshi::CloseInventoryWindows();
+        ok = kenshi::DestroyObject(c);
+    }
+    resolved_.erase(h);
+    Log("character '%s' %s: it is in no player squad (made for a character editor never finished)", name.c_str(), ok ? "removed" : "could not be removed");
+    return ok;
 }
 
 void KenshiWorld::Toast(const std::string& msg) {

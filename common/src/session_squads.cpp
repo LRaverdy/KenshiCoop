@@ -481,8 +481,24 @@ void Session::ClientSquads(double now) {
         IWorld::SquadView v;
         v.id = s.id;
         v.name = s.name;
-        for (uint32_t id : s.members)
-            if (auto it = entities_.find(id); it != entities_.end() && it->second.present) v.members.push_back(it->second.handle);
+        for (uint32_t id : s.members) {
+            auto it = entities_.find(id);
+            if (it == entities_.end() || !it->second.present) continue;
+            Entity& e = it->second;
+            v.members.push_back(e.handle);
+            // A member of the host's squads whose copy is still an NPC here (0.3.2: Nei, Skinner and
+            // Kihaku, recruited by nass4 and passed from hand to hand with G, had no portrait on rob's
+            // and nass4's screens): it joins our player faction (the session's adopt step), so that
+            // ApplySquadViews can put it in its squad. Whatever Bind came first, or how fast.
+            if (e.squad && !e.adopt && now >= e.adoptRetryAt && !world_.InPlayerFactionHere(e.handle)) {
+                e.adopt = true;
+                e.adoptTries = 0;
+                uint32_t held = 0;
+                if (adoptLog_.Allow(now, &held))
+                    log_("squad character " + world_.CharacterNameOf(e.handle) + " of the host's squad '" + s.name +
+                         "' is not in our player faction here: it joins it" + (held ? " [" + std::to_string(held) + " more such lines not written]" : std::string()));
+            }
+        }
         views.push_back(std::move(v));
     }
     world_.ApplySquadViews(views);

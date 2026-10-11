@@ -252,7 +252,10 @@ Ordre dans `Tick()` (`main.cpp`) :
   - l'hôte reconnaît le même personnage par son identité (`IWorld::Identity`, l'adresse de
     l'objet), garde son netId et renvoie un `Bind` avec `previous` ;
   - le client fait pointer le nouveau handle vers sa propre copie (`Rehandle`, table `alias_`) ;
-  - quand c'est le client qui change ses escouades, `LocalRehandled` met cette table à jour.
+  - quand c'est le client qui change ses escouades, `LocalRehandled` met cette table à jour ;
+  - le jeu du client qui change seul un handle (une mort, une escouade) est suivi par numéro de série
+    (`FindMoved`), jamais vers un perso dont le handle est celui d'un perso que la session suit
+    (`IWorld::SetHostKnows`, 0.3.2) : en cas de conflit, le handle l'emporte.
 - **Remplaçants** (stand-ins) : un personnage que l'hôte a et pas le client est recréé
   (`Spawn` : modèle et faction), ou adopté parmi les « inconnus » de même type que le jeu du client
   a créés (`Reconcile`). Le client garde l'association handle de l'hôte → handle local
@@ -623,6 +626,14 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
   avec `previous` = son handle de PNJ, `EditCharacter` si le jeu voulait l'éditeur. Client : un
   `Bind` d'escouade avec `previous` renomme sa copie (`Rehandle`) et la marque `adopt` ;
   `IWorld::AdoptRecruit` la fait entrer dans la faction du joueur (le `recruit` du jeu, sans éditeur).
+  0.3.2 : à chaque application des escouades, tout membre d'une escouade de l'hôte dont la copie
+  n'est pas dans la faction ici (`IWorld::InPlayerFactionHere`) repasse en `adopt` (réessai après une
+  minute en cas d'échec) ; l'hôte envoie l'apparence de chaque nouveau perso d'escouade
+  (`BroadcastLooks`). Le perso fait pour l'éditeur d'un joueur (`editorChars_`) n'est jamais une
+  recrue, et il est supprimé s'il reste hors des escouades quand son joueur part sans le finir.
+- Deux persos d'un même joueur et un même PNJ (0.3.2) : le client n'envoie qu'un ordre « parler » par
+  PNJ et par lot ; chez l'hôte, `ConversationAllowed` refuse sans message un autre perso du même
+  joueur (propriétaires publiés par `IWorld::SetSquadOwners` dans `HookView::squadOwner`).
 - « Parler » d'un joueur à un PNJ de sa propre conversation : `TalkTargetBusy(from, …)` ne refuse
   jamais pour lui ; même perso → `ResendDialog` ; autre perso → `EndDialog` puis la nouvelle ;
   conversation du jeu avec un de ses persos sans fenêtre → `IWorld::EndConversationOf`.

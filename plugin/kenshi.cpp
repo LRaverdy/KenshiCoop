@@ -1852,7 +1852,21 @@ Character* CreateCharacter(const kc::SpawnInfo& info, const kc::Vec3& pos, std::
     if (!faction) { if (err) *err = "unknown faction " + info.factionSid; return nullptr; }
     const float p[3] = {pos.x, pos.y, pos.z};
     unsigned long fault = 0;
+    // A "unique" template (0.3.2): createRandomCharacter (0x5836E0) reads the template's bool
+    // "unique" and, when the world's unique registry already has it, takes the template's
+    // "unique replacement spawn" list instead, and returns null when that list is empty. Recruits
+    // of Dialogue.mod ('hire engineer wall man', 'Sword for hire ex-slave') and named characters
+    // ('Cat', 'Ruka') are unique, and the client's world loaded from the host's save has them
+    // registered: 'factory did not return a character (template type 1 ...)', 11 October. A copy of
+    // the host's character is not a second one of the world's own: the flag is cleared for the call
+    // only (game thread, the same GameData value the factory reads), then put back.
+    uint8_t* unique = nullptr;
+    ForEachNode(gd, GDM_bool, [&](const std::string& k, const uint8_t* v) { if (!unique && k == "unique") unique = const_cast<uint8_t*>(v); });
+    uint8_t wasUnique = 0;
+    if (unique && Rd(unique, 0, wasUnique) && wasUnique) Wr(unique, 0, uint8_t(0));
+    else unique = nullptr;
     void* obj = CallCreateChar(FnAddr(FnCreateRandomCharacter), factory, faction, p, gd, info.age, &fault);
+    if (unique) Wr(unique, 0, wasUnique);
     if (fault && err) {
         // the factory faulted part way: a character it had begun may stay in the game's update lists
         // half set up (Character::update on one whose CharStats has no MedicalSystem yet crashes at
