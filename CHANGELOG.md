@@ -4,7 +4,7 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
-## En cours (pas encore commité)
+## v0.3.1 (11 octobre 2026)
 
 - **Toits : on restait sous le toit à l'intérieur d'une cabane.** (1) Un bâtiment à étages (la Petite
   Cabane 4092, son toit est son étage 1, 4093) : `createBuilding` crée lui-même chaque étage dans son
