@@ -4950,8 +4950,17 @@ def exp_lootcreature(host, cli, only=""):
     next to the client's character and kills it; the client sends its loot order (what the right
     click's "loot" does); the loot window must open on the client once the looter stands by the body
     (lootstats: opened, not dropped), whatever its size; then one item of the body (its "death items":
-    meat, skins, pearls) is taken and must land the same on the host and the client."""
+    meat, skins, pearls) is taken and must land the same on the host and the client.
+
+    The first run (11/10, 26/32) left the joiner's character editor open: the whole game stayed
+    paused, no looter walked, and only the two bodies already in reach (turtle, leviathan) opened."""
     time.sleep(6)
+    log("editdone", cmd(cli, "editdone"))   # the joiner's character editor holds the whole game paused: nobody would walk
+    for _ in range(20):
+        if (cmd(host, "paused")[1].split() + ["?", "?"])[1] == "0":
+            break
+        time.sleep(1)
+    log("host paused:", cmd(host, "paused"))
     log("give", cmd(host, "give 2 0"))
     wanted = [c for c in LOOT_CREATURES if not only or only.lower() in c[1].lower()]
     for sid, name, d in wanted:

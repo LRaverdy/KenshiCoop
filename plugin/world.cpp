@@ -2466,8 +2466,7 @@ void KenshiWorld::RequestLoot(const kc::Handle& looter, kenshi::Character* targe
     c.kind = kc::CommandKind::MoveTo;
     c.pos = kc::loot::ApproachPoint(lp, tp, body);
     QueueLocalOrder(looter, c);
-    const double now = NowSeconds();
-    pendingLoot_.push_back({looter, t, body, race, now + kc::loot::OrderTimeout(dist), now, 0.0});
+    pendingLoot_.push_back({looter, t, body, race, kc::loot::StartOrder(NowSeconds(), dist)});
 }
 
 void KenshiWorld::UpdatePendingLoot() {
@@ -2484,25 +2483,26 @@ void KenshiWorld::UpdatePendingLoot() {
             it = pendingLoot_.erase(it);
             continue;
         }
-        // stopped: the looter has not been walking for a second (a big ragdoll blocks it at its edge)
+        // paused (the host's pause, a joining player's character editor): the looter cannot walk, the
+        // order waits. Stopped: it walked, then stood still for a second (a big ragdoll blocks it).
         kc::Vec3 dest;
         bool moving = true;
         float speed = 0;
-        if (kenshi::GetMovement(me, dest, moving, speed) && !moving) {
-            if (it->stillSince == 0) it->stillSince = now;
-        } else {
-            it->stillSince = 0;
-        }
-        const bool stopped = it->stillSince != 0 && now - it->stillSince >= 1.0 && now - it->since >= 1.5;
+        if (!kenshi::GetMovement(me, dest, moving, speed)) moving = true;
+        const bool paused = kenshi::GetPaused();
+        if (paused && it->clock.pausedFor == 0) Log("loot order waits: the game is paused");
+        kc::loot::Tick(it->clock, now, paused, moving);
+        const bool stopped = kc::loot::Stopped(it->clock, now);
         if (havePos && (kc::loot::InReach(lp, tp, it->body) || (stopped && kc::loot::InReach(lp, tp, it->body, kc::loot::kStoppedSlack)))) {
             kenshi::OpenLootWindow(me, target);
             ++lootOpened;
             Log("loot window opened at %.0f units (%s, reach %.0f%s)", kc::loot::GroundDist(lp, tp), it->race.c_str(), kc::loot::Reach(it->body),
                 kc::loot::InReach(lp, tp, it->body) ? "" : ", stopped by the body");
             it = pendingLoot_.erase(it);
-        } else if (now >= it->until) {
-            Log("loot order dropped: the looter is still %.0f units from the body (%s, reach %.0f)", havePos ? kc::loot::GroundDist(lp, tp) : -1.0f,
-                it->race.c_str(), kc::loot::Reach(it->body));
+        } else if (kc::loot::Expired(it->clock, now)) {
+            Log("loot order dropped: the looter is still %.0f units from the body (%s, reach %.0f, %s, paused %.0f s)",
+                havePos ? kc::loot::GroundDist(lp, tp) : -1.0f, it->race.c_str(), kc::loot::Reach(it->body),
+                it->clock.walked ? "it walked" : "it never walked", it->clock.pausedFor);
             ++lootDropped;
             it = pendingLoot_.erase(it);
         } else {

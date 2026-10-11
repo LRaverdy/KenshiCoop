@@ -47,6 +47,12 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   échelle), pilleur envoyé au bord du corps, portée élargie s'il s'est arrêté contre, attente selon
   la distance, ouverture et abandon journalisés ; âge réel des animaux recréés ; dépôt au sol
   depuis un grand corps accepté de son flanc. Tests `TestLootCreatures`, `TestBigBodyDrop`.
+  **Essai en jeu du 11/10** (`lootcreature`, 26/32) : tortue et léviathan réussis ; chèvre, chien
+  d'os, taureau, gorillo, araignée, bête à bec : ordre abandonné, le pilleur toujours à la distance
+  de départ. Cause : l'éditeur de personnage du client, laissé ouvert par l'expérience, gardait tout
+  le jeu en pause ; seuls les corps déjà à portée s'ouvraient. Corrigé (`editdone` dans
+  l'expérience ; pause non comptée dans le délai d'un ordre ; « arrêté contre le corps » seulement
+  après avoir marché). À relancer.
 
 - ✅ **Rejoindre est long** (corrigé en 0.3.1, à vérifier en jeu) : nass4 a mis ~1 min 55 entre
   « world sent » (22:15:01) et son arrivée (22:16:55) ; rob, arrivé pendant ce temps, attendait

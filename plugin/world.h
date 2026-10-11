@@ -484,9 +484,7 @@ private:
         kc::Handle looter, target;
         kc::loot::BodySize body;   // the body's size: how close the looter must get (kc::loot::Reach)
         std::string race;
-        double until;              // the order expires (logged)
-        double since;              // when it was given
-        double stillSince;         // the looter stopped walking at (0: walking)
+        kc::loot::OrderClock clock;   // expiry (paused time not counted), walked, stopped
     };
     std::vector<PendingLoot> pendingLoot_;   // client, game thread only
     void UpdatePendingLoot();
