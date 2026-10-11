@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 35;   // 35: the world sent to a joiner is packed (WorldBegin rawBytes, WorldChunk packedSize), JoinQueue also tells players in the world waiting for the character editor, BuildMaterials (87: delivered construction materials), MachineState flag kMachOurs (a mine or node of the player faction); 34: Research, ResearchRequest, Machines, MachineRequest (workshop), SquadState, SquadRequest, JobState (squad window); 33: BagBind (travelling merchants), Result (actor safety), JoinQueue, Diplomacy, MapMarkers and MapPing (map)
+constexpr uint16_t kProtocolVersion = 36;   // 36: AnimalShop and AnimalBuy (a farmer's animals bought from a client's conversation); 35: the world sent to a joiner is packed (WorldBegin rawBytes, WorldChunk packedSize), JoinQueue also tells players in the world waiting for the character editor, BuildMaterials (87: delivered construction materials), MachineState flag kMachOurs (a mine or node of the player faction); 34: Research, ResearchRequest, Machines, MachineRequest (workshop), SquadState, SquadRequest, JobState (squad window); 33: BagBind (travelling merchants), Result (actor safety), JoinQueue, Diplomacy, MapMarkers and MapPing (map)
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -114,6 +114,9 @@ enum class Msg : uint8_t {
     JobState = 62,        // S->C  the job list of the players' characters with each job's target (the Tâches panel, built the same everywhere)
     // ---- actor safety
     Result = 90,          // S->C  the host's answer to a request: rejected (with the reason) or done
+    // ---- animal shops (protocol 36)
+    AnimalShop = 91,      // S->C  the animals a seller offers your character (the dialogue's "animals for sale?"): open its window
+    AnimalBuy = 92,       // C->S  the animals the player chose in that window (none: closed without buying)
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -804,6 +807,27 @@ struct TradeOpen {
 };
 constexpr uint32_t kMaxTradeCounters = 32;
 
+// Buying animals (a farmer's "got animals for sale?", the dialogue action CHOOSE_ANIMALS_BUYING).
+// The host's game makes the offer (the seller's animals around it, a price for each) for another
+// player's character: the window opens on that player's screen instead, with the same animals; the
+// player's choice goes back to the host, whose game sells them (the cats taken, the animals join
+// the player faction and go to the buyer).
+constexpr uint32_t kMaxShopAnimals = 32;
+struct AnimalShopMsg {
+    uint32_t offerId = 0;
+    uint32_t sellerNetId = 0;
+    uint32_t buyerNetId = 0;       // the player's character buying
+    int32_t basePrice = 0;         // the dialogue's price (0: the game's own); each animal's follows from it and its age
+    std::vector<uint32_t> animals;
+    std::string note;              // no animals: why the shop cannot open (shown to the player)
+};
+struct AnimalBuyMsg {
+    uint32_t offerId = 0;
+    uint32_t buyerNetId = 0;       // the player's character buying (OwnCharacter rule)
+    std::vector<uint32_t> animals; // empty: the window closed without buying
+    int32_t shownPrice = 0;        // the total the player's window showed (the host's own prices are paid)
+};
+
 // ---- lot A: doors and locks
 // A door (DoorStuff) or a piece of furniture with a lock (chest, cage...). Objects of the world have
 // another handle on every machine: they are known by kind and place (as containers are).
@@ -922,6 +946,10 @@ bool Decode(Reader& r, BuildAction& m);
 
 void Encode(Writer& w, const TradeOpen& m);
 bool Decode(Reader& r, TradeOpen& m);
+void Encode(Writer& w, const AnimalShopMsg& m);
+bool Decode(Reader& r, AnimalShopMsg& m);
+void Encode(Writer& w, const AnimalBuyMsg& m);
+bool Decode(Reader& r, AnimalBuyMsg& m);
 
 // ---- lot D: prisons
 // What holds a character captive, as the host's game has it: a cage or prison furniture (found on

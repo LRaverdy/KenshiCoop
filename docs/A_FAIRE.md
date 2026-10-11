@@ -60,7 +60,8 @@ l'hôte et à x2/x3.
 **Ce qui manque sûrement** (constats du 11/10) :
 - fermier de rob sur sa ferme : pas de ligne `workers`, donc peut-être jamais compté ;
 - bâtiments des clients absents chez nass4 (« machine … of the host not found here ») ;
-- fenêtre Prospecter (3p) et boutique d'animaux (3i) qui ne s'ouvrent pas chez le client ;
+- fenêtre Prospecter (3p) et boutique d'animaux (3i) qui ne s'ouvrent pas chez le client (corrigé
+  dans le code, à tester en jeu) ;
 - hauteur fausse des poses de client (3o).
 
 ## 11 octobre 2026, soir : partie entre amis en v0.3.1, soucis pour rejoindre
@@ -368,7 +369,10 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
    - Horloge en retard 100 fois et en avance 13 fois (recalée à chaque fois).
 
 3i. **Achat d'animaux : la fenêtre s'ouvre chez l'hôte, pas chez le client (22:50, rob et le Chef Ferme
-   Sacré)**
+   Sacré)** — **corrigé dans le code, à tester en jeu** (protocole 36 : `AnimalShop` / `AnimalBuy` ;
+   `plugin/shops.cpp`, `common/src/session_animals.cpp` ; test `coop_test.py animalshop`, voir
+   docs/TESTS.md et docs/MOTEUR.md « Boutique d'animaux et prospection »). Les trois autres fenêtres
+   de la même classe (vente et achat d'esclaves, caution) s'ouvrent encore chez l'hôte.
    - Dans le journal : rob parle au Chef Ferme Sacré (« Qu'est-ce que tu veux ? » 1. Je veux juste
      commercer | 2. T'as des animaux à vendre ? | 3. Rien). Il répond 2, la conversation se ferme, et
      **rien n'est envoyé à rob**. La fenêtre d'achat d'animaux s'ouvre sur l'écran de l'hôte. À
@@ -502,7 +506,12 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
      268,1 ; Geoffrey -19,4 → 931,1). L'hôte recale sur le sol, mais il faudra voir pourquoi le client
      envoie une hauteur pareille.
 
-3p. **La fenêtre « Prospecter » ne s'ouvre pas chez le client (23:47)**
+3p. **La fenêtre « Prospecter » ne s'ouvre pas chez le client (23:47)** — **corrigé dans le code, à
+   tester en jeu**. Cause (piste 3, en partie) : le bouton donne la tâche 150 par
+   `Character::addOrder` sans passer par nos crochets d'ordres ; chez le client la tâche ne tourne
+   jamais (l'hôte pilote nos persos), donc rien ne s'ouvre ni ne part vers l'hôte. Le client ouvre
+   maintenant la fenêtre tout de suite (`hk_prospectButton`, `plugin/shops.cpp`) ; test
+   `coop_test.py prospect`.
    - Le bouton PROSPECT de la barre d'ordres (`OrdersPanel`, `0x72B540`) ouvre normalement la fenêtre de
      prospection (fertilité, eau, minerais à l'endroit du perso sélectionné). Chez le client, rien ne
      s'ouvre, et le journal ne montre rien : ni ordre, ni tâche 150, ni refus.

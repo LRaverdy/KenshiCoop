@@ -4,6 +4,26 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
+## v0.3.2 (en cours)
+
+- **Achat d'animaux par un client (A_FAIRE 3i).** « T'as des animaux à vendre ? » dans la
+  conversation d'un client ouvrait la fenêtre d'achat d'animaux sur l'écran de l'hôte. L'action de
+  dialogue (`CHOOSE_ANIMALS_BUYING`) fait un gestionnaire d'achat (`0x6A9440`) puis une
+  `CharacterTradingWindow` (`0x72A880`) : l'hôte note le gestionnaire fait pour le perso d'un autre
+  joueur, garde la fenêtre cachée et envoie l'offre à ce joueur (**protocole 36** : `AnimalShop`,
+  `AnimalBuy`). Le client ouvre la même fenêtre du jeu avec ses copies ; sa validation part chez
+  l'hôte, qui vérifie l'acheteur (le sien), l'offre et l'argent, puis vend avec le gestionnaire gardé
+  (`confirm` du jeu : recrutement, cats prises). L'animal est au joueur et rejoint l'escouade de son
+  perso (`Session::AnimalFollowsOwner`, aussi après une recrue). Fichiers : `common/src/session_animals.cpp`,
+  `plugin/shops.cpp`. Tests : `TestAnimalShop`, `coop_test.py animalshop`. À tester en jeu.
+- **Prospection chez un client (A_FAIRE 3p).** Le bouton PROSPECT (`0x721800`) donne la tâche 150
+  par `Character::addOrder` (aucun crochet d'ordre ne la voyait) et la fenêtre s'ouvre à la fin de la
+  tâche, qui ne tourne jamais chez un client : rien ne s'ouvrait, rien dans le journal. Le client
+  ouvre maintenant la fenêtre tout de suite pour son perso (`ProspectingWindow::showT` : position,
+  science, nom ; la fenêtre ne lit que les données du jeu). L'hôte ne peut plus prospecter avec le
+  perso d'un autre joueur. Test : `coop_test.py prospect`. À tester en jeu.
+- Commandes de debug : `animalshop`, `animalshopstate`, `animalbuy`, `prospect`, `prospectstate`.
+
 ## v0.3.1 (11 octobre 2026)
 
 - **Antivirus** : l'installeur du zip n'utilise plus PowerShell (`Installer.bat` lançait

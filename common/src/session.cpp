@@ -178,6 +178,7 @@ void Session::Leave() {
     ResetFactions();
     ResetDiplomacy();
     ResetDoors();   // lot A
+    ResetAnimalShops();
     ResetWorkshop();   // research, crafting, machines, power
     floorSent_.clear(); floors_.clear(); nextFloors_ = nextFloorsFull_ = 0; floorPlayers_ = 0;   // fix G6
     ResetJobs();   // fix G5
@@ -275,6 +276,7 @@ void Session::HostTick(double now, bool live) {
     HostContainers(now);
     HostBags(now);
     HostTrades(now);
+    HostAnimalShops(now);   // animal shops of other players' conversations
     HostDoors(now);   // lot A
     HostWorkshopRequests();   // research and machine requests, one after the other
     HostResearch(now);
@@ -1907,15 +1909,7 @@ void Session::Assign(const Handle& h, uint8_t playerId) {
         e->owner = playerId;
         for (auto& [pid, p] : players_) if (p.inGame) SendBind(*e, p.peer);  // Bind doubles as an ownership update
         // An animal follows its squad: it goes into the squad of its new owner's own character
-        if (world_.IsAnimal(h)) {
-            Handle leader;
-            if (auto sy = sync_.find(playerId); playerId != hostId_ && sy != sync_.end() && entityByHandle(sy->second.own)) leader = sy->second.own;
-            for (auto& [nid, o] : entities_) {
-                if (leader.valid()) break;
-                if (o.squad && !o.container && o.owner == playerId && !(o.handle == h) && !world_.IsAnimal(o.handle)) leader = o.handle;
-            }
-            if (leader.valid() && world_.JoinSquadOf(h, leader)) log_("the animal " + world_.CharacterNameOf(h) + " joins its owner's squad");
-        }
+        AnimalFollowsOwner(h, playerId);
     }
     controllableDirty_ = true;
 }
@@ -1981,6 +1975,7 @@ void Session::RecruitJoined(Entity& e, const PendingRecruit& r) {
     if (pl == players_.end()) return;
     log_("a new squad character (" + world_.CharacterNameOf(e.handle) + ") goes to " + pl->second.name + ", who recruited it");
     controllableDirty_ = true;
+    if (rec.player != hostId_) AnimalFollowsOwner(e.handle, rec.player);   // a bought animal: into the buyer's squad, not the host's
     if (rec.editor && pl->second.inGame) {   // the game wanted its editor: on that player's screen
         Writer w;
         Encode(w, EditCharacter{e.netId});
@@ -2264,6 +2259,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         break;
     }
     case Msg::DoorRequest: HostDoorPacket(pl->id, r); break;   // lot A
+    case Msg::AnimalBuy: HostAnimalBuyPacket(pl->id, r); break;
     case Msg::ResearchRequest: HostResearchPacket(pl->id, r); break;   // workshop
     case Msg::MachineRequest: HostMachinePacket(pl->id, r); break;
     case Msg::MapPing: if (pl && pl->inGame) HostPingPacket(pl->id, r); break;   // map pings
@@ -3269,6 +3265,7 @@ void Session::ClientTick(double now, bool live) {
     }
     SendEditedAppearances();
     ClientContainers(now);
+    ClientAnimalShops();
     ClientFactionsTick(now);   // lot B
     ClientDiplomacyTick(now);
     ClientDoors(now);   // lot A
@@ -3817,6 +3814,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
         break;
     }
     case Msg::Doors: ClientDoorsPacket(r); break;   // lot A
+    case Msg::AnimalShop: ClientAnimalShopPacket(r); break;
     case Msg::Research: ClientResearchPacket(r); break;   // workshop
     case Msg::Machines: ClientMachinesPacket(r); break;
     case Msg::JobList: ClientJobsPacket(r); break;   // fix G5

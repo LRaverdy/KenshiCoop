@@ -308,6 +308,12 @@ public:
     bool OrderShared(const kc::Handle& h, const kc::Command& c) override;
     bool ReadJobList(const kc::Handle& h, std::vector<kc::JobEntry>& jobs) override;
     void ApplyJobList(const kc::Handle& h, const std::vector<kc::JobEntry>& jobs) override;
+    // Animal shops (plugin/shops.cpp)
+    void TakeAnimalOffers(std::vector<AnimalOffer>& out) override;
+    bool SellAnimals(uint64_t key, const std::vector<kc::Handle>& animals, int32_t& price, std::string& why) override;
+    void DropAnimalOffer(uint64_t key) override;
+    bool OpenAnimalShop(const kc::Handle& seller, const kc::Handle& buyer, const std::vector<kc::Handle>& animals, int32_t basePrice) override;
+    void TakeAnimalChoices(std::vector<AnimalChoice>& out) override;
     // Called from hooks (client): a portrait dropped in the squad window, asked of the host.
     void QueueSquadRequest(kenshi::Character* actor, void* targetSquad, int index);
     kc::Handle HostSquadId(void* localSquad) const;   // client: the host squad ours is matched to (invalid: none)

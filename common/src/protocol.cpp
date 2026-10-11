@@ -901,6 +901,7 @@ const MessageRule kMessageRules[] = {
     {Msg::MapPing, AuthRole::InGame, AuthSubject::None, "map ping", 0.5},   // = Session::kPingInterval
     {Msg::ResearchRequest, AuthRole::InGame, AuthSubject::OwnCharacter, "research request"},
     {Msg::MachineRequest, AuthRole::InGame, AuthSubject::OwnCharacter, "machine request"},
+    {Msg::AnimalBuy, AuthRole::InGame, AuthSubject::OwnCharacter, "buy animals"},
     // host -> client only
     {Msg::Welcome, AuthRole::HostOnly, AuthSubject::None, "welcome"},
     {Msg::Reject, AuthRole::HostOnly, AuthSubject::None, "reject"},
@@ -950,6 +951,7 @@ const MessageRule kMessageRules[] = {
     {Msg::SquadState, AuthRole::HostOnly, AuthSubject::None, "squad state"},
     {Msg::SquadRequest, AuthRole::InGame, AuthSubject::OwnCharacter, "squad request"},
     {Msg::JobState, AuthRole::HostOnly, AuthSubject::None, "job state"},
+    {Msg::AnimalShop, AuthRole::HostOnly, AuthSubject::None, "animal shop"},
 };
 } // namespace
 const char* MsgName(Msg type) {
@@ -1025,6 +1027,8 @@ const char* MsgName(Msg type) {
     case Msg::SquadState: return "SquadState";
     case Msg::SquadRequest: return "SquadRequest";
     case Msg::JobState: return "JobState";
+    case Msg::AnimalShop: return "AnimalShop";
+    case Msg::AnimalBuy: return "AnimalBuy";
     }
 #pragma warning(pop)
     return nullptr;
@@ -1120,6 +1124,54 @@ bool Decode(Reader& r, TradeOpen& m) {
     }
     m.note = r.str(200);
     return Done(r) && m.traderNetId != 0;
+}
+
+// ---- animal shops (protocol 36)
+void Encode(Writer& w, const AnimalShopMsg& m) {
+    w.u8(uint8_t(Msg::AnimalShop));
+    w.varint(m.offerId);
+    w.varint(m.sellerNetId);
+    w.varint(m.buyerNetId);
+    w.i32(m.basePrice);
+    const size_t n = std::min<size_t>(m.animals.size(), kMaxShopAnimals);
+    w.varint(n);
+    for (size_t i = 0; i < n; ++i) w.varint(m.animals[i]);
+    w.str(m.note.size() > 200 ? m.note.substr(0, 200) : m.note);
+}
+bool Decode(Reader& r, AnimalShopMsg& m) {
+    m.offerId = GetU32Var(r);
+    m.sellerNetId = GetU32Var(r);
+    m.buyerNetId = GetU32Var(r);
+    m.basePrice = r.i32();
+    const uint32_t n = r.count(kMaxShopAnimals, 1);
+    m.animals.resize(n);
+    for (auto& a : m.animals) {
+        a = GetU32Var(r);
+        if (!a) return false;
+    }
+    m.note = r.str(200);
+    return Done(r) && m.offerId != 0 && m.buyerNetId != 0 && m.basePrice >= 0;
+}
+void Encode(Writer& w, const AnimalBuyMsg& m) {
+    w.u8(uint8_t(Msg::AnimalBuy));
+    w.varint(m.offerId);
+    w.varint(m.buyerNetId);
+    const size_t n = std::min<size_t>(m.animals.size(), kMaxShopAnimals);
+    w.varint(n);
+    for (size_t i = 0; i < n; ++i) w.varint(m.animals[i]);
+    w.i32(m.shownPrice);
+}
+bool Decode(Reader& r, AnimalBuyMsg& m) {
+    m.offerId = GetU32Var(r);
+    m.buyerNetId = GetU32Var(r);
+    const uint32_t n = r.count(kMaxShopAnimals, 1);
+    m.animals.resize(n);
+    for (auto& a : m.animals) {
+        a = GetU32Var(r);
+        if (!a) return false;
+    }
+    m.shownPrice = r.i32();
+    return Done(r) && m.offerId != 0 && m.buyerNetId != 0;
 }
 
 void Encode(Writer& w, const ContainerOpen& m) {

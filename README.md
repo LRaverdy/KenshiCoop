@@ -163,6 +163,11 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
   pause pour une conversation. Un PNJ ne parle qu'à un joueur à la fois (« occupé »), jamais
   « occupé » pour ses propres conversations. Une recrue gagnée dans ta conversation est à toi (et
   son éditeur de perso, quand le jeu en propose un, s'ouvre chez toi, pas chez l'hôte).
+- **Achat d'animaux** : « T'as des animaux à vendre ? » ouvre la fenêtre d'achat d'animaux chez toi
+  (plus chez l'hôte) ; l'animal acheté est payé avec l'argent commun, t'appartient et rejoint ton
+  escouade, chez tout le monde.
+- **Prospection** : le bouton PROSPECT de la barre d'ordres ouvre la fenêtre de prospection chez
+  toi, pour l'endroit où se trouve ton perso.
 - **Heure, vitesse et pause** : celles de l'hôte, imposées en permanence. Les clients ne peuvent
   pas les changer ; un client figé un moment (une zone qui charge) est remis à l'heure de l'hôte
   d'un coup.

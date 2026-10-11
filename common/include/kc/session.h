@@ -265,6 +265,32 @@ public:
     // Put a character into the squad of another (the host's way to make an animal follow its owner).
     virtual bool JoinSquadOf(const Handle& who, const Handle& leader) { (void)who; (void)leader; return false; }
     virtual std::string CharacterNameOf(const Handle& h) { (void)h; return {}; }
+    // Buying animals (the dialogue's "got animals for sale?"). Host: the animal shops the game made for
+    // another player's character (its window is not shown here; the game's offer is kept until that
+    // player answers): who sells, who buys, the dialogue's price, the animals offered in order; sell
+    // some of them the game's own way (its purchase: the cats of their prices taken, each animal
+    // recruited into the player faction), false with the reason (French, for the player) when it
+    // cannot; forget an offer. Client: open the game's animal window with our copies of them; the
+    // player's choices in it (the animals ticked and the total shown).
+    struct AnimalOffer {
+        uint64_t key = 0;
+        Handle seller, buyer;
+        int32_t basePrice = 0;
+        std::vector<Handle> animals;
+    };
+    virtual void TakeAnimalOffers(std::vector<AnimalOffer>& out) { out.clear(); }
+    virtual bool SellAnimals(uint64_t key, const std::vector<Handle>& animals, int32_t& price, std::string& why) {
+        (void)key; (void)animals; price = 0; why = "indisponible"; return false;
+    }
+    virtual void DropAnimalOffer(uint64_t key) { (void)key; }
+    virtual bool OpenAnimalShop(const Handle& seller, const Handle& buyer, const std::vector<Handle>& animals, int32_t basePrice) {
+        (void)seller; (void)buyer; (void)animals; (void)basePrice; return false;
+    }
+    struct AnimalChoice {
+        std::vector<Handle> animals;
+        int32_t price = 0;
+    };
+    virtual void TakeAnimalChoices(std::vector<AnimalChoice>& out) { out.clear(); }
     // ---- lot B: factions. Host: the player faction's relations with every faction (both ways) and
     // a character's bounties and crime state. Client: impose the host's (the local game may not
     // change them itself). Apply returns how many values had to change here.
@@ -603,6 +629,11 @@ public:
         return {trade_.pending, trade_.open, trade_.trader, trade_.counters.size(), unsentSpend_};
     }
     size_t hostTrades() const { return trades_.size(); }   // host: trade windows open by players
+    // Animal shops (tests): offers waiting for their player's answer and animals sold (host); the offer
+    // whose window is open here (client, 0: none).
+    size_t animalOffers() const { return animalOffers_.size(); }
+    size_t animalsSold() const { return animalsSold_; }
+    uint32_t animalShopOpen() const { return animalShop_.offerId; }
     // ---- lot B: factions (tests): messages received / values corrected here (client), sent (host)
     struct FactionsView { size_t received = 0, bountiesReceived = 0, corrected = 0, sent = 0; };
     FactionsView factionsView() const { return factionsView_; }
@@ -985,6 +1016,34 @@ private:
     std::map<uint8_t, HostTrade> trades_;
     std::vector<IWorld::TradeRequest> scratchTradeReqs_;
     void HostTrades(double now);
+    // ---- animal shops (session_animals.cpp). Host: the game's offer for each player (one at a time),
+    // and their answers. Client: the offer whose window is open.
+    struct HostAnimalOffer {
+        uint64_t key = 0;
+        uint32_t id = 0;
+        uint32_t buyer = 0;                      // netId of the buying character
+        std::map<uint32_t, Handle> animals;      // netId -> the host's handle when offered
+        double since = 0;
+    };
+    std::map<uint8_t, HostAnimalOffer> animalOffers_;
+    uint32_t nextAnimalOffer_ = 1;
+    size_t animalsSold_ = 0;
+    std::vector<IWorld::AnimalOffer> scratchAnimalOffers_;
+    std::vector<std::pair<uint8_t, AnimalBuyMsg>> pendingAnimalBuys_;
+    struct ClientAnimalShop {
+        uint32_t offerId = 0;
+        uint32_t buyer = 0;
+    };
+    ClientAnimalShop animalShop_;
+    std::vector<IWorld::AnimalChoice> scratchAnimalChoices_;
+    void HostAnimalShops(double now);
+    void ClientAnimalShops();
+    void HostAnimalBuyPacket(uint8_t from, Reader& r);
+    void ClientAnimalShopPacket(Reader& r);
+    void EndAnimalOffer(uint8_t player, const char* why);
+    void ResetAnimalShops();
+    // An animal of the player faction goes into the squad of its owner's own character.
+    void AnimalFollowsOwner(const Handle& h, uint8_t playerId);
     // Worn backpacks (travelling merchants sell from their squad's): host: each followed character's
     // worn backpack is an entity of its own (bag), bound on every client to the same backpack of its
     // copy of that character; its items are synced like a character's.

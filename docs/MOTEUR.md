@@ -260,6 +260,31 @@ pas deux lignes inversées (chaque adresse correspond bien à ses octets). Deux 
 corrigé, et `python tools/check_functions.py` vérifie désormais que chaque entrée correspond au
 commentaire de son énumérateur.
 
+### Boutique d'animaux et prospection (`plugin/shops.cpp`, A_FAIRE 3i et 3p)
+
+| Groupe | Enum | Fonction | RVA | Hook | Rôle |
+|---|---|---|---|---|---|
+| animaux | `FnAnimalTradeCtor` | constructeur du gestionnaire d'achat d'animaux (notre nom) `(this, Character* vendeur, Character* acheteur, lektor<Character*>* animaux, int prixDeBase)` | `0x6A9440` | hôte | [D] appelé par l'action de dialogue `CHOOSE_ANIMALS_BUYING` (0x30, `0x6817F4`) ; vtable `0x16FFAD8` ; prix de chaque animal = (prix de base, 14000 par défaut si ≤ 0) × (âge vt 0x398 + constante). L'hôte note celui fait pour le perso d'un autre joueur |
+| animaux | `FnAnimalTradeConfirm` | sa `confirm()` (vt 0, notre nom) | `0x6AAC20` | client | [D] rassemble les entrées cochées (`0x7261C0`, vivantes), vérifie la taille d'escouade (message sinon), puis pour chacune : `removePermajob`, `PlayerInterface::recruit(animal, false)` ; enfin `takeMoney(total)` sur la faction du joueur (`[0x2134690]`+0x2A0 → +0x80, vt 0). **Ne vérifie pas l'argent** (c'est la fenêtre qui grise le bouton) : l'hôte le vérifie avant |
+| animaux | `FnCharTradeHandlerDtor` | `CharacterTradingHandler::~` (non virtuel) | `0x6A69D0` | — | la fenêtre l'appelle puis libère par l'`operator delete` importé `[0x2247198]` (alloué par `[0x22471A0]`, 0x88 octets) |
+| animaux | `FnCharTradeWindowCtor` | `CharacterTradingWindow::CharacterTradingWindow(handler)` | `0x72A880` | — | [D] 0x110 octets ; détruit l'`Instance` précédente (`0x2132C30`) puis prend sa place ; ne met pas le jeu en pause |
+| animaux | `FnCharTradeWindowShow` | `CharacterTradingWindow::show(bool)` (vt 0x10) | `0x7223A0` | hôte | [D] true : widget (+0x38) vt 0x18 `setVisible(true)` ; false : `close()` (`0x726830` : cache, `GameWorld::setPaused(false)` `0x787D40`, libère le gestionnaire +0xD0 et la fenêtre). L'hôte garde cachée la fenêtre d'un gestionnaire noté |
+| animaux | `FnCharTradeConfirmButton` | `CharacterTradingWindow::confirmButton(Widget*)` | `0x7267D0` | — | `handler->confirm()` ; vrai : libère le gestionnaire et ferme. Tests (`animalbuy`) |
+| prospection | `FnProspectButton` | `OrdersPanel::prospectingButton(Widget*)` | `0x721800` | oui | [D] fenêtre ouverte : `hide` ; sinon perso = `0x7F4BA0(PI, 0x785F90(GameWorld))`, `checkPlayerOrderForProblems(150)` (`0x5D1940`), puis **`Character::addOrder(null, 150, null, false, true, 0)`** directement (aucune fonction d'ordre de `PlayerInterface` : aucun hook d'ordre ne le voyait), son de clic. N'utilise pas son `this` |
+| prospection | `FnProspectSingleton` | `ProspectingWindow::getSingleton()` | `0x338400` | — | objet en `0x212EA60` (garde `0x212EA6C`, 0x140 octets) ; `getVisible` `0x48BF50` lit le widget à +8 |
+| prospection | `FnProspectShow` | `ProspectingWindow::showT(const Vector3& pos, float skill, const std::string& name)` | `0x48E9E0` | — | [D] ce qu'appelle la tâche 150 (`0x348610`, son action) une fois son temps écoulé : position du perso (vt 0x38), compétence **science** (`CharStats`+0xE0), nom ; la fenêtre ne lit ensuite que les cartes de ressources du monde (données du jeu). Garde +0x108 position, +0x114 compétence, +0x118 nom |
+| prospection | `FnCameraTarget` | `GameWorld::<cible de la caméra>(Vector3* out)` (notre nom) | `0x785F90` | — | `PlayerInterface`+0x30 (caméra) +0x58 nœud → position |
+| prospection | `FnNearestSelected` | `PlayerInterface::<sélectionné le plus proche>(const Vector3&)` (notre nom) | `0x7F4BA0` | — | parcourt la sélection (+0x208) et rend le perso (type 1 ou 0x5B) le plus proche du point |
+
+Mise en page lue au désassemblage (KenshiLib n'a pas `CharacterTradingHandler`) : gestionnaire +0x08
+vendeur, +0x10 acheteur (pointeurs bruts), +0x18 booléen, +0x20 tableau d'entrées (nombre +0x28,
+capacité +0x30), +0x38 titre, +0x60 texte ; entrée de 0x68 octets : `hand` de l'animal (+0), prix
+(+0x20, int), cochée (+0x24). Fenêtre : +0x38 widget, +0xD0 gestionnaire, +0xD8 cases. Les quatre
+fenêtres de ce type (vente et achat d'esclaves 0x29 / 0x2A, caution 0x2B, animaux 0x30) partagent la
+classe ; seule celle des animaux est détournée pour l'instant. Décalages par rapport à KenshiLib
+1.0.65 : +0x11D0 (zone 0x72xxxx : `OrdersPanel`), +0x780 (`ProspectingWindow` 0x48xxxx), +0x4B0
+(`getSingleton`), +0x1260 (`ForgottenGUI`).
+
 ### Autres adresses de fonctions utilisées directement
 
 | RVA | Fonction | Usage |
@@ -658,7 +683,9 @@ snapshots) ; 3/4 `Character`+0xD4 ; 5/6/7 `AI` (+0x650) +0x2B8 ; 8/9 une fonctio
 Boutons de la barre (`OrdersPanel`, `0x72B540`) : BLOCK, HOLD, PASSIVE, JOBS, RANGED, TAUNT, SNEAK et
 les flèches d'allure appellent `setOrderSelectedCharacters` ; MEDIC (`0x7FAC20`) et RESCUE
 (`0x721790`) appellent `newPlayerTaskSelectedCharacters` avec les tâches 58 (`JOB_MEDIC`) et 148
-(`FIND_AND_RESCUE_IF_THERES_BEDS`) ; PROSPECT ouvre la fenêtre de prospection. Le curseur de
+(`FIND_AND_RESCUE_IF_THERES_BEDS`) ; PROSPECT (`0x721800`) donne la tâche 150 au perso sélectionné le
+plus proche de la caméra par `Character::addOrder`, et la tâche ouvre la fenêtre de prospection à sa
+fin (voir « Boutique d'animaux et prospection »). Le curseur de
 comportement (AGRESSIVE / CONFIDENT / SUBMISSIVE) existe dans la mise en page mais est caché.
 
 ### Tâches (`TaskType`, celles que le mod nomme dans le journal)

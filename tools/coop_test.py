@@ -5926,6 +5926,112 @@ def exp_pets(host, cli):
     summary()
 
 
+def exp_animalshop(host, cli):
+    """A_FAIRE 3i: buying animals. The host spawns a seller and two goats next to the client's character
+    and makes the game's animal shop for it (animalshop: what a farmer's "animals for sale?" does); the
+    window must open on the client only (the host keeps it hidden and its offer aside); the client ticks
+    one animal and confirms; the host's game sells it (cats taken from the shared money), the animal
+    becomes the client's and joins their squad, everywhere. Then the host buys one for itself (its own
+    window, the game's usual path)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    log("cats for the test:", cmd(host, "givemoney 30000"))
+    log("seller:", cmd(host, f"spawnnpc 25 0 {own}"))
+    for dx, dz in ((35, 12), (40, -10), (45, 4)):
+        log("goat:", cmd(host, f"spawncreature 3993-gamedata.base {dx} {dz} {own}"))
+    time.sleep(6)
+    animals0_h, animals0_c = cmd(host, "squadanimals")[1], cmd(cli, "squadanimals")[1]
+    opened = cmd(host, f"animalshop {own} 300")
+    log("host makes the animal shop for the client's character:", opened)
+    state_c = "?"
+    for _ in range(20):
+        time.sleep(0.5)
+        state_c = cmd(cli, "animalshopstate")[1]
+        if "visible=1" in state_c:
+            break
+    state_h = cmd(host, "animalshopstate")[1]
+    log("client:", state_c, "| host:", state_h)
+    check("animaux (boutique) : la fenetre s'ouvre chez le client", "visible=1" in state_c and "entries=0" not in state_c, state_c)
+    check("animaux (boutique) : rien ne s'affiche chez l'hote, l'offre est gardee", "visible=0" in state_h and "offers=1" in state_h, state_h)
+    shot(cli, os.path.abspath(os.path.join(OUT_DIR, "animalshop_client.png")))
+    cats0_h, cats0_c = cmd(host, "money")[1], cmd(cli, "money")[1]
+    bought = cmd(cli, "animalbuy 0")
+    log("client buys the first animal:", bought)
+    time.sleep(5)
+    state_h2 = cmd(host, "animalshopstate")[1]
+    cats1_h, cats1_c = cmd(host, "money")[1], cmd(cli, "money")[1]
+    log("cats host", cats0_h, "->", cats1_h, "/ client", cats0_c, "->", cats1_c, "| host", state_h2)
+    check("animaux (boutique) : la fenetre du client se ferme apres l'achat", bought[0] and "window=0" in bought[1], bought[1])
+    check("animaux (boutique) : l'hote vend l'animal (sold=1, offre liberee)", "sold=1" in state_h2 and "offers=0" in state_h2, state_h2)
+    check("animaux (boutique) : achat paye chez l'hote", cats1_h != cats0_h, f"{cats0_h} -> {cats1_h}")
+    check("animaux (boutique) : meme argent partout", cats1_h == cats1_c, f"hote {cats1_h} / client {cats1_c}")
+    time.sleep(4)
+    animals1_h, animals1_c = cmd(host, "squadanimals")[1], cmd(cli, "squadanimals")[1]
+    log("squad animals host", animals0_h, "->", animals1_h, "/ client", animals0_c, "->", animals1_c)
+    n = lambda s: int((s.split() + ["0", "0"])[1]) if s.startswith("ok") else -1
+    check("animaux (boutique) : l'animal rejoint l'escouade chez l'hote et le client", n(animals1_h) == n(animals0_h) + 1 and n(animals1_c) == n(animals1_h),
+          f"hote {animals1_h} / client {animals1_c}")
+    if n(animals1_h) > 0:
+        akey = animals1_h.split()[-1].split(":", 1)[1].rsplit(":", 1)[0]
+        owner = dump(host, "h_animalshop")["entity"].get(akey, {}).get("owner")
+        check("animaux (boutique) : l'animal appartient au client", owner == "2", f"proprietaire {owner} ({akey})")
+    rep = compare(dump(host, "h_animalshop2"), dump(cli, "c_animalshop2"), "animal shop")
+    check("animaux (boutique) : positions identiques apres l'achat", rep["pos_err_over_tol"] == 0, rep.get("pos_err_over_tol"))
+    # the host's own purchase: its window on its screen, the game's usual path
+    mine = cmd(host, "animalshop 0 600")
+    time.sleep(1)
+    state_h3 = cmd(host, "animalshopstate")[1]
+    log("host's own animal shop:", mine, state_h3)
+    check("animaux (boutique) : l'hote voit sa propre fenetre", "visible=1" in state_h3, state_h3)
+    check("animaux (boutique) : rien ne s'ouvre chez le client pour l'achat de l'hote", "visible=0" in cmd(cli, "animalshopstate")[1] or "window=0" in cmd(cli, "animalshopstate")[1],
+          cmd(cli, "animalshopstate")[1])
+    if "visible=1" in state_h3:
+        log("host buys:", cmd(host, "animalbuy 0"))
+    summary()
+
+
+def exp_prospect(host, cli):
+    """A_FAIRE 3p: the orders bar's PROSPECT button. On the client it opens the prospecting window at
+    once for its own character (the place's fertility, water and ores, read from the game data) and
+    nothing on the host; pressed again it closes it. On the host it works as in solo (task 150, window
+    after a moment); the host cannot prospect with the client's character."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    mine = cmd(cli, "ownidx")[1].split()
+    ci = int(mine[1]) if len(mine) > 1 and mine[1].isdigit() else 0
+    log("client presses PROSPECT for its character", ci, cmd(cli, f"prospect {ci}"))
+    time.sleep(1.5)
+    st_c, st_h = cmd(cli, "prospectstate")[1], cmd(host, "prospectstate")[1]
+    log("client:", st_c, "| host:", st_h)
+    check("prospection : la fenetre s'ouvre chez le client", "visible=1" in st_c and "name=" in st_c and not st_c.endswith("name="), st_c)
+    check("prospection : rien ne s'ouvre chez l'hote", "visible=1" not in st_h, st_h)
+    shot(cli, os.path.abspath(os.path.join(OUT_DIR, "prospect_client.png")))
+    log("client presses PROSPECT again:", cmd(cli, f"prospect {ci}"))
+    time.sleep(1)
+    st_c2 = cmd(cli, "prospectstate")[1]
+    check("prospection : un second appui la ferme", "visible=0" in st_c2, st_c2)
+    log("host presses PROSPECT for its own character:", cmd(host, "prospect 0"))
+    st_h2 = "?"
+    for _ in range(20):
+        time.sleep(0.5)
+        st_h2 = cmd(host, "prospectstate")[1]
+        if "visible=1" in st_h2:
+            break
+    check("prospection : l'hote prospecte comme en solo", "visible=1" in st_h2, st_h2)
+    check("prospection : le client n'en voit rien", "visible=1" not in cmd(cli, "prospectstate")[1], cmd(cli, "prospectstate")[1])
+    log("host closes it:", cmd(host, "prospect 0"))
+    time.sleep(1)
+    log("host presses PROSPECT for the client's character:", cmd(host, f"prospect {own}"))
+    time.sleep(6)
+    st_h3 = cmd(host, "prospectstate")[1]
+    check("prospection : l'hote ne peut pas prospecter avec le perso du client", "visible=1" not in st_h3, st_h3)
+    summary()
+
+
 def exp_carry(host, cli):
     """The host carries a knocked out NPC, walks, puts it down: the client shows it on the shoulder,
     then lying where the host's landed, without throwing it."""
@@ -7296,7 +7402,9 @@ def main():
     fl_.add_argument("--keep", action="store_true")
     fl_.add_argument("--seconds", type=int, default=300, help="time spent far away")
     for name_, hlp_ in (("caravan", "travelling merchant: packs synced, buy/sell while it walks, window closed on a kill, theft and loot of pack animals"),
-                        ("pets", "squad animals: ownership, owner's squad, orders through the host, shared inventory")):
+                        ("pets", "squad animals: ownership, owner's squad, orders through the host, shared inventory"),
+                        ("animalshop", "3i: a client buys an animal from a seller: window on the client only, sold by the host, the animal theirs"),
+                        ("prospect", "3p: the PROSPECT button on the client (window there only) and on the host")):
         sp_ = sub.add_parser(name_, help=hlp_)
         sp_.add_argument("--save", default="kctest_town")
         sp_.add_argument("--keep", action="store_true")
@@ -7553,6 +7661,10 @@ def main():
             exp_caravan(host, cli)
         elif a.what == "pets":
             exp_pets(host, cli)
+        elif a.what == "animalshop":
+            exp_animalshop(host, cli)
+        elif a.what == "prospect":
+            exp_prospect(host, cli)
         elif a.what == "trade":
             exp_trade(host, cli, a.merchant)
         elif a.what == "passive":
