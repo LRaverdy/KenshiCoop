@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <sstream>
+#include <unordered_map>
 
 #include "hooks.h"
 #include "kenshi.h"
@@ -86,14 +87,28 @@ void Notify(kc::Session& s, KenshiWorld& w, uint8_t id, const std::string& fr) {
 
 bool Wanted(const std::vector<uint8_t>& ids, uint8_t owner) { return std::find(ids.begin(), ids.end(), owner) != ids.end(); }
 
+// god characters' blood: never below its highest since god mode began (by handle: an address may
+// be reused by another character)
+std::unordered_map<kc::Handle, float, kc::HandleHash> g_godBlood;
+
 void ApplyGods(kc::Session& s, KenshiWorld& w) {
     if (!g_gods.any()) {
         if (kenshi::GodModeCount()) kenshi::SetGodModes({});
+        g_godBlood.clear();
         return;
     }
     std::vector<kenshi::Character*> on;
-    for (const auto& m : Squad(s, w))
-        if (g_gods.On(KeyOf(s, m.owner))) on.push_back(m.c);
+    std::unordered_map<kc::Handle, float, kc::HandleHash> blood;
+    for (const auto& m : Squad(s, w)) {
+        if (!g_gods.On(KeyOf(s, m.owner))) continue;
+        on.push_back(m.c);
+        auto it = g_godBlood.find(m.h);
+        float peak = it != g_godBlood.end() ? it->second : -1.0f;
+        // hits are refused (hk_medDamage) but a fight still drained blood a little: put back
+        if (!kenshi::IsDead(m.c)) kenshi::HoldBlood(m.c, peak);
+        blood[m.h] = peak;
+    }
+    g_godBlood.swap(blood);
     kenshi::SetGodModes(on);
 }
 

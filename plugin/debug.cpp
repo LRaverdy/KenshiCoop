@@ -250,6 +250,10 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         if (!s.isHost() && s.state() != kc::SessionState::Idle) return "err host only";
         if (idx >= squad.size()) return "err no such squad member";
         kenshi::Character* c = w.FindSquad(squad[idx]);
+        // a body lying on the ground (knocked out in a fight): the admin TP's way, else it stays put
+        // (the 0.3.1 research run: the client's knocked-out character left in town, every machine
+        // request then refused as too far)
+        if (c && s.isHost() && kenshi::IsRagdoll(c)) return w.TeleportCharacters({squad[idx]}, {x, y, z}, false) ? "ok body" : "err teleport failed";
         kc::Quat q;
         kenshi::GetRotation(c, q);
         HostCallScope scope;
@@ -299,6 +303,9 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         kc::SpawnInfo info;
         std::string e = "no NPC to copy";
         HostCallScope scope;
+        // a person, never an animal (the 0.3.1 dialogue run copied a garru, which says nothing: the
+        // test's conversations had nobody to talk with); animals only when there is nobody else
+        std::stable_partition(all.begin(), all.end(), [](kenshi::Character* c) { return !kenshi::IsAnimal(c); });
         for (kenshi::Character* src : all) {
             kc::Handle h;
             if (!kenshi::GetHandle(src, h) || w.FindSquad(h) || kenshi::IsDead(src) || !kenshi::ReadSpawnSource(src, info)) continue;
@@ -1727,7 +1734,8 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             std::vector<std::pair<float, kenshi::Character*>> nearby;
             for (kenshi::Character* c : all) {
                 kc::Handle h;
-                if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsDown(c) || !kenshi::GetPosition(c, p)) continue;
+                if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsDown(c) || kenshi::IsAnimal(c) || !kenshi::GetPosition(c, p))
+                    continue;   // (an animal has nothing to say)
                 nearby.emplace_back((p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z), c);
             }
             std::sort(nearby.begin(), nearby.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -1757,7 +1765,8 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             std::vector<std::pair<float, kenshi::Character*>> nearby;
             for (kenshi::Character* c : all) {
                 kc::Handle h;
-                if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsDown(c) || !kenshi::GetPosition(c, p)) continue;
+                if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsDown(c) || kenshi::IsAnimal(c) || !kenshi::GetPosition(c, p))
+                    continue;   // (an animal has nothing to say)
                 nearby.emplace_back((p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z), c);
             }
             std::sort(nearby.begin(), nearby.end(), [](const auto& a, const auto& b) { return a.first < b.first; });

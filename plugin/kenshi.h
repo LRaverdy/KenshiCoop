@@ -513,6 +513,10 @@ void ForgetGodModes();   // a new world: the characters it named are gone
 // rejoins); how many are.
 void SetGodModes(const std::vector<Character*>& chars);
 size_t GodModeCount();
+// Admin god mode: the character's blood never below `peak` (its highest since god mode began; < 0:
+// not known yet, set now). True when blood was put back. Hits on a god character's body are refused
+// (hk_medDamage), but blood still ran out slowly in a fight (the admin test: 75.8 -> 75.2).
+bool HoldBlood(Character* c, float& peak);
 // ---- fix G6: the floor a character is on (CharMovement::floorGroup; 9 = ground floor)
 bool ReadFloorGroup(const Character* c, int32_t& group);
 bool WriteFloorGroup(Character* c, int32_t group);

@@ -5271,6 +5271,34 @@ static void TestMotion() {
         EntityState still = walker(0, 0.2f);
         CHECK(IsZero2(TravelDir(still, still)));
         CHECK(TravelDir(still, walker(0, 30)).x > 0.99f);   // not moved yet: toward its destination
+        // 0.3.1 regression (suite "vitesse 3 : orientation en marchant", 167 deg): rendered past the
+        // newest sample (extrapolated), the newest position lies behind; the way it goes is still forwards
+        std::deque<Sample> buf;
+        Cadence cad;
+        PushSample(buf, cad, 1.0, walker(0, 100), 0.05, 1.0);
+        PushSample(buf, cad, 1.1, walker(4.2f, 100), 0.05, 1.0);   // running at speed 3
+        const EntityState ahead3 = StateAt(buf, 1.3, 50.0f);
+        CHECK(ahead3.pos.x > 4.2f);                                // extrapolated past the newest
+        const Vec3 way = TravelDir(ahead3, buf.back().s);
+        CHECK(way.x > 0.99f);                                      // forwards, never back to the newest
+        CHECK(WantFacing(Vec3{1, 0, 0}, way, true, false).x > 0.99f);
+        CHECK(WantFacing(Vec3{-1, 0, 0}, way, true, false).x > 0.99f);
+        // a walker turning on its way (a path): the newest position, not the destination, while it agrees
+        EntityState turnR = walker(0, 100), turnL = walker(0, 100);
+        turnL.pos = {1, 0, 1};
+        CHECK(TravelDir(turnR, turnL).z > 0.7f);
+    }
+    // 4b. the host paused (suite "pause en pleine course", 5.8 units off): exactly its newest state,
+    // never extrapolated past where its runner stopped
+    {
+        std::deque<Sample> buf;
+        Cadence cad;
+        PushSample(buf, cad, 1.0, walker(0, 100), 0.05, 1.0);
+        PushSample(buf, cad, 1.1, walker(2.3f, 100), 0.05, 1.0);
+        // paused: nothing new comes (the host's world stands still), its runner still flagged moving
+        CHECK(StateAt(buf, 3.0, 50.0f).pos.x > 2.4f);              // what the extrapolation alone would show
+        CHECK(PausedState(buf).pos.x == 2.3f);
+        CHECK(PausedState(std::deque<Sample>{}).pos.x == 0.0f);
     }
     // 5. the pull: never backwards against the walk (a little ahead: held back gently, still going
     // forwards), sideways and standing errors corrected, the same at any frame rate
@@ -5452,6 +5480,24 @@ static void TestStreamingTools() {
     CHECK(resyncs == 3 + 1);   // three quick ones, then one more 5 min after the last (in 500 s)
 }
 
+// A player's streaming centres: their own characters and the squad members of the group they are with.
+static void TestGroupCentres() {
+    std::printf("streaming: a player's group (squad members near their characters) is streamed around too\n");
+    const std::vector<Vec3> own = {{0, 0, 0}};
+    const std::vector<Vec3> squad = {{0, 0, 0}, {400, 0, 0}, {2900, 0, 0}, {9000, 0, 0}};
+    const std::vector<Vec3> g = GroupCentres(own, squad, 3000.0f);
+    CHECK(g.size() == 3);                                   // itself, the two near it; not the one 9 km away
+    CHECK(WithinAny({5800, 0, 0}, g, 3000.0f));             // around a groupmate (2900 from it)
+    CHECK(!WithinAny({5800, 0, 0}, own, 3000.0f));          // (not around its own character)
+    CHECK(!WithinAny({12500, 0, 0}, g, 3000.0f));           // the far squad member's crowd: not theirs
+    CHECK(GroupCentres({}, squad, 3000.0f).empty());
+    CHECK(GroupCentres(own, squad, 0.0f).size() == 1);
+    // the suite's missing spider: 2994 from the host's character, 2881 from the client's, 3000 radius
+    const std::vector<Vec3> suiteOwn = {{25267, 149, 11022}};
+    const std::vector<Vec3> suiteSquad = {{25267, 149, 11022}, {25369, 162, 11142}, {25657, 193, 11012}};
+    CHECK(WithinAny({22395, 225, 10795}, GroupCentres(suiteOwn, suiteSquad, 3000.0f), 3000.0f));
+}
+
 // The host sends each client the characters around that client's own characters, never the crowd
 // around the host or another player; a client recreates a few per frame, near its characters only;
 // a client that keeps missing NPCs gets its zone again by itself.
@@ -5582,6 +5628,7 @@ int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);   // every line out before a crash
     if (std::getenv("KC_ONLY_STREAMING")) {   // the 0.3.1 streaming tests alone
         TestStreamingTools();
+        TestGroupCentres();
         TestPerPlayerStreaming();
         TestStandInArea();
         std::printf("%d checks, %d failed\n", g_checks, g_failed);
@@ -5600,6 +5647,7 @@ int main() {
     TestNoDuplicatePlayers();
     TestSpawnReplication();
     TestStreamingTools();      // 0.3.1: per-player streaming
+    TestGroupCentres();
     TestPerPlayerStreaming();
     TestStandInArea();
     TestInventories();

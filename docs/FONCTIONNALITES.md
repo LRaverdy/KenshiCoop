@@ -607,12 +607,15 @@ la fenêtre du client.
     donc il tient aux changements de zone, aux reconnexions et aux nouveaux persos. « Tout le
     monde » couvre toute l'escouade, nouveaux venus compris ; décocher un joueur pendant ce temps
     laisse les autres en mode dieu. Il s'arrête quand l'hôte cesse d'héberger. Activer le mode dieu
-    soigne d'abord.
+    soigne d'abord ; ensuite le sang ne descend plus sous son maximum depuis l'activation (un combat
+    le faisait encore baisser un peu malgré les coups refusés).
   - **TP** : ses persos près de l'hôte (« TP moi »), l'hôte près de lui (« Aller »), près d'un autre
     joueur ou au *point marqué* (« TP à… »). Le point marqué est le dernier endroit où l'hôte a
     ordonné un déplacement par clic droit au sol (`PlayerInterface::playerMove`, déjà détourné) :
     on a ainsi la hauteur du sol. Les commandes acceptent aussi des coordonnées. C'est le TP admin
-    sûr (`TeleportCharacters`) : un corps à terre est relevé avant, recouché à l'arrivée, un perso
+    sûr (`TeleportCharacters`) : un corps à terre est relevé avant, téléporté à une image suivante
+    (un ragdoll actif ne se déplace pas, même coupé dans la même image), recouché à l'arrivée et
+    revérifié une fois couché (reparti à son ancienne place : renvoyé et laissé debout), un perso
     porté est posé ; le jeu du joueur téléporté a droit à 120 s de gel (chargement de zone).
     Confirmation (second clic) quand un des persos déplacés est à terre.
   - **XP** : une compétence (ou toutes) et une quantité réglées sous la liste, en points
@@ -1115,7 +1118,8 @@ la fenêtre du client.
 - Avec `interest_radius=0` (défaut), l'hôte suit **chaque** personnage actif de son jeu, où
   qu'il soit. Un joueur à l'autre bout de la carte garde donc sa zone simulée par l'hôte.
 - **Diffusion par joueur (0.3.1, à vérifier en jeu)** : chaque client ne reçoit l'état que des PNJ
-  autour de **ses** persos (`stream_radius`, 3000), plus la foule autour de l'hôte ; il ne recrée
+  autour de **ses** persos et des membres de l'escouade près d'eux (`stream_radius`, 3000 : le
+  groupe avec lequel il joue, l'hôte compris s'il est à côté) ; il ne recrée
   que ceux-là, 2 par image au plus ; une doublure que son jeu décharge sans cesse revient de plus
   en plus tard ; une zone où il lui manque des PNJ 15 s de suite lui est renvoyée toute seule
   (sans pause ni clic de l'hôte) ; les chiffres de dégâts de ses combats arrivent même quand la

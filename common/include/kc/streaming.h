@@ -24,6 +24,19 @@ inline bool WithinAny(const Vec3& p, const std::vector<Vec3>& centres, float r) 
     return false;
 }
 
+// A player's streaming centres: their own characters, plus every squad member within r of one of
+// them (the group they are with). Own characters first; none: empty (the caller decides).
+inline std::vector<Vec3> GroupCentres(const std::vector<Vec3>& own, const std::vector<Vec3>& squad, float r) {
+    std::vector<Vec3> out = own;
+    if (own.empty() || r <= 0) return out;
+    for (const Vec3& m : squad) {
+        bool mine = false;
+        for (const Vec3& o : own) mine = mine || (o.x == m.x && o.y == m.y && o.z == m.z);
+        if (!mine && WithinAny(m, own, r)) out.push_back(m);
+    }
+    return out;
+}
+
 // A retry delay per key that doubles with each failure, up to a ceiling: a template the character
 // factory refuses, a stand-in the local game keeps unloading. Success forgets the key.
 template <class Key>

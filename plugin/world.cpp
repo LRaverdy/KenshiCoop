@@ -1532,10 +1532,11 @@ void KenshiWorld::NoteLocalJob(const kc::Handle& h, int task) {
     localJobs_[KeyOf(h)].push_back({task, GetTickCount64() + 5000});
 }
 
-int KenshiWorld::TeleportCharacters(const std::vector<kc::Handle>& who, const kc::Vec3& to) {
+int KenshiWorld::TeleportCharacters(const std::vector<kc::Handle>& who, const kc::Vec3& to, bool spread) {
     int n = 0;
     HostCallScope scope;
     std::vector<kenshi::Character*> all;
+    const double now = NowSeconds();
     for (const auto& h : who) {
         kenshi::Character* c = FindSquad(h);
         kc::Quat rot;
@@ -1550,17 +1551,30 @@ int KenshiWorld::TeleportCharacters(const std::vector<kc::Handle>& who, const kc
                 break;
             }
         }
-        // the engine does not move an active ragdoll: the body gets up, moves, and lies down again
-        // a moment later (a ragdoll started right after a teleport would be thrown away)
+        const kc::Vec3 p = spread ? kc::Vec3{to.x + 6.0f * float(n + 1), to.y + 2.0f, to.z + 4.0f} : to;
+        // The engine does not move an active ragdoll, even one switched off in the same frame: the
+        // teleport "took" (the character's position read right), then the body lying down again took
+        // the ragdoll's own place back, where it lay before (the 0.3.1 suite: a knocked-out player's
+        // character 392 units from the host after its admin TP). A body is stood up now, teleported on
+        // a later frame, laid down there, and checked once lying (UpdateReRagdolls).
         const bool body = kenshi::IsRagdoll(c);
-        if (body) kenshi::SetRagdoll(c, false);
-        const kc::Vec3 p{to.x + 6.0f * float(n + 1), to.y + 2.0f, to.z + 4.0f};
-        if (kenshi::Teleport(c, p, rot)) {
+        ReRagdoll r{h, 0, p, rot, body, 0, c};
+        if (body) {
+            kenshi::SetRagdoll(c, false);
+            r.stage = ReRagdoll::Stand;
+            r.at = now + 0.15;
             ++n;
-            // checked a moment later: a body (or a character the game was still moving) may stay put
-            reRagdoll_.push_back({h, NowSeconds() + 0.3, p, rot, body, 0, c});
-            Log("tp: %s moved%s", KeyOf(h).c_str(), body ? " (it was lying on the ground)" : "");
+            Log("tp: %s lies on the ground: stood up, teleported next", KeyOf(h).c_str());
+        } else if (kenshi::Teleport(c, p, rot)) {
+            r.stage = ReRagdoll::Check;
+            r.at = now + 0.3;   // checked a moment later: a character the game was still moving may stay put
+            ++n;
+            Log("tp: %s moved", KeyOf(h).c_str());
+        } else {
+            continue;
         }
+        reRagdoll_.erase(std::remove_if(reRagdoll_.begin(), reRagdoll_.end(), [&](const ReRagdoll& o) { return o.h == h; }), reRagdoll_.end());
+        reRagdoll_.push_back(r);
     }
     return n;
 }
@@ -1568,34 +1582,66 @@ int KenshiWorld::TeleportCharacters(const std::vector<kc::Handle>& who, const kc
 void KenshiWorld::UpdateReRagdolls() {
     const double now = NowSeconds();
     HostCallScope scope;
+    constexpr float kThere = 15.0f;
+    constexpr int kTries = 6;
     for (auto it = reRagdoll_.begin(); it != reRagdoll_.end();) {
         if (now < it->at) { ++it; continue; }
         kenshi::Character* c = FindSquad(it->h);
         if (!c) { it = reRagdoll_.erase(it); continue; }
-        // fix G7: a teleport that did not take (a lying body whose ragdoll was still active this frame:
-        // the suite's admin TP left one 470 units away) is done again, a few times, before lying down
         kc::Vec3 at;
-        const bool arrived = kenshi::GetPosition(c, at) && Dist(at, it->to) < 15.0f;
-        if (!arrived && it->tries < 6) {
-            // a teleport does not move an active ragdoll, even one switched off in the same frame: the
-            // body is stood up first and teleported on a later frame (hk_ragdollMode keeps the game from
-            // laying it down again meanwhile, see HoldsUpright)
-            ++it->tries;
-            if (kenshi::IsRagdoll(c)) {
+        const bool known = kenshi::GetPosition(c, at);
+        const float off = known ? Dist(at, it->to) : 1e9f;
+        const bool down = it->body && (kenshi::IsUnconscious(c) || kenshi::IsDead(c));
+        switch (it->stage) {
+        case ReRagdoll::Stand:
+            // fix G7: still a ragdoll (the game laid it down again): stood up once more first
+            if (kenshi::IsRagdoll(c) && ++it->tries < kTries) {
                 kenshi::SetRagdoll(c, false);
                 it->at = now + 0.15;
-                Log("tp: %s still %.0f away and still a ragdoll: stood up, teleported next (%d)", KeyOf(it->h).c_str(), Dist(at, it->to), it->tries);
-            } else {
-                kenshi::Teleport(c, it->to, it->rot);
-                it->at = now + 0.4;
-                Log("tp: %s still %.0f away from where it was sent: teleported again (%d)", KeyOf(it->h).c_str(), Dist(at, it->to), it->tries);
+                break;
             }
-            ++it;
+            kenshi::Teleport(c, it->to, it->rot);
+            it->stage = ReRagdoll::Check;
+            it->at = now + 0.3;
+            break;
+        case ReRagdoll::Check:
+            if (off >= kThere && ++it->tries < kTries) {
+                if (kenshi::IsRagdoll(c)) {
+                    kenshi::SetRagdoll(c, false);
+                    it->stage = ReRagdoll::Stand;
+                    it->at = now + 0.15;
+                    Log("tp: %s still %.0f away and a ragdoll: stood up, teleported next (%d)", KeyOf(it->h).c_str(), off, it->tries);
+                } else {
+                    kenshi::Teleport(c, it->to, it->rot);
+                    it->at = now + 0.4;
+                    Log("tp: %s still %.0f away from where it was sent: teleported again (%d)", KeyOf(it->h).c_str(), off, it->tries);
+                }
+                break;
+            }
+            if (off >= kThere) Log("tp: %s did not reach its destination (%.0f away)", KeyOf(it->h).c_str(), off);
+            if (down && !kenshi::IsRagdoll(c) && !it->noRelay) {
+                kenshi::SetRagdoll(c, true);   // knocked out or dead: lying again, where it was sent
+                it->stage = ReRagdoll::Settle;
+                it->at = now + 0.6;
+                break;
+            }
+            it = reRagdoll_.erase(it);
+            continue;
+        case ReRagdoll::Settle:
+            // lying again: still there? A ragdoll that took its old place back is stood up and sent
+            // again, and then left standing for the game to lay down (its own fall starts where it is)
+            if (off >= kThere && ++it->tries < kTries) {
+                Log("tp: %s went back %.0f away when it lay down again: stood up and sent again", KeyOf(it->h).c_str(), off);
+                kenshi::SetRagdoll(c, false);
+                it->stage = ReRagdoll::Stand;
+                it->noRelay = true;
+                it->at = now + 0.15;
+                break;
+            }
+            it = reRagdoll_.erase(it);
             continue;
         }
-        if (!arrived) Log("tp: %s did not reach its destination", KeyOf(it->h).c_str());
-        if (it->body && (kenshi::IsUnconscious(c) || kenshi::IsDead(c)) && !kenshi::IsRagdoll(c)) kenshi::SetRagdoll(c, true);
-        it = reRagdoll_.erase(it);
+        ++it;
     }
 }
 
