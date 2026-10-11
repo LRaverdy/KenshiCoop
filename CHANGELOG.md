@@ -6,6 +6,12 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## v0.3.1 (11 octobre 2026)
 
+- **Antivirus** : l'installeur du zip n'utilise plus PowerShell (`Installer.bat` lançait
+  `powershell -ExecutionPolicy Bypass`, ce que les antivirus signalent) : de simples fichiers batch
+  (`tools/Installer.bat`, `tools/Desinstaller.bat`) cherchent Kenshi dans Steam et ses bibliothèques,
+  copient la DLL et ajoutent `Plugin=KenshiCoop` à `Plugins_x64.cfg`, rien d'autre. La DLL porte une
+  fiche de version (produit, description, éditeur, lien du code source : `plugin/version.rc`).
+
 - **Toits : on restait sous le toit à l'intérieur d'une cabane.** (1) Un bâtiment à étages (la Petite
   Cabane 4092, son toit est son étage 1, 4093) : `createBuilding` crée lui-même chaque étage dans son
   propre appel, et le mod captait aussi ces appels imbriqués : le toit partait chez les clients comme un

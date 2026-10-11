@@ -8,16 +8,10 @@ $stage = Join-Path $PSScriptRoot "dist\KenshiCoop"
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Force $stage | Out-Null
 Copy-Item $dll $stage
-Copy-Item (Join-Path $PSScriptRoot "install.ps1") $stage
+# plain batch installers (no PowerShell, no execution-policy bypass: antivirus heuristics flag those)
+Copy-Item (Join-Path $PSScriptRoot "tools\Installer.bat") $stage
+Copy-Item (Join-Path $PSScriptRoot "tools\Desinstaller.bat") $stage
 Copy-Item (Join-Path $PSScriptRoot "README.md") (Join-Path $stage "LISEZMOI.md")
-Set-Content (Join-Path $stage "Installer.bat") -Encoding ascii -Value @(
-    '@echo off',
-    'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1"',
-    'pause')
-Set-Content (Join-Path $stage "Desinstaller.bat") -Encoding ascii -Value @(
-    '@echo off',
-    'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1" -Uninstall',
-    'pause')
 
 $zip = Join-Path $PSScriptRoot "dist\KenshiCoop.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
