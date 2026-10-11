@@ -466,6 +466,14 @@ struct ItemState {
         return sameKind(o) && section == o.section && quantity == o.quantity && x == o.x && y == o.y && equipped == o.equipped;
     }
 };
+// How many of `moving` items join a stack of `have` of the same kind that holds at most `maxStack`
+// (Item::isStackable: 1 for what never stacks, weapons, armour, backpacks): a single unit dropped on a
+// single unit stacks too (rob's purchases into his backpack, 11 October). The rest is placed like any
+// other move.
+inline int StackMergeCount(int have, int moving, int maxStack) {
+    if (have <= 0 || moving <= 0 || maxStack <= 1 || have >= maxStack) return 0;
+    return moving < maxStack - have ? moving : maxStack - have;
+}
 struct InventoryMsg {
     uint32_t netId = 0;
     std::vector<ItemState> items;

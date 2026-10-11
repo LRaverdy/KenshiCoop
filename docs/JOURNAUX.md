@@ -156,7 +156,10 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 | `NPC Y joined the player faction: a squad character now` / `a new squad character (Y) goes to X, who was talking with it (recruited)` | recrue d'une conversation |
 | `[X] goes to look into Y` → `[X] opens Y` → `[X] closes the container` | contenant |
 | `[X] steals Y (unseen)` / `[X] caught stealing Y` | vol réussi / vol repéré (la fenêtre se ferme) |
-| `client item move done: …` / `client item move refused: …` | déplacement d'objet demandé par un client |
+| `client item move done: …` / `client item drop done: …` / `client item move refused: …` | déplacement (ou dépôt au sol) d'objet demandé par un client, rejoué par l'hôte ; la quantité suit le modèle (`x3`) |
+| `INVCHECK after a move/a drop/a swap: clean` ou `: <problème>` | contrôle des deux inventaires après chaque opération (seulement avec `invcheck each 1`, tests) |
+| `INVCHECK sweep: <inventaire>: <problème> - repaired: …` | contrôle périodique (toutes les 3 s, partie en coop) : un problème vu deux fois de suite est réparé (objet libéré retiré de la liste, objet parti retiré de la liste ou de la section) ; un problème non réparable est écrit une fois. **À signaler** : il ne doit plus apparaître après la v0.3.2, sauf sur une sauvegarde déjà abîmée |
+| `invcheck: <problème>` | réponse détaillée de la commande de debug `invcheck` |
 | `client pick up: the item left the ground (taken): in the inventory of the character that was sent` | ramassage d'un client fait par l'hôte, et où l'objet est arrivé ; à surveiller : `in ANOTHER squad member's inventory (Y)`, `in an inventory outside the squad (taken by someone else?)`, `joined a stack of the same kind in an inventory, or destroyed` (pile fusionnée : normal) |
 | `[X] placement of Y at x,y,z refused: invalid spot (in water or acid (ground …, surface …))` | pose d'un client que le mode construction aurait refusée (aussi : `too close to a town`, `inside another building`, `on top of another building`, `too steep`, `the ground there is not loaded on the host`) : rien n'est bâti, le joueur reçoit la raison |
 | `refused an inventory move from player N` | demande refusée (pas son personnage, PNJ conscient…) : l'état réel est renvoyé |

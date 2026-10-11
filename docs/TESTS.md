@@ -145,6 +145,7 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `progress` | compétences, argent, bulles et ordres : l'hôte décide, le client suit |
 | `ground` / `clientpickup` | objets posés et ramassés ; ramassage demandé par un client |
 | `grounddrop` | objets lâchés par le chemin du glisser-déposer (`uidrop` = `Inventory::dropItem`) : une pile de minerai, une arme, une armure, par l'hôte puis par le client, puis les deux à la fois, puis ce qui tombe sur un K.-O. et une mort. Chaque objet une seule fois des deux côtés, même pile, à moins de 5 unités ; ramassé par l'hôte, il disparaît partout. Compteurs `groundstats` des deux côtés au journal. Pas encore lancée |
+| `backpack` (`kctest_mine`, v0.3.2) | **sacs à dos** (plantages de l'hôte du 11/10 23:04 et 23:48, point 0 et 3c d'A_FAIRE) : l'hôte met un sac sur le perso du client (`wearbag`) et lui donne 10 Matériaux de Construction et une arme ; le client range 1 unité dans le sac, en pose 1 sur 1 (**une seule pile de 2** chez l'hôte), y ajoute le reste de la pile (une pile de 10), en ressort 3, range l'arme (ne s'empile pas), lâche les matériaux du sac au sol (**une fois au sol, plus dans le sac, une seule ligne `client item drop done`**), l'hôte les ramasse ; s'il y a un marchand à côté, achète et range l'achat dans le sac ; enfin travail permanent de minage (`objjob … 87 Ressource_Fer`) 2 min à x3. Après chaque étape : `invcheck all` propre chez l'hôte et le client, même sac des deux côtés ; à la fin : pas de `CRASH`, mêmes inventaires (`compare`), aucune ligne `INVCHECK` en erreur (contrôle après chaque opération, `invcheck each 1`) |
 | `anim` / `animframe` / `gait` | animations de combat et d'action ; tout ce qui est à l'écran ; allure |
 | `fx` / `fxlive` | effets météo (orage forcé puis comparaison en pause ; en direct) |
 | `bodies` / `dead` / `items` | où reposent les corps ; morts ; objets |
@@ -287,6 +288,7 @@ l'escouade triée par handle.
 | `insomething <index>` | 0 rien, 1 au lit, 2 en cage |
 | `objnear <index> <rayon>` | objets autour (modèle × nombre) |
 | `objreq <sélection> <tâche> <nom>` | ordre d'utiliser l'objet le plus proche dont le nom contient ce texte (`_` pour les espaces) |
+| `objjob <sélection> <tâche> <nom>` | travail **permanent** (bouton JOBS, `addJobSelectedCharacters`) sur l'objet le plus proche dont le nom contient ce texte ; ex. `objjob 0 87 Ressource_Fer` (minage) |
 | `furnparent <nom>` | de quel bâtiment l'objet le plus proche de ce nom est le meuble |
 | `trace <handle> <images>` | journalise les corrections de position d'un personnage côté client |
 
@@ -357,7 +359,7 @@ l'escouade triée par handle.
 | `drop <index>` | ce membre pose un objet non équipé (répond avec son handle) |
 | `pickup <index> <clé>` / `pickupreq <index> <modèle> <x,y,z>` | ramasser (hôte) ; ce qu'envoie le « ramasser » d'un client |
 | `groundnear <rayon>` / `ground <clé de l'hôte>` | objets au sol autour ; cet objet est-il au sol ici ? |
-| `uidrop <index> <weapon\|armour\|item\|modèle>` | ce membre lâche cet objet comme le glisser-déposer vers le monde (`Inventory::dropItem`) ; client : demandé à l'hôte |
+| `uidrop <index\|bag:index> <weapon\|armour\|item\|modèle>` | ce membre (ou le sac qu'il porte : `bag:N`) lâche cet objet comme le glisser-déposer vers le monde (`Inventory::dropItem`) ; client : demandé à l'hôte ; hôte, depuis un sac : l'objet quitte d'abord le sac, comme quand la souris le prend |
 | `fetchitem <index> <weapon\|armour\|modèle>` | (hôte) prend un objet de ce genre à un autre membre (porté ou non) et le met dans son sac |
 | `groundall <rayon> [index]` / `groundcopy <clé de l'hôte>` | objets posés dans le monde autour, `clé\|modèle\|nombre\|x,y,z` ; (client) sa copie de cet objet de l'hôte |
 | `groundstats` | compteurs des objets au sol (crochets, relevé, répétitions ; côté client : créés, adoptés, fusionnés, retirés) |
@@ -375,6 +377,11 @@ l'escouade triée par handle.
 | `minereq <i>` | ce membre seul reçoit l'ordre d'exploiter la mine la plus proche (tâche 87) |
 | `caravan [i]` | caravane la plus proche du membre `i` : marchand sans bâtiment dont l'escouade a des bêtes de somme ; `trader=` `key=` `members=` `animals=` `stock=` (piles de chaque membre) `back=` (piles dans les sacs portés d'où il vend) `packs=` (membres qui en portent un) |
 | `bag <qui>` | le sac porté par ce personnage (`squadN`, `spawned` ou clé) : `ok <modèle> <piles> sid:qté...` |
+| `baginv <qui>` | le sac porté, chaque pile avec sa place : `ok <n> sid:qté@section:x,y ...` |
+| `invitems <qui>` | les piles du perso dans l'ordre que compte `invmove` : `ok <n> sid:qté@section:x,y ...` |
+| `wearbag <index> [nom]` | (hôte) un sac neuf (données de type 0x2E) mis dans la case sac de ce membre, comme la fenêtre d'inventaire ; rien s'il en porte déjà un |
+| `invcheck [all] [repair]` | contrôle des inventaires des persos du joueur (`all` : tous les persos actifs) et de leurs sacs (`kenshi::CheckInventories`) : objet libéré encore listé, objet listé hors de toute section, dans deux sections ou deux inventaires, objet d'une section absent de la liste ou marqué « hors inventaire ». `ok clean inventories=N items=M repairs=R each=0\|1` ou `err problems=K … \| <problème>; …` (chaque problème aussi dans le journal, `invcheck:`). `repair` : retire ce qui peut l'être sans toucher un objet libéré |
+| `invcheck each <0\|1>` | en plus, contrôle des deux inventaires après chaque déplacement rejoué par l'hôte (ou par `invmove`) : lignes `INVCHECK after a move/a drop/a swap: clean` ou le problème |
 | `caravanbeast [i]` | sa première bête de somme vivante devient la cible de `kill` / `npcstate` |
 | `caravanopen [i]` | le membre `i` va près du marchand ambulant et ouvre le commerce (appel du jeu) |
 | `squadanimals` | membres de l'escouade qui sont des animaux : `index:clé:piles` |

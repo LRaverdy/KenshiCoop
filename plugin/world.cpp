@@ -157,6 +157,61 @@ void KenshiWorld::BeginFrame(bool live) {
     }
     wasReady_ = ready;
     lastPlayer_ = player;
+    if (ready && active_) InventorySweep(NowSeconds());
+}
+
+// Every 3 s in a co-op game: the inventories of the player's characters and their backpacks checked
+// (kenshi::CheckInventories). A problem seen by two sweeps in a row (not something the game was in the
+// middle of) is repaired: a freed item out of a list, an item that left out of the list or section it
+// stayed in. Saves already holding such backpacks (11 October) no longer crash the AI that reads them.
+// Never while an item is dragged with the mouse (it is out of its section for that time).
+void KenshiWorld::InventorySweep(double now) {
+    constexpr double kEvery = 3.0;
+    if (now < invSweepAt_) return;
+    invSweepAt_ = now + kEvery;
+    if (kenshi::MouseHoldsItem()) { invSweepLast_.clear(); return; }
+    std::vector<std::string> lines;
+    int inventories = 0, items = 0;
+    if (CheckInventories(false, false, lines, inventories, items) == 0) { invSweepLast_.clear(); return; }
+    const bool again = std::any_of(lines.begin(), lines.end(), [&](const std::string& l) {
+        return std::find(invSweepLast_.begin(), invSweepLast_.end(), l) != invSweepLast_.end();
+    });
+    if (!again) {
+        invSweepLast_ = lines;
+        return;
+    }
+    std::vector<std::string> fixed;
+    HostCallScope scope;
+    CheckInventories(false, true, fixed, inventories, items);
+    invSweepLast_.clear();
+    for (const std::string& l : fixed) {
+        const bool repaired = l.find("repaired") != std::string::npos;
+        if (repaired) ++invRepairs_;
+        // what cannot be repaired here (a state the check does not know, a freed item in a section)
+        // is said once, not every 3 s
+        if (repaired || (invSweepLogged_.size() < 1000 && invSweepLogged_.insert(l).second)) Log("INVCHECK sweep: %s", l.c_str());
+    }
+}
+
+int KenshiWorld::CheckInventories(bool all, bool repair, std::vector<std::string>& lines, int& inventories, int& items) {
+    std::vector<kenshi::Character*> chars;
+    if (all) kenshi::ActiveCharacters(chars);
+    else kenshi::PlayerCharacters(chars);
+    std::vector<void*> holders(chars.begin(), chars.end());
+    return kenshi::CheckInventories(holders, repair, lines, &inventories, &items);
+}
+
+void KenshiWorld::CheckAfterOp(const char* what, void* a, void* b) {
+    if (!invCheckEachOp_) return;
+    std::vector<void*> holders{a};
+    if (b && b != a) holders.push_back(b);
+    for (void* h : {a, b})   // a backpack: its wearer's inventory too (and so every section it shows)
+        if (h && !kenshi::IsCharacter(h)) holders.push_back(kenshi::BackpackWearer(h));
+    holders.erase(std::remove(holders.begin(), holders.end(), nullptr), holders.end());
+    std::vector<std::string> lines;
+    const int n = kenshi::CheckInventories(holders, false, lines);
+    if (n == 0) Log("INVCHECK after %s: clean", what);
+    for (const std::string& l : lines) Log("INVCHECK after %s: %s", what, l.c_str());
 }
 
 // Everything that names objects of the loaded world (pointers, local handles, requests about
@@ -3304,12 +3359,14 @@ bool KenshiWorld::ExecuteInvOp(const kc::Handle& from, const kc::Handle& to, con
     if (!a || !b) return false;
     std::string err;
     HostCallScope scope;
-    if (kenshi::MoveInventoryItem(a, b, op, &err)) {
-        Log("client item move done: %s %s -> %s %d,%d", op.item.templateSid.c_str(), op.item.section.c_str(), op.toSection.c_str(), op.toX, op.toY);
-        return true;
-    }
-    Log("client item move refused: %s (%s x%d)", err.c_str(), op.item.templateSid.c_str(), op.item.quantity);
-    return false;
+    const bool ok = kenshi::MoveInventoryItem(a, b, op, &err);
+    if (ok)
+        Log("client item %s done: %s x%d %s -> %s %d,%d", op.kind == kc::InvOpKind::Drop ? "drop" : "move", op.item.templateSid.c_str(),
+            op.item.quantity, op.item.section.c_str(), op.toSection.c_str(), op.toX, op.toY);
+    else
+        Log("client item move refused: %s (%s x%d)", err.c_str(), op.item.templateSid.c_str(), op.item.quantity);
+    CheckAfterOp(op.kind == kc::InvOpKind::Drop ? "a drop" : "a move", a, b);
+    return ok;
 }
 
 bool KenshiWorld::ExecuteInvSwap(const kc::Handle& from, const kc::Handle& to, const kc::InvOp& a, const kc::InvOp& b) {
@@ -3321,6 +3378,7 @@ bool KenshiWorld::ExecuteInvSwap(const kc::Handle& from, const kc::Handle& to, c
     const bool ok = kenshi::SwapInventoryItems(x, y, a, b, &err);
     Log("client item swap %s: %s <-> %s (%s %d,%d)%s%s", ok ? "done" : "not possible", a.item.templateSid.c_str(), b.item.templateSid.c_str(),
         a.toSection.c_str(), a.toX, a.toY, ok ? "" : ": ", err.c_str());
+    CheckAfterOp("a swap", x, y);
     return ok;
 }
 
