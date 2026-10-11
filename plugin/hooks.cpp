@@ -990,7 +990,11 @@ uint64_t hk_addWound(void* medical, uint64_t a2, uint64_t a3, void* a4, void* a5
         if (v->active && v->remoteNear && !v->remoteNear->empty())
             if (kenshi::Character* c = kenshi::MedicalCharacter(medical); c && v->remoteNear->count(c)) {
                 uint8_t* f = reinterpret_cast<uint8_t*>(c) + kenshi::CH_inView;
-                if (*f == 0) { *f = 1; flag = f; }
+                if (*f == 0) {
+                    *f = 1;
+                    flag = f;
+                    if (KenshiWorld* w = TheWorld()) ++w->woundsForcedInView;
+                }
             }
     }
     const uint64_t r = o_addWound(medical, a2, a3, a4, a5, a6, a7, a8);
@@ -1002,7 +1006,10 @@ void hk_labelTrack(void* label, const void* hand, const float* offset) {
     if (label && label == t_floaterLabel) {
         t_floaterChar = kenshi::CharacterOfHand(hand);
         if (t_floaterChar)
-            if (KenshiWorld* w = TheWorld()) w->NoteAnim(t_floaterChar, t_floater);
+            if (KenshiWorld* w = TheWorld()) {
+                w->NoteAnim(t_floaterChar, t_floater);
+                ++w->floatersMade;
+            }
     }
 }
 void hk_labelColor(void* label, const float* colour) {

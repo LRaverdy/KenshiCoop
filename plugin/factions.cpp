@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <set>
@@ -401,6 +402,29 @@ bool ReadTown(void* t, kc::TownState& out) {
 }
 
 } // namespace
+
+// Tests ("towns"): every town with its position, so a test can send a character to another town.
+// "sid|name|x,y,z|ownerSid" each ('_' for spaces); towns whose position cannot be read are left out.
+std::string KenshiWorld::TownPositions() {
+    std::string out;
+    size_t n = 0;
+    auto word = [](std::string t) {
+        for (char& c : t) if (c == ' ' || c == '|' || c == '=' || (unsigned char)c < 32) c = '_';
+        return t.empty() ? std::string("-") : t;
+    };
+    for (void* t : AllTowns()) {
+        kc::TownState ts;
+        kc::Vec3 p;
+        if (!ReadTown(t, ts) || !kenshi::ObjectPosition(t, p)) continue;
+        std::string name;
+        kenshi::TemplateDisplayName(ts.sid, name);
+        char b[96];
+        snprintf(b, sizeof(b), "%.0f,%.0f,%.0f", p.x, p.y, p.z);
+        out += " " + word(ts.sid) + "|" + word(name) + "|" + b + "|" + word(ts.ownerSid);
+        ++n;
+    }
+    return "ok " + std::to_string(n) + out;
+}
 
 bool KenshiWorld::ReadDiplomacy(kc::DiplomacyState& out) {
     out = kc::DiplomacyState{};

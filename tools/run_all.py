@@ -15,7 +15,7 @@ import time
 sys.stdout.reconfigure(errors="replace")   # game names can hold characters the console's code page lacks
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT = ["suite", "trade", "doors", "factions", "diplomacy", "prison", "ranged", "build", "placevalid", "stuck", "farnpc", "beds", "tpdown", "research"]
+DEFAULT = ["suite", "trade", "doors", "factions", "diplomacy", "prison", "ranged", "build", "placevalid", "stuck", "farnpc", "beds", "tpdown", "research", "faraway"]
 
 which = sys.argv[1:] or DEFAULT
 os.makedirs(os.path.join(ROOT, "test_out"), exist_ok=True)

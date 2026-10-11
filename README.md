@@ -247,5 +247,7 @@ nom `LISEZMOI.md`.
   le lancer pendant une partie. Exemples :
   - `python tools\coop_test.py suite` (tout, point par point) ;
   - `... four` (1 hôte + 3 clients) ;
-  - `... soak --minutes 15`.
+  - `... soak --minutes 15` ;
+  - `... faraway` (le client dans une autre ville à plus de 30000 unités, l'hôte sans jamais
+    regarder : synchro, mouvement, combat, fouille, dialogue, commerce, objets au sol).
   Détails dans [docs/TESTS.md](docs/TESTS.md).

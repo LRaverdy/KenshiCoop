@@ -24,6 +24,8 @@ bool MapRefreshGui(MapScene& s);
 // Tests ("mapconv"): MyGUI view, back buffer, window client and DPI, the factors, the portrait
 // frames read now (raw MyGUI and converted) and the ones the overlay last drew.
 std::string DescribeMapConversion();
+// Tests ("campos"): this machine's 3D camera eye in world units: "ok x,y,z fwd=fx,fz".
+std::string DescribeCamera();
 // Tests ("mapui open|close|maptab|state"): clicks the game's MAP button through MyGUI's input.
 std::string MapUi(const std::string& what);
 

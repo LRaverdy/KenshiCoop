@@ -2577,6 +2577,665 @@ def exp_farlong(host, cli, seconds=300, kinds=("Tente", "Feu", "Coffre", "Lit", 
     summary()
 
 
+# ---- faraway: everything works with the players far apart, the host never spectating
+# Towns with merchants and people to talk with (English names, as the game data has them); the
+# test prefers those, then any other town, nearest first.
+FAR_TOWN_NAMES = ("Squin", "Stack", "Admag", "Shark", "Mongrel", "Clownsteady", "Bark", "Stoat", "Heft", "Blister",
+                  "Black_Scratch", "World", "Waystation", "Catun", "Spring", "Drifter", "Shem", "Brink", "Eyesocket",
+                  "Hub", "Sho-Battai", "Heng", "Okran", "Bad_Teeth", "Flats_Lagoon", "Mud_Town", "Free_Settlement",
+                  "Rebirth", "Port_North", "Settlement")
+FAR_NOT_TOWNS = ("camp", "nest", "ruin", "lair", "hideout", "den", "tower", "bandit", "repaire", "nid", "ruine")
+FAR_MIN = 30000          # the client's character at least that far from the host's squad
+FAR_ZONE = 3000          # sync compared within that distance of the client's character
+FAR_POS_TOL, FAR_DOWN_TOL = 3.0, 20.0
+FAR_CAM_NEAR = 5000      # the host's camera eye stays within that (x,z) distance of its own squad
+FAR_JUMP = 25.0          # a client sample moving more than that per 0.1 s is a teleport-like jump
+FAR_MOONWALK_DEG = 120.0
+
+
+def xz(a, b):
+    return math.hypot(a[0] - b[0], a[2] - b[2])
+
+
+def where_vec(pid, q):
+    ok, t = cmd(pid, f"where {q}")
+    return vec(t) if ok else None
+
+
+def town_list(pid):
+    """The towns this game knows (debug "towns"): [{sid, name, pos, owner}]."""
+    ok, t = cmd(pid, "towns")
+    out = []
+    for tok in (t.split()[2:] if ok else []):
+        parts = tok.split("|")
+        if len(parts) != 4:
+            continue
+        try:
+            p = tuple(map(float, parts[2].split(",")))
+        except ValueError:
+            continue
+        if len(p) == 3 and all(math.isfinite(v) for v in p) and (abs(p[0]) + abs(p[2])) > 1:
+            out.append({"sid": parts[0], "name": parts[1], "pos": p, "owner": parts[3]})
+    return out
+
+
+def far_town_candidates(towns, home, away_from=(), min_away=0):
+    """Towns at least FAR_MIN from home (and min_away from each of away_from): known merchant towns
+    first, then the others; nearest first in each group."""
+    def known(t):
+        n = t["name"].lower()
+        return any(k.lower() in n for k in FAR_TOWN_NAMES)
+
+    def not_town(t):
+        n = t["name"].lower()
+        return any(w in n.replace("_", " ").split() for w in FAR_NOT_TOWNS)
+
+    c = [t for t in towns if xz(t["pos"], home) >= FAR_MIN and not not_town(t) and all(xz(t["pos"], a) >= min_away for a in away_from)]
+    c.sort(key=lambda t: (not known(t), xz(t["pos"], home)))
+    return c
+
+
+def far_teleport(host, idx, base, offsets=((0, 0), (220, 0), (0, 220), (-220, 0), (0, -220), (400, 400), (-400, -400))):
+    """Debug TP of squad member idx next to base, on dry land, on top of the ground (the ground is
+    read on the host before the TP when known, else once the zone has streamed in). Returns the spot
+    or None."""
+    x, y, z = base
+    for dx, dz in offsets:
+        tx, tz = x + dx, z + dz
+        g = ground_at(host, tx, tz)
+        if g and g[2] == "water":
+            log(f"   {tx:.0f},{tz:.0f}: water or acid, next spot")
+            continue
+        ty = g[0] + 60 if g and g[2] == "land" and g[0] > -90 else y + 300
+        log(f"teleport {idx} to {tx:.0f},{ty:.0f},{tz:.0f}:", cmd(host, f"teleport {idx} {tx:.0f} {ty:.0f} {tz:.0f}"))
+        for _ in range(15):
+            time.sleep(1)
+            g = ground_at(host, tx, tz)
+            if g and g[2] != "unknown":
+                break
+        if g and g[2] == "land":
+            p = where_vec(host, idx)
+            if p and p[1] < g[0] - 30:   # under the ground (the town's height was a guess): on top of it
+                log("   under the ground, again on top:", cmd(host, f"teleport {idx} {tx:.0f} {g[0] + 60:.0f} {tz:.0f}"))
+                time.sleep(3)
+            return (tx, g[0], tz)
+        log(f"   {tx:.0f},{tz:.0f} is not dry land ({g}), next spot")
+    return None
+
+
+class HostCameraWatch(threading.Thread):
+    """Samples the host's camera (debug "campos") every 2 s for the whole test: its (x,z) distance to
+    the host's own characters at home."""
+
+    def __init__(self, host, anchors):
+        super().__init__(daemon=True)
+        self.host, self.anchors = host, anchors
+        self.samples, self.errors = [], []
+        self.halt = threading.Event()
+
+    def run(self):
+        while not self.halt.is_set():
+            try:
+                ok, t = cmd(self.host, "campos", timeout=6)
+            except RuntimeError as e:
+                self.errors.append(str(e))
+                break
+            if ok:
+                p = tuple(map(float, t.split()[1].split(",")))
+                self.samples.append((time.time(), min(xz(p, a) for a in self.anchors), p))
+            else:
+                self.errors.append(t)
+            self.halt.wait(2.0)
+
+    def stop(self):
+        self.halt.set()
+        self.join(10)
+
+
+def far_vitals_diff(hv, cv):
+    """'' when host and client have the same vitals for that character, else what differs."""
+    def life(v):
+        f = int(v.get("vflags", "0") or 0)
+        return 2 if f & 2 else f & 1
+    out = []
+    if life(hv) != life(cv):
+        out.append(f"etat {life(hv)}/{life(cv)}")
+    try:
+        if abs(float(hv.get("blood", 0)) - float(cv.get("blood", 0))) > 1.0:
+            out.append(f"sang {hv.get('blood')}/{cv.get('blood')}")
+    except ValueError:
+        pass
+    hp, cp = hv.get("parts", ""), cv.get("parts", "")
+    if hp and cp:
+        try:
+            hf = [float(x.split("/")[0]) for x in hp.split(";")]
+            cf = [float(x.split("/")[0]) for x in cp.split(";")]
+            worst = max((abs(a - b) for a, b in zip(hf, cf)), default=0.0)
+            if len(hf) != len(cf) or worst > 2.0:
+                out.append(f"membres ecart {worst:.1f}")
+        except ValueError:
+            pass
+    return ", ".join(out)
+
+
+def far_damaged(v, v0=None):
+    """Has that character been hurt (blood or a limb below its value at v0, or knocked out / dead)?"""
+    if int(v.get("vflags", "0") or 0) & 3:
+        return True
+    try:
+        parts = [float(x.split("/")[0]) for x in v.get("parts", "").split(";") if x]
+        if v0 is not None:
+            parts0 = [float(x.split("/")[0]) for x in v0.get("parts", "").split(";") if x]
+            return float(v.get("blood", 0)) < float(v0.get("blood", 0)) - 0.5 or any(a < b - 0.5 for a, b in zip(parts, parts0))
+        return any(p < 99 for p in parts)
+    except ValueError:
+        return False
+
+
+def far_floaters(pid):
+    ok, t = cmd(pid, "floaters")
+    return {k: int(v) for k, v in (kv.split("=") for kv in t.split()[1:] if "=" in kv)} if ok else {}
+
+
+def far_motion(samples):
+    """Client samples of one character (t, (x,y,z), (fx,fz), down): moving steps, steps against the
+    facing (moonwalk), teleport-like jumps."""
+    moving, back, jumps = 0, [], []
+    for (t0, p0, f0, d0), (t1, p1, f1, d1) in zip(samples, samples[1:]):
+        dt = max(1e-3, t1 - t0)
+        dx, dz = p1[0] - p0[0], p1[2] - p0[2]
+        step = math.hypot(dx, dz)
+        if step > FAR_JUMP * max(1.0, dt / 0.1):
+            jumps.append((round(t1, 2), round(step, 1)))
+        if d0 or d1 or step < 0.5:   # standing (or on the ground): no direction to compare
+            continue
+        moving += 1
+        fx, fz = f1
+        fl = math.hypot(fx, fz)
+        if fl < 1e-3:
+            continue
+        cosang = max(-1.0, min(1.0, (dx * fx + dz * fz) / (step * fl)))
+        ang = math.degrees(math.acos(cosang))
+        if ang > FAR_MOONWALK_DEG:
+            back.append((round(t1, 2), round(ang), round(step, 1)))
+    return moving, back, jumps
+
+
+def exp_faraway(host, cli):
+    """The client's character in another town far away (over 30000 units) while the host's squad stays
+    at home and the host's camera never leaves it (0.3.1: per-player streaming, addWound hook, trade
+    home building, drop handle). Around the client's character: same NPCs, positions and vitals; NPCs
+    walk smoothly (no moonwalk, no jumps); a fight's wounds and damage numbers reach the client; loot
+    (a knocked-out NPC, a creature), talk, trade, drop and pick up work there; then a third town."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    pid = player_id(cli) or 2
+    own_h = (own_indices(host, pid) or [own_index(host)])[0]     # the client's character, host's order
+    own_c = (own_indices(cli) or [own_h])[0]                      # the same, client's order
+    h0 = dump(host, "h_far_home", 3000)
+    keys_h = sorted(h0["squad"], key=lambda k: (int(k.split(":")[3]), int(k.split(":")[4])))
+    own_key = keys_h[own_h] if own_h < len(keys_h) else None
+    client_keys = {e["key"] for e in h0["entity"].values() if e.get("owner") == str(pid)}
+    home_idx = [i for i, k in enumerate(keys_h) if k not in client_keys and i != own_h]
+    hidx = (own_indices(host) or home_idx or [0])[0]
+    home = {i: where_vec(host, i) for i in home_idx}
+    home = {i: p for i, p in home.items() if p}
+    log(f"client character: host index {own_h} / client index {own_c} ({own_key}); host's squad at home: {sorted(home)}")
+    check("loin : l'escouade de l'hote est trouvee", bool(home), keys_h)
+    if not home:
+        summary()
+        return
+    anchors = list(home.values())
+    home_c = (sum(p[0] for p in anchors) / len(anchors), sum(p[1] for p in anchors) / len(anchors), sum(p[2] for p in anchors) / len(anchors))
+    # everyone healed and in god mode first (the fights then last; NPCs are not players: they get hurt)
+    log("heal everyone:", cmd(host, "admin heal all"), "| god mode:", cmd(host, "admin god all on"))
+    log("cats for the trade:", cmd(host, "givemoney 20000"))
+    # the host's camera on its own squad, and watched for the whole test
+    log("host camera on its own character:", cmd(host, f"camto {hidx}"))
+    time.sleep(2)
+    cam0 = cmd(host, "campos")
+    log("host camera:", cam0)
+    check("loin : la position de la camera de l'hote se lit (campos)", cam0[0], cam0[1])
+    watch = HostCameraWatch(host, anchors)
+    watch.start()
+
+    def go_far(towns, label, need_merchant):
+        """The client's character to the first candidate town that works (dry land, NPCs there,
+        a merchant when asked). Returns the town or None."""
+        for town in towns[:5]:
+            log(f"[{label}] try {town['name']} ({town['sid']}) at {town['pos']}, {xz(town['pos'], home_c):.0f} from home")
+            spot = far_teleport(host, own_h, town["pos"])
+            if not spot:
+                continue
+            cmd(cli, f"camto {own_c}")   # the client's player looks at its own character, as in a real game
+            time.sleep(25)                # zone streaming on both
+            me = where_vec(host, own_h)
+            if not me or xz(me, home_c) < FAR_MIN:
+                log(f"   the character is at {me}: not far enough")
+                continue
+            if need_merchant:
+                m = cmd(host, f"merchants {own_h}")[1]
+                log("   merchants there (host):", m)
+                if not re.findall(r"\((\d+)\)", m):
+                    continue
+            hz = dump(host, f"h_far_{label}_probe", FAR_ZONE)
+            people = [k for k, v in hz["char"].items() if "pos" in v and k not in hz["squad"] and xz(v["pos"], me) < 1500]
+            log(f"   {len(people)} NPC(s) within 1500 there")
+            if len(people) >= 2:
+                return town
+        return None
+
+    def zone_sync(label, rounds, gap):
+        """Paused host, host and client dumps, characters within FAR_ZONE of the client's character."""
+        prev, persist, off_all, vit_all, sizes = set(), set(), [], [], []
+        for r in range(rounds):
+            if r:
+                time.sleep(gap)
+            cmd(host, "pause 1")
+            time.sleep(2.5)
+            me = where_vec(host, own_h)
+            h = dump(host, f"h_far_{label}_{r}", FAR_ZONE)
+            c = dump(cli, f"c_far_{label}_{r}", FAR_ZONE + 500)
+            cmd(host, "pause 0")
+            near = {k: v for k, v in h["char"].items() if "pos" in v and me and xz(v["pos"], me) <= FAR_ZONE}
+            missing = {k for k in near if k not in c["char"]}
+            off, vit = [], []
+            for k in near:
+                cv = c["char"].get(k)
+                if not cv or "pos" not in cv:
+                    continue
+                down = int(near[k].get("flags", "0") or 0) & 12
+                e = dist(near[k]["pos"], cv["pos"])
+                if e > (FAR_DOWN_TOL if down else FAR_POS_TOL):
+                    off.append((k, round(e, 1), "a terre" if down else "debout"))
+                vd = far_vitals_diff(near[k], cv)
+                if vd:
+                    vit.append((k, vd))
+            persist |= missing & prev
+            prev = missing
+            off_all += off
+            vit_all += vit
+            sizes.append(len(near))
+            st = status(cli)
+            log(f"[{label} {r + 1}/{rounds}] within {FAR_ZONE}: host {len(near)} | missing {len(missing)} {sorted(missing)[:4]} | "
+                f"off {len(off)} {off[:3]} | vitals {len(vit)} {vit[:3]} | client missingNpcs {st.get('missingNpcs')}")
+        check(f"loin : {label} : des PNJ autour du perso du client chez l'hote", min(sizes) >= 2, sizes)
+        check(f"loin : {label} : aucun PNJ manquant deux releves de suite", not persist, sorted(persist)[:5])
+        check(f"loin : {label} : positions identiques (debout {FAR_POS_TOL}, a terre {FAR_DOWN_TOL})", not off_all, off_all[:5])
+        check(f"loin : {label} : memes vitaux (sang, etat, membres)", not vit_all, vit_all[:5])
+
+    def wait_dialog(want=True, seconds=15):
+        t = cmd(cli, "dialog")[1]
+        for _ in range(int(seconds * 2)):
+            if ("open=1" in t) == want:
+                break
+            time.sleep(0.5)
+            t = cmd(cli, "dialog")[1]
+        return t
+
+    def talk(label):
+        """The client's character talks to a town NPC: window on the client, tracked by the host, one
+        answer; then an NPC starts a conversation (npcevent) when one has a line for it."""
+        d, who = cmd(cli, "dialog")[1], None
+        for k in range(6):
+            r = cmd(cli, f"talkto {own_c} {k}")
+            log(f"[{label}] client talks to the NPC nearest #{k}:", r)
+            if not r[0]:
+                continue
+            d = wait_dialog(True, 15)
+            if "open=1" in d:
+                who = k
+                break
+        check(f"loin : {label} : le client parle a un PNJ de la ville, la fenetre s'ouvre chez lui", "open=1" in d, d[:200])
+        ds = cmd(host, "dialogs")[1]
+        dd = dict(kv.split("=", 1) for kv in ds.split(" | ")[0].split()[1:] if "=" in kv)
+        check(f"loin : {label} : l'hote suit la conversation", "open=1" in d and int(dd.get("n", 0)) >= 1, ds[:200])
+        if "open=1" in d:
+            replies = re.findall(r"\[([^\]]*)\]", d)
+            if replies:
+                n0 = host_log().count("] answers: \"")
+                turn0 = re.search(r"turn=(\S+)", d)
+                log(f"[{label}] client answers 0 ({replies[0][:60]}):", cmd(cli, "answer 0"))
+                for _ in range(20):
+                    time.sleep(0.5)
+                    d2 = cmd(cli, "dialog")[1]
+                    if "open=1" not in d2 or (turn0 and f"turn={turn0.group(1)}" not in d2):
+                        break
+                time.sleep(1)
+                check(f"loin : {label} : la reponse du client arrive a l'hote", host_log().count("] answers: \"") > n0, cmd(cli, "dialog")[1][:200])
+            else:
+                log(f"[{label}] that line has no answer to pick (who #{who})")
+            cmd(cli, "answer leave")
+            wait_dialog(False, 10)
+        time.sleep(2)
+        # an NPC starts it
+        found = None
+        for ev in (1, 3):
+            for which in ["dlg"] + [str(k) for k in range(6)]:
+                r = cmd(host, f"npcevent {own_h} {ev} {which}")
+                if not r[0]:
+                    continue
+                t = wait_dialog(True, 8 if "talking=1" in r[1] else 3)
+                if "open=1" in t:
+                    found = (ev, which, t)
+                    break
+                if "talking=1" in r[1]:
+                    found = (ev, which, t)   # the NPC did start it on the host: the window must follow
+                    break
+            if found:
+                break
+        if found:
+            check(f"loin : {label} : un PNJ engage la conversation, la fenetre s'ouvre chez le client", "open=1" in found[2],
+                  f"evenement {found[0]} {found[1]} | {found[2][:160]}")
+            cmd(cli, "answer leave")
+            wait_dialog(False, 10)
+        else:
+            log(f"[{label}] no NPC there has a line to start a conversation (npcevent): not checked")
+
+    # ---- town 2: far away
+    towns = town_list(host)
+    log(f"{len(towns)} towns known:", ", ".join(f"{t['name']}@{t['pos'][0]:.0f},{t['pos'][2]:.0f}" for t in towns)[:1500])
+    cands = far_town_candidates(towns, home_c)
+    log("far candidates:", [(t["name"], round(xz(t["pos"], home_c))) for t in cands[:8]])
+    check("loin : des villes a plus de 30000 de l'hote (towns)", bool(cands), len(towns))
+    town2 = go_far(cands, "ville2", need_merchant=True) if cands else None
+    me = where_vec(host, own_h)
+    check("loin : le perso du client est dans une autre ville, a plus de 30000", town2 is not None and me and xz(me, home_c) >= FAR_MIN,
+          f"{town2 and town2['name']} | {me} / maison {home_c}")
+    if not town2:
+        watch.stop()
+        summary()
+        return
+    log("client status:", status(cli))
+
+    # 1. sync around the client's character
+    zone_sync("synchro " + town2["name"], 3, 20)
+
+    # 2. smooth motion: walking NPCs near the client's character, sampled on the client at 10 Hz
+    cands_m = []
+    for _ in range(4):
+        hm = dump(host, "h_far_walkers", FAR_ZONE)
+        me = where_vec(host, own_h)
+        cands_m = sorted((xz(v["pos"], me), k) for k, v in hm["char"].items()
+                         if "pos" in v and k not in hm["squad"] and int(v.get("flags", "0") or 0) & 1 and not int(v.get("flags", "0") or 0) & 12
+                         and xz(v["pos"], me) < 1500)
+        if len(cands_m) >= 2:
+            break
+        time.sleep(3)
+    walkers = [k for _, k in cands_m[:5]]
+    if own_key:
+        log("client's character walks too:", cmd(cli, f"moverel {own_c} 160 60"))
+        walkers.append(own_key)
+    time.sleep(1)
+    path = os.path.abspath(os.path.join(OUT_DIR, "c_far_motion.txt"))
+    log(f"motion of {len(walkers)} character(s) on the client:", cmd(cli, f"motionrec 5 10 {path} {' '.join(walkers)}"))
+    lines = []
+    for _ in range(30):
+        time.sleep(0.5)
+        if os.path.exists(path):
+            lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+            if lines and lines[-1] == "end":
+                break
+    per = {}
+    for ln in lines:
+        p = ln.split()
+        if len(p) >= 8 and p[0] == "m":
+            per.setdefault(p[2], []).append((float(p[1]), tuple(map(float, p[3].split(","))), tuple(map(float, p[4].split(","))), p[7] == "1"))
+    moving_all, back_all, jumps_all = 0, [], []
+    for k, ss in per.items():
+        mv, back, jumps = far_motion(ss)
+        moving_all += mv
+        back_all += [(k,) + b for b in back]
+        jumps_all += [(k,) + j for j in jumps]
+        log(f"   {k}: {len(ss)} samples, {mv} moving steps, {len(back)} backward, {len(jumps)} jumps {jumps[:3]}")
+    check("loin : mouvement : des PNJ qui marchent echantillonnes a 10 Hz chez le client", len(per) >= 2 and moving_all >= 10,
+          f"{len(per)} persos, {moving_all} pas en mouvement")
+    check(f"loin : mouvement : jamais de marche a reculons (> {FAR_MOONWALK_DEG:.0f} deg entre deplacement et regard)", not back_all, back_all[:5])
+    check(f"loin : mouvement : aucun saut de plus de {FAR_JUMP:.0f} unites par echantillon", not jumps_all, jumps_all[:5])
+
+    # 5. talking there
+    talk("dialogue " + town2["name"])
+
+    # 6. trading there: the merchant's stock in the client's window, one purchase
+    m = cmd(host, f"merchants {own_h}")[1]
+    names = re.findall(r" ([^()]+?)\((\d+)\)", m)
+    merchant = names[0][0].strip().replace(" ", "_") if names else "any"
+    log("merchant:", merchant, "| list:", m[:300])
+    before_t = cmd(cli, "tradestate")[1]
+    log("client right-clicks the merchant (trade):", cmd(cli, f"npcreq {own_c} 26 {merchant}"))
+    state = before_t
+    for _ in range(90):
+        time.sleep(0.5)
+        state = cmd(cli, "tradestate")[1]
+        if "open=1" in state:
+            break
+    how = "clic droit"
+    if "open=1" not in state:
+        log("   no window from the right click: the host opens it (what 'let's trade' does)",
+            cmd(host, f"tradeopen {own_h} {merchant if merchant != 'any' else 'any'} near"))
+        how = "ouverte par l'hote"
+        for _ in range(30):
+            time.sleep(0.5)
+            state = cmd(cli, "tradestate")[1]
+            if "open=1" in state:
+                break
+    check(f"loin : commerce : la fenetre s'ouvre chez le client ({how})", "open=1" in state, state)
+    stock = cmd(cli, "tradelist merchant")[1]
+    log("client sees the stock:", stock[:300])
+    check("loin : commerce : la fenetre montre le stock du marchand (pas vide)", stock.startswith("ok") and stock.split()[1] != "0", stock[:150])
+    cats0_h, cats0_c = cmd(host, "money")[1], cmd(cli, "money")[1]
+    bought = cmd(cli, "tradebuy 0")
+    log("client buys:", bought)
+    time.sleep(4)
+    cats1_h, cats1_c = cmd(host, "money")[1], cmd(cli, "money")[1]
+    check("loin : commerce : achat paye chez l'hote", bought[0] and cats1_h != cats0_h, f"{bought[1]} | hote {cats0_h} -> {cats1_h}")
+    check("loin : commerce : meme argent partout", cats1_h == cats1_c, f"hote {cats1_h} / client {cats1_c}")
+    rep = compare(dump(host, "h_far_trade", FAR_ZONE), dump(cli, "c_far_trade", FAR_ZONE), "far trade")
+    check("loin : commerce : inventaires identiques apres l'achat", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    cmd(cli, "closewindows")
+    cmd(host, "closewindows")
+    time.sleep(3)
+
+    # 7. ground items: the client drops a stack there and picks it back up
+    ore = None
+    for part in ("Iron_Ore", "Copper_Ore", "Ore", "Stone"):
+        t = cmd(host, f"itemtypes {part}")[1].split()
+        if len(t) > 2 and "=" in t[2]:
+            ore = t[2].split("=")[0]
+            break
+    if ore:
+        log("ore for the client's character:", cmd(host, f"giveitem {ore} 6 {own_h}"))
+        time.sleep(4)
+
+        def ground(p, idx):
+            ok, t = cmd(p, f"groundall 700 {idx}")
+            out = {}
+            for x in (t.split()[2:] if ok and t.startswith("ok") else []):
+                k, sid, q, pos = x.split("|")
+                if sid == ore:
+                    out[k] = (int(q), tuple(map(float, pos.split(","))))
+            return out
+
+        def carried(p, idx):
+            ok, t = cmd(p, f"invcount {idx} {ore}")
+            return int(t.split()[1]) if ok else -1
+
+        n0_h, n0_c = carried(host, own_h), carried(cli, own_c)
+        gb_h, gb_c = ground(host, own_h), ground(cli, own_c)
+        dr = cmd(cli, f"uidrop {own_c} {ore}")
+        log("client drops the ore (inventory window's way):", dr)
+        time.sleep(3)
+        gn_h = {k: v for k, v in ground(host, own_h).items() if k not in gb_h}
+        gn_c = {k: v for k, v in ground(cli, own_c).items() if k not in gb_c}
+        same = len(gn_h) == 1 and len(gn_c) == 1 and next(iter(gn_h.values()))[0] == next(iter(gn_c.values()))[0] and \
+            dist(next(iter(gn_h.values()))[1], next(iter(gn_c.values()))[1]) < 5
+        check("loin : objet au sol : lache une fois, meme pile, meme endroit chez l'hote et le client", dr[0] and same,
+              f"hote {list(gn_h.values())} / client {list(gn_c.values())}")
+        if gn_h:
+            q, pos = next(iter(gn_h.values()))
+            log("client picks it up:", cmd(cli, f"pickupreq {own_c} {ore} {pos[0]:.1f},{pos[1]:.1f},{pos[2]:.1f}"))
+            for _ in range(20):
+                time.sleep(2)
+                if carried(host, own_h) >= n0_h:
+                    break
+            time.sleep(3)
+            left_h = [k for k in gn_h if k in ground(host, own_h)]
+            left_c = [k for k in gn_c if k in ground(cli, own_c)]
+            check("loin : objet au sol : ramasse, disparu des deux cotes", not left_h and not left_c, f"{left_h} / {left_c}")
+        n1_h, n1_c = carried(host, own_h), carried(cli, own_c)
+        check("loin : objet au sol : rien de perdu (meme nombre porte qu'avant, des deux cotes)", n1_h == n0_h and n1_c == n0_c,
+              f"hote {n0_h} -> {n1_h} / client {n0_c} -> {n1_c}")
+    else:
+        check("loin : objet au sol : un minerai trouve", False)
+
+    # 3. a fight next to the client's character, the host's camera at home
+    f0_h, f0_c = far_floaters(host), far_floaters(cli)
+    sp = cmd(host, f"spawnnpc 25 15 {own_h}")
+    log("host spawns an NPC next to the client's character:", sp)
+    npc = sp[1].split()[1] if sp[0] else None
+    if npc:
+        time.sleep(3)
+        v0 = dump(host, "h_far_npc0", FAR_ZONE)["char"].get(npc, {})
+        log("fight:", cmd(host, f"fight {own_h}"))
+        hurt = False
+        for _ in range(8):
+            time.sleep(4)
+            hv = dump(host, "h_far_fight", FAR_ZONE)["char"].get(npc, {})
+            if hv and far_damaged(hv, v0 or None):
+                hurt = True
+                if far_floaters(cli).get("shown", 0) > f0_c.get("shown", 0):
+                    break
+        time.sleep(3)
+        cmd(host, "pause 1")
+        time.sleep(2.5)
+        h, c = dump(host, "h_far_fight_end", FAR_ZONE), dump(cli, "c_far_fight_end", FAR_ZONE)
+        cmd(host, "pause 0")
+        hv, cv = h["char"].get(npc, {}), c["char"].get(npc, {})
+        check("loin : combat : le PNJ est blesse chez l'hote", hurt or (hv and far_damaged(hv, v0 or None)), hv.get("parts", "")[:120])
+        diffs = [(k, far_vitals_diff(h["char"][k], c["char"][k])) for k in (npc, own_key) if k in h["char"] and k in c["char"]]
+        check("loin : combat : memes vitaux et blessures chez le client (sang, etat, membres)",
+              npc in c["char"] and all(not d for _, d in diffs), diffs or "PNJ absent chez le client")
+        f1_h, f1_c = far_floaters(host), far_floaters(cli)
+        log("damage numbers: host", f0_h, "->", f1_h, "| client", f0_c, "->", f1_c)
+        check("loin : combat : l'hote fait les chiffres de degats hors de sa camera (addWound)",
+              f1_h.get("forced", 0) > f0_h.get("forced", 0), f"{f0_h} -> {f1_h}")
+        check("loin : combat : les chiffres de degats arrivent au client", f1_c.get("shown", 0) > f0_c.get("shown", 0), f"{f0_c} -> {f1_c}")
+    else:
+        check("loin : combat : PNJ cree pres du perso du client", False, sp)
+
+    # 4. looting there: the NPC knocked out, the client loots it the right click's way
+    if npc:
+        st = cmd(host, "npcstate")[1]
+        if "down=0" in st:
+            log("ko:", cmd(host, "ko"))
+        time.sleep(5)
+        h = dump(host, "h_far_body", FAR_ZONE)
+        body = npc if npc in h["char"] else None
+        if not body:   # its key may change when it goes down: the nearest body on the ground
+            me = where_vec(host, own_h)
+            downs = [k for k, v in h["char"].items() if "pos" in v and int(v.get("flags", "0") or 0) & 12 and me and xz(v["pos"], me) < 200]
+            body = downs[0] if downs else None
+        inv0 = h["char"].get(body, {}).get("inv") if body else None
+        log("body", body, "inventory on the host:", inv0)
+        check("loin : fouille : un PNJ a terre avec des objets pres du perso du client", bool(body) and bool(inv0), f"{body} {inv0}")
+        if body and inv0:
+            before = cmd(cli, "lootstats")[1]
+
+            def opened_since(b):
+                s_ = cmd(cli, "lootstats")[1]
+                return s_.split("opened=")[-1].split()[0] != b.split("opened=")[-1].split()[0], s_
+
+            log("client selects its character:", cmd(cli, f"selectset {own_c}"), "| right-click loot:", cmd(cli, f"lootorder {body}"))
+            ok_open, stats = False, before
+            for _ in range(45):
+                time.sleep(1)
+                ok_open, stats = opened_since(before)
+                if ok_open:
+                    break
+            how = "clic droit"
+            if not ok_open:
+                before = stats
+                log("   no window from the right click: loot order", cmd(cli, f"loot {body} {own_c}"))
+                how = "ordre de fouille"
+                for _ in range(30):
+                    time.sleep(1)
+                    ok_open, stats = opened_since(before)
+                    if ok_open:
+                        break
+            check(f"loin : fouille : la fenetre s'ouvre chez le client ({how})", ok_open, stats)
+            log("client takes one item:", cmd(cli, f"invmove {body} squad{own_c} 0"))
+            time.sleep(4)
+            h, c = dump(host, "h_far_looted", FAR_ZONE), dump(cli, "c_far_looted", FAR_ZONE)
+            inv1 = h["char"].get(body, {}).get("inv")
+            check("loin : fouille : un objet a quitte le corps chez l'hote", inv1 != inv0, f"{inv0} -> {inv1}")
+            bad = [k for k in (body, own_key) if k in h["char"] and h["char"][k].get("inv", "") != c["char"].get(k, {}).get("inv", "")]
+            check("loin : fouille : inventaires du corps et du perso identiques des deux cotes", not bad, bad)
+            cmd(cli, "closewindows")
+            time.sleep(2)
+        # a creature too
+        ok, t = cmd(host, f"spawncreature 3993-gamedata.base 35 -20 {own_h}")
+        log("host spawns a goat by the client's character:", t)
+        if ok and t.startswith("ok"):
+            ckey = t.split()[1]
+            time.sleep(4)
+            at = dump(host, "h_far_goat", FAR_ZONE)["char"].get(ckey, {}).get("pos")
+            log("kill:", cmd(host, "kill"))
+            time.sleep(6)
+            h = dump(host, "h_far_goat_dead", FAR_ZONE)
+            dead = [k for k, v in h["char"].items() if int(v.get("vflags", "0") or 0) & 2 and "pos" in v]
+            if at and dead and (ckey not in h["char"] or not int(h["char"][ckey].get("vflags", "0") or 0) & 2):
+                ckey = min(dead, key=lambda k: dist(h["char"][k]["pos"], at))
+            cinv0 = h["char"].get(ckey, {}).get("inv")
+            before = cmd(cli, "lootstats")[1]
+            log("client loots the goat:", cmd(cli, f"loot {ckey} {own_c}"))
+            ok_open, stats = False, before
+            for _ in range(45):
+                time.sleep(1)
+                stats = cmd(cli, "lootstats")[1]
+                if stats.split("opened=")[-1].split()[0] != before.split("opened=")[-1].split()[0]:
+                    ok_open = True
+                    break
+            check("loin : fouille d'une creature : la fenetre s'ouvre chez le client", ok_open, stats)
+            if ok_open and cinv0:
+                log("client takes one item:", cmd(cli, f"invmove {ckey} squad{own_c} 0"))
+                time.sleep(4)
+                h, c = dump(host, "h_far_goat_looted", FAR_ZONE), dump(cli, "c_far_goat_looted", FAR_ZONE)
+                bad = [k for k in (ckey, own_key) if k in h["char"] and h["char"][k].get("inv", "") != c["char"].get(k, {}).get("inv", "")]
+                check("loin : fouille d'une creature : un objet pris, memes inventaires des deux cotes",
+                      h["char"].get(ckey, {}).get("inv") != cinv0 and not bad, f"{cinv0} -> {h['char'].get(ckey, {}).get('inv')} | {bad}")
+            cmd(cli, "closewindows")
+            time.sleep(2)
+        else:
+            log("no creature could be spawned there: creature loot not checked")
+    log("heal everyone after the fight:", cmd(host, "admin heal all"))
+    time.sleep(3)
+
+    # 9. a third town: the stream follows the client's character
+    town3 = go_far(far_town_candidates(towns, home_c, (town2["pos"],), 15000) or
+                   [t for t in far_town_candidates(towns, home_c) if t["sid"] != town2["sid"]], "ville3", need_merchant=False)
+    me = where_vec(host, own_h)
+    check("loin : deuxieme voyage, une troisieme ville loin de l'hote", town3 is not None and me and xz(me, home_c) >= FAR_MIN,
+          f"{town3 and town3['name']} | {me}")
+    if town3:
+        zone_sync("synchro " + town3["name"], 2, 15)
+        talk("dialogue " + town3["name"])
+
+    # 8. the host never spectated
+    watch.stop()
+    ds = [s_[1] for s_ in watch.samples]
+    log(f"host camera: {len(ds)} samples, farthest from its squad {max(ds) if ds else -1:.0f}, errors {watch.errors[:3]}")
+    check("loin : camera de l'hote echantillonnee pendant tout le test", len(ds) >= 30 and len(watch.errors) <= len(ds) // 10,
+          f"{len(ds)} releves, {len(watch.errors)} erreurs")
+    check(f"loin : la camera de l'hote n'a jamais quitte son escouade (< {FAR_CAM_NEAR})", ds and max(ds) < FAR_CAM_NEAR,
+          f"pire {max(ds) if ds else -1:.0f}")
+    moved = {i: round(xz(where_vec(host, i) or (1e9, 0, 1e9), p)) for i, p in home.items()}
+    check("loin : l'escouade de l'hote est restee a la maison", all(d < 500 for d in moved.values()), moved)
+    check("loin : le client est toujours connecte", status(cli).get("state") == "connected", status(cli))
+    log("host god mode off:", cmd(host, "admin god all off"))
+    summary()
+
+
 def exp_placevalid(host, cli, kinds=("Tente", "Feu", "Coffre", "Lit", "Mur")):
     """Placements are checked as build mode checks a spot. The client's character goes next to an
     acid lake (on dry land, so that both games have the zone): the lake spot is refused by the
@@ -5896,6 +6555,10 @@ def main():
     bh = sub.add_parser("buyhouse", help="buying a building for sale: price, owner, doors and containers, refusal, simultaneous purchase")
     bh.add_argument("--save", default="kctest_town")
     bh.add_argument("--keep", action="store_true")
+    fw_ = sub.add_parser("faraway", help="0.3.1: the client's character in another town (> 30000) while the host never looks: sync, smooth NPCs, "
+                                         "fight and damage numbers, loot, talk, trade, ground items, a third town")
+    fw_.add_argument("--save", default="kctest_town")
+    fw_.add_argument("--keep", action="store_true")
     fl_ = sub.add_parser("farlong", help="the client's character far away (>= 30000) for a long time: zone compared every 30 s, fight, building")
     fl_.add_argument("--save", default="kctest_base")
     fl_.add_argument("--keep", action="store_true")
@@ -6121,6 +6784,8 @@ def main():
             exp_buyhouse(host, cli)
         elif a.what == "farlong":
             exp_farlong(host, cli, seconds=a.seconds)
+        elif a.what == "faraway":
+            exp_faraway(host, cli)
         elif a.what == "buildstate":
             exp_buildstate(host, cli)
         elif a.what == "placevalid":

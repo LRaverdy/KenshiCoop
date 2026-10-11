@@ -2971,6 +2971,7 @@ void KenshiWorld::ApplyAnim(const kc::Handle& h, const kc::AnimEvent& e) {
         if (e.kind == kc::AnimKind::Floater) {
             const size_t bar = e.name.find('|');
             lastFloater_[c] = kenshi::ShowFloater(c, bar == std::string::npos ? "" : e.name.substr(bar + 1), col, e.flags & 0xF, e.flags >> 4);
+            ++floatersShown;
         } else if (auto it = lastFloater_.find(c); it != lastFloater_.end()) {
             kenshi::SetLabelColor(it->second, col);
         }

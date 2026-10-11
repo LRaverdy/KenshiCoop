@@ -789,6 +789,31 @@ void UpdateMapScene(kc::Session& session, KenshiWorld& world, const Config& cfg,
 
 const MapScene& LastMapScene() { return g_scene; }
 
+// Tests ("campos"): where this machine's 3D camera is, in world units (the eye, from the view matrix,
+// plus Kenshi's moving render origin). The far tests check that the host never looked at a client.
+std::string DescribeCamera() {
+    ResolveExports();
+    void* cc = nullptr;
+    void* cam = nullptr;
+    bool init = false;
+    if (!g_ex.viewMatrix || !g_ex.projMatrix || !kenshi::Player() || !Rd(kenshi::Player(), kPiCamera, cc) || !cc ||
+        !Rd(cc, kCamInitialised, init) || !init || !Rd(cc, kCamOgre, cam) || !cam)
+        return "err no camera";
+    float v[16], p[16], of[3] = {};
+    if (!MatricesSEH(cam, v, p)) return "err view matrix";
+    if (!RelativeOriginSEH(cam, of)) of[0] = of[1] = of[2] = 0;
+    double eye[3];
+    for (int j = 0; j < 3; ++j) {   // view = [R | t]: eye = -R^T t (render space), then + origin
+        double acc = 0;
+        for (int i = 0; i < 3; ++i) acc += double(v[i * 4 + j]) * double(v[i * 4 + 3]);
+        eye[j] = -acc + double(of[j]);
+    }
+    if (!std::isfinite(eye[0]) || !std::isfinite(eye[1]) || !std::isfinite(eye[2])) return "err not finite";
+    char b[128];
+    snprintf(b, sizeof(b), "ok %.1f,%.1f,%.1f fwd=%.3f,%.3f", eye[0], eye[1], eye[2], -v[8], -v[10]);
+    return b;
+}
+
 std::string CheckMapProjection(float x, float z) {
     void* ms = MapScreen();
     if (!ms) return "err no map screen";

@@ -26,6 +26,15 @@ namespace {
 
 double g_nextPoll = 0;
 kc::Handle lastSpawned_;
+// motionrec: characters sampled at a fixed rate on the game's thread (tests: moonwalk, jumps)
+struct MotionRec {
+    bool on = false;
+    double until = 0, next = 0, step = 0.1, t0 = 0;
+    std::string file;
+    std::vector<kc::Handle> who;
+    std::ostringstream out;
+};
+MotionRec g_motion;
 
 // (host) the NPC of the last conversation shown on a client's screen, alive and standing
 kenshi::Character* DialogNpc(KenshiWorld& w) {
@@ -1714,6 +1723,32 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         if (idx < squad.size()) kenshi::ReadInSomething(w.FindSquad(squad[idx]), v);
         return "ok " + std::to_string(v);
     }
+    if (cmd == "towns") return w.TownPositions();   // towns: every town, "sid|name|x,y,z|owner" each
+    if (cmd == "campos") return DescribeCamera();   // campos: this machine's camera eye, world units "ok x,y,z fwd=fx,fz"
+    if (cmd == "floaters")   // floaters: damage numbers made and sent (host), made off the host's camera for a client's zone, shown here (client)
+        return "ok made=" + std::to_string(w.floatersMade.load()) + " forced=" + std::to_string(w.woundsForcedInView.load()) +
+               " shown=" + std::to_string(w.floatersShown.load());
+    if (cmd == "motionrec") {   // motionrec <seconds> <hz> <file> <key>...: those characters sampled at that rate here (pos, facing, moving), then the file is written
+        double secs = 5, hz = 10;
+        std::string file;
+        in >> secs >> hz >> file;
+        if (file.empty() || secs <= 0 || hz <= 0 || hz > 60) return "err usage: motionrec <seconds> <hz> <file> <key>...";
+        g_motion = MotionRec{};
+        for (std::string k; in >> k;) {
+            kc::Handle h;
+            if (sscanf(k.c_str(), "%u:%u:%u:%u:%u", &h.type, &h.container, &h.containerSerial, &h.index, &h.serial) == 5) g_motion.who.push_back(h);
+        }
+        if (g_motion.who.empty()) return "err no character keys";
+        g_motion.file = file;
+        g_motion.step = 1.0 / hz;
+        g_motion.t0 = g_motion.next = NowSeconds();
+        g_motion.until = g_motion.t0 + secs;
+        g_motion.out.setf(std::ios::fixed);
+        g_motion.out.precision(3);
+        g_motion.on = true;
+        DeleteFileA(file.c_str());
+        return "ok " + std::to_string(g_motion.who.size());
+    }
     if (cmd == "camto") {   // camto <squadIndex>: the camera goes to that squad member
         size_t idx = 0;
         in >> idx;
@@ -1895,7 +1930,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         return kenshi::CallAddTaskNearest(26, t) ? "ok" : "err call failed";
     }
     if (cmd == "merchants" || cmd == "tradeopen") {
-        // merchants: NPCs around squad member 0 who sell from shop counters ("name(counters)" each)
+        // merchants [squadIndex]: NPCs around squad member 0 (or that one) who sell from shop counters ("name(counters)" each)
         // tradeopen <squadIndex> <name part|any> [near]: the game asks for a trade window between that
         //   squad member and the nearest such merchant (what "let's trade" in a conversation does); on
         //   the host, for another player's character, it opens on that player's screen. near: the
@@ -1903,6 +1938,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         size_t sel = 0;
         std::string part = "any", nearArg;
         if (cmd == "tradeopen") in >> sel >> part >> nearArg;
+        else if (!(in >> sel)) sel = 0;   // merchants [squadIndex]: around that member (default 0)
         std::replace(part.begin(), part.end(), '_', ' ');
         auto squad = SortedSquad(w);
         if (sel >= squad.size()) return "err no such squad member";
@@ -2710,6 +2746,28 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
 
 void DebugPoll(kc::Session& s, KenshiWorld& w, bool live) {
     const double now = NowSeconds();
+    if (g_motion.on && now >= g_motion.next) {   // motionrec: one sample of every character asked for
+        g_motion.next += g_motion.step;
+        if (g_motion.next < now) g_motion.next = now + g_motion.step;   // a long frame: no burst of catch-up samples
+        if (live && w.Ready())
+            for (const kc::Handle& h : g_motion.who) {
+                kenshi::Character* c = w.Find(h);
+                kc::Vec3 p, fd, dest;
+                bool mv = false;
+                float sp = 0;
+                if (!c || !kenshi::GetPosition(c, p)) continue;
+                const bool face = kenshi::GetFacing(c, fd);
+                kenshi::GetMovement(c, dest, mv, sp);
+                g_motion.out << "m " << (now - g_motion.t0) << ' ' << Key(h) << ' ' << p.x << ',' << p.y << ',' << p.z << ' '
+                             << (face ? fd.x : 0.0f) << ',' << (face ? fd.z : 0.0f) << ' ' << int(mv) << ' ' << sp << ' '
+                             << int(kenshi::IsDown(c) || kenshi::IsDead(c)) << '\n';
+            }
+        if (now >= g_motion.until) {
+            std::ofstream f(g_motion.file, std::ios::trunc);
+            f << g_motion.out.str() << "end\n";
+            g_motion.on = false;
+        }
+    }
     if (now < g_nextPoll) return;
     g_nextPoll = now + 0.1;
     const std::wstring dir = GameDir();

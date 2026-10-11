@@ -6,6 +6,22 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+- **Expérience `faraway` : tout marche avec les joueurs loin l'un de l'autre, sans que l'hôte regarde.**
+  Session réelle : un client à 900 m dans une autre ville avait des PNJ absents, des PNJ saccadés ou
+  qui marchaient à reculons, aucun dégât affiché tant que la caméra de l'hôte n'allait pas sur lui,
+  pas de dialogue, des fenêtres de commerce vides, des objets perdus (corrigé en 0.3.1 : diffusion
+  par joueur, crochet `addWound`, bâtiment du marchand, handle des objets lâchés). `kctest_town` ;
+  escouade de l'hôte à la maison, sa caméra dessus pendant tout le test ; le perso du client dans
+  une autre ville à plus de 30000 unités, puis une troisième. Points « loin : … » : synchro autour
+  du client (3 relevés), mouvement à 10 Hz chez le client (ni marche à reculons ni saut), dialogue
+  (le client puis un PNJ), commerce (stock non vide, achat), objet lâché puis ramassé, combat
+  (vitaux, blessures, chiffres de dégâts chez le client), fouille d'un PNJ assommé et d'une chèvre,
+  caméra de l'hôte jamais à plus de 5000 de son escouade. Ajoutée à `run_all`. Pas encore lancée.
+  Nouvelles commandes de debug : `campos` (œil de la caméra en coordonnées du monde), `floaters`
+  (chiffres de dégâts : faits par l'hôte, faits hors de sa caméra par `hk_addWound`, affichés chez
+  le client), `motionrec` (persos relevés à fréquence fixe sur le fil du jeu), `towns` (villes et
+  positions) ; `merchants` prend un index de membre. Compteurs `KenshiWorld::floatersMade`,
+  `woundsForcedInView`, `floatersShown` (tests seulement, aucun changement de comportement).
 - **Restes de la série du 11/10 à 03 h (master f93e80b) : dialogue 13/16, squadui 19/21, research
   10/13, map 46/47.** Pas encore relancé en jeu.
   - *Dialogue, « occupé pour un autre perso »* (test) : le perso de l'hôte (un autre joueur, comme

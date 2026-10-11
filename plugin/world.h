@@ -131,6 +131,7 @@ public:
     bool SetFactionPair(const std::string& fromSid, const std::string& toSid, const kc::RelationState& rel);
     bool SetUniqueState(const std::string& sid, uint8_t state, bool byPlayer);
     bool SetTownOwner(const std::string& townSid, const std::string& factionSid);
+    std::string TownPositions();   // tests ("towns"): "ok <n> sid|name|x,y,z|owner ..."
     // ---- workshop: research, crafting benches, machines, power (plugin/workshop.cpp)
     bool ReadResearch(kc::ResearchState& out) override;
     bool ExecuteResearchRequest(const kc::ResearchRequest& r, const kc::Handle& actor, std::string& refusedFr) override;
@@ -369,6 +370,9 @@ public:
     kc::Handle LastDialogNpc();
     int dialogsBusyRefused = 0, dialogsSwept = 0, hostDialogUnpaused = 0;
     int saysApplied = 0;          // tests (client): speech bubbles replayed
+    // tests ("floaters"): damage numbers. Host: made by addWound and sent (floatersMade), made off its
+    // camera for a character near a client player (woundsForcedInView, hk_addWound). Client: shown here.
+    std::atomic<int> floatersMade{0}, woundsForcedInView{0}, floatersShown{0};
     std::string lastSay;
     // Client: the player dropped it from that character or that building's inventory (any thread).
     void QueueLocalDrop(void* holder, void* item);
