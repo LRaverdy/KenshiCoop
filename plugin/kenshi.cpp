@@ -235,6 +235,9 @@ const FunctionSig kFunctions[FnCount] = {
     {"MedicalSystem::addWound", 0x6508D0, {0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56}},
     {"Character::updateView", 0x5C9F60, {0x40, 0x53, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x68, 0x44, 0x0F, 0xB6, 0xB1}},
     {"Character::setInBed", 0x32E2F0, {0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48}},
+    // ---- inventories
+    {"Item::isStackable", 0x75E090, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x60, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE}},
+    {"InventorySection::removeItem", 0x749A20, {0x48, 0x89, 0x5C, 0x24, 0x20, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B}},
 };
 
 namespace {
@@ -2403,44 +2406,6 @@ std::string FirstSectionName(void* holder) {
 }
 
 
-bool RebuildInventory(void* c, const std::vector<kc::ItemState>& items, std::string* err) {
-    void* inv = InventoryOf(c);
-    if (!inv) { if (err) *err = "no inventory"; return false; }
-    // Keep every local item that already is exactly what the host has; only the rest changes.
-    std::vector<kc::ItemState> missing = items;
-    std::vector<void*> extra;
-    bool extraEquipped = false;
-    for (void* it : InventoryItems(inv)) {
-        kc::ItemState s;
-        if (!ReadItemState(it, s)) continue;
-        auto m = std::find(missing.begin(), missing.end(), s);
-        if (m != missing.end()) { missing.erase(m); continue; }
-        extra.push_back(it);
-        extraEquipped |= s.equipped;
-    }
-    if (extraEquipped && IsCharacter(c)) EndCombat(static_cast<Character*>(c));   // it may be holding the weapon that goes away
-    for (void* it : extra) {
-        int q = 1;
-        Rd(it, IT_quantity, q);
-        CallRemoveDestroy(VSlot(inv, INVV_removeAutoDestroy), inv, it, q);
-    }
-    bool ok = true;
-    for (const auto& s : missing) {
-        std::string why;
-        void* item = CreateItemFromState(s, &why);
-        if (!item) { ok = false; if (err) *err = why; continue; }
-        // where the host has it; else anywhere in the bag; only then the game's own add, which destroys
-        // what it cannot store: an item the host has must not simply vanish here (v0.3.0 session:
-        // "cannot place 42243-rebirth.mod", the item then "missing" on two clients)
-        if (PlaceItem(inv, item, s.section, s.x, s.y, s.quantity, false, true)) continue;
-        ok = false;
-        if (err) *err = "cannot place " + s.templateSid + " at " + s.section;
-        if (s.section != "main" && PlaceItem(inv, item, "main", 0, 0, s.quantity, false)) continue;
-        if (!CallAddItem(VSlot(inv, INVV_addItem), inv, item, s.quantity) && err) *err += " (nowhere: lost here)";
-    }
-    return ok;
-}
-
 namespace {
 struct Stack { void* item = nullptr; int qty = 0; };
 void ItemPlace(void* it, std::string& sec, int& x, int& y) {
@@ -2485,7 +2450,194 @@ void* ItemAt(void* inv, const std::string& section, int x, int y, void* except) 
     }
     return nullptr;
 }
+
+// ---- Which inventory owns an item (host crashes of 11 October, 23:04 and 23:48).
+// An InventorySection knows its inventory (+0xC8): its _addItem and removeItem update that inventory's
+// list (_allItems, +0x10) through the section callbacks (vt 0x40 / 0x50 -> _addToList / _removeFromList).
+// Inventory::removeItemDontDestroy (vt 0x28, 0x74A950) finds the item's section BY NAME in its own
+// table (+0x28); when that inventory has no section of that name, it only clears the item's flags
+// (+0xD8, the section name) and returns it, still listed where it really is. That is what replaying a
+// drop out of a worn backpack did: the backpack's Inventory::dropItem calls ContainerItem::dropItem
+// (the wearer's dropItem), which removes the item through the CHARACTER's inventory (no
+// "backpack_content" there), then the backpack's own remove sees the item flagged out and returns
+// too: the item lay on the ground and stayed in the backpack's list and section. Once picked up and
+// merged (destroyed), the AI's getResourceItems (0x749490) or the section's weight update (0x749160)
+// read it freed. Every operation here therefore goes through the inventory that owns the item, and
+// first checks that this inventory finds the item's section by name.
+constexpr uintptr_t SEC_equipSection = 0xB4;      // bool isAnEquippedItemSection: its items are not in the list
+constexpr uintptr_t SEC_parent = 0xC8;            // Inventory* parentInventory (InventorySection::getInventory 0x745BC0)
+constexpr uintptr_t INVV_removeFromList = 0x68;   // Inventory: void _removeFromList(Item*, bool): the list only, pointer compare
+constexpr uintptr_t CI_wearer = 0x230;            // ContainerItem: who wears it (ContainerItem::dropItem 0x75D810 calls its dropItem)
+constexpr uint32_t kMaxCheckedItems = 4096;
+
+struct ItemHome { void* inv = nullptr; void* sec = nullptr; };
+
+// the raw list (nulls and freed pointers included: what the game itself iterates)
+std::vector<void*> ListOf(void* inv) {
+    std::vector<void*> out;
+    const auto* lk = reinterpret_cast<const uint8_t*>(inv) + INV_allItems;
+    uint32_t count = 0;
+    void** data = nullptr;
+    if (!inv || !Rd(lk, off::LK_count, count) || count > kMaxCheckedItems || !count || !Rd(lk, off::LK_data, data) || !data) return out;
+    for (uint32_t i = 0; i < count; ++i) {
+        void* p = nullptr;
+        Rd(data, i * sizeof(void*), p);
+        out.push_back(p);
+    }
+    return out;
+}
+std::vector<void*> ItemsOfSection(void* sec) {
+    std::vector<void*> out;
+    uintptr_t first = 0, last = 0;
+    if (!Rd(sec, SEC_items, first) || !Rd(sec, SEC_items + 8, last) || last < first || (last - first) % kSectionItemSize ||
+        (last - first) / kSectionItemSize > kMaxCheckedItems)
+        return out;
+    for (uintptr_t p = first; p < last; p += kSectionItemSize) {
+        void* it = nullptr;
+        Rd(reinterpret_cast<const void*>(p), 0, it);
+        out.push_back(it);
+    }
+    return out;
+}
+// every section an inventory shows: its search list, and any one only in its name table
+std::vector<void*> SectionsOf(void* inv) {
+    std::vector<void*> out;
+    if (!inv) return out;
+    ReadPointerLektor(reinterpret_cast<const uint8_t*>(inv) + INV_sectionList, out, 64);
+    const auto* map = reinterpret_cast<const uint8_t*>(inv) + INV_sections;
+    uint64_t size = 0, bucketCount = 0;
+    void** buckets = nullptr;
+    if (!Rd(map, off::US_size, size) || size == 0 || size > 256) return out;
+    if (!Rd(map, off::US_bucketCount, bucketCount) || !Rd(map, off::US_buckets, buckets) || !buckets) return out;
+    void* node = nullptr;
+    if (!Rd(buckets, bucketCount * sizeof(void*), node)) return out;
+    for (uint64_t i = 0; node && i < size; ++i) {
+        void* sec = nullptr;
+        if (Rd(node, off::MapNode_mapped, sec) && sec && std::find(out.begin(), out.end(), sec) == out.end()) out.push_back(sec);
+        if (!Rd(node, off::USNode_next, node)) break;
+    }
+    return out;
+}
+void* SectionParent(void* sec, void* fallback) {
+    void* p = nullptr;
+    return Rd(sec, SEC_parent, p) && p ? p : fallback;
+}
+bool Has(const std::vector<void*>& v, const void* p) { return std::find(v.begin(), v.end(), p) != v.end(); }
+// The inventory that really holds an item `inv` shows, and the section it lies in (none: only listed).
+ItemHome HomeOf(void* inv, void* item) {
+    if (!inv || !item) return {};
+    for (void* sec : SectionsOf(inv))
+        if (Has(ItemsOfSection(sec), item)) return {SectionParent(sec, inv), sec};
+    if (Has(ListOf(inv), item)) return {inv, nullptr};
+    return {};
+}
+// still referenced by that inventory: its list, one of its sections, or the list of a section's owner
+bool Listed(void* inv, void* item) {
+    if (!inv || !item) return false;
+    if (Has(ListOf(inv), item)) return true;
+    for (void* sec : SectionsOf(inv)) {
+        if (Has(ItemsOfSection(sec), item)) return true;
+        void* parent = SectionParent(sec, inv);
+        if (parent != inv && Has(ListOf(parent), item)) return true;
+    }
+    return false;
+}
+// Takes `qty` of an item out of the inventory that owns it, never destroyed: the item itself (the
+// whole stack) or a copy holding `qty` (the stack keeps the rest). Null (and *err) when the owner would
+// not really let it go: then nothing changed.
+void* TakeFromHome(const ItemHome& h, void* item, int qty, std::string* err) {
+    if (!h.inv || !item) { if (err) *err = "item not found"; return nullptr; }
+    std::string name;
+    int x = 0, y = 0;
+    ItemPlace(item, name, x, y);
+    uint8_t in = 0;
+    Rd(item, IT_inInventory, in);
+    if (!in || !h.sec || FindSection(h.inv, name) != h.sec) {
+        if (err) *err = "the item is not where its inventory looks for it (section '" + name + "', in=" + std::to_string(in) + ")";
+        return nullptr;
+    }
+    void* moving = CallRemoveReturns(VSlot(h.inv, INVV_removeDontDestroy), h.inv, item, qty);
+    if (!moving) { if (err) *err = "cannot take the item"; return nullptr; }
+    if (moving == item && Listed(h.inv, item)) { if (err) *err = "the item stayed listed after its removal"; return nullptr; }
+    return moving;
+}
+// An item taken out (TakeFromHome) that is no longer needed: destroyed like the game's
+// removeItemAutoDestroy does (GameWorld::destroy), but only when no inventory involved still lists it.
+bool DisposeTaken(void* item, std::initializer_list<void*> invs) {
+    for (void* inv : invs)
+        if (Listed(inv, item)) return false;   // leaked rather than freed while referenced
+    GameWorld* w = World();
+    return w && CallDestroy(FnAddr(FnWorldDestroy), w, item);
+}
+using FnIsStackable = int (*)(void* item, void* section);
+int StackMaxSeh(void* item, void* sec) {
+    __try { return reinterpret_cast<FnIsStackable>(FnAddr(FnItemIsStackable))(item, sec); } __except (EXCEPTION_EXECUTE_HANDLER) { return 1; }
+}
+// the most of that item one cell of that section holds (the game's own rule, its stacking bonus included)
+int StackMax(void* item, void* sec) {
+    const int n = item && sec ? StackMaxSeh(item, sec) : 1;
+    return n > 0 ? n : 1;
+}
+Character* BagWearer(void* bag) {
+    void* w = nullptr;
+    return bag && !IsCharacter(bag) && IsItemObject(bag) && Rd(bag, CI_wearer, w) && IsCharacter(w) ? static_cast<Character*>(w) : nullptr;
+}
+using FnRemoveFromList = void (*)(void* inv, void* item, bool checkEverything);
+bool RemoveFromListSeh(void* fn, void* inv, void* item) {
+    __try { reinterpret_cast<FnRemoveFromList>(fn)(inv, item, false); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+using FnSecRemove = bool (*)(void* sec, void* item);
+bool SectionRemoveSeh(void* sec, void* item) {
+    __try { return reinterpret_cast<FnSecRemove>(FnAddr(FnSectionRemoveItem))(sec, item); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
 } // namespace
+
+bool RebuildInventory(void* c, const std::vector<kc::ItemState>& items, std::string* err) {
+    void* inv = InventoryOf(c);
+    if (!inv) { if (err) *err = "no inventory"; return false; }
+    // Keep every local item that already is exactly what the host has; only the rest changes.
+    std::vector<kc::ItemState> missing = items;
+    std::vector<void*> extra;
+    bool extraEquipped = false;
+    for (void* it : InventoryItems(inv)) {
+        kc::ItemState s;
+        if (!ReadItemState(it, s)) continue;
+        auto m = std::find(missing.begin(), missing.end(), s);
+        if (m != missing.end()) { missing.erase(m); continue; }
+        extra.push_back(it);
+        extraEquipped |= s.equipped;
+    }
+    if (extraEquipped && IsCharacter(c)) EndCombat(static_cast<Character*>(c));   // it may be holding the weapon that goes away
+    bool ok = true;
+    for (void* it : extra) {
+        // out of the inventory that owns it (a section another inventory owns is not ours to empty),
+        // then destroyed once nothing lists it any more
+        int q = 1;
+        Rd(it, IT_quantity, q);
+        std::string why;
+        const ItemHome home = HomeOf(inv, it);
+        if (void* taken = TakeFromHome(home, it, q, &why)) {
+            DisposeTaken(taken, {home.inv, inv});
+        } else {
+            ok = false;
+            if (err) *err = "cannot remove " + ItemTemplate(it) + ": " + why;
+        }
+    }
+    for (const auto& s : missing) {
+        std::string why;
+        void* item = CreateItemFromState(s, &why);
+        if (!item) { ok = false; if (err) *err = why; continue; }
+        // where the host has it; else anywhere in the bag; only then the game's own add, which destroys
+        // what it cannot store: an item the host has must not simply vanish here (v0.3.0 session:
+        // "cannot place 42243-rebirth.mod", the item then "missing" on two clients)
+        if (PlaceItem(inv, item, s.section, s.x, s.y, s.quantity, false, true)) continue;
+        ok = false;
+        if (err) *err = "cannot place " + s.templateSid + " at " + s.section;
+        if (s.section != "main" && PlaceItem(inv, item, "main", 0, 0, s.quantity, false)) continue;
+        if (!CallAddItem(VSlot(inv, INVV_addItem), inv, item, s.quantity) && err) *err += " (nowhere: lost here)";
+    }
+    return ok;
+}
 
 bool KeepInInventory(void* inventory, void* item) {
     if (!inventory || !item) return false;
@@ -2507,6 +2659,38 @@ bool InventoryHolds(void* holder, void* item) {
     return false;
 }
 
+namespace {
+// Drops an item to the ground. A character's own item: its inventory drops it, as the inventory
+// window does (the character's dropItem, then removeItemDontDestroy, both find it there). Anything
+// else (a chest's, a worn backpack's, one shown in a section another inventory owns): out of its own
+// inventory first, whole stack, never destroyed, then a character drops it: `to` (the player's
+// character standing by a chest), else the one wearing the backpack, else `from`.
+bool DropOut(void* from, void* to, void* src, const ItemHome& home, void* item, std::string* err) {
+    if (!home.inv) { if (err) *err = "item not found"; return false; }
+    std::string sec;
+    int x = 0, y = 0, q = 1;
+    ItemPlace(item, sec, x, y);
+    Rd(item, IT_quantity, q);
+    if (IsCharacter(from) && home.inv == src && home.sec && FindSection(src, sec) == home.sec && (to == from || !IsCharacter(to))) {
+        void* fn = VSlot(src, INVV_drop);
+        if (!fn || !CallPtrArg2(fn, src, item)) { if (err) *err = "the drop failed"; return false; }
+        if (Listed(src, item)) { if (err) *err = "dropped, but its inventory still lists it"; return false; }
+        return true;
+    }
+    Character* dropper = IsCharacter(to) ? static_cast<Character*>(to) : nullptr;
+    if (!dropper) dropper = BagWearer(from);
+    if (!dropper && IsCharacter(from)) dropper = static_cast<Character*>(from);
+    if (!dropper) { if (err) *err = "nobody to drop it"; return false; }
+    void* taken = TakeFromHome(home, item, q, err);
+    if (!taken) return false;
+    if (CallDropItem(dropper, taken)) return true;
+    // never lost: back where it was, in its own inventory
+    if (!PlaceItem(home.inv, taken, sec, x, y, q, false)) PlaceItem(home.inv, taken, sec, x, y, q);
+    if (err) *err = "the drop failed";
+    return false;
+}
+} // namespace
+
 bool MoveInventoryItem(void* from, void* to, const kc::InvOp& op, std::string* err) {
     void* src = InventoryOf(from);
     void* dst = InventoryOf(to);
@@ -2515,34 +2699,42 @@ bool MoveInventoryItem(void* from, void* to, const kc::InvOp& op, std::string* e
     void* best = found.item;
     const int bestQty = found.qty;
     if (!best) { if (err) *err = "item not found"; return false; }
-    if (op.kind == kc::InvOpKind::Drop) {
-        // a chest's item: dropped by the player's character standing by it (`to`), as the game does
-        // with the chest's user; a character's: its inventory drops it, as the inventory window does
-        if (!IsCharacter(from) && IsCharacter(to)) return DropFromHolder(from, best, static_cast<Character*>(to));
-        void* fn = VSlot(src, INVV_drop);
-        return fn && CallPtrArg2(fn, src, best);
-    }
-    const int qty = std::min(op.item.quantity, bestQty);
-    // dropped on a stack of the same kind: it joins that stack, as the client's game showed it (only
-    // for what surely stacks, a pile of two or more: two single swords trade places instead)
+    const ItemHome home = HomeOf(src, best);   // a backpack's item: the backpack's own inventory
+    if (op.kind == kc::InvOpKind::Drop) return DropOut(from, to, src, home, best, err);
+    int qty = std::min(op.item.quantity, bestQty);
+    if (qty <= 0) { if (err) *err = "nothing to move"; return false; }
+    std::string fromSec;
+    int fromX = 0, fromY = 0;
+    ItemPlace(best, fromSec, fromX, fromY);
+    // Dropped on a stack of the same kind: it joins that stack, as the client's game showed it, up to
+    // what one cell holds (Item::isStackable with that section's bonus; 1 for weapons, armour,
+    // backpacks: two single swords trade places instead). A single unit on a single unit stacks too:
+    // the host used to put it in another cell (11 October, rob's backpack filling up on the host only).
     if (void* onto = ItemAt(dst, op.toSection, op.toX, op.toY, best)) {
         kc::ItemState k;
         int have = 0;
-        if (ItemKind(onto, k) && k.sameKind(op.item) && Rd(onto, IT_quantity, have) && have > 0 && (have > 1 || qty > 1)) {
-            CallRemoveDestroy(VSlot(src, INVV_removeAutoDestroy), src, best, qty);
-            const int sum = have + qty;
+        const ItemHome there = HomeOf(dst, onto);
+        const int n = there.sec && ItemKind(onto, k) && k.sameKind(op.item) && Rd(onto, IT_quantity, have)
+                          ? kc::StackMergeCount(have, qty, StackMax(onto, there.sec))
+                          : 0;
+        if (n > 0) {
+            void* taken = TakeFromHome(home, best, n, err);   // the whole stack, or a copy of n (the stack keeps the rest)
+            if (!taken) return false;
+            const int sum = have + n;
             Wr(onto, IT_quantity, sum);
-            if (err) err->clear();
-            return true;
+            DisposeTaken(taken, {home.inv, src, dst, there.inv});
+            qty -= n;
+            if (qty == 0) { if (err) err->clear(); return true; }
+            // that stack is full: the rest goes like any other move (`best` still holds it)
         }
     }
-    void* moving = CallRemoveReturns(VSlot(src, INVV_removeDontDestroy), src, best, qty);
-    if (!moving) { if (err) *err = "cannot take the item"; return false; }
+    void* moving = TakeFromHome(home, best, qty, err);
+    if (!moving) return false;
     // Only cells we checked are free: the game's addItem could destroy the item when it finds no
     // room, and putting a destroyed item back would leave a dangling pointer in the inventory.
     if (PlaceItem(dst, moving, op.toSection, op.toX, op.toY, qty, false)) return true;
-    // never lose it: back where it was (that cell was just freed)
-    if (!PlaceItem(src, moving, op.item.section, op.item.x, op.item.y, qty, false)) PlaceItem(src, moving, op.item.section, op.item.x, op.item.y, qty);
+    // never lose it: back where it was, in the inventory that owned it (that cell was just freed)
+    if (!PlaceItem(home.inv, moving, fromSec, fromX, fromY, qty, false)) PlaceItem(home.inv, moving, fromSec, fromX, fromY, qty);
     if (err) *err = "no room";
     return false;
 }
@@ -2555,27 +2747,31 @@ bool SwapInventoryItems(void* from, void* to, const kc::InvOp& a, const kc::InvO
     const Stack sb = FindStack(ib, b.item);
     // whole stacks only, and really where the client saw them (else it is not this swap)
     if (!sa.item || !sb.item || sa.item == sb.item || sa.qty != a.item.quantity || sb.qty != b.item.quantity) { if (err) *err = "not the same items here"; return false; }
-    std::string sec;
-    int x = 0, y = 0;
+    std::string sec, secA;
+    int x = 0, y = 0, ax = 0, ay = 0;
     ItemPlace(sb.item, sec, x, y);
     if (sec != a.toSection || x != a.toX || y != a.toY) { if (err) *err = "the slot holds something else here"; return false; }
-    void* ma = CallRemoveReturns(VSlot(ia, INVV_removeDontDestroy), ia, sa.item, sa.qty);
-    if (!ma) { if (err) *err = "cannot take the first item"; return false; }
-    void* mb = CallRemoveReturns(VSlot(ib, INVV_removeDontDestroy), ib, sb.item, sb.qty);
+    ItemPlace(sa.item, secA, ax, ay);
+    const ItemHome ha = HomeOf(ia, sa.item);   // each out of the inventory that owns it (a worn backpack's own)
+    const ItemHome hb = HomeOf(ib, sb.item);
+    std::string why;
+    void* ma = TakeFromHome(ha, sa.item, sa.qty, &why);
+    if (!ma) { if (err) *err = "cannot take the first item: " + why; return false; }
+    void* mb = TakeFromHome(hb, sb.item, sb.qty, &why);
     if (!mb) {
-        if (!PlaceItem(ia, ma, a.item.section, a.item.x, a.item.y, sa.qty, false)) PlaceItem(ia, ma, a.item.section, a.item.x, a.item.y, sa.qty);
-        if (err) *err = "cannot take the second item";
+        if (!PlaceItem(ha.inv, ma, secA, ax, ay, sa.qty, false)) PlaceItem(ha.inv, ma, secA, ax, ay, sa.qty);
+        if (err) *err = "cannot take the second item: " + why;
         return false;
     }
     const bool okA = PlaceItem(ib, ma, a.toSection, a.toX, a.toY, sa.qty, false);
     if (!okA) {   // both back home, as they were
-        if (!PlaceItem(ib, mb, b.item.section, b.item.x, b.item.y, sb.qty, false)) PlaceItem(ib, mb, b.item.section, b.item.x, b.item.y, sb.qty);
-        if (!PlaceItem(ia, ma, a.item.section, a.item.x, a.item.y, sa.qty, false)) PlaceItem(ia, ma, a.item.section, a.item.x, a.item.y, sa.qty);
+        if (!PlaceItem(hb.inv, mb, sec, x, y, sb.qty, false)) PlaceItem(hb.inv, mb, sec, x, y, sb.qty);
+        if (!PlaceItem(ha.inv, ma, secA, ax, ay, sa.qty, false)) PlaceItem(ha.inv, ma, secA, ax, ay, sa.qty);
         if (err) *err = "no room for the first item";
         return false;
     }
     // the second where the client put it, else anywhere it fits in that inventory, never lost
-    if (!PlaceItem(ia, mb, b.toSection, b.toX, b.toY, sb.qty, false) && !PlaceItem(ia, mb, a.item.section, a.item.x, a.item.y, sb.qty, false))
+    if (!PlaceItem(ia, mb, b.toSection, b.toX, b.toY, sb.qty, false) && !PlaceItem(ha.inv, mb, secA, ax, ay, sb.qty, false))
         PlaceItem(ia, mb, b.toSection, b.toX, b.toY, sb.qty);
     return true;
 }
@@ -3927,9 +4123,117 @@ bool DropFromHolder(void* holder, void* item, Character* dropper) {
     void* inv = InventoryOf(holder);
     if (!inv || !item || !IsCharacter(dropper)) return false;
     // out of the chest first (the dropper's dropItem would otherwise look for it in its own body's
-    // sections), whole stack, never destroyed
-    if (!InventoryRemove(inv, item)) return false;
-    return CallDropItem(dropper, item);
+    // sections), whole stack, never destroyed, through the inventory that really owns it
+    int q = 1;
+    Rd(item, IT_quantity, q);
+    void* taken = TakeFromHome(HomeOf(inv, item), item, q, nullptr);
+    return taken && CallDropItem(dropper, taken);
+}
+
+void* OwningInventory(void* holder, void* item) { return HomeOf(InventoryOf(holder), item).inv; }
+Character* BackpackWearer(void* bag) { return BagWearer(bag); }
+
+namespace {
+std::string HolderLabel(void* holder) {
+    std::string name;
+    if (IsCharacter(holder)) {
+        CharacterName(static_cast<Character*>(holder), name);
+        return name.empty() ? "a character" : name;
+    }
+    if (Character* w = BagWearer(holder)) {
+        CharacterName(w, name);
+        return "backpack " + ItemTemplate(holder) + " of " + (name.empty() ? "a character" : name);
+    }
+    return "inventory of " + (IsItemObject(holder) ? ItemTemplate(holder) : std::string("a building"));
+}
+// One inventory: its list against the sections it owns. `seen`: item -> the inventory listing it
+// (across every inventory checked). Returns the problems found (repaired ones included).
+int CheckOneInventory(void* inv, const std::string& label, bool repair, std::vector<std::string>& lines,
+                      std::unordered_map<const void*, std::string>& seen) {
+    int problems = 0;
+    auto note = [&](const std::string& s) { ++problems; if (lines.size() < 200) lines.push_back(label + ": " + s); };
+    const std::vector<void*> list = ListOf(inv);
+    std::vector<void*> own;        // sections this inventory owns
+    for (void* sec : SectionsOf(inv))
+        if (SectionParent(sec, inv) == inv) own.push_back(sec);
+    std::vector<std::vector<void*>> secItems;
+    for (void* sec : own) secItems.push_back(ItemsOfSection(sec));
+    auto secName = [](void* sec) {
+        std::string n;
+        ReadGameString(reinterpret_cast<uint8_t*>(sec) + 8, n);   // InventorySection::name
+        return n;
+    };
+    void* removeFromList = VSlot(inv, INVV_removeFromList);
+    for (size_t i = 0; i < list.size(); ++i) {
+        void* p = list[i];
+        if (!p) { note("null entry in the list"); continue; }
+        if (!IsItemObject(p)) {   // freed (or never an item): what the game crashed on
+            const bool fixed = repair && removeFromList && RemoveFromListSeh(removeFromList, inv, p);
+            note("freed item still listed (" + std::to_string(reinterpret_cast<uintptr_t>(p)) + ")" + (fixed ? " - repaired: out of the list" : ""));
+            continue;
+        }
+        const std::string sid = ItemTemplate(p);
+        if (std::find(list.begin(), list.begin() + ptrdiff_t(i), p) != list.begin() + ptrdiff_t(i)) { note(sid + " listed twice"); continue; }
+        if (auto s = seen.find(p); s != seen.end()) note(sid + " also listed by " + s->second);
+        else seen[p] = label;
+        int in = 0;
+        for (const auto& v : secItems) in += Has(v, p) ? 1 : 0;
+        if (in == 1) continue;
+        if (in > 1) { note(sid + " in " + std::to_string(in) + " sections"); continue; }
+        std::string name;
+        int x = 0, y = 0;
+        ItemPlace(p, name, x, y);
+        uint8_t flag = 0;
+        Rd(p, IT_inInventory, flag);
+        // listed, in no section: an item that left (on the ground, in another inventory) but stayed here
+        const bool fixed = repair && (!flag || name.empty()) && removeFromList && RemoveFromListSeh(removeFromList, inv, p);
+        note(sid + " listed but in no section (section '" + name + "', in=" + std::to_string(flag) + ")" + (fixed ? " - repaired: out of the list" : ""));
+    }
+    for (size_t s = 0; s < own.size(); ++s) {
+        uint8_t equip = 0;
+        Rd(own[s], SEC_equipSection, equip);
+        for (void* p : secItems[s]) {
+            if (!p) { note("null entry in section " + secName(own[s])); continue; }
+            if (!IsItemObject(p)) { note("freed item in section " + secName(own[s]) + " (save and reload; not repairable here)"); continue; }
+            const std::string sid = ItemTemplate(p);
+            uint8_t flag = 0;
+            Rd(p, IT_inInventory, flag);
+            if (!flag) {   // the section still has it, the item says it is out (dropped through the wrong inventory)
+                const bool fixed = repair && SectionRemoveSeh(own[s], p);
+                note(sid + " in section " + secName(own[s]) + " but marked out of every inventory" + (fixed ? " - repaired: out of the section" : ""));
+                continue;
+            }
+            if (!equip && !Has(list, p)) note(sid + " in section " + secName(own[s]) + " but not in the list");
+        }
+    }
+    return problems;
+}
+} // namespace
+
+int CheckInventories(const std::vector<void*>& holders, bool repair, std::vector<std::string>& lines, int* inventories, int* items) {
+    std::vector<std::pair<void*, std::string>> todo;   // inventory, label
+    auto add = [&](void* inv, const std::string& label) {
+        if (inv && std::none_of(todo.begin(), todo.end(), [&](const auto& t) { return t.first == inv; })) todo.emplace_back(inv, label);
+    };
+    for (void* h : holders) {
+        void* inv = InventoryOf(h);
+        if (!inv) continue;
+        const std::string label = HolderLabel(h);
+        add(inv, label);
+        if (IsCharacter(h))
+            if (void* bag = WornBackpack(static_cast<Character*>(h))) add(InventoryOf(bag), HolderLabel(bag));
+        for (void* sec : SectionsOf(inv))   // a section shown here that another inventory owns
+            if (void* parent = SectionParent(sec, inv); parent != inv) add(parent, "owner of a section shown by " + label);
+    }
+    std::unordered_map<const void*, std::string> seen;
+    int problems = 0, count = 0;
+    for (const auto& [inv, label] : todo) {
+        problems += CheckOneInventory(inv, label, repair, lines, seen);
+        count += int(ListOf(inv).size());
+    }
+    if (inventories) *inventories = int(todo.size());
+    if (items) *items = count;
+    return problems;
 }
 
 void* FindItemOfKind(void* holder, const std::string& kind) {
@@ -4229,6 +4533,44 @@ void ItemTemplates(const std::string& part, std::vector<std::pair<std::string, s
         if (out.size() >= max) break;
         out.emplace_back(std::move(sid), std::move(name));
     }
+}
+
+std::string WearNewBackpack(Character* c, const std::string& part, std::string* why) {
+    constexpr int kItemTypeBackpack = 0x2E;   // what Item::isStackable and ContainerItem vt 0x2C8 call a backpack
+    void* inv = InventoryOf(c);
+    if (!IsCharacter(c) || !inv) { if (why) *why = "no character"; return {}; }
+    if (void* worn = WornBackpack(c)) return ItemTemplate(worn);
+    void* slot = nullptr;   // its backpack slot (section of kind 12)
+    for (void* sec : SectionsOf(inv)) {
+        int32_t type = -1;
+        if (Rd(sec, SEC_type, type) && type == kSectionBackpack) { slot = sec; break; }
+    }
+    std::string slotName;
+    if (!slot || !ReadGameString(reinterpret_cast<uint8_t*>(slot) + 8, slotName)) { if (why) *why = "no backpack slot"; return {}; }
+    if (!g_gameDataBuilt) BuildGameDataIndex();
+    std::vector<std::string> cands;
+    for (const auto& [sid, gd] : g_gameDataBySid) {
+        int type = -1;
+        std::string name;
+        if (!Rd(gd, off::GD_type, type) || type != kItemTypeBackpack) continue;
+        if (!part.empty() && sid != part && !(TemplateDisplayName(sid, name) && name.find(part) != std::string::npos)) continue;
+        cands.push_back(sid);
+    }
+    std::sort(cands.begin(), cands.end());
+    if (cands.empty()) { if (why) *why = "no backpack template" + (part.empty() ? std::string() : " named " + part); return {}; }
+    for (const std::string& sid : cands) {
+        kc::ItemState st;
+        st.templateSid = sid;
+        st.quantity = 1;
+        void* item = CreateItemFromState(st, why);
+        if (!item) continue;
+        // into the slot as the inventory window does (InventorySection::_addItem: the section's equip
+        // callback puts it on)
+        if (PlaceItem(inv, item, slotName, 0, 0, 1, false) && WornBackpack(c) == item) return sid;
+        if (!Listed(inv, item)) DisposeTaken(item, {inv});
+        if (why) *why = "the slot " + slotName + " refused " + sid;
+    }
+    return {};
 }
 
 namespace {

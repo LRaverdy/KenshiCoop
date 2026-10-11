@@ -5150,6 +5150,153 @@ def exp_grounddrop(host, cli):
     summary()
 
 
+def exp_backpack(host, cli, haul_seconds=120):
+    """Backpack inventories (host crashes of 11 October, 23:04 and 23:48; 3c): the client moves single
+    items and stacks into and out of the backpack its character wears, drops 1 on 1 of a stackable
+    item (one stack of 2 everywhere), puts a purchase in the backpack, drops from the backpack to the
+    ground, the host picks it up again, then the client's character works a permanent mining job (ore
+    carried and hauled: the AI reads the backpack) for 2 min at x3. invcheck must stay clean on the host
+    and the client (no freed item listed, nothing listed outside a section), and inventories equal."""
+    log_start = len(host_log())
+    time.sleep(8)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    log("per-operation check on the host:", cmd(host, "invcheck each 1"))
+    r = cmd(host, f"wearbag {own}")
+    log("the client's character wears a backpack:", r)
+    check("sac : le perso du client porte un sac", r[0] and r[1].startswith("ok"), r[1])
+    mats = None
+    for part in ("Building_Materials", "Matériaux_Construction", "Materiaux"):
+        t = cmd(host, f"itemtypes {part}")[1].split()
+        if len(t) > 2 and "=" in t[2]:
+            mats = t[2].split("=")[0]
+            break
+    mats = mats or "580-gamedata.base"
+    log("materials:", mats, cmd(host, f"giveitem {mats} 10 {own}"))
+    log("weapon:", cmd(host, f"fetchitem {own} weapon"))
+    time.sleep(5)
+
+    def bag(pid):   # the backpack's stacks, "sid:qty@section:x,y", sorted
+        ok, t = cmd(pid, f"baginv squad{own}")
+        return sorted(t.split()[2:]) if ok and t.startswith("ok") else None
+
+    def stacks(pid):   # the character's own stacks, in invmove's index order
+        ok, t = cmd(pid, f"invitems squad{own}")
+        return t.split()[2:] if ok and t.startswith("ok") else []
+
+    def index_of(pid, sid, main_only=False):
+        for k, s in enumerate(stacks(pid)):
+            if s.split(":")[0] == sid and (not main_only or "@main:" in s):
+                return k
+        return None
+
+    def mats_in_bag(pid):
+        return [s for s in (bag(pid) or []) if s.startswith(mats + ":")]
+
+    def clean(label):
+        for pid, who in ((host, "hote"), (cli, "client")):
+            r = cmd(pid, "invcheck all")
+            check(f"sac : {label} : invcheck propre chez {who}", r[0] and r[1].startswith("ok clean"), r[1][:400])
+        hb, cb = bag(host), bag(cli)
+        check(f"sac : {label} : meme sac chez l'hote et le client", hb is not None and hb == cb, f"hote {hb} / client {cb}")
+
+    def move(label, frm, to, which, qty=0, x=-1, y=-1, sec="main"):
+        r = cmd(cli, f"invmove {frm} {to} {which} {qty} {x} {y} {sec}")
+        log(f"{label}:", r)
+        time.sleep(4)   # the client's move goes to the host, the true state comes back
+        return r
+
+    me, mybag = f"squad{own}", f"bag:squad{own}"
+    clean("depart")
+    # 1. one unit into the backpack, then one more dropped on it: one stack of 2 (3c)
+    i = index_of(cli, mats)
+    check("sac : materiaux chez le perso du client", i is not None, stacks(cli))
+    if i is not None:
+        move("1 unit into the backpack", me, mybag, i, 1)
+        first = mats_in_bag(host)
+        check("sac : 1 materiau dans le sac chez l'hote", len(first) == 1 and first[0].split(":")[1].startswith("1@"), bag(host))
+        if first:
+            sec, pos = first[0].split("@")[1].split(":")
+            x, y = pos.split(",")
+            move("1 dropped on 1 in the backpack", me, mybag, index_of(cli, mats), 1, x, y, sec)
+            st = mats_in_bag(host)
+            check("sac : 1 pose sur 1 = une seule pile de 2 chez l'hote (3c)", len(st) == 1 and st[0].split(":")[1].startswith("2@"), bag(host))
+            clean("1 sur 1")
+            # 2. the rest of the stack onto it
+            i = index_of(cli, mats)
+            if i is not None:
+                move("the rest of the stack onto it", me, mybag, i, 0, x, y, sec)
+                st = mats_in_bag(host)
+                check("sac : toute la pile fusionnee dans le sac chez l'hote", len(st) == 1 and st[0].split(":")[1].startswith("10@"), bag(host))
+                clean("pile entiere dans le sac")
+            # 3. part of it back out to the character
+            move("3 back out of the backpack", mybag, me, 0, 3)
+            clean("3 sortis du sac")
+    # 4. an item that never stacks (a weapon) into the backpack
+    wi = next((k for k, s in enumerate(stacks(cli)) if "@main:" in s and s.split(":")[0] != mats), None)
+    if wi is not None:
+        move("an item that does not stack into the backpack", me, mybag, wi)
+        clean("objet non empilable dans le sac")
+    # 5. drop from the backpack to the ground (the 23:29 reproduction), then the host picks it up
+    gb = cmd(host, f"groundall 700 {own}")[1].split()[2:]
+    r = cmd(cli, f"uidrop bag:{own} {mats}")
+    log("client drops materials from its backpack:", r)
+    time.sleep(5)
+    ga = cmd(host, f"groundall 700 {own}")[1].split()[2:]
+    fresh = [g for g in ga if g not in gb and g.split("|")[1] == mats]
+    check("sac : lache depuis le sac : une fois au sol chez l'hote", len(fresh) == 1, fresh)
+    check("sac : lache depuis le sac : plus dans le sac chez l'hote", not mats_in_bag(host), bag(host))
+    drops = [l for l in host_log()[log_start:].splitlines() if "client item drop done" in l and mats in l]
+    check("sac : lache depuis le sac : lache une seule fois chez l'hote", len(drops) == 1, drops[-3:])
+    clean("lache depuis le sac")
+    if fresh:
+        log("host picks it up again:", cmd(host, f"pickup {own} {fresh[0].split('|')[0]}"))
+        time.sleep(6)
+        clean("ramasse")
+    # 6. a purchase put into the backpack (needs a merchant nearby; skipped otherwise)
+    t = cmd(cli, f"tradeopen {own} any near")
+    log("trade:", t)
+    if t[0] and t[1].startswith("ok"):
+        time.sleep(6)
+        before = stacks(cli)
+        for _ in range(3):
+            log("buy one:", cmd(cli, "tradebuy 0"))
+            time.sleep(3)
+        new = next((k for k, s in enumerate(stacks(cli)) if s not in before and "@main:" in s), None)
+        if new is not None:
+            move("the purchase into the backpack", me, mybag, new)
+        clean("achat range dans le sac")
+    else:
+        log("no merchant near: purchase into the backpack not tested here (see docs/TESTS.md, manual step)")
+    # 7. a permanent mining job (ore carried, hauled: the AI reads the backpack) for 2 min at x3
+    r = cmd(cli, f"objjob {own} 87 Ressource_Fer")
+    log("client gives its character a permanent mining job:", r)
+    check("sac : travail de minage permanent donne", r[0] and r[1].startswith("ok"), r[1])
+    cmd(host, "speed 3")
+    t0 = time.time()
+    alive = True
+    while time.time() - t0 < haul_seconds:
+        time.sleep(20)
+        st = cmd(host, "status")
+        if not st[0]:
+            alive = False
+            break
+        log("  host invcheck:", cmd(host, "invcheck all")[1][:200], "| bag:", bag(host))
+    cmd(host, "speed 1")
+    check("sac : l'hote vit pendant 2 min de minage a x3", alive, "")
+    time.sleep(6)
+    new_log = host_log()[log_start:]
+    check("sac : aucun plantage de l'hote", "CRASH" not in new_log, "")
+    clean("2 min de minage a x3")
+    rep = compare(dump(host, "h_bp"), dump(cli, "c_bp"), "backpack")
+    check("sac : memes inventaires partout", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    bad = [l for l in new_log.splitlines() if "INVCHECK" in l and "clean" not in l]
+    check("sac : aucun probleme apres chaque operation (INVCHECK)", not bad, bad[-5:])
+    log("host:", cmd(host, "invcheck each 0"))
+    summary()
+
+
 def exp_clientpickup(host, cli):
     """The client asks to pick up an item: its character walks there, the item leaves the ground everywhere."""
     time.sleep(8)
@@ -7383,6 +7530,9 @@ def main():
     gd = sub.add_parser("grounddrop", help="items dropped the inventory window's way (host, client, both, KO/death): once, same place, everywhere")
     gd.add_argument("--save", default="kctest_base")
     gd.add_argument("--keep", action="store_true")
+    bp = sub.add_parser("backpack", help="backpack inventories: moves, 1 on 1 merges, drop and pickup, purchase, 2 min of mining at x3; invcheck clean everywhere")
+    bp.add_argument("--save", default="kctest_mine")
+    bp.add_argument("--keep", action="store_true")
     af = sub.add_parser("animframe")
     af.add_argument("--save", default="kctest_base")
     af.add_argument("--keep", action="store_true")
@@ -7569,6 +7719,8 @@ def main():
             exp_ground(host, cli)
         elif a.what == "grounddrop":
             exp_grounddrop(host, cli)
+        elif a.what == "backpack":
+            exp_backpack(host, cli)
         elif a.what == "animframe":
             exp_animframe(host, cli)
         elif a.what == "anim":

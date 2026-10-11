@@ -101,7 +101,32 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
      - CHANGELOG, et publier quand l'utilisateur donne son accord.
    - Les autres threads sont sans risque : `Net::keepThread_` est joint par `~Net` → `Close`, et
      `steam_link` garde son `Link` derrière un pointeur jamais détruit.
-0. **PRIORITÉ : plantage de l'hôte à 23:04:22 (pid 56496), en pleine partie à 4**
+0. **PRIORITÉ : plantage de l'hôte à 23:04:22 (pid 56496), en pleine partie à 4** — **corrigé dans le
+   code, à tester en jeu** (12/10, v0.3.2 en cours).
+   - **Cause vérifiée dans le code du jeu** (détail dans MOTEUR.md, « Quel inventaire possède un objet ») :
+     ce n'est pas `InventoryItems` (l'inventaire du perso ne montre pas la section du sac : le contenu du
+     sac est synchronisé à part, `BagBind`, et les demandes du client nomment le sac). C'est le **dépôt au
+     sol depuis le sac** : l'hôte appelait `Inventory::dropItem` (vt 0x38) du sac sur un objet encore dans
+     sa section ; le jeu le fait lâcher par le porteur, dont l'inventaire cherche la section
+     « backpack_content » par son nom, ne la trouve pas, et se contente d'effacer les marques de l'objet.
+     Objet au sol **et** dans la liste et la section du sac, sans nom de section : exactement « move
+     done … -> 0,0 », le double « dropped » et « 580 x4 at  0,0 ». Détruit plus tard (ramassé, fusionné) :
+     pointeur pendant lu par `getResourceItems` (23:04, IA de transport) ou `recalculateTotalWeight`
+     (23:48, section du sac).
+   - **Correction** : toute opération de l'hôte passe par l'inventaire propriétaire (parent de la section,
+     `InventorySection`+0xC8), vérifie que celui-ci retrouve la section par son nom avant de retirer quoi
+     que ce soit, sort l'objet du sac avant de le faire lâcher par le porteur, ne détruit qu'un objet que
+     plus aucune liste ne tient. Déplacements, échanges, dépôts, achats/ventes, reconstruction chez les
+     clients, plan lu (`workshop.cpp`). Contrôle `invcheck`, contrôle après chaque opération
+     (`invcheck each 1`), et contrôle-réparation toutes les 3 s en partie (sauvegardes déjà abîmées).
+   - **À tester en jeu** : `python tools/coop_test.py backpack` (sauvegarde `kctest_mine`), puis à la main :
+     acheter **directement dans le sac** (glisser du marchand vers le sac, chemin non couvert par le banc),
+     lâcher du sac au sol, ramasser, et un perso avec un travail de minage ou de transport 10 min à x3 ;
+     chercher `INVCHECK` dans le journal de l'hôte (aucune ligne attendue).
+   - « inventory rebuild incomplete: unknown item Étrippeurs_23 » : **pas dans ce code**. Le modèle de l'objet
+     de l'hôte a un identifiant qui ressemble à un nom (des données de jeu créées pendant la partie, par
+     exemple un objet nommé d'après une faction), inconnu du client : `CreateItemFromState` ne peut pas le
+     créer. À traiter à part (envoyer ces données, ou les ignorer sans réessayer).
    - Rapport du mod : `CRASH (unhandled) code=c0000005 at kenshi_x64.exe+0x7494cf … addr=FFFFFFFFFFFFFFFF
      phase='game (outside KenshiCoop's tick)'`. Dump :
      `%LOCALAPPDATA%\CrashDumps\kenshi_x64.exe.56496.dmp`. Le journal complet est dans
@@ -249,6 +274,9 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
 3c. **rob n'arrive pas à acheter chez le marchand (22:28-22:29)** : refus « no room » / « trade refused: the
    item could not move » quand il pose des Matériaux de Construction (580-gamedata.base) **dans son
    sac** (`backpack_content`). Vers l'inventaire principal (`main`), ça passe.
+   - **Corrigé dans le code, à tester en jeu** (v0.3.2) : fusion selon `Item::isStackable` (maximum d'une
+     case, bonus du sac compris), une unité sur une unité comprise, aussi pour les achats ; ce qui ne
+     s'empile pas échange sa place. `kc::StackMergeCount`, test `TestStackMerge`, expérience `backpack`.
    - Quelques achats dans le sac passent (22:29:10-17), puis tout est refusé, même en vendant et en
      rachetant. Le sac de rob se remplit donc chez l'hôte alors qu'il a l'air vide chez lui.
    - Cause probable : `MoveInventoryItem` (`plugin/kenshi.cpp:2531`) ne fusionne avec la pile visée que

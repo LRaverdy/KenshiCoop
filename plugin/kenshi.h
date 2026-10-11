@@ -274,6 +274,9 @@ enum Fn : int {
     FnMedAddWound,              // ? MedicalSystem::addWound(this, bool, int, ptr, 4 stack args)   (makes the damage number, only if the character is in the camera's view: CH_inView)
     FnCharUpdateView,           // uint8 Character::updateView()   (our name, 0x5C9F60: sets CH_inView +0x1A9 every frame from the camera; player-faction characters always in view)
     FnSetInBed,                 // void Character::setInBed(bool on, UseableStuff* bed)   (our name, 0x32E2F0: inSomething 1, inWhat = the bed's hand, the bed's vt 0x4F8 takes it in; setBedMode-like)
+    // ---- inventories (v0.3.2: backpack corruption)
+    FnItemIsStackable,          // int Item::isStackable(InventorySection*) const   (the most of that item one cell holds: 1 for weapons, armour, backpacks; else game data "stackable", with the section's stacking bonus)
+    FnSectionRemoveItem,        // bool InventorySection::removeItem(Item*)   (out of its cells, then its parent inventory's list (+0xC8, vt 0x50 -> _removeFromList))
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -835,6 +838,24 @@ bool InventoryHolds(void* holder, void* item);       // that item object is in t
 // Host: an item of a building's inventory (a chest) dropped by a character standing by it: out of
 // the chest, then that character's dropItem (what the game's Building::dropItem does with its user).
 bool DropFromHolder(void* holder, void* item, Character* dropper);
+// The inventory that really holds an item the holder's inventory shows: the owner of the section it
+// lies in (InventorySection +0xC8: a worn backpack's section belongs to the backpack's own inventory),
+// else the holder's when only listed there. Removing or destroying an item through any other
+// inventory leaves it listed where it is (host crashes of 11 October). Null: not there.
+void* OwningInventory(void* holder, void* item);
+Character* BackpackWearer(void* bag);   // the character wearing that backpack (ContainerItem +0x230), or null
+// tests (host): a new backpack (game data type 0x2E; name part optional) put in that character's
+// backpack slot, as the inventory window does. Its template id, or empty (and *why). Already wearing
+// one: that one's id.
+std::string WearNewBackpack(Character* c, const std::string& part, std::string* why);
+// Safety check (debug command `invcheck`, the per-operation check, the periodic sweep): the inventories
+// of these holders, of the backpacks the characters wear and of any section they show, each list
+// against its sections: a freed item still listed (invalid vtable), an item listed but in no section,
+// in two sections or listed by two inventories, an item in a section but out of the list or marked out
+// of every inventory. One line per problem in `lines` (200 at most); returns how many. repair: takes
+// out what can go without touching a freed item (list entries by pointer, live items out of a section).
+int CheckInventories(const std::vector<void*>& holders, bool repair, std::vector<std::string>& lines, int* inventories = nullptr,
+                     int* items = nullptr);
 // tests: an item of that kind in that holder's inventory: "weapon", "armour", "item" (anything
 // else), or a template id / name part. Unequipped ones first; nullptr when none.
 void* FindItemOfKind(void* holder, const std::string& kind);

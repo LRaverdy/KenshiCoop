@@ -167,7 +167,10 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
   pas les changer ; un client figé un moment (une zone qui charge) est remis à l'heure de l'hôte
   d'un coup.
 - **Météo** (pluie, tempêtes, éclairs, nuages de gaz…) : celle de l'hôte, région par région.
-- **Inventaires et équipement** de tous les personnages proches.
+- **Inventaires et équipement** de tous les personnages proches, sacs à dos compris : ranger,
+  sortir, empiler (une unité posée sur une unité fait une pile, comme dans le jeu) et lâcher au sol
+  depuis son sac passent par l'hôte sans abîmer le sac (v0.3.2 : corrige les plantages de l'hôte du
+  11 octobre ; à vérifier en jeu).
 - **Fouille** : clic droit « Fouiller » sur un personnage K.-O. ou mort, ou sur un **coffre, une
   étagère ou un coffre-fort**. Ton personnage y va, puis la fenêtre du jeu s'ouvre ; chaque objet
   déplacé est rejoué par l'hôte. Toutes les créatures se fouillent, des humains aux animaux, même

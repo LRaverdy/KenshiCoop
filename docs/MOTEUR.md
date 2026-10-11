@@ -168,6 +168,8 @@ Les signatures sont celles du commentaire du code.
 | 121 | `FnDoorLockButton` | `DoorStuff::lockButton` | `0x547060` | oui (lot A) | void lockButton(DataPanelLine*) : idem |
 | 116 | `FnSetPrisonMode` | `Character::setPrisonMode` | `0x330600` | oui | lot D : met dans une cage / en sort (voir section 10) |
 | — | `FnSetInBed` | `Character::setInBed(bool, UseableStuff* lit)` (notre nom) | `0x32E2F0` | — | [D, faraway] inSomething (+0x2F8) = 1, inWhat (+0x300) = le `hand` du lit (+0x58), le lit le prend (vt 0x4F8) ; déjà dans ce lit : rien. Le client met la copie d'un dormeur dans le même lit (`ApplyCaptive`) |
+| — | `FnItemIsStackable` | `Item::isStackable(InventorySection*)` | `0x75E090` | — | [D, v0.3.2] maximum d'une case pour cet objet dans cette section (1 : ne s'empile pas) ; règle de fusion des piles des déplacements et achats rejoués par l'hôte |
+| — | `FnSectionRemoveItem` | `InventorySection::removeItem(Item*)` | `0x749A20` | — | [D, v0.3.2] retire l'objet de la section puis de la liste de son inventaire (+0xC8) ; réparation des sacs abîmés (`CheckInventories` en mode réparation) |
 | 117 | `FnSetChainedMode` | `Character::setChainedMode` | `0x32E590` | oui | lot D : menottes (crée l'objet si besoin) |
 | 118 | `FnSetSlaveState` | `StateBroadcastData::setSlaveState` | `0x5A4940` | oui | lot D : état d'esclave |
 | 116 | `FnGunShoot` | `GunClass::shoot` | `0x43A730` | oui | (lot C) void shoot(Character* me, RootObject* cible, StatsEnumerated stat, const Vector3& visée) : tire un projectile ; hôte : noté pour les clients ; client : seuls les tirs rejoués par le mod passent |
@@ -560,6 +562,43 @@ Emplacements de vtable :
   premier, comme dans le code du jeu.
 - L'équipement porté n'existe que dans les sections d'équipement, pas dans la liste
   `_allItems`.
+- **Quel inventaire possède un objet** [D, 12/10, cause des plantages de l'hôte du 11/10] :
+  - `InventorySection` +0xB4 `isAnEquippedItemSection` (ses objets ne sont pas dans `_allItems`), +0xC0
+    objet de rappel (équipement : vt 0x198 à l'ajout, vt 0x1A0 au retrait), **+0xC8 l'inventaire qui la
+    possède** (`InventorySection::getInventory` `0x745BC0` ne fait que le lire) ;
+  - `InventorySection::_addItem` (vt 0x18, `0x749720`) : position et nom de section dans l'objet,
+    `setInventoryWeAreIn`, +0xD8 = 1, ajout au vecteur et à la grille, puis (section non d'équipement)
+    `parent->_sectionAddItemCallback` (vt 0x40 → `_addToList`, vt 0x60) : **l'objet entre dans la liste de
+    l'inventaire de la section**, quel que soit l'inventaire par lequel on est passé ;
+  - `InventorySection::removeItem` (`0x749A20`) : retrait du vecteur et de la grille, puis
+    `parent->_sectionRemoveItemCallback` (vt 0x50 → `_removeFromList(item, false)`, vt 0x68 : retrait de
+    la liste par simple comparaison de pointeurs, `0x7462C0`), rappel vt 0x1A0, `setInventoryWeAreIn(vide)`,
+    +0xD8 = 0, nom de section vidé ;
+  - `Inventory::removeItemDontDestroy_returnsItem` (vt 0x28, **`0x74A950`**) : si +0xD8 vaut 0, rend l'objet
+    sans rien retirer ; sinon cherche la section **par son nom** (`getSection(nom)` `0x747BB0`, la table
+    +0x28 de **cet** inventaire). **Pas de section de ce nom : +0xD8 = 0, nom vidé, l'objet est rendu,
+    mais il reste dans la liste et la section de l'inventaire qui le possède.** Moins que la pile : une
+    copie (`returnCopy`) ou rien ; sinon `section->removeItem`. `removeItemAutoDestroy` (vt 0x30, `0x745DE0`)
+    = ce retrait puis `GameWorld::destroy` (`0x799AF0`) de ce qui est rendu ;
+  - `Inventory::dropItem` (vt 0x38, `0x745D90`) = `callbackObject->dropItem(item)` puis
+    `removeItemDontDestroy(item, -1, true)`. Pour un sac, `ContainerItem::dropItem` (`0x75D810`) fait lâcher
+    son porteur (+0x230), et `CharacterHuman::dropItem` (`0x5CA740`) retire l'objet par l'inventaire **du
+    perso** (+0x2E8), qui n'a pas de section « backpack_content » : l'objet est au sol, marqué hors
+    inventaire, et **reste dans la liste et la section du sac**. Puis le retrait par le sac le voit à
+    +0xD8 = 0 et ne fait rien. C'est ce que faisait l'hôte en rejouant un dépôt au sol depuis un sac
+    (`MoveInventoryItem` → vt 0x38 de l'inventaire du sac) : objet lâché deux fois, puis, une fois l'objet
+    détruit (ramassé et fusionné dans une pile), pointeur pendant lu par `Inventory::getResourceItems`
+    (`0x749490`, l'IA de transport par `findResourceDestinationFor` et `hasABackpackOn`) ou par
+    `InventorySection::recalculateTotalWeight` (`0x749160`, depuis `removeItem`) : les deux plantages.
+    Dans le jeu de base, la souris sort d'abord l'objet de sa section (+0xD8 = 0) avant ce `dropItem`.
+  - Le mod passe donc toujours par l'inventaire qui possède l'objet (`HomeOf` : le parent de la section qui
+    le tient, `plugin/kenshi.cpp`), vérifie que cet inventaire trouve la section par son nom avant tout
+    retrait (`TakeFromHome`), sort l'objet d'un sac avant de le faire lâcher par le porteur (`DropOut`), et
+    ne détruit un objet qu'une fois absent de toute liste (`DisposeTaken`).
+- **Piles** [D] : `Item::isStackable(InventorySection*)` (`0x75E090`) rend le maximum d'une case : 1 pour les
+  types 2 (arme), 3 (armure), 0x2E (sac), 0x66, 0x6B, 0x6F ; sinon l'entier « stackable » des données de
+  l'objet (`GameData`+0x178), passé par `applyStackingBonuses` de la section (bonus des sacs de marchand).
+  `Item::addQuantity` (`0x75E220`) fusionne en tenant compte des charges. `canStackWith` `0x75D470`.
 
 ### Escouades
 - `Character` +0x658 → `ActivePlatoon` ; +0x78 → `Platoon` (nom à +0x18). Le `hand` de

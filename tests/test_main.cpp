@@ -2727,6 +2727,23 @@ static void TestClientDropGate() {
 }
 
 // ---- fix G2: swaps, merges and refusals in looting
+// 3c (11 October): a stack takes what one cell of it holds (Item::isStackable), a single unit on a
+// single unit included; what never stacks (max 1) never merges.
+static void TestStackMerge() {
+    std::printf("inventory: stack merges by the game's max stack (1 on 1, full stacks, non-stackables)\n");
+    CHECK(StackMergeCount(1, 1, 10) == 1);     // rob's purchases: 1 dropped on 1 joins it
+    CHECK(StackMergeCount(1, 1, 1) == 0);      // two single swords: never merged (swap)
+    CHECK(StackMergeCount(5, 4, 10) == 4);
+    CHECK(StackMergeCount(8, 5, 10) == 2);     // the rest goes elsewhere
+    CHECK(StackMergeCount(10, 3, 10) == 0);    // full stack
+    CHECK(StackMergeCount(12, 3, 10) == 0);    // over the limit already (a bonus gone): nothing more
+    CHECK(StackMergeCount(0, 3, 10) == 0);
+    CHECK(StackMergeCount(3, 0, 10) == 0);
+    CHECK(StackMergeCount(3, -2, 10) == 0);
+    CHECK(StackMergeCount(1, 99, 0) == 0);     // the game's answer missing: no merge
+    CHECK(StackMergeCount(1, 1000, 1000) == 999);
+}
+
 static void TestInventorySwaps() {
     std::printf("session: loot swaps, stack merges, moves into a freed slot, refusals\n");
     FakeWorld hw, cw;
@@ -5871,6 +5888,7 @@ int main() {
     TestPerPlayerStreaming();
     TestStandInArea();
     TestInventories();
+    TestStackMerge();
     TestInventorySwaps();
     TestGroundDrops();
     TestClientDropGate();

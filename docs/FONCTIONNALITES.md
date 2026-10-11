@@ -541,7 +541,13 @@ la fenêtre du client.
   - Un déplacement qui libère une case passe avant celui qui la remplit (ranger son arme dans le sac
     puis prendre celle du corps).
   - Une pile lâchée sur une pile du même objet s'y ajoute chez l'hôte aussi (au lieu d'être posée
-    ailleurs, ce qui faisait « sauter » l'inventaire du client).
+    ailleurs, ce qui faisait « sauter » l'inventaire du client), jusqu'au maximum d'une case selon le
+    jeu (`Item::isStackable`, bonus du sac compris), une unité sur une unité comprise (v0.3.2, 3c :
+    avant, le sac se remplissait chez l'hôte seul). Ce qui ne s'empile pas échange sa place.
+  - **Inventaire propriétaire** (v0.3.2, à tester en jeu) : l'hôte retire, détruit, lâche ou ajoute
+    toujours un objet par l'inventaire qui le possède (celui de sa section : le sac porté a le sien), et
+    ne détruit rien qui soit encore listé. Un contrôle toutes les 3 s répare un sac abîmé (voir
+    `INVCHECK sweep` dans JOURNAUX.md). Expérience `backpack`, commande `invcheck`.
   - Expérience `lootswap`, tests `TestInventorySwaps`.
   - Chez le client, l'inventaire d'une copie est refait à l'identique de celui de l'hôte, même
     dans une section d'équipement que son jeu tient désactivée (bottes, chemise d'une doublure de
