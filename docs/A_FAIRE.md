@@ -4,6 +4,11 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
 
 ## 10 octobre 2026, partie réelle en v0.3.0 (soir, 4 joueurs par Steam)
 
+- **~3000 refus « refused an inventory move … 556-gamedata.base (may not take from there) »** dans
+  le journal de la session (des bottes) : un client redemande sans fin un déplacement d'objet sur
+  un perso dont il n'a pas le droit de prendre. Trouver qui le redemande en boucle (synchro
+  d'inventaire qui rejoue le geste ?) et l'arrêter.
+
 - **Son de menu en boucle par moments** chez les joueurs. Piste principale : les fenêtres que le
   mod ouvre et ferme en boucle font jouer le son d'interface du jeu à chaque fois. Dans le
   journal de la session : 74 « trade window open », 50 « closed for a moment » (la réouverture
