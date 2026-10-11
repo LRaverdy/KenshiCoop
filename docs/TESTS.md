@@ -377,7 +377,7 @@ l'escouade triée par handle.
 |---|---|
 | `mapfeed` | le flux de carte de cette machine (hôte : construit, client : reçu) : âge, joueurs, persos (`nom:owner=:av=:x=:z=`), escouades hostiles (`threat:kind=:n=:x=:z=`) |
 | `mapscene carte` | ce que la carte dessine : ouverte (sinon `why=` : la raison), bornes, chaque perso avec propriétaire, couleur (`col=or`…), position, et à l'écran si la carte est ouverte (`sx=`, `sy=`, `vis=`) ; escouades hostiles |
-| `mapscene minicarte` | centre, zoom, rotation, coin, persos et ennemis dans le cercle |
+| `mapscene minicarte` | centre, zoom, rotation, coin, position libre (`fx=`, `fy=` : fractions de l'écran, -1 : le coin) et taille (`size=`), où l'overlay l'a dessinée (`drawn=`, `pos=x,y`, `r=`, `free=`, `drag=`, `screen=`), persos et ennemis dans le cercle |
 | `mapscene tetes` | repères au-dessus des têtes : origine de rendu (`origin=`), perso, propriétaire, couleur, à l'écran ou non, point projeté (même hors écran) |
 | `mapscene barre` | cadres de la barre d'escouade (`frame:owner=:col=:x=:y=:w=`) et cellules de portrait suivies |
 | `mapscene pings` | pings dessinés ici (id, joueur, type, position, âge) |

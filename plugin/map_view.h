@@ -77,6 +77,8 @@ struct MapScene {
     // settings
     bool showMap = true, showHeads = true, showPortraits = true, showMinimap = true, minimapRotate = false, showPings = true;
     int minimapCorner = 1;              // 0 top left, 1 top right, 2 bottom left, 3 bottom right
+    float minimapX = -1, minimapY = -1; // free position: the circle's centre in fractions of the display (< 0: the corner)
+    float minimapSize = 1.0f;           // radius factor (0.5 to 2.5)
     float minimapZoom = 1500.0f;        // world units from the centre to the rim
 };
 
@@ -87,6 +89,9 @@ struct MapDrawn {
     bool refreshed = false;     // GUI rectangles read again in that frame (same thread as the game's GUI)
     int heads = 0;              // markers above heads
     bool minimap = false;
+    float mmX = 0, mmY = 0, mmR = 0;    // where the minimap was drawn: centre and radius (display pixels)
+    bool mmFree = false;                // at a free position (else in its corner)
+    bool mmDrag = false;                // being moved or resized with the mouse
     bool mapOpen = false;
     int mapMarkers = 0;         // characters, hostile squads and pings drawn on the map screen
     float imgX = 0, imgY = 0, imgW = 0, imgH = 0;
@@ -196,6 +201,49 @@ inline kc::Vec3 MinimapUnproject(const MinimapFrame& f, const kc::Vec3& centre, 
     const float rx = sx - f.cx, ry = sy - f.cy;
     const float dx = rx * f.cosA + ry * f.sinA, dy = -rx * f.sinA + ry * f.cosA;
     return {centre.x + dx / f.scale, centre.y, centre.z + dy / f.scale};
+}
+
+// Where the minimap goes on a w x h display: in its corner (fx or fy < 0), else its centre at
+// (fx * w, fy * h), always kept on screen with its north marker, scale and +/- buttons. `size`
+// scales the default radius (11 % of the height, 70 to 160 px). Fractions survive resizes.
+struct MinimapPlace {
+    float cx = 0, cy = 0, r = 0;
+    bool free = false;
+};
+constexpr float kMinimapMinSize = 0.5f, kMinimapMaxSize = 2.5f;
+constexpr float kMinimapPadSide = 10.0f, kMinimapPadBottom = 26.0f;   // north marker, scale and buttons
+inline float MinimapBaseRadius(float h) {   // size 1
+    const float base = h * 0.11f;
+    return base < 70.0f ? 70.0f : (base > 160.0f ? 160.0f : base);
+}
+inline float MinimapRadius(float size, float w, float h) {
+    const float base = MinimapBaseRadius(h);
+    size = size < kMinimapMinSize ? kMinimapMinSize : (size > kMinimapMaxSize ? kMinimapMaxSize : size);
+    float r = base * size;
+    // never more than fits: the circle and its pads inside the display
+    const float maxR = std::fmin((w - 2 * kMinimapPadSide) * 0.5f, (h - kMinimapPadSide - kMinimapPadBottom) * 0.5f);
+    if (r > maxR) r = maxR;
+    return r < 20.0f ? 20.0f : r;
+}
+inline MinimapPlace PlaceMinimap(int corner, float fx, float fy, float size, float w, float h) {
+    MinimapPlace p;
+    p.r = MinimapRadius(size, w, h);
+    const float R = p.r, margin = 18.0f;
+    if (fx < 0 || fy < 0) {
+        corner = corner < 0 ? 0 : (corner > 3 ? 3 : corner);
+        p.cx = (corner % 2 == 0) ? margin + R : w - margin - R;
+        // top right: below KenshiCoop's status panel
+        p.cy = corner >= 2 ? h - margin - R - 30.0f : margin + R + (corner == 1 ? 150.0f : 0.0f);
+    } else {
+        p.free = true;
+        p.cx = fx * w;
+        p.cy = fy * h;
+    }
+    // on screen, whatever the display size
+    const float x0 = R + kMinimapPadSide, x1 = w - R - kMinimapPadSide, y0 = R + kMinimapPadSide, y1 = h - R - kMinimapPadBottom;
+    p.cx = x1 < x0 ? w * 0.5f : (p.cx < x0 ? x0 : (p.cx > x1 ? x1 : p.cx));
+    p.cy = y1 < y0 ? h * 0.5f : (p.cy < y0 ? y0 : (p.cy > y1 ? y1 : p.cy));
+    return p;
 }
 
 inline bool ScreenToGround(const MapScene& s, float sx, float sy, float w, float h, float groundY, kc::Vec3& out) {

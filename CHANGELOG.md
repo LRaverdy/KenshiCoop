@@ -6,6 +6,23 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+- **Minicarte déplaçable et redimensionnable.** Pas encore lancé en jeu.
+  - *Déplacer* : clic gauche maintenu sur la minicarte et glisser (le clic gauche n'y faisait rien ;
+    clic molette et Alt+clic restent aux pings, la molette au zoom). Un clic sans bouger ne change
+    rien. *Redimensionner* : la poignée sur le bord en bas à droite, ou Ctrl+molette au survol
+    (50 % à 250 %).
+  - *Écran* : toujours entière à l'écran ; position gardée en fractions de l'écran, elle survit à
+    un redimensionnement de la fenêtre. Nouveaux réglages `[ui] minimap_x`, `minimap_y` (-1 : le
+    coin) et `minimap_size`.
+  - *Souris* : pendant le glissé, la souris est capturée et le jeu ne reçoit aucun clic ; la
+    capture se coupe d'elle-même quand l'overlay ne dessine plus, que la minicarte disparaît ou
+    que le relâchement est manqué.
+  - *Affichage* : le choix d'un coin remet la minicarte dans ce coin (le menu montre « position
+    libre » après un glissé) ; nouveau bouton « Réinitialiser la position » (coin et taille
+    normale) ; infobulles en français.
+  - *Tests* : `TestMinimapPlace` (coins, fractions après un redimensionnement, bords, tailles) ;
+    `mapscene minicarte` donne toujours le centre, plus la position (`fx`, `fy`, `size`, `pos`,
+    `r`, `free`, `drag`, `screen`).
 - **Administration : faire apparaître des objets.** Pas encore lancé en jeu.
   - *Fenêtre de l'hôte* (section Administration, repli « Faire apparaître des objets ») : favoris
     (matériaux de construction `580-gamedata.base`, tissu, fer, cuivre, nourriture, bandages),

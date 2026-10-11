@@ -65,6 +65,8 @@ Raccourcis (Kenshi au premier plan) :
 | Ctrl+Shift+O | afficher ou masquer le panneau |
 | Ctrl+Shift+D | écrire un diagnostic dans `KenshiCoop.log` |
 | Ctrl+Shift+N | afficher ou masquer la minicarte |
+| clic gauche maintenu sur la minicarte | la déplacer (« Réinitialiser la position » ou le choix d'un coin dans « Affichage » la remet en place) |
+| Ctrl+molette sur la minicarte, ou sa poignée en bas à droite | la redimensionner (la molette seule zoome) |
 | clic molette / Alt+clic | ping sur la carte, la minicarte ou le sol (Maj : danger, Ctrl : butin, Maj+Ctrl : à l'aide) |
 
 1. L'hôte charge sa partie et appuie sur **Ctrl+Shift+H**.
@@ -178,7 +180,7 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
 - **Carte et repères** : sur la carte du jeu (onglet CARTE de la fenêtre de gestion, bouton MAP), tous les persos de tous les joueurs à la couleur
   de leur joueur et les escouades hostiles qui nous visent en rouge ; une minicarte ronde ; un
   repère au-dessus de la tête des persos des joueurs ; leur cadre de portrait coloré ; des pings
-  partagés. Réglages : fenêtre Multijoueur, « Affichage ».
+  partagés. La minicarte se déplace à la souris et se redimensionne. Réglages : fenêtre Multijoueur, « Affichage ».
 
 Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui reste à faire :
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).

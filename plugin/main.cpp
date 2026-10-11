@@ -673,6 +673,8 @@ void PublishOverlay() {
     m.optMinimap = g_cfg.minimap;
     m.optMinimapRotate = g_cfg.minimapRotate;
     m.optMinimapCorner = g_cfg.minimapCorner;
+    m.optMinimapFree = g_cfg.minimapX >= 0 && g_cfg.minimapY >= 0;
+    m.optMinimapSize = g_cfg.minimapSize;
     m.optPings = g_cfg.pings;
     const double now = NowSeconds();
     while (!g_toasts.empty() && g_toasts.front().second < now) g_toasts.pop_front();

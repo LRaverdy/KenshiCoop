@@ -91,6 +91,29 @@ int g_frameHeads = 0, g_frameMarkers = 0, g_frameMarkersTotal = 0;   // counted 
 std::string g_lastMarkersKey;        // map screen markers log: on change, every 2 s at most
 double g_lastMarkersAt = -1e9;
 double g_midDownAt = 0;
+// moving (left button held on the disc) and resizing (the grip, Ctrl+wheel) the minimap: the window
+// procedure sets these, the render thread draws with them; the settings follow on release
+int g_drag = 0;                      // 0 none, 1 moving, 2 resizing
+float g_dragDx = 0, g_dragDy = 0;    // moving: cursor - centre at the press
+float g_dragX0 = 0, g_dragY0 = 0;   // the press
+float g_dragR0 = 0, g_dragBase = 1;  // resizing: the radius then, the size-1 radius
+bool g_dragMoved = false;            // past a few pixels: a plain click changes nothing
+float g_liveFx = -1, g_liveFy = -1, g_liveSize = 1;   // shown while dragging, then until the settings come back
+double g_livePosAt = -1e9, g_liveSizeAt = -1e9;     // their last change
+ImVec2 g_grip(-1e9f, -1e9f);         // the resize grip's centre
+constexpr float kGripR = 9.0f;
+std::atomic<bool> g_dragging{false};
+MinimapPlace g_lastPlace;            // the render thread's last minimap (MapDrawn)
+bool g_lastDrag = false;
+
+// The minimap's position and size now: the settings, or what the mouse is doing to them. Under g_mx.
+void EffectivePlaceLocked(float& fx, float& fy, float& size) {
+    const MapScene& s = g_inScene;
+    const double now = NowSeconds();
+    fx = s.minimapX; fy = s.minimapY; size = s.minimapSize;
+    if (g_drag == 1 || now - g_livePosAt < 1.0) { fx = g_liveFx; fy = g_liveFy; }
+    if (g_drag == 2 || now - g_liveSizeAt < 1.0) size = g_liveSize;
+}
 
 // ---- the world map texture (GUI_Map.dds, what the map screen shows): one mip of 2048 px or less
 ID3D11ShaderResourceView* g_mapSrv = nullptr;
@@ -293,18 +316,21 @@ bool ClipSegmentToCircle(ImVec2 c, float r, ImVec2& a, ImVec2& b) {
 }
 
 void DrawMinimap(const MapScene& s, float w, float h, ID3D11Device* dev) {
-    const float R = std::clamp(h * 0.11f, 70.0f, 160.0f);
-    const float margin = 18.0f;
-    const int corner = std::clamp(s.minimapCorner, 0, 3);
-    const float cx = (corner % 2 == 0) ? margin + R : w - margin - R;
-    // top right: below KenshiCoop's status panel
-    const float cy = corner >= 2 ? h - margin - R - 30.0f : margin + R + (corner == 1 ? 150.0f : 0.0f);
     MapScene sz = s;
     float zoom = s.minimapZoom;
+    float pfx = -1, pfy = -1, size = 1;
+    bool dragging = false;
     {
         std::lock_guard<std::mutex> lk(g_mx);
         if (g_zoomPending > 0 && NowSeconds() - g_zoomPendingAt < 1.0) zoom = g_zoomPending;
+        EffectivePlaceLocked(pfx, pfy, size);
+        dragging = g_drag != 0;
     }
+    // in its corner, or where it was dragged (fractions of the display), always on screen
+    const MinimapPlace place = PlaceMinimap(s.minimapCorner, pfx, pfy, size, w, h);
+    const float R = place.r, cx = place.cx, cy = place.cy;
+    g_lastPlace = place;
+    g_lastDrag = dragging;
     sz.minimapZoom = std::clamp(zoom, kMinZoom, kMaxZoom);
     const MinimapFrame f = MakeMinimapFrame(sz, cx, cy, R);
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
@@ -351,7 +377,7 @@ void DrawMinimap(const MapScene& s, float w, float h, ID3D11Device* dev) {
         }
     }
     dl->AddCircle(C, R, IM_COL32(10, 10, 10, 230), kSeg, 3.0f);
-    dl->AddCircle(C, R - 2.0f, IM_COL32(200, 190, 160, 160), kSeg, 1.0f);
+    dl->AddCircle(C, R - 2.0f, dragging ? IM_COL32(255, 215, 110, 230) : IM_COL32(200, 190, 160, 160), kSeg, dragging ? 2.0f : 1.0f);
     const float mx = g_curX.load(), my = g_curY.load();
     float bestD = 10.0f;
     std::vector<std::string> tip;
@@ -445,14 +471,27 @@ void DrawMinimap(const MapScene& s, float w, float h, ID3D11Device* dev) {
         dl->AddRect(ImVec2(b->x, b->y), ImVec2(b->z, b->w), IM_COL32(200, 190, 160, 200), 4.0f);
         TextCentred(dl, ImVec2((b->x + b->z) * 0.5f, (b->y + b->w) * 0.5f), IM_COL32(240, 240, 240, 255), b == &plus ? "+" : "-");
     }
+    // the resize grip, on the rim at the bottom right
+    const ImVec2 grip(cx + R * 0.7071f, cy + R * 0.7071f);
+    {
+        const bool hot = std::hypot(mx - grip.x, my - grip.y) <= kGripR + 2.0f;
+        dl->AddCircleFilled(grip, kGripR, (hot || dragging) ? IM_COL32(80, 76, 60, 245) : IM_COL32(30, 30, 36, 225), 16);
+        dl->AddCircle(grip, kGripR, IM_COL32(200, 190, 160, 220), 16, 1.2f);
+        for (float k : {-3.5f, 0.0f, 3.5f}) {   // three short strokes along the rim's tangent
+            const float ox = grip.x + k * 0.7071f, oy = grip.y + k * 0.7071f, l = k == 0.0f ? 4.0f : 2.8f;
+            dl->AddLine(ImVec2(ox - l, oy + l), ImVec2(ox + l, oy - l), IM_COL32(240, 235, 220, 230), 1.2f);
+        }
+        if (hot && !dragging) tip = {"Redimensionner la minicarte", "Glisser la poignée, ou Ctrl+molette sur la minicarte."};
+    }
     {
         std::lock_guard<std::mutex> lk(g_mx);
         g_mm = f;
         g_mmShown = true;
         g_plus = plus;
         g_minus = minus;
+        g_grip = grip;
     }
-    if (!tip.empty()) Tooltip(mx, my, tip);
+    if (!tip.empty() && !dragging) Tooltip(mx, my, tip);
 }
 
 // ---- input
@@ -504,11 +543,103 @@ void Zoom(float factor) {
     OverlayPushAction(std::move(a));
 }
 
+bool OverGripLocked(float x, float y) { return std::hypot(x - g_grip.x, y - g_grip.y) <= kGripR + 2.0f; }
+
 bool OverMinimap(float x, float y) {
     std::lock_guard<std::mutex> lk(g_mx);
     if (!g_mmShown) return false;
     auto in = [&](const ImVec4& b) { return x >= b.x && x <= b.z && y >= b.y && y <= b.w; };
-    return std::hypot(x - g_mm.cx, y - g_mm.cy) <= g_mm.radius || in(g_plus) || in(g_minus);
+    return std::hypot(x - g_mm.cx, y - g_mm.cy) <= g_mm.radius || in(g_plus) || in(g_minus) || OverGripLocked(x, y);
+}
+
+void PushOption(const char* key, float v) {
+    OverlayAction a;
+    a.kind = OverlayAction::Kind::SetOption;
+    a.text = key;
+    a.value = v;
+    OverlayPushAction(std::move(a));
+}
+
+// Ctrl+wheel on the minimap: 10 % bigger or smaller.
+void Resize(float factor) {
+    std::lock_guard<std::mutex> lk(g_mx);
+    float fx, fy, size;
+    EffectivePlaceLocked(fx, fy, size);
+    g_liveSize = std::clamp(size * factor, kMinimapMinSize, kMinimapMaxSize);
+    g_liveSizeAt = NowSeconds();
+    PushOption("minimap_size", g_liveSize);
+}
+
+// The left button went down on the minimap (not on a button): start moving it, or resizing it on the grip.
+void BeginDrag(float x, float y) {
+    {
+        std::lock_guard<std::mutex> lk(g_mx);
+        if (g_screenW <= 0 || g_screenH <= 0) return;
+        float fx, fy, size;
+        EffectivePlaceLocked(fx, fy, size);
+        g_liveSize = size;
+        g_dragX0 = x; g_dragY0 = y;
+        g_dragMoved = false;
+        if (OverGripLocked(x, y)) {
+            g_drag = 2;
+            g_dragR0 = g_mm.radius;
+            g_dragBase = MinimapBaseRadius(g_screenH);
+            // the position does not change: a minimap in its corner stays there while resized
+            g_liveFx = fx; g_liveFy = fy;
+            g_livePosAt = NowSeconds();
+        } else {
+            g_drag = 1;
+            g_liveFx = g_mm.cx / g_screenW;   // where it is drawn, corner or not
+            g_liveFy = g_mm.cy / g_screenH;
+            g_dragDx = x - g_mm.cx;
+            g_dragDy = y - g_mm.cy;
+        }
+    }
+    g_dragging = true;
+    if (HWND wnd = GetActiveWindow()) SetCapture(wnd);   // keep the moves and the release outside the window
+}
+
+void UpdateDrag(float x, float y) {
+    std::lock_guard<std::mutex> lk(g_mx);
+    const float w = g_screenW, h = g_screenH;
+    if (w <= 0 || h <= 0) return;
+    if (!g_dragMoved && std::abs(x - g_dragX0) <= 3.0f && std::abs(y - g_dragY0) <= 3.0f) return;
+    g_dragMoved = true;
+    if (g_drag == 1) {
+        const MinimapPlace p = PlaceMinimap(g_inScene.minimapCorner, (x - g_dragDx) / w, (y - g_dragDy) / h, g_liveSize, w, h);
+        g_liveFx = p.cx / w;
+        g_liveFy = p.cy / h;
+    } else if (g_drag == 2) {
+        // along the grip's diagonal: the grip follows the cursor
+        const float r = g_dragR0 + ((x - g_dragX0) + (y - g_dragY0)) * 0.7071f;
+        g_liveSize = std::clamp(r / std::max(1.0f, g_dragBase), kMinimapMinSize, kMinimapMaxSize);
+        g_livePosAt = NowSeconds();
+    }
+}
+
+// The button is up (or the drag was lost): keep the result in KenshiCoop.ini.
+void EndDrag() {
+    int was = 0;
+    float fx = -1, fy = -1, size = 1;
+    {
+        std::lock_guard<std::mutex> lk(g_mx);
+        was = g_dragMoved ? g_drag : 0;
+        g_drag = 0;
+        if (!was) g_livePosAt = -1e9;   // a plain click: back to the settings
+        if (was == 1) g_livePosAt = NowSeconds();
+        if (was == 2) g_liveSizeAt = g_livePosAt = NowSeconds();
+        fx = g_liveFx; fy = g_liveFy; size = g_liveSize;
+    }
+    g_dragging = false;
+    if (GetCapture() && GetCapture() == GetActiveWindow()) ReleaseCapture();
+    if (was == 1) {
+        PushOption("minimap_x", fx);
+        PushOption("minimap_y", fy);
+        Log("minimap: moved to %.3f, %.3f of the display", double(fx), double(fy));
+    } else if (was == 2) {
+        PushOption("minimap_size", size);
+        Log("minimap: resized to %.0f %%", double(size * 100.0f));
+    }
 }
 
 } // namespace
@@ -548,6 +679,11 @@ void MapOverlayDraw(const MapScene& in, float w, float h, ID3D11Device* device) 
     d.refreshed = refreshed;
     d.heads = g_frameHeads;
     d.minimap = minimap;
+    if (minimap) {
+        d.mmX = g_lastPlace.cx; d.mmY = g_lastPlace.cy; d.mmR = g_lastPlace.r;
+        d.mmFree = g_lastPlace.free;
+        d.mmDrag = g_lastDrag;
+    }
     d.mapOpen = s.live && s.mapOpen && s.showMap;
     d.mapMarkers = d.mapOpen ? g_frameMarkers : 0;
     d.imgX = s.imgX; d.imgY = s.imgY; d.imgW = s.imgW; d.imgH = s.imgH;
@@ -581,7 +717,25 @@ MapDrawn MapOverlayLastDrawn() {
 
 bool MapOverlayMessage(UINT msg, WPARAM wp, float x, float y) {
     if (msg != WM_MOUSEWHEEL && msg != WM_MOUSEHWHEEL) { g_curX = x; g_curY = y; }
-    if (NowSeconds() - g_drawnAt.load() > 0.5) return false;   // the layer is not on screen
+    if (NowSeconds() - g_drawnAt.load() > 0.5) {   // the layer is not on screen
+        if (g_dragging.load()) EndDrag();
+        return false;
+    }
+    if (g_dragging.load()) {
+        bool shown = false;
+        {
+            std::lock_guard<std::mutex> lk(g_mx);
+            shown = g_mmShown;
+        }
+        // the minimap went away, or the release was missed: the drag ends here
+        if (!shown || (msg == WM_MOUSEMOVE && !(wp & MK_LBUTTON))) {
+            EndDrag();
+        } else {
+            if (msg == WM_MOUSEMOVE) { UpdateDrag(x, y); return false; }   // the game keeps its cursor
+            if (msg == WM_LBUTTONUP) { UpdateDrag(x, y); EndDrag(); return true; }
+            return msg != WM_MOUSEWHEEL && msg != WM_MOUSEHWHEEL;   // no game click while dragging
+        }
+    }
     const bool over = OverMinimap(x, y);
     if (msg == WM_MOUSEMOVE) { g_overMinimap = over; return false; }
     bool pings = false;
@@ -592,7 +746,8 @@ bool MapOverlayMessage(UINT msg, WPARAM wp, float x, float y) {
     switch (msg) {
     case WM_MOUSEWHEEL:
         if (!over) return false;
-        Zoom(GET_WHEEL_DELTA_WPARAM(wp) > 0 ? 0.8f : 1.25f);
+        if (GET_KEYSTATE_WPARAM(wp) & MK_CONTROL) Resize(GET_WHEEL_DELTA_WPARAM(wp) > 0 ? 1.1f : 1.0f / 1.1f);
+        else Zoom(GET_WHEEL_DELTA_WPARAM(wp) > 0 ? 0.8f : 1.25f);
         return true;
     case WM_LBUTTONDOWN: {
         const bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
@@ -605,6 +760,7 @@ bool MapOverlayMessage(UINT msg, WPARAM wp, float x, float y) {
         }
         if (x >= plus.x && x <= plus.z && y >= plus.y && y <= plus.w) Zoom(0.8f);
         else if (x >= minus.x && x <= minus.z && y >= minus.y && y <= minus.w) Zoom(1.25f);
+        else BeginDrag(x, y);   // the disc or its grip: move or resize it
         return true;
     }
     case WM_LBUTTONUP: case WM_LBUTTONDBLCLK: case WM_RBUTTONDOWN: case WM_RBUTTONUP:
@@ -636,10 +792,12 @@ bool MapOverlayMessage(UINT msg, WPARAM wp, float x, float y) {
 
 bool MapOverlayHoldsMouse() {
     if (NowSeconds() - g_drawnAt.load() > 0.5) return false;   // the overlay stopped drawing (failed, minimised)
-    if (g_overMinimap.load()) return true;
+    if (g_overMinimap.load() || g_dragging.load()) return true;
     // Alt+click places a ping: the game must not see that click
     return g_pingsArmed.load() && (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
 }
+
+bool MapOverlayDragging() { return g_dragging.load() && NowSeconds() - g_drawnAt.load() <= 0.5; }
 
 void MapOverlaySetCursorScale(float, float) {}
 

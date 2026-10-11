@@ -100,7 +100,8 @@ bool CursorOf(HWND hwnd, UINT msg, LPARAM lp, float& x, float& y) {
 
 LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     // the map layer: pings, the minimap's wheel and buttons (not while one of our windows has the mouse)
-    if (g_ready && !(Interactive() && g_wantMouse.load()) && msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) {
+    // (a minimap drag keeps the mouse until the button is let go, even over one of our windows)
+    if (g_ready && (!(Interactive() && g_wantMouse.load()) || MapOverlayDragging()) && msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) {
         float x = 0, y = 0;
         if (CursorOf(hwnd, msg, lp, x, y) && MapOverlayMessage(msg, wp, x, y)) return 0;
     }
@@ -655,7 +656,20 @@ void DrawDisplaySettings(const OverlayModel& m) {
     static const char* corners[] = {"en haut à gauche", "en haut à droite", "en bas à gauche", "en bas à droite"};
     int corner = std::clamp(m.optMinimapCorner, 0, 3);
     ImGui::SetNextItemWidth(180.0f);
-    if (ImGui::Combo("Coin de la minicarte", &corner, corners, 4)) option("minimap_corner", float(corner));
+    // choosing a corner (even the same one) puts a moved minimap back in it
+    if (ImGui::BeginCombo("Coin de la minicarte", m.optMinimapFree ? "position libre" : corners[corner])) {
+        for (int i = 0; i < 4; ++i)
+            if (ImGui::Selectable(corners[i], !m.optMinimapFree && i == corner)) option("minimap_corner", float(i));
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Place la minicarte dans ce coin et oublie la position choisie à la souris.\n"
+                          "Glisser la minicarte (clic gauche maintenu) la déplace ;\n"
+                          "Ctrl+molette ou la poignée en bas à droite la redimensionne.");
+    if (ImGui::Button("Réinitialiser la position")) option("minimap_reset", 1.0f);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remet la minicarte dans son coin, à sa taille normale.");
+    ImGui::SameLine();
+    ImGui::TextDisabled("taille %.0f %%", double(m.optMinimapSize * 100.0f));
     box("Pings", "pings", m.optPings, "Clic molette ou Alt+clic sur la carte, la minicarte ou le sol.\nMaj : danger, Ctrl : butin, Maj+Ctrl : à l'aide.");
 }
 

@@ -39,13 +39,16 @@ struct Config {
     bool minimap = true;            // minimap (also Ctrl+Shift+N)
     bool minimapRotate = false;     // minimap_rotate: turns with the camera (else north up)
     int minimapCorner = 1;          // minimap_corner: 0 top left, 1 top right, 2 bottom left, 3 bottom right
+    float minimapX = -1, minimapY = -1;   // minimap_x / minimap_y: free position (centre, fractions of the display), -1: the corner
+    float minimapSize = 1.0f;       // minimap_size: radius factor, 0.5 to 2.5
     float minimapZoom = 1500.0f;    // minimap_zoom: world units from the centre to the rim
     bool pings = true;              // pings: place and show pings
 };
 Config LoadConfig(const std::wstring& iniPath);   // creates the file with defaults if missing
 bool SaveConnection(const std::wstring& iniPath, const std::string& name, const std::string& address, uint16_t port);
 // One [ui] map layer setting (key as in KenshiCoop.ini): applied to `cfg` and written to the file.
-// False: no such key.
+// False: no such key. "minimap_corner" also drops the free position; "minimap_reset" (any value)
+// puts the minimap back in its corner at its default size.
 bool SetUiOption(Config& cfg, const std::wstring& iniPath, const std::string& key, float value);
 
 std::wstring GameDir();                            // folder of kenshi_x64.exe, with trailing '\'
