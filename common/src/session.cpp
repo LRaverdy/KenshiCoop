@@ -1381,6 +1381,15 @@ bool Session::SelfDrop(uint32_t netId) const {
     return w && w->squad && !w->container;
 }
 
+// A drop from a body is made by a character standing by it: by a leviathan, a beak thing or a
+// swamp turtle that is far from the body's position (kc::loot::DropReach).
+float Session::DropReachOf(const Entity& e) {
+    const Entity* w = Wearer(e);
+    if (!w || w->container) return kDropReach;
+    loot::BodySize b;
+    return world_.ReadBodySize(w->handle, b) ? std::max(kDropReach, loot::DropReach(b)) : kDropReach;
+}
+
 bool Session::DropSourcePos(const Entity& e, Vec3& out) {
     const Entity* w = Wearer(e);
     if (!w) return false;
@@ -2382,7 +2391,7 @@ void Session::HostInvOp(uint8_t from, const InvOp& op, const InvOp* swapWith) {
         if (!self) {
             const Entity& a = entities_.at(actor);   // AdmitActor: a squad member of that player
             Vec3 at;
-            if (!srcOk || !DropSourcePos(src->second, at) || world_.DistanceTo(a.handle, at) > kDropReach) {
+            if (!srcOk || !DropSourcePos(src->second, at) || world_.DistanceTo(a.handle, at) > DropReachOf(src->second)) {
                 log_("refused a drop to the ground from player " + std::to_string(from) + ": " + op.item.templateSid +
                      (srcOk ? " (its character is not by it)" : " (not an inventory it may touch)"));
                 src->second.invHash = 0;
@@ -2702,7 +2711,7 @@ Session::DropPlan Session::PlanClientDrop(uint32_t netId, Entity& e, InvOp& op) 
     // (named, the host checks it is ours and standing by it); our characters and their bags: themselves
     Vec3 at;
     if (!SelfDrop(netId) && DropSourcePos(e, at)) {
-        float best = kDropReach;
+        float best = DropReachOf(e);
         for (const auto& [oid, o] : entities_) {
             if (!o.squad || o.container || o.owner != localId_) continue;
             const float d = world_.DistanceTo(o.handle, at);

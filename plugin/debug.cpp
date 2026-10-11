@@ -309,6 +309,57 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         return "err " + e;
     }
+    if (cmd == "spawncreature") {
+        // spawncreature <templateSid> <dx> <dz> [squadIndex] [age]: host creates a character of that
+        // template (an animal: "3967-gamedata.base" leviathan, "3993-..." goat...) next to that squad
+        // member, in the faction of a nearby NPC. It becomes the target of ko / kill / wake / npcstate.
+        std::string sid;
+        float dx = 0, dz = 0, age = 1.0f;
+        size_t near0 = 0;
+        in >> sid >> dx >> dz;
+        if (!(in >> near0)) near0 = 0;
+        if (!(in >> age)) age = 1.0f;
+        auto squad = SortedSquad(w);
+        kc::Vec3 base;
+        if (sid.empty() || near0 >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[near0]), base)) return "err usage or no squad";
+        std::vector<kenshi::Character*> all;
+        kenshi::ActiveCharacters(all);
+        kc::SpawnInfo info;
+        for (kenshi::Character* src : all) {
+            kc::Handle h;
+            if (kenshi::GetHandle(src, h) && !w.FindSquad(h) && kenshi::ReadSpawnSource(src, info)) break;
+            info.factionSid.clear();
+        }
+        if (info.factionSid.empty()) return "err no NPC around to take a faction from";
+        info.templateSid = sid;
+        info.name.clear();
+        info.age = age;
+        std::string e;
+        HostCallScope scope;
+        kenshi::Character* c = kenshi::CreateCharacter(info, {base.x + dx, base.y, base.z + dz}, &e);
+        kc::Handle h;
+        if (!c || !kenshi::GetHandle(c, h)) return "err " + e;
+        lastSpawned_ = h;
+        return "ok " + Key(h) + " " + sid + (kenshi::IsAnimal(c) ? " animal" : " human");
+    }
+    if (cmd == "bodysize") {   // bodysize <target|spawned>: a character's race, scale, body radius and loot reach (kc::loot)
+        std::string k;
+        in >> k;
+        kc::Handle h = lastSpawned_;
+        if (k != "spawned" && !k.empty()) sscanf(k.c_str(), "%u:%u:%u:%u:%u", &h.type, &h.container, &h.containerSerial, &h.index, &h.serial);
+        kenshi::Character* c = w.Find(h);
+        if (!c) return "err no such character";
+        kc::loot::BodySize b;
+        std::string race;
+        kenshi::ReadBodySize(c, b, &race);
+        kc::SpawnInfo info;
+        kenshi::ReadSpawnSource(c, info);
+        std::ostringstream o;
+        o << "ok race=" << race << " animal=" << kenshi::IsAnimal(c) << " handleType=" << h.type << " scale=" << b.scale << " age=" << info.age
+          << " footprint=" << b.footprint << " hull=" << b.hullX << ',' << b.hullY << ',' << b.hullZ << " radius=" << kc::loot::BodyRadius(b)
+          << " reach=" << kc::loot::Reach(b) << " dead=" << kenshi::IsDead(c) << " down=" << kenshi::IsDown(c) << " ragdoll=" << kenshi::IsRagdoll(c);
+        return o.str();
+    }
     if (cmd == "fight") {   // fight <index>: squad member engages the NPC created by the last spawnnpc
         size_t idx = 0;
         in >> idx;
@@ -2435,6 +2486,9 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         int state = 1;
         try { state = std::stoi(arg); } catch (...) { return "err state 0-3"; }
         return kenshi::CallSetSlaveState(c, state) ? "ok" : "err call failed";
+    }
+    if (cmd == "lootstats") {   // client loot orders: pending, windows opened, orders dropped (expired or body lost)
+        return "ok pending=" + std::to_string(w.PendingLootCount()) + " opened=" + std::to_string(w.lootOpened) + " dropped=" + std::to_string(w.lootDropped);
     }
     if (cmd == "tradegui") {   // the trade window request the game has not consumed yet (type 0 = none)
         int type = -1;

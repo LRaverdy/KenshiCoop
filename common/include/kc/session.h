@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "kc/clock.h"
+#include "kc/loot.h"
 #include "kc/motion.h"
 #include "kc/net.h"
 #include "kc/protocol.h"
@@ -258,6 +259,9 @@ public:
     virtual bool WornBackpack(const Handle& wearer, Handle& bag, std::string& sid) { (void)wearer; (void)bag; sid.clear(); return false; }
     virtual bool TravellingCounters(const Handle& trader, std::vector<Handle>& wearers) { (void)trader; wearers.clear(); return false; }
     virtual bool IsAnimal(const Handle& h) { (void)h; return false; }
+    // A character's body size (its race's footprint and hull, its scale): how close a looter or a
+    // dropping character stands to it (kc::loot). False: unknown (a human's size is assumed).
+    virtual bool ReadBodySize(const Handle& h, loot::BodySize& out) { (void)h; (void)out; return false; }
     // Put a character into the squad of another (the host's way to make an animal follow its owner).
     virtual bool JoinSquadOf(const Handle& who, const Handle& leader) { (void)who; (void)leader; return false; }
     virtual std::string CharacterNameOf(const Handle& h) { (void)h; return {}; }
@@ -988,7 +992,8 @@ private:
     void ClientBags(double now);
     double nextClientBags_ = 0;
     const Entity* Wearer(const Entity& e) const;   // a bag's wearer, else the entity itself (null: unknown wearer)
-    static constexpr float kDropReach = 160.0f;   // a drop from a chest or a body: the dropping character stands this close (a looter's reach x 2)
+    static constexpr float kDropReach = loot::kDropReach;   // a drop from a chest or a body: the dropping character stands this close (a looter's reach x 2; more by a big body: DropReachOf)
+    float DropReachOf(const Entity& e);   // kDropReach, grown by the size of the body (or wearer) it comes from
     uint32_t DropActor(uint32_t netId) const;      // who drops an item from that inventory: a worn bag's wearer, else netId itself
     // A drop to the ground names the character that drops it (actor safety). From a squad character or
     // the backpack one wears (SelfDrop): that character (DropActor). From anything else (a chest one has

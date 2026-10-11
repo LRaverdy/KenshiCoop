@@ -1199,6 +1199,10 @@ bool KenshiWorld::TravellingCounters(const kc::Handle& trader, std::vector<kc::H
 }
 
 bool KenshiWorld::IsAnimal(const kc::Handle& h) { return kenshi::IsAnimal(Find(h)); }
+bool KenshiWorld::ReadBodySize(const kc::Handle& h, kc::loot::BodySize& out) {
+    kenshi::Character* c = Find(h);
+    return c && kenshi::ReadBodySize(c, out);
+}
 
 bool KenshiWorld::JoinSquadOf(const kc::Handle& who, const kc::Handle& leader) {
     kenshi::Character* c = Find(who);
@@ -2380,10 +2384,12 @@ void KenshiWorld::QueueLocalOrder(const kc::Handle& h, const kc::Command& c) {
     if (orders_.size() < 256) orders_.emplace_back(h, c);
 }
 
-namespace {
-constexpr float kLootRange = 12.0f;   // the looter stops next to the body; bodies lie within a few units of the host's copy
-}
-
+// Client loot orders (task 26 on a body or an animal). The looter walks to the body through the host
+// and the game's loot window opens here once it stands by it. How close is "by it" depends on the
+// body: kc::loot::Reach grows with the race's size and the body's scale (a leviathan's position, the
+// root of its ragdoll, is ~25 times as far from where a looter can stand as a human's). Until 0.3.1
+// it was a flat 12 units in 3D: big animals (leviathans, beak things, swamp turtles, gorillos,
+// spiders...) never opened, the order silently expired after 30 s.
 void KenshiWorld::RequestLoot(const kc::Handle& looter, kenshi::Character* target) {
     kc::Handle t;
     kc::Vec3 tp, lp;
@@ -2391,16 +2397,25 @@ void KenshiWorld::RequestLoot(const kc::Handle& looter, kenshi::Character* targe
     if (!me || !kenshi::GetHandle(target, t) || !kenshi::GetPosition(target, tp) || !kenshi::GetPosition(me, lp)) return;
     pendingLoot_.erase(std::remove_if(pendingLoot_.begin(), pendingLoot_.end(), [&](const PendingLoot& p) { return p.looter == looter; }),
                        pendingLoot_.end());
-    Log("loot order: %.0f units to go", Dist(lp, tp));
-    if (Dist(lp, tp) <= kLootRange) {
+    kc::loot::BodySize body;
+    std::string race;
+    kenshi::ReadBodySize(target, body, &race);
+    const float dist = kc::loot::GroundDist(lp, tp);
+    Log("loot order: %.0f units to go (%s %s, race %s, scale %.2f, body radius %.0f, reach %.0f)", dist,
+        kenshi::IsAnimal(target) ? "animal" : "human", kenshi::IsDead(target) ? "dead" : kenshi::IsDown(target) ? "down" : "standing",
+        race.c_str(), body.scale, kc::loot::BodyRadius(body), kc::loot::Reach(body));
+    if (kc::loot::InReach(lp, tp, body)) {
         kenshi::OpenLootWindow(me, target);
+        ++lootOpened;
+        Log("loot window opened at %.0f units", dist);
         return;
     }
     kc::Command c;
     c.kind = kc::CommandKind::MoveTo;
-    c.pos = tp;
+    c.pos = kc::loot::ApproachPoint(lp, tp, body);
     QueueLocalOrder(looter, c);
-    pendingLoot_.push_back({looter, t, NowSeconds() + 30.0});
+    const double now = NowSeconds();
+    pendingLoot_.push_back({looter, t, body, race, now + kc::loot::OrderTimeout(dist), now, 0.0});
 }
 
 void KenshiWorld::UpdatePendingLoot() {
@@ -2409,12 +2424,34 @@ void KenshiWorld::UpdatePendingLoot() {
         kenshi::Character* me = FindSquad(it->looter);
         kenshi::Character* target = kenshi::Resolve(it->target);
         kc::Vec3 lp, tp;
-        const bool valid = me && target && (kenshi::IsDown(target) || kenshi::IsDead(target) || kenshi::IsRagdoll(target) || kenshi::IsAnimal(target)) &&
-                           now < it->until;
-        if (valid && kenshi::GetPosition(me, lp) && kenshi::GetPosition(target, tp) && Dist(lp, tp) <= kLootRange) {
-            kenshi::OpenLootWindow(me, target);
+        const bool lootable = target && (kenshi::IsDown(target) || kenshi::IsDead(target) || kenshi::IsRagdoll(target) || kenshi::IsAnimal(target));
+        const bool havePos = me && lootable && kenshi::GetPosition(me, lp) && kenshi::GetPosition(target, tp);
+        if (!me || !lootable) {
+            Log("loot order dropped: %s", !me ? "the looter is gone" : !target ? "the body is gone here" : "it got up");
+            ++lootDropped;
             it = pendingLoot_.erase(it);
-        } else if (!valid) {
+            continue;
+        }
+        // stopped: the looter has not been walking for a second (a big ragdoll blocks it at its edge)
+        kc::Vec3 dest;
+        bool moving = true;
+        float speed = 0;
+        if (kenshi::GetMovement(me, dest, moving, speed) && !moving) {
+            if (it->stillSince == 0) it->stillSince = now;
+        } else {
+            it->stillSince = 0;
+        }
+        const bool stopped = it->stillSince != 0 && now - it->stillSince >= 1.0 && now - it->since >= 1.5;
+        if (havePos && (kc::loot::InReach(lp, tp, it->body) || (stopped && kc::loot::InReach(lp, tp, it->body, kc::loot::kStoppedSlack)))) {
+            kenshi::OpenLootWindow(me, target);
+            ++lootOpened;
+            Log("loot window opened at %.0f units (%s, reach %.0f%s)", kc::loot::GroundDist(lp, tp), it->race.c_str(), kc::loot::Reach(it->body),
+                kc::loot::InReach(lp, tp, it->body) ? "" : ", stopped by the body");
+            it = pendingLoot_.erase(it);
+        } else if (now >= it->until) {
+            Log("loot order dropped: the looter is still %.0f units from the body (%s, reach %.0f)", havePos ? kc::loot::GroundDist(lp, tp) : -1.0f,
+                it->race.c_str(), kc::loot::Reach(it->body));
+            ++lootDropped;
             it = pendingLoot_.erase(it);
         } else {
             ++it;

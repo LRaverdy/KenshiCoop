@@ -160,6 +160,9 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 | `client pick up: the item left the ground (taken): in the inventory of the character that was sent` | ramassage d'un client fait par l'hôte, et où l'objet est arrivé ; à surveiller : `in ANOTHER squad member's inventory (Y)`, `in an inventory outside the squad (taken by someone else?)`, `joined a stack of the same kind in an inventory, or destroyed` (pile fusionnée : normal) |
 | `[X] placement of Y at x,y,z refused: invalid spot (in water or acid (ground …, surface …))` | pose d'un client que le mode construction aurait refusée (aussi : `too close to a town`, `inside another building`, `on top of another building`, `too steep`, `the ground there is not loaded on the host`) : rien n'est bâti, le joueur reçoit la raison |
 | `refused an inventory move from player N` | demande refusée (pas son personnage, PNJ conscient…) : l'état réel est renvoyé |
+| `[X] loot order: N units to go (animal dead, race Leviathan, scale 1.50, body radius 112, reach 237)` | ordre de fouille d'un client : distance au sol, sorte de corps, race (données du jeu), échelle, rayon et portée qui en découlent |
+| `[X] loot window opened at N units (…[, stopped by the body])` | la fenêtre de fouille s'ouvre chez ce client ; « stopped by the body » : le pilleur s'est arrêté contre un grand corps |
+| `[X] loot order dropped: the looter is still N units from the body (…)` / `… the body is gone here` / `… it got up` | ordre de fouille abandonné, avec la raison (avant 0.3.1 : rien au journal) |
 
 ### Lignes venues des clients (préfixe `[nom]`)
 | Ligne | Sens |

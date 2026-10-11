@@ -9,6 +9,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "kc/loot.h"
 #include "kc/session.h"
 #include "kc/streaming.h"
 #include "kc/world_identity.h"
@@ -105,6 +106,7 @@ public:
     bool WornBackpack(const kc::Handle& wearer, kc::Handle& bag, std::string& sid) override;
     bool TravellingCounters(const kc::Handle& trader, std::vector<kc::Handle>& wearers) override;
     bool IsAnimal(const kc::Handle& h) override;
+    bool ReadBodySize(const kc::Handle& h, kc::loot::BodySize& out) override;
     bool JoinSquadOf(const kc::Handle& who, const kc::Handle& leader) override;
     bool PayTrade(const kc::Handle& buyer, const kc::Handle& trader, int32_t price) override;
     void RefreshTradeWindow(const kc::Handle& trader) override;
@@ -376,6 +378,8 @@ public:
     // Client: the local player wants `looter` (one of its characters) to loot `target`, a knocked-out
     // or dead character. It walks there through the host; the loot window opens once it is close.
     void RequestLoot(const kc::Handle& looter, kenshi::Character* target);
+    size_t PendingLootCount() const { return pendingLoot_.size(); }
+    int lootOpened = 0, lootDropped = 0;   // client loot orders: windows opened, orders that expired or lost their body (debug: lootstats)
     void Toast(const std::string& msg);
     std::vector<std::string> TakeToasts();
 
@@ -468,7 +472,14 @@ private:
     kc::ResultReason orderRefusalReason_ = kc::ResultReason::None;
     int targetRefusals_ = 0;   // host: why the last client order was refused for safety (French)
     std::vector<std::pair<kc::Handle, kc::Command>> orders_;
-    struct PendingLoot { kc::Handle looter, target; double until; };
+    struct PendingLoot {
+        kc::Handle looter, target;
+        kc::loot::BodySize body;   // the body's size: how close the looter must get (kc::loot::Reach)
+        std::string race;
+        double until;              // the order expires (logged)
+        double since;              // when it was given
+        double stillSince;         // the looter stopped walking at (0: walking)
+    };
     std::vector<PendingLoot> pendingLoot_;   // client, game thread only
     void UpdatePendingLoot();
     std::vector<kenshi::Character*> scratch_;

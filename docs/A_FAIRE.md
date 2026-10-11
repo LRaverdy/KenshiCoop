@@ -7,6 +7,35 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
 Journal de l'hôte gardé dans `kc_crashdumps/session_2215/host_live.log` (à compléter par les
 journaux des clients `KenshiCoop-<pid>.log` de chacun).
 
+- ✅ **Les clients ne peuvent pas fouiller certaines créatures** (léviathans…), alors que l'hôte le
+  fait en solo ; il faut pouvoir fouiller (et dépecer) toutes les créatures, humaines comme
+  animales. Corrigé, à vérifier en jeu (`coop_test.py lootcreature`).
+  **Ce que dit le journal** : aucun léviathan dans cette partie, et aucun refus lié à une fouille
+  d'animal : l'échec était muet. Les lignes `loot order: N units to go` (73) n'ont aucune suite
+  quand la fenêtre ne s'ouvre pas (`RequestLoot` ne journalisait ni l'ouverture ni l'expiration) ;
+  plusieurs ordres n'ont été suivis d'aucun déplacement d'objet (nass4 22:44:45, 23:11:53, 23:11:54,
+  23:13:25). Les refus du journal sont autre chose : `refused an inventory move … 556-gamedata.base
+  (may not take from there)` (près de 3000, des bottes : un client qui redemande en boucle un
+  déplacement sur le perso d'un autre) et `client task 16 … unknown task id` (déjà traité : tâche 16
+  = `ATTACK_ENEMIES`).
+  **Causes** (désassemblage du 1.0.68 et données du jeu) : (1) **la portée** : le client n'ouvrait
+  la fenêtre qu'à 12 unités en 3D de la position du corps, la racine du ragdoll, au milieu et en
+  hauteur ; un léviathan a un rayon de 40 et une coque de 75 × 90 × 75 (échelle adulte 1,5), une
+  bête à bec 16, une tortue des marais 25, gorillos 12, araignées 14 : le pilleur bloqué contre le
+  corps n'y arrivait jamais et l'ordre expirait après 30 s sans message ; (2) **l'âge des animaux
+  recréés chez les clients** : l'échelle (vt 0x390) était envoyée comme âge (vt 0x398) : un
+  léviathan adulte faisait 2,05 fois la taille de sa race chez un client au lieu de 1,5, son corps
+  ailleurs. Écartés : le type (seules trois classes de perso existent, `Character`,
+  `CharacterHuman`, `CharacterAnimal`, toutes acceptées par `IsCharacter`), la tâche (le clic droit
+  donne 26 sur un animal aussi ; il n'existe pas de tâche de dépeçage : la viande, les peaux et les
+  perles sont les « death items » de l'animal, dans son inventaire une fois mort), les sections
+  d'inventaire (lues par leur nom, quel que soit le perso), les droits de l'hôte (un corps mort ou
+  K.-O. hors escouade se fouille, animal ou non).
+  **Corrigé** : portée selon la taille du corps (`kc::loot`, rayon et coque de sa race fois son
+  échelle), pilleur envoyé au bord du corps, portée élargie s'il s'est arrêté contre, attente selon
+  la distance, ouverture et abandon journalisés ; âge réel des animaux recréés ; dépôt au sol
+  depuis un grand corps accepté de son flanc. Tests `TestLootCreatures`, `TestBigBodyDrop`.
+
 - ✅ **Rejoindre est long** (corrigé en 0.3.1, à vérifier en jeu) : nass4 a mis ~1 min 55 entre
   « world sent » (22:15:01) et son arrivée (22:16:55) ; rob, arrivé pendant ce temps, attendait
   dans la file et n'a reçu le monde qu'à 22:17:04 (+1 min 45). Pistes : télécharger et charger le
