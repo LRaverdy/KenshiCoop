@@ -255,6 +255,11 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   portrait reste le choix du joueur. L'hôte envoie toujours l'étage de chaque perso (message 71)
   mais le client ne l'écrit plus (écriture désactivée : le jeu remettait sa valeur et un client a
   planté après une rafale d'écritures). Expérience `floor`.
+- **Caméra libre** (0.3.2) : ce perso suivi est aussi celui que la caméra suit, et le jeu le lâche
+  dès que le joueur bouge la caméra. Le mod 0.3.1 le reprenait toutes les 0,5 s : la caméra d'un
+  client « allait partout ». Il n'est plus posé qu'une fois après le chargement (ou s'il revient sur
+  le perso de la sauvegarde de l'hôte) ; ensuite la caméra est au joueur. Les toits au-dessus du perso
+  sélectionné restent cachés à l'intérieur. Expérience `camfocus`.
 
 ---
 
@@ -400,6 +405,10 @@ client s'ouvre chez **ce** client. Les bulles au-dessus des têtes sont montrée
 s'ouvre (`userPause(true)`, voir MOTEUR). En coop, **pas de pause** : une conversation ne concerne
 que son joueur, le monde continue pour les autres.
 - La conversation d'un client ne s'ouvre jamais chez l'hôte : pas de pause.
+- **Mode construction (0.3.2)** : même règle. En solo il met le jeu en pause ; chez l'hôte avec
+  d'autres joueurs, le mod lève cette pause aussitôt (sauf si l'hôte avait déjà mis pause lui-même),
+  et les autres continuent de jouer. Celui d'un client ne met en pause que son jeu un instant : il
+  reprend l'horloge de l'hôte à l'image suivante. Expérience `buildpause`.
 - Celle d'un client n'ouvre pas non plus la fenêtre du jeu chez lui : sa vitesse reste celle de l'hôte.
 - La propre conversation de l'hôte, quand d'autres joueurs ont des persos : le mod lève aussitôt la
   pause que le jeu vient de mettre (journal « the host's own conversation: the game is not paused in
@@ -876,7 +885,11 @@ la fenêtre du client.
     l'autre) et impose l'état de l'hôte, puis le réimpose toutes les 3 s (zone chargée plus tard,
     changement local) ;
   - chez un client, le jeu ne peut plus ouvrir, fermer, verrouiller ni déverrouiller une porte de
-    lui-même (hooks sur `openDoor`, `closeDoor`, `lockDoor`, `unlockDoor`).
+    lui-même (hooks sur `openDoor`, `closeDoor`, `lockDoor`, `unlockDoor`) ;
+  - (0.3.2) une porte fermée chez le client alors que celle de l'hôte reste « en fermeture » (ou
+    ouverte / « en ouverture ») est déjà juste : elle n'est plus réappliquée toutes les 3 s ; une porte
+    que le jeu du client ne veut pas tourner est laissée après 3 essais, jusqu'au prochain changement
+    chez l'hôte (une ligne de journal au lieu de centaines).
 - **À vérifier en jeu** (expérience `doors`) : que les portes sont bien dans la grille des
   bâtiments de la zone (sinon elles ne seraient pas trouvées), le crochetage par un client, le
   bouton du panneau, le coffre verrouillé.
@@ -895,6 +908,9 @@ la fenêtre du client.
     change (`Captives`), plus tous les captifs toutes les 5 s (joueur arrivé en retard, perte) ;
   - le client retrouve la cage chez lui « par type et endroit » et y met son personnage avec la
     fonction du jeu (`setPrisonMode`) : position, pose, occupation de la cage ;
+  - (0.3.2) le journal du client dit chaque changement une seule fois, avec le meuble (un lit compte
+    comme « caged »), et 6 lignes par 10 s au plus (une ville qui se couche, c'est des dizaines de
+    changements d'un coup) ; l'état est quand même imposé à chaque fois ;
   - les autres états (menottes, propriétaire, esclavage, faction, évadé, enlevé, peine) sont
     écrits directement : l'objet « menottes » arrive, lui, avec l'inventaire ;
   - le jeu du client ne peut plus mettre ni sortir de cage, enchaîner ou changer le statut
@@ -1135,6 +1151,12 @@ la fenêtre du client.
   (sans pause ni clic de l'hôte) ; les chiffres de dégâts de ses combats arrivent même quand la
   caméra de l'hôte n'est pas sur lui. Limite : la caméra d'un client posée loin de tous ses persos
   ne fait pas venir la foule de cet endroit.
+- **Attaquants (0.3.2, à vérifier en jeu)** : qui combat un perso envoyé à un joueur lui est envoyé
+  aussi (en plus de « ce que combat un perso envoyé part avec lui »), et un client recrée, même loin
+  de ses persos, un PNJ qui combat un membre d'escouade de n'importe quel joueur : en suivant de la
+  caméra le combat d'un autre joueur, on voit qui le frappe. Le reste de la foule de cet endroit
+  ne vient toujours pas (il faudrait envoyer la caméra du client : changement de protocole).
+  Expérience `attackers`.
 - L'expérience `far` du harnais compare un combat à environ 5 km de l'escouade de l'hôte avec le
   même combat à côté.
 - **Limite connue** : le jeu ne déplace les PNJ lointains que quelques fois par seconde. Ceux qui

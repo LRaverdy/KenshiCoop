@@ -785,6 +785,7 @@ private:
     size_t ZoneResync(uint8_t playerId, const std::string& why);
     void UpdateMyCentres();                  // client: where our own characters are (host positions)
     bool InMyArea(const Entity& e, double now) const;   // client: near our characters and still sent
+    bool FightsSquad(const Entity& e, double now) const;   // client: still sent, and fighting a squad member (any player's)
     bool Dormant(const Entity& e, double now) const;    // client: the host stopped sending it
     std::vector<Vec3> myCentres_;            // client
     double lastReconcile_ = -1e9;            // client: Reconcile last ran
@@ -1175,6 +1176,8 @@ private:
     double nextCaptives_ = 0, captivesFullAt_ = 0;
     std::unordered_map<uint32_t, CaptiveState> captives_;      // client: the host's state per character
     std::unordered_set<uint32_t> captivesDirty_;               // client: to impose now
+    std::unordered_map<uint32_t, CaptiveState> captiveLogged_; // client: the last state told in the log per character
+    LogLimiter captiveLog_{6, 10.0};                           // client: "captivity from the host" lines
     double captivesReapplyAt_ = 0;
     void HostCaptives(double now);
     void ClientCaptives(double now);

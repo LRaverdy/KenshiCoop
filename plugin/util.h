@@ -14,6 +14,8 @@ void Log(const char* fmt, ...);
 // The newest log lines (oldest first, at most `max`), for the in-game console. `seq` counts every
 // line ever logged, so a reader can tell whether anything new arrived.
 std::vector<std::string> RecentLog(size_t max, uint64_t* seq = nullptr);
+// Tests (debug "logcount"): lines containing `text` logged since its first call (at most 16 texts).
+uint64_t LogWatch(const std::string& text);
 
 struct Config {
     std::string name = "Player";

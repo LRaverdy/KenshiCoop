@@ -274,6 +274,12 @@ enum Fn : int {
     FnMedAddWound,              // ? MedicalSystem::addWound(this, bool, int, ptr, 4 stack args)   (makes the damage number, only if the character is in the camera's view: CH_inView)
     FnCharUpdateView,           // uint8 Character::updateView()   (our name, 0x5C9F60: sets CH_inView +0x1A9 every frame from the camera; player-faction characters always in view)
     FnSetInBed,                 // void Character::setInBed(bool on, UseableStuff* bed)   (our name, 0x32E2F0: inSomething 1, inWhat = the bed's hand, the bed's vt 0x4F8 takes it in; setBedMode-like)
+    // ---- 0.3.2: build mode and the camera's tracked character
+    FnBuildModeInstance,        // PlayerBuildMode* <getInstance>()   (our name, 0x296D10: made on first use, kept at 0x212DE48; the B key (0x7884D9) and the main bar's button use it)
+    FnBuildModeActivate,        // void PlayerBuildMode::activate(bool levelEditor)   (our name, 0x4E65E0: GameWorld::togglePause(true) first, then the BuildModeWindow at +0x28)
+    FnBuildModeDeactivate,      // void PlayerBuildMode::deactivate()   (our name, 0x4D1870: deletes the window +0x28, then togglePause(false))
+    FnBuildModeIsActive,        // bool PlayerBuildMode::isActive() const   (our name, 0x4D1860: +0x28 != null)
+    FnStopTrackCharacter,       // void PlayerInterface::stopTrackCharacter()   (0x7F2780: +0x270 = none, +0x290 = -1, Camera::stopFollowing; called by CameraClass::move and teleport)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -861,6 +867,9 @@ bool CallSetFrameSpeed(float speed);
 bool CallSetGameSpeedUi(float speed);   // as the speed buttons and keys do (no sound): the buttons show it too
 bool CallUserPause(bool paused);
 bool CallTogglePause(bool paused);
+bool BuildModeActive();               // the player's build mode is open (PlayerBuildMode::isActive)
+bool SetBuildMode(bool on);           // open / close it as the B key does (activate(false) / deactivate); main thread only
+bool StopTrackCharacter();            // what moving the camera does: PlayerInterface::stopTrackCharacter
 // Writes host health into the local copy (does not trigger death/knockout by itself).
 bool WriteVitals(Character* c, const kc::EntityVitals& v);
 // The irreversible transitions; callers must hold a HostCallScope on clients.

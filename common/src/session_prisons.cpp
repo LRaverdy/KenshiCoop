@@ -84,8 +84,22 @@ void Session::OnCaptives(Reader& r) {
     for (auto& c : m.chars) {
         auto it = captives_.find(c.netId);
         if (it != captives_.end() && it->second == c) continue;
-        auto e = entities_.find(c.netId);
-        log_("captivity from the host: " + (e != entities_.end() ? world_.CharacterNameOf(e->second.handle) : std::string("?")) + Describe(c));
+        // Told once per change: the same state comes back with every full refresh (5 s) once our
+        // entry was dropped (a character we had not bound yet), and a town going to bed at night is
+        // dozens of changes at once ("a merchant caged" twice a second on every client, 11 October;
+        // a bed counts as "caged", its furniture is named now). The state is imposed every time.
+        auto lg = captiveLogged_.find(c.netId);
+        if (lg == captiveLogged_.end() || lg->second != c) {
+            if (captiveLogged_.size() > 8192) captiveLogged_.clear();
+            captiveLogged_[c.netId] = c;
+            uint32_t held = 0;
+            if (captiveLog_.Allow(clock_(), &held)) {
+                auto e = entities_.find(c.netId);
+                log_("captivity from the host: " + (e != entities_.end() ? world_.CharacterNameOf(e->second.handle) : std::string("?")) + Describe(c) +
+                     (c.caged ? " (" + world_.TemplateName(c.cageSid) + ")" : std::string{}) +
+                     (held ? " [" + std::to_string(held) + " more captivity change(s) not written]" : std::string{}));
+            }
+        }
         captivesDirty_.insert(c.netId);
         captives_[c.netId] = std::move(c);
     }

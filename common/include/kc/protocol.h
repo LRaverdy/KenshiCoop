@@ -826,6 +826,13 @@ struct DoorState {
     bool sameState(const DoorState& o) const {   // what matters (the opening amount moves on its own)
         return kind == o.kind && state == o.state && flags == o.flags && lockLevel == o.lockLevel;
     }
+    bool open() const { return state == 1 || state == 2; }   // open or opening
+    // The same once both doors stop moving: closed and closing (or open and opening) count as one. A
+    // host's door can stay "closing" for good (far from the host's camera, or blocked): a client's
+    // closed copy of it is right, and was "applied" again every 3 s for ever (A_FAIRE 3h).
+    bool sameSettled(const DoorState& o) const {
+        return kind == o.kind && open() == o.open() && flags == o.flags && lockLevel == o.lockLevel;
+    }
 };
 struct DoorsMsg {
     bool full = false;      // every door near the players (others the client knows are unchanged)

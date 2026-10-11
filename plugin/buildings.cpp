@@ -315,8 +315,11 @@ void KenshiWorld::NoteBuildCapture(const BuildArgs& a, void* created) {
         return;
     }
     if (created) kenshi::ObjectHandle(created, lp.created);
-    Log("build mode placement: %s at %.1f,%.1f,%.1f floor %d%s%s", lp.place.sid.c_str(), lp.place.pos.x, lp.place.pos.y, lp.place.pos.z,
-        lp.place.floor, lp.place.parentSid.empty() ? "" : " (furniture)", created ? "" : " - asked of the host");
+    // The factory's height is relative to the ground (getTerrainWithWaterHeight, which createBuildings
+    // took off the preview's position, 0x4D7512): -13.6 here is 268.1 in the world on the host's side
+    // (A_FAIRE 3o, not a wrong height).
+    Log("build mode placement: %s at %.1f,%.1f (%.1f from the ground) floor %d%s%s", lp.place.sid.c_str(), lp.place.pos.x, lp.place.pos.z,
+        lp.place.pos.y, lp.place.floor, lp.place.parentSid.empty() ? "" : " (furniture)", created ? "" : " - asked of the host");
     std::lock_guard<std::mutex> lk(buildMutex_);
     if (localPlacements_.size() < 64) localPlacements_.push_back(std::move(lp));
 }

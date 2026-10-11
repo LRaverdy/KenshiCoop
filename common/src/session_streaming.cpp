@@ -91,7 +91,10 @@ void Session::UpdateStreams() {
             if (o != own.end() && WithinAny(p->second, o->second, r > 0 ? r : 3000.0f)) { nearRemote.push_back(e.handle); break; }
         }
     }
-    // What a streamed character fights or carries goes with it (the last snapshot's view of them).
+    // What a streamed character fights or carries goes with it (the last snapshot's view of them),
+    // and whoever fights a streamed character goes with it too (A_FAIRE 3g): a player watching
+    // another player's fight far away saw that player's character hit by nobody (the squad member
+    // goes to everyone, the NPCs hitting it only to those near them).
     for (int pass = 0; pass < 2; ++pass)
         for (const auto& [id, st] : stateCache_) {
             auto e = entities_.find(id);
@@ -101,6 +104,9 @@ void Session::UpdateStreams() {
                 auto o = entities_.find(other);
                 if (o != entities_.end() && !o->second.container) o->second.streamMask |= e->second.streamMask;
             }
+            if (!st.combatTarget || e->second.container) continue;
+            if (auto t = entities_.find(st.combatTarget); t != entities_.end() && !t->second.container)
+                e->second.streamMask |= t->second.streamMask;
         }
     // A player who starts being sent a character gets all of its state at once (positions, health),
     // not only what changes from now on.
@@ -209,6 +215,17 @@ bool Session::InMyArea(const Entity& e, double now) const {
     if (e.buf.empty() || Dormant(e, now)) return false;
     if (cfg_.standInRadius <= 0 || myCentres_.empty()) return true;
     return WithinAny(e.buf.back().s.pos, myCentres_, cfg_.standInRadius);
+}
+
+// A host character fighting a squad member (any player's), still sent to us: made here even far from
+// our characters, so that a player whose camera follows another player's fight sees who hits them
+// (A_FAIRE 3g). Where our game has not loaded the land it goes again at once, and comes back after
+// the growing stand-in delay (StandInLossDelay) like any other.
+bool Session::FightsSquad(const Entity& e, double now) const {
+    if (e.squad || e.buf.empty() || Dormant(e, now)) return false;
+    const uint32_t target = e.buf.back().s.combatTarget;
+    auto t = target ? entities_.find(target) : entities_.end();
+    return t != entities_.end() && t->second.squad;
 }
 
 } // namespace kc

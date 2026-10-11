@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <deque>
 #include <mutex>
 #include <vector>
@@ -23,6 +24,7 @@ FILE* g_log = nullptr;
 std::deque<std::string> g_recent;   // newest last
 uint64_t g_logSeq = 0;
 constexpr size_t kRecentLines = 500;
+std::vector<std::pair<std::string, uint64_t>> g_watches;   // tests: lines containing that text, counted from LogWatch on
 
 std::string Narrow(const std::wstring& w) {
     if (w.empty()) return {};
@@ -101,9 +103,20 @@ void Log(const char* fmt, ...) {
     g_recent.push_back(stamp + std::string(msg));
     if (g_recent.size() > kRecentLines) g_recent.pop_front();
     ++g_logSeq;
+    for (auto& [text, n] : g_watches)
+        if (std::strstr(msg, text.c_str())) ++n;
     if (!g_log) return;
     fprintf(g_log, "%02d:%02d:%02d.%03d  %s\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg);
     fflush(g_log);
+}
+
+uint64_t LogWatch(const std::string& text) {
+    std::lock_guard<std::mutex> lk(g_logMutex);
+    for (const auto& [t, n] : g_watches)
+        if (t == text) return n;
+    if (text.empty() || g_watches.size() >= 16) return 0;
+    g_watches.emplace_back(text, 0);
+    return 0;
 }
 
 std::vector<std::string> RecentLog(size_t max, uint64_t* seq) {

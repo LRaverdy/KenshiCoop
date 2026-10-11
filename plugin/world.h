@@ -158,6 +158,11 @@ public:
     bool ContainerLocked(const kc::Handle& container) override;
     bool ExecuteDoorRequest(const kc::DoorRequest& r) override;
     bool ApplyDoor(const kc::DoorState& d) override;
+    size_t DoorsGivenUp() const {   // client: doors left alone until the host's changes (doors.cpp)
+        size_t n = 0;
+        for (const auto& [k, t] : doorTries_) n += t.tries >= 3 ? 1 : 0;
+        return n;
+    }
     void TakeDoorRequests(std::vector<kc::DoorRequest>& out) override;
     void QueueDoorRequest(void* door, kc::DoorAction action);   // hooks (client): a door button the player clicked
     void* FindDoor(const std::string& sid, const kc::Vec3& pos);   // the same door here (kind and place)
@@ -374,6 +379,7 @@ public:
     // say: `talkto` / `npcevent ... dlg` pick it).
     kc::Handle LastDialogNpc();
     int dialogsBusyRefused = 0, dialogsSwept = 0, hostDialogUnpaused = 0;
+    int hostBuildUnpaused = 0;   // host: build mode opened in co-op, its pause lifted (hooks.cpp hk_buildActivate)
     int saysApplied = 0;          // tests (client): speech bubbles replayed
     // tests ("floaters"): damage numbers. Host: made by addWound and sent (floatersMade), made off its
     // camera for a character near a client player (woundsForcedInView, hk_addWound). Client: shown here.
@@ -601,6 +607,8 @@ private:   // first few lifecycle events (tests)
     std::mutex doorMutex_;
     std::vector<kc::DoorRequest> doorReqs_;                          // client, under doorMutex_
     std::unordered_map<std::string, kc::Handle> doorCache_;         // kind and place -> our handle of it
+    struct DoorTry { kc::DoorState host; int tries = 0; };
+    std::unordered_map<std::string, DoorTry> doorTries_;            // client: doors our game would not turn the host's way (doors.cpp)
     // ---- end lot A
     // ---- lot D: prisons
     std::unordered_set<kc::Handle, kc::HandleHash> captiveHold_;      // client: caged on the host (no position corrections)
@@ -651,6 +659,9 @@ private:
     void UpdateReRagdolls();
     void UpdateFloorFocus();      // client: the floor view follows one of our characters
     double nextFocusCheck_ = 0;
+    bool focusPlaced_ = false;    // client: the loaded world's tracked character replaced by one of ours (once per load)
+    kc::Handle loadFocus_;        // the one the loaded world tracked (the host's character from the save; invalid: none)
+    int focusRetakes_ = 0;        // times it was found on loadFocus_ again and taken back (at most a few)
     void UpdateRoof(kenshi::Character* c);
     void UpdateHostRoof();   // host: the same for its own followed / selected character
     double nextHostRoofCheck_ = 0;   // client: floors above our followed character hidden (world.cpp)

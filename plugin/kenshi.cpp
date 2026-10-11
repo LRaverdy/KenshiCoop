@@ -235,6 +235,12 @@ const FunctionSig kFunctions[FnCount] = {
     {"MedicalSystem::addWound", 0x6508D0, {0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56}},
     {"Character::updateView", 0x5C9F60, {0x40, 0x53, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x68, 0x44, 0x0F, 0xB6, 0xB1}},
     {"Character::setInBed", 0x32E2F0, {0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48}},
+    // ---- 0.3.2: build mode and the camera's tracked character
+    {"PlayerBuildMode::getInstance", 0x296D10, {0x48, 0x83, 0xEC, 0x38, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF}},
+    {"PlayerBuildMode::activate", 0x4E65E0, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x50, 0x48, 0xC7, 0x44, 0x24, 0x40, 0xFE}},
+    {"PlayerBuildMode::deactivate", 0x4D1870, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x33, 0xD2, 0x48, 0x8B, 0xD9, 0x48}},
+    {"PlayerBuildMode::isActive", 0x4D1860, {0x33, 0xC0, 0x48, 0x39, 0x41, 0x28, 0x0F, 0x95, 0xC0, 0xC3, 0xCC, 0xCC}},
+    {"PlayerInterface::stopTrackCharacter", 0x7F2780, {0x8B, 0x05, 0x7A, 0x7E, 0x64, 0x01, 0x89, 0x81, 0x78, 0x02, 0x00, 0x00}},
 };
 
 namespace {
@@ -4071,6 +4077,36 @@ bool CallTogglePause(bool paused) {
 bool CallUserPause(bool paused) {
     GameWorld* w = World();
     return w && CallBoolArg(FnAddr(FnUserPause), w, paused);
+}
+
+// ---------------------------------------------------------------- 0.3.2: build mode, camera tracking
+namespace {
+void* BuildModeSeh() {
+    __try { return reinterpret_cast<void* (*)()>(FnAddr(FnBuildModeInstance))(); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+bool BuildModeActiveSeh(void* bm, bool& out) {
+    __try { out = reinterpret_cast<bool (*)(void*)>(FnAddr(FnBuildModeIsActive))(bm); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+bool BuildModeActive() {
+    bool on = false;
+    void* bm = World() && Player() ? BuildModeSeh() : nullptr;
+    return bm && BuildModeActiveSeh(bm, on) && on;
+}
+
+bool SetBuildMode(bool on) {
+    void* bm = World() && Player() ? BuildModeSeh() : nullptr;
+    bool now = false;
+    if (!bm || !BuildModeActiveSeh(bm, now)) return false;
+    if (now == on) return true;
+    // what the B key does (0x7884D9): activate(false) to enter, deactivate to leave
+    return on ? CallBoolArg(FnAddr(FnBuildModeActivate), bm, false) : CallVoid(FnAddr(FnBuildModeDeactivate), bm);
+}
+
+bool StopTrackCharacter() {
+    PlayerInterface* pi = Player();
+    return pi && CallVoid(FnAddr(FnStopTrackCharacter), pi);
 }
 
 // ---------------------------------------------------------------- lot D: prisons

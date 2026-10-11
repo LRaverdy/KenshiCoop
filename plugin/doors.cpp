@@ -258,14 +258,30 @@ bool KenshiWorld::ApplyDoor(const kc::DoorState& d) {
         return false;
     }
     kc::DoorState local;
-    if (kenshi::ReadDoor(o, local) && local.sameState(d)) return true;
+    // closed here while the host's is still closing (or open while opening): nothing to do
+    if (kenshi::ReadDoor(o, local) && (local.sameState(d) || local.sameSettled(d))) {
+        doorTries_.erase(DoorKey(d.sid, d.pos));
+        return true;
+    }
+    // A door our game will not turn the host's way: 3 tries, then left alone until the host's state
+    // changes (A_FAIRE 3h: "Storm Shack Door stays 0 (host 3)" every 3 s for 40 min on every client).
+    constexpr int kDoorTries = 3;
+    if (doorTries_.size() > 4096) doorTries_.clear();
+    DoorTry& t = doorTries_[DoorKey(d.sid, d.pos)];
+    if (!t.host.sameState(d)) t = DoorTry{d, 0};
+    if (t.tries >= kDoorTries) return true;
     HostCallScope scope;   // lets our own call through the door hooks
     const bool ok = kenshi::ApplyDoorState(o, d);
     kc::DoorState after;
-    if (kenshi::ReadDoor(o, after) && after.state != local.state)
+    const bool read = kenshi::ReadDoor(o, after);
+    if (read && after.state != local.state)
         Log("door: %s state %d -> %d (host %d)", TemplateName(d.sid).c_str(), int(local.state), int(after.state), int(d.state));
-    else if (local.state != d.state)
-        Log("door: %s stays %d (host %d)", TemplateName(d.sid).c_str(), int(local.state), int(d.state));
+    if (read && after.sameSettled(d)) {
+        doorTries_.erase(DoorKey(d.sid, d.pos));
+    } else if (++t.tries >= kDoorTries) {
+        Log("door: %s stays %d (host %d) after %d tries: left alone until the host's door changes", TemplateName(d.sid).c_str(),
+            int(read ? after.state : local.state), int(d.state), t.tries);
+    }
     if (ok && (local.flags ^ d.flags) & (kc::kDoorLocked | kc::kDoorBroken | kc::kDoorLockBroken))
         Log("door: %s now %s%s%s as on the host", TemplateName(d.sid).c_str(), (d.flags & kc::kDoorLocked) ? "locked" : "unlocked",
             (d.flags & kc::kDoorBroken) ? ", broken" : "", (d.flags & kc::kDoorLockBroken) ? ", lock broken" : "");
