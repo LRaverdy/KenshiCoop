@@ -6,6 +6,50 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+- **Restes de la série du 11/10 à 03 h (master f93e80b) : dialogue 13/16, squadui 19/21, research
+  10/13, map 46/47.** Pas encore relancé en jeu.
+  - *Dialogue, « occupé pour un autre perso »* (test) : le perso de l'hôte (un autre joueur, comme
+    voulu) parlait au PNJ **créé** par le test (`talkto … npc`, un « Garde Ninja »), pas à celui de la
+    conversation du client (« Chef Voleur », 3e plus proche) : rien à refuser. Nouvelle cible `dlg`
+    pour `talkto` et `npcevent` : le PNJ de la dernière conversation d'un client
+    (`KenshiWorld::LastDialogNpc`) ; le test l'utilise. Le refus côté mod
+    (`ConversationAllowed`) n'est pas en cause.
+  - *Dialogue, « un PNJ engage la conversation » et « vitesse 3 »* (test) : `npcevent` n'essayait
+    que le PNJ créé (une copie qui n'a rien à dire) et les 4 plus proches (gardes et voleurs sans
+    ligne pour l'événement, ou un chirurgien dont la ligne ne fait que parler). Les conversations
+    lancées par un PNJ marchent en vraie partie (journal du 10/10 au soir). Le test essaie d'abord le
+    PNJ à qui le client vient de parler (`dlg`), puis le PNJ créé et les 8 plus proches ;
+    `npcevent` dit `talking=1` quand le PNJ a vraiment engagé ce perso (sinon 3 s d'attente au lieu
+    de 8).
+  - *Escouades, « ordre des escouades identique »* (mod) : le client glissait son escouade (2e) en
+    tête ; deux voisines échangées donnent deux candidats (la sienne remontée, ou celle de l'hôte
+    descendue), et `ClientSquads` prenait le premier trouvé, celle de l'hôte, refusée : « the host's
+    order is put back » à chaque essai depuis le lot escouades. C'est maintenant l'escouade que le
+    joueur peut modifier qui est demandée. Test unitaire `TestSquadWindow` (son escouade remise en
+    tête).
+  - *IA, « tâches du perso du client identiques »* (test) : le perso du client suivait celui de
+    l'hôte, puis l'hôte faisait suivre son perso par celui du client : le jeu retire le premier
+    « rester proche » quand le second ferme la boucle (0 tâche à chaque série ; la même demande du
+    client dans `suite` donne bien 1 tâche). Le perso de l'hôte suit maintenant un autre perso de
+    l'hôte, après que la tâche du client est arrivée.
+  - *Recherche, bac à sable* (test) : les combats du village laissaient les membres 0, 1 et le perso
+    du client K.-O. ; la TP d'un corps ne tenait pas (« went back 5014 away when it lay down
+    again »), le membre 0 (ancre de toutes les poses) revenait au village : 7 anneaux refusés, puis
+    banc de recherche posé mais « no such building » pour le finir, établis, éolienne et lampes
+    « trop près d'une ville », livres non donnés, donc l'hôte refusait toutes les recherches
+    (« banc de recherche trop petit, ou artefacts / livres manquants »). Maintenant : tout le monde
+    soigné et réveillé (`console heal all`) et en mode dieu dès le début, de nouveau soigné avant le
+    départ ; le membre 0 doit vraiment être au point choisi (sinon anneau suivant) ; avant chaque
+    pose il y est renvoyé s'il en est parti ; `buildprogress` réessayé jusqu'à 12 s le temps que le
+    bâtiment existe. *Non résolu* : la TP d'un corps couché (7646713) ne tient toujours pas quand le
+    jeu le recouche ; le test l'évite.
+  - *Carte, « écran de carte refermé »* (mod, commande de test) : la fenêtre du client venait d'être
+    réduite à 672×313, la croix de la fenêtre de gestion était hors de l'écran (« the button is not
+    on screen »). `mapui close` cache alors la fenêtre comme sa croix
+    (`MyGUI::Window::setVisible(false)`, export de MyGUI ; l'état « ouvert » du jeu est cette
+    visibilité) et répond `ok hidden`. La fonction de fermeture propre au jeu n'a pas d'adresse
+    connue (la vtable de `ManagementScreen` n'a que son destructeur).
+  - Pas de changement de protocole.
 - **Régressions de la fusion 0.3.1 (master a2890df) corrigées.** Pas encore relancé en jeu.
   Mesures de la série du 11/10 à 02 h : suite 24/32 (32/32 en 0.3.0), dialogue 5/10, sécurité
   71/72, recherche 31/35, admin 27/28, join4 15/16.

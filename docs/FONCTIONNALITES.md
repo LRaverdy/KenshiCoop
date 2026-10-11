@@ -276,7 +276,9 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   - déposer ou échanger un portrait (changer d'escouade, devenir chef) : **seulement ses propres
     persos** ;
   - renommer une escouade, la glisser (ordre des escouades), la retirer (croix) : une escouade qui
-    contient un de ses persos, ou vide ; retirer : seulement une escouade vide, jamais la dernière ;
+    contient un de ses persos, ou vide ; retirer : seulement une escouade vide, jamais la dernière.
+    Deux escouades voisines échangées (la sienne remontée = celle d'à côté descendue) : c'est la
+    sienne qui est demandée à l'hôte ;
   - créer une escouade (bouton « nouvelle escouade ») ;
   - renommer son personnage (fenêtre du personnage) ; le perso d'un autre garde son nom.
 - **Conflits** : l'hôte exécute les demandes une par une, dans l'ordre où elles arrivent ; la

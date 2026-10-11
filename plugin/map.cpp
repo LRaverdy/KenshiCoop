@@ -109,6 +109,7 @@ using MouseMoveFn = bool (*)(void* input, int x, int y, int z);
 using MouseButtonFn = bool (*)(void* input, int x, int y, int button);
 using MousePosFn = const int* (*)(const void* input);
 using TabIndexFn = void (*)(void* tabControl, size_t index);
+using SetVisibleFn = void (*)(void* widget, bool visible);
 struct Exports {
     bool tried = false;
     WidgetBoolFn inheritedVisible = nullptr, visible = nullptr;
@@ -123,6 +124,7 @@ struct Exports {
     MouseButtonFn mousePress = nullptr, mouseRelease = nullptr;
     MousePosFn mousePos = nullptr;
     TabIndexFn tabSelect = nullptr;
+    SetVisibleFn windowSetVisible = nullptr;   // MyGUI::Window::setVisible (no fade), else Widget::setVisible
     MatrixFn viewMatrix = nullptr, projMatrix = nullptr;
     WidgetPtrFn camSceneMgr = nullptr;                       // Ogre::Camera::getSceneManager
     float* (*relativeOrigin)(const void* sm, float* out) = nullptr;   // Ogre::SceneManager::getRelativeOrigin (Kenshi's)
@@ -148,6 +150,8 @@ void ResolveExports() {
         g_ex.mouseRelease = reinterpret_cast<MouseButtonFn>(fn("?injectMouseRelease@InputManager@MyGUI@@QEAA_NHHUMouseButton@2@@Z"));
         g_ex.mousePos = reinterpret_cast<MousePosFn>(fn("?getMousePosition@InputManager@MyGUI@@QEBAAEBU?$TPoint@H@types@2@XZ"));
         g_ex.tabSelect = reinterpret_cast<TabIndexFn>(fn("?setIndexSelected@TabControl@MyGUI@@QEAAX_K@Z"));
+        g_ex.windowSetVisible = reinterpret_cast<SetVisibleFn>(fn("?setVisible@Window@MyGUI@@UEAAX_N@Z"));
+        if (!g_ex.windowSetVisible) g_ex.windowSetVisible = reinterpret_cast<SetVisibleFn>(fn("?setVisible@Widget@MyGUI@@UEAAX_N@Z"));
     }
     if (HMODULE ogre = GetModuleHandleW(L"OgreMain_x64.dll")) {
         g_ex.viewMatrix = reinterpret_cast<MatrixFn>(GetProcAddress(ogre, "?getViewMatrix@Camera@Ogre@@UEBAAEBVMatrix4@2@XZ"));
@@ -940,6 +944,14 @@ bool InjectClickSEH(void* input, int x, int y) {
         return false;
     }
 }
+bool HideWindowSEH(void* window) {
+    __try {
+        g_ex.windowSetVisible(window, false);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
 bool TabSelectSEH(void* tabs, size_t i) {
     __try {
         g_ex.tabSelect(tabs, i);
@@ -990,9 +1002,20 @@ std::string MapUi(const std::string& what) {
         target = button;
     }
     Coord c{};
-    if (!VisiblePart(target, c, s.guiW, s.guiH)) return "err the button is not on screen (" + WidgetName(target) + ")";
+    const bool onScreen = VisiblePart(target, c, s.guiW, s.guiH);
     const int x = c.left + c.width / 2, y = c.top + c.height / 2;
-    if (CoveredAt(target, x, y)) return "err the button is under another window (" + WidgetName(target) + ")";
+    const bool covered = onScreen && CoveredAt(target, x, y);
+    if (what == "close" && (!onScreen || covered)) {
+        // the close button off screen (a game window made smaller than the management window: the
+        // 11/10 map run) or under something: the window hidden the way its close button's handler
+        // leaves it (the game reads "open" from that visibility: refreshMap, MapScreen::getVisible)
+        if (!g_ex.windowSetVisible) return "err close button not reachable and no MyGUI setVisible (" + state + ")";
+        if (!HideWindowSEH(window)) return "err hiding the management window failed";
+        Log("map: test closed the management window directly (its close button is %s)", onScreen ? "covered" : "off screen");
+        return "ok hidden";
+    }
+    if (!onScreen) return "err the button is not on screen (" + WidgetName(target) + ")";
+    if (covered) return "err the button is under another window (" + WidgetName(target) + ")";
     if (!InjectClickSEH(input, x, y)) return "err click failed";
     Log("map: test clicked '%s' at (%d,%d) to %s the map", WidgetName(target).c_str(), x, y, what.c_str());
     return "ok clicked " + std::to_string(x) + "," + std::to_string(y);

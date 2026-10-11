@@ -987,12 +987,15 @@ def exp_dialogue(host, cli):
         return out
 
     def npc_opens(events=(1,)):
+        # first the NPC the client's character already talked with (it has something to say: the
+        # nearest ones in kctest_town often have no line for that event, or a line that only says
+        # something, "talking=0"), then the last spawned one, then the 8 nearest
         for ev in events:
-            for which in ["npc"] + [str(k) for k in range(4)]:
+            for which in ["dlg", "npc"] + [str(k) for k in range(8)]:
                 r = cmd(host, f"npcevent {own} {ev} {which}")
                 log("host: npcevent", ev, which, r)
                 if r[0]:
-                    d = wait_open(True, 8)
+                    d = wait_open(True, 8 if "talking=1" in r[1] else 3)
                     if d.get("open") == "1":
                         return ev, which, d
         return None, None, dialog()
@@ -1051,13 +1054,14 @@ def exp_dialogue(host, cli):
               hl[-2000:].splitlines()[-5:])
         check("dialogue : la conversation reste ouverte (reprise)", dialog().get("open") == "1" or "is shown again" in hl[-20000:], dialog()["raw"])
 
-    # 2. one conversation per NPC: the host's own character asking the same NPC
+    # 2. one conversation per NPC: the host's own character (another player's) asking the same NPC,
+    #    the one the client's character talks with ("dlg"; "npc", the spawned copy, is often another)
     d = dialog()
     if d.get("open") != "1":
         npc_opens((1,))
     if hidx and dialog().get("open") == "1":
         b0 = int(dialogs()[0].get("busy", 0))
-        log("host's own character talks to the same NPC", cmd(host, f"talkto {hidx[0]} npc"))
+        log("host's own character talks to the same NPC", cmd(host, f"talkto {hidx[0]} dlg"))
         busy = False
         for _ in range(30):
             time.sleep(0.5)
@@ -3060,9 +3064,17 @@ def exp_squadui(host, cli):
         check("ia : reglages simultanes sur une recrue, meme resultat partout", mh == mc and mh is not None, f"{mh} / {mc}")
     else:
         log("no recruit nobody owns in this save (every host character is the host's): shared settings not tested in game")
-    # 10. jobs, with their targets, the same on both: one the client gives, one the host gives
+    # 10. jobs, with their targets, the same on both: one the client gives, one the host gives. Never
+    #     two characters following each other: the game drops the first "stay close" when the second
+    #     one closes the loop (Kenji -> Truth then Truth -> Kenji left Kenji with no job, every run
+    #     since the squad lot); the host's character follows another of the host's characters.
     log("client job (follow):", cmd(cli, f"jobfor {me} 31 {host_char}"))
-    log("host job (follow) for its character:", cmd(host, f"jobfor {host_char} 31 {me}"))
+    for _ in range(10):
+        time.sleep(0.5)
+        if cmd(host, f"jobsof {me}")[1] != "ok 0":
+            break
+    third = next((n for n in others if n != host_char), me)
+    log("host job (follow) for its character:", third, cmd(host, f"jobfor {host_char} 31 {third}"))
     time.sleep(5)
     jh, jc = cmd(host, f"jobsof {me}")[1], cmd(cli, f"jobsof {me}")[1]
     check("ia : taches du perso du client identiques", jh == jc and jh != "ok 0", f"{jh} / {jc}")
@@ -5484,15 +5496,51 @@ IRON_NODE = "42248-gamedata.base"           # Iron Resource: 3 workers (a copper
 FABRICS = "584-gamedata.base"
 
 
+SANDBOX = {"home": None}   # where move_squad_out_of_town put squad member 0 (the sandbox's anchor)
+
+
+def pos_xz(pid, idx):
+    t = cmd(pid, f"pos {idx}")[1].split()
+    if len(t) < 2:
+        return None
+    try:
+        x, _, z = (float(v) for v in t[1].split(","))
+    except ValueError:
+        return None
+    return x, z
+
+
+def keep_anchor_home(host):
+    """Squad member 0 back at the sandbox when it left it (a knocked-out body the game put back where it
+    lay, the 11/10 research run: every placement after the first one was then 'too close to a town')."""
+    home = SANDBOX["home"]
+    if not home:
+        return
+    p = pos_xz(host, 0)
+    if p and math.hypot(p[0] - home[0], p[1] - home[2]) < 800:
+        return
+    log("   squad member 0 left the sandbox", p, ": healed and sent back")
+    cmd(host, "console heal all")
+    time.sleep(1)
+    log("   teleport 0 back:", cmd(host, f"teleport 0 {home[0]:.0f} {home[1] + 300:.0f} {home[2]:.0f}"))
+    time.sleep(5)
+
+
 def sandbox_building(host, sid, dx, dz, label):
     """Placed by the host next to squad member 0 at a spot build mode accepts, then finished at once
     (sandbox). True when built."""
+    keep_anchor_home(host)
     ok, t, spot = place_valid(host, sid, 0, dx, dz)
     log(label, sid, "placed:", ok, t, spot)
     if not ok:
         return False
-    time.sleep(2)
-    log(label, "finished:", cmd(host, f"buildprogress {sid} 100000"))
+    # finished by the workers' progress, once the new building is there (it may take a moment)
+    for _ in range(8):
+        time.sleep(1.5)
+        r = cmd(host, f"buildprogress {sid} 100000")
+        if r[0]:
+            break
+    log(label, "finished:", r)
     time.sleep(2)
     return True
 
@@ -5521,9 +5569,16 @@ def move_squad_out_of_town(host):
         for i in range(1, n):
             cmd(host, f"teleport {i} {sx + 15 * i:.0f} {sy + 300:.0f} {sz + 10:.0f}")
         time.sleep(6)
+        # member 0 really there (a body could be put back where it lay: then the check below was made
+        # from the town, or from the sandbox and the next placements from the town)
+        p = pos_xz(host, 0)
+        if not p or math.hypot(p[0] - sx, p[1] - sz) > 800:
+            log("   squad member 0 is not at", (round(sx), round(sz)), "but at", p, ": next spot")
+            continue
         probe = cmd(host, f"buildcheck {RESEARCH_BENCH} 60 0")
         log("out of town at", spot, "build check:", probe)
         if probe[0] or "town" not in probe[1]:
+            SANDBOX["home"] = spot
             return True
     return False
 
@@ -5540,7 +5595,13 @@ def exp_research(host, cli):
     own = own_index(host)
     log("client's own character: squad index", own)
     cmd(host, "console xp all 60")   # faster researchers, builders and miners
-    time.sleep(2)
+    # the town's fights leave squad members knocked out (members 0, 1 and the client's in the 11/10 run):
+    # a body is not teleported for good, and squad member 0 anchors the whole sandbox. Healed (woken
+    # up) and in god mode, nobody lies down any more.
+    SANDBOX["home"] = None
+    log("heal everyone:", cmd(host, "console heal all"))
+    log("god mode for everyone:", cmd(host, "console god all"))
+    time.sleep(4)
 
     # ---- mine first (the save's iron nodes): three characters, the host's and the client's, on one node
     others = [i for i in range(squad_size(host)) if i != own][:2]
@@ -5577,6 +5638,8 @@ def exp_research(host, cli):
         check("mine : un mineur retire, vu partout", ok and mh2.get("ops") != mh.get("ops"), f"{mh.get('ops')} -> {mh2.get('ops')} | {last[2] if len(last) > 2 else ''}")
 
     # ---- sandbox away from towns: research bench, crafting bench, generator, battery, light
+    cmd(host, "console heal all")   # the miners may have been hit since
+    time.sleep(2)
     out = move_squad_out_of_town(host)
     check("recherche : escouade hors des villes pour le bac a sable", out, "")
     rb_ok = sandbox_building(host, RESEARCH_BENCH, 60, 0, "research bench")
@@ -5587,6 +5650,7 @@ def exp_research(host, cli):
             cb_sid, cb_ok = sid, True
             break
     time.sleep(4)
+    keep_anchor_home(host)
     if rb_ok:
         for what in ("Livre", "Book", "Books", "Artefact", "Artifact", "artifact"):
             log("sandbox: into the research bench", what, cmd(host, f"machinegive {RESEARCH_BENCH} {what} 20"))

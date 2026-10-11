@@ -2067,6 +2067,7 @@ KenshiWorld::RemoteDialog& KenshiWorld::Remember(void* dialogue, kenshi::Charact
         if (other != r.other) r.placed = false;   // someone else takes over (a leader): measured anew
         r.other = other;
         kenshi::GetHandle(other, r.otherH);
+        lastDialogNpc_ = r.otherH;
     }
     return r;
 }
@@ -2228,12 +2229,17 @@ std::vector<KenshiWorld::RemoteDialogInfo> KenshiWorld::RemoteDialogList() {
     std::vector<RemoteDialogInfo> out;
     std::lock_guard<std::mutex> lk(dialogMutex_);
     for (const auto& [dl, r] : remoteDialogs_) {
-        RemoteDialogInfo i{r.id, {}, {}};
+        RemoteDialogInfo i{r.id, {}, {}, r.otherH};
         if (r.pc) kenshi::CharacterName(r.pc, i.pc);
         if (r.other) kenshi::CharacterName(r.other, i.other);
         out.push_back(std::move(i));
     }
     return out;
+}
+
+kc::Handle KenshiWorld::LastDialogNpc() {
+    std::lock_guard<std::mutex> lk(dialogMutex_);
+    return lastDialogNpc_;
 }
 
 // A conversation is over for good when its dialogue is gone or ended, a side is dead, knocked out or

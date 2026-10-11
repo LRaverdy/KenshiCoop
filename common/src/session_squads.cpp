@@ -426,9 +426,15 @@ void Session::ClientSquads(double now) {
         for (const auto& id : baseOrder_)
             if (std::find(mine.begin(), mine.end(), id) != mine.end()) theirs.push_back(id);
         if (mine != theirs && mine.size() == theirs.size()) {
-            for (size_t i = 0; i < theirs.size(); ++i) {
+            // the squad that moved: one whose removal leaves both orders the same. Two neighbours
+            // swapped give two such squads (ours dragged up = theirs dragged down, the same result):
+            // the one we may edit is the one asked for (the first found was the other player's,
+            // refused, and the drag of our own squad was put back every time)
+            bool any = false, done = false;
+            for (size_t i = 0; i < theirs.size() && !done; ++i) {
                 auto without = [&](std::vector<Handle> v) { v.erase(std::find(v.begin(), v.end(), theirs[i])); return v; };
                 if (without(mine) != without(theirs)) continue;
+                any = true;
                 const Handle moved = theirs[i];
                 const size_t at = size_t(std::find(mine.begin(), mine.end(), moved) - mine.begin());
                 // its place in the host's full list: before the squad that follows it here
@@ -442,11 +448,10 @@ void Session::ClientSquads(double now) {
                     ask(SquadOp::Order, ownActor, moved, int(index), {});
                     rest.insert(rest.begin() + ptrdiff_t(index), m);
                     host = std::move(rest);
-                } else {
-                    log_("squad order changed here for a squad without our characters: the host's order is put back");
+                    done = true;
                 }
-                break;
             }
+            if (any && !done) log_("squad order changed here for a squad without our characters: the host's order is put back");
         }
     }
     // 5. character names typed here (the character's window): only one's own goes to the host

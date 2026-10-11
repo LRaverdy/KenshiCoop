@@ -362,8 +362,11 @@ public:
     // (one conversation at a time per NPC); the character asking is told "occupé".
     bool ConversationAllowed(void* dialogue, void* target);
     // Host (tests): conversations shown on clients' screens, and talks refused because the NPC was busy.
-    struct RemoteDialogInfo { uint32_t id; std::string pc, other; };
+    struct RemoteDialogInfo { uint32_t id; std::string pc, other; kc::Handle otherH; };
     std::vector<RemoteDialogInfo> RemoteDialogList();
+    // Host (tests): the NPC of the last conversation shown on a client's screen (it has something to
+    // say: `talkto` / `npcevent ... dlg` pick it).
+    kc::Handle LastDialogNpc();
     int dialogsBusyRefused = 0, dialogsSwept = 0, hostDialogUnpaused = 0;
     int saysApplied = 0;          // tests (client): speech bubbles replayed
     std::string lastSay;
@@ -655,6 +658,7 @@ private:
         kc::Handle pcH, otherH;
     };
     std::unordered_map<void*, RemoteDialog> remoteDialogs_;
+    kc::Handle lastDialogNpc_;   // (under dialogMutex_) LastDialogNpc
     std::vector<WorldRecruit> recruits_;                   // host, under dialogMutex_: recruitments in a client's conversation
     uint32_t nextDialogId_ = 1;
     double nextDialogSweep_ = 0;

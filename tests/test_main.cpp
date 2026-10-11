@@ -3684,6 +3684,14 @@ static void TestSquadWindow() {
     std::swap(cw.squads[0], cw.squads[1]);
     Run(all, 3.0, [&] { return hw.squads[0].name == "Beta" && same(); });
     CHECK(hw.squads[0].name == "Beta" && same());
+    // ... then first again: two neighbours swapped, the squad found first (Beta, the other player's)
+    // is not the one dragged: ours is asked for (squadui in game, 11/10: put back every time)
+    std::swap(cw.squads[0], cw.squads[1]);
+    Run(all, 3.0, [&] { return hw.squads[0].name == "Les Rats" && same(); });
+    CHECK(hw.squads[0].name == "Les Rats" && same());
+    std::swap(cw.squads[0], cw.squads[1]);   // and last again, for what follows
+    Run(all, 3.0, [&] { return hw.squads[0].name == "Beta" && same(); });
+    CHECK(hw.squads[0].name == "Beta" && same());
 
     // 5. concurrent: the host and the client rename the same squad at once; the host runs them in
     //    order (the client's arrives last: it wins) and everyone ends with the same name

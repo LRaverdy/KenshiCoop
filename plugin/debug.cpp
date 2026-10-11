@@ -27,6 +27,15 @@ namespace {
 double g_nextPoll = 0;
 kc::Handle lastSpawned_;
 
+// (host) the NPC of the last conversation shown on a client's screen, alive and standing
+kenshi::Character* DialogNpc(KenshiWorld& w) {
+    const kc::Handle h = w.LastDialogNpc();
+    if (!h.valid()) return nullptr;
+    kenshi::Character* c = w.Find(h);
+    if (!c) c = kenshi::Resolve(h);
+    return c && !kenshi::IsDead(c) && !kenshi::IsDown(c) ? c : nullptr;
+}
+
 std::string Key(const kc::Handle& h) {
     char b[96];
     snprintf(b, sizeof(b), "%u:%u:%u:%u:%u", h.type, h.container, h.containerSerial, h.index, h.serial);
@@ -1766,7 +1775,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         for (const auto& d : list) o << " " << d.id << ":" << d.pc << ">" << d.other;
         return o.str();
     }
-    if (cmd == "npcevent") {   // npcevent <squadIndex> <event> [k|npc]: (host) the k-th nearest NPC (or the last spawned) sends that dialogue event to that squad member (1 talk, 3 guard check)
+    if (cmd == "npcevent") {   // npcevent <squadIndex> <event> [k|npc|dlg]: (host) the k-th nearest NPC (or the last spawned, or the one of the last client conversation) sends that dialogue event to that squad member (1 talk, 3 guard check)
         size_t sel = 0;
         int ev = 1;
         std::string which;
@@ -1776,6 +1785,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         kenshi::Character* me = w.FindSquad(squad[sel]);
         kenshi::Character* npc = nullptr;
         if (which == "npc") npc = w.Find(lastSpawned_);
+        else if (which == "dlg") npc = DialogNpc(w);
         else {
             const size_t k = which.empty() ? 0 : std::strtoul(which.c_str(), nullptr, 10);
             kc::Vec3 mp, p;
@@ -1795,10 +1805,18 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         if (!npc) return "err no such NPC";
         std::string name;
         kenshi::CharacterName(npc, name);
-        HostCallScope scope;
-        return (kenshi::CallDialogueEvent(npc, me, ev) ? "ok " : "err ") + name;
+        bool ok = false;
+        {
+            HostCallScope scope;
+            ok = kenshi::CallDialogueEvent(npc, me, ev);
+        }
+        // talking=1: the NPC's dialogue now has that character as its partner (a line that only says
+        // something, with no conversation, leaves it at 0)
+        void* d = kenshi::CharacterDialogue(npc);
+        const bool talking = d && !kenshi::DialogueEnded(d) && kenshi::DialogueTarget(d) == me;
+        return (ok ? "ok " : "err ") + name + " talking=" + (talking ? "1" : "0");
     }
-    if (cmd == "talkto") {   // talkto <selectIndex> <k|npc>: select that squad member alone, order it to talk to the k-th nearest NPC (npc: the last spawned, host)
+    if (cmd == "talkto") {   // talkto <selectIndex> <k|npc|dlg>: select that squad member alone, order it to talk to the k-th nearest NPC (npc: the last spawned; dlg: the NPC of the last client conversation, host)
         size_t sel = 0;
         std::string which;
         in >> sel >> which;
@@ -1807,6 +1825,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         kenshi::Character* me = w.FindSquad(squad[sel]);
         kenshi::Character* npc = nullptr;
         if (which == "npc") npc = w.Find(lastSpawned_);
+        else if (which == "dlg") npc = DialogNpc(w);
         else {
             const size_t k = which.empty() ? 0 : std::strtoul(which.c_str(), nullptr, 10);
             kc::Vec3 mp, p;
