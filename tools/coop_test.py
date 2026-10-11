@@ -256,6 +256,7 @@ def dist(a, b):
 
 def dump(pid, name, radius=3000):
     os.makedirs(OUT_DIR, exist_ok=True)
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", name)   # the debug command splits on spaces ("Wild Bull")
     path = os.path.abspath(os.path.join(OUT_DIR, f"{name}.txt"))
     ok, text = cmd(pid, f"state {path} {radius}")
     for _ in range(10):   # the world can read as unloaded for a frame (save, zone streaming): ask again
