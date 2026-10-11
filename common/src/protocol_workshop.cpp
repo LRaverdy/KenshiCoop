@@ -129,6 +129,14 @@ void Encode(Writer& w, const MachinesMsg& m) {
             w.str(c.itemSid.substr(0, kMaxSidLen));
             w.f32(Fin(c.progress));
         }
+        if (s.flags & kMachFarm) {
+            w.u8(s.crop.stage);
+            w.varint(s.crop.plants);
+            w.varint(std::min(s.crop.harvested, s.crop.plants));
+            w.f32(Fin(s.crop.grown));
+            w.f32(Fin(s.crop.died));
+            w.f32(Fin(s.crop.cleared));
+        }
     }
     const size_t nt = std::min<size_t>(m.towns.size(), kMaxTownPower);
     w.varint(nt);
@@ -167,6 +175,17 @@ bool Decode(Reader& r, MachinesMsg& m) {
             c.itemSid = r.str(kMaxSidLen);
             c.progress = r.f32();
             if (c.baseSid.empty() || !std::isfinite(c.progress)) return false;
+        }
+        if (s.flags & kMachFarm) {
+            s.crop.stage = r.u8();
+            const uint32_t plants = VarU32(r), harvested = VarU32(r);
+            s.crop.grown = r.f32();
+            s.crop.died = r.f32();
+            s.crop.cleared = r.f32();
+            if (plants > kMaxFarmPlants || harvested > plants || !std::isfinite(s.crop.grown) || !std::isfinite(s.crop.died) || !std::isfinite(s.crop.cleared))
+                return false;
+            s.crop.plants = uint16_t(plants);
+            s.crop.harvested = uint16_t(harvested);
         }
         if (s.sid.empty() || !FiniteV(s.pos) || !std::isfinite(s.power) || !std::isfinite(s.stored) || !std::isfinite(s.progress) ||
             !std::isfinite(s.production))

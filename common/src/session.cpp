@@ -2879,6 +2879,8 @@ void Session::ApplyCommand(uint8_t from, const Command& c) {
     res.netId = c.netId;
     if (ok) {
         res.state = ResultState::Done;
+        res.text = world_.TakeOrderNote();   // e.g. that machine needs no worker right now
+        if (!res.text.empty()) log_("[" + who + "] " + what + ": told \"" + res.text + "\"");
     } else {
         res.state = ResultState::Rejected;
         res.text = world_.TakeOrderRefusal(res.reason);

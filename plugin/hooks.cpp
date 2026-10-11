@@ -285,9 +285,10 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
         w->Toast("Cette action n'est pas encore disponible en multijoueur.");
         return false;
     }
-    // AI settings (squad bar toggles, fight style, speed, permanent jobs) of a character nobody owns
-    // (a recruit never given to a player): anyone's, the host runs them in arrival order
-    const bool settings = via == kc::TaskVia::SetOrder || (via == kc::TaskVia::AddJob && shift);
+    // AI settings (squad bar toggles, fight style, speed, permanent jobs) and base work at a workstation
+    // (kc::IsBaseWorkTask: machine, farm, hauling, building, medic) of a character nobody owns (a
+    // recruit never given to a player): anyone's, the host runs them in arrival order
+    const bool settings = via == kc::TaskVia::SetOrder || (via == kc::TaskVia::AddJob && shift) || kc::IsBaseWorkTask(task);
     std::vector<kc::Handle> sharedSel;
     if (settings)
         for (const auto& h : s.others) if (v->shared.count(h)) sharedSel.push_back(h);

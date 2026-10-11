@@ -329,7 +329,7 @@ Ordre dans `Tick()` (`main.cpp`) :
 
 ## Messages (`common/include/kc/protocol.h`)
 
-Version du protocole : **35** (35 : monde envoyé compressé : `WorldBegin` et `WorldChunk` portent les tailles décompressées ; `JoinQueue` aussi pour un joueur dans le monde qui attend l'éditeur ; 34 : atelier : `Research`, `ResearchRequest`, `Machines`, `MachineRequest` ; fenêtre Escouade : `SquadState`, `SquadRequest`, `JobState` ; 33 : sacs à dos portés : `BagBind` ; sécurité des acteurs : `Result` ; file d'attente des arrivées : `JoinQueue` ; diplomatie : `Diplomacy` ; carte : `MapMarkers`, `MapPing`) au moment de la rédaction. Elle augmente à chaque changement de
+Version du protocole : **36** (36 : `MachineState` porte le drapeau `kMachFarm` et l'état des cultures d'une ferme, `CropState` ; 35 : monde envoyé compressé : `WorldBegin` et `WorldChunk` portent les tailles décompressées ; `JoinQueue` aussi pour un joueur dans le monde qui attend l'éditeur ; 34 : atelier : `Research`, `ResearchRequest`, `Machines`, `MachineRequest` ; fenêtre Escouade : `SquadState`, `SquadRequest`, `JobState` ; 33 : sacs à dos portés : `BagBind` ; sécurité des acteurs : `Result` ; file d'attente des arrivées : `JoinQueue` ; diplomatie : `Diplomacy` ; carte : `MapMarkers`, `MapPing`) au moment de la rédaction. Elle augmente à chaque changement de
 format, et une version différente est refusée à la connexion.
 
 Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51, 63 à 67, 69, 73 à 79, 81, 84,
@@ -391,7 +391,7 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | 55 | BuildAction | ⇄ | lot E : acheter / démonter (client : demande ; hôte : rejeu d'un achat chez tous) |
 | 56 | Research | H→C | atelier (protocole 34) : la recherche de la faction du joueur : technologies connues (plans lus compris), file dans l'ordre et avancement, niveau du banc |
 | 57 | ResearchRequest | C→H | atelier : mettre en file / retirer une technologie, apprendre un plan (acteur : le perso du joueur ; règle `OwnCharacter`) |
-| 58 | Machines | H→C | atelier : machines des joueurs près d'eux (et celles qu'un perso de joueur travaille) : opérateurs, marche / batterie, énergie, charge, barre de progression, production, ordres de fabrication et « répéter », netId de leur inventaire ; totaux d'énergie de leur ville |
+| 58 | Machines | H→C | atelier : machines des joueurs près d'eux (et celles qu'un perso de joueur travaille) : opérateurs, marche / batterie, énergie, charge, barre de progression, production, ordres de fabrication et « répéter », netId de leur inventaire, cultures d'une ferme (`kMachFarm` : étape, plants, récoltés, pousse, pourriture, nettoyage ; protocole 36) ; totaux d'énergie de leur ville |
 | 59 | MachineRequest | C→H | atelier : ajouter / retirer un ordre de fabrication, répéter, marche, batterie (acteur nommé ; règle `OwnCharacter`) |
 | 60 | SquadState | H→C | fenêtre Escouade : chaque escouade (identifiant fait par l'hôte de l'adresse de son `Platoon`, nom, membres dans l'ordre : le premier est le chef) dans l'ordre de la faction, vides comprises ; nom et drapeau « à personne » (`kMemberShared`) de chaque perso de l'escouade ; à chaque changement et toutes les 10 s |
 | 61 | SquadRequest | C→H | une action de la fenêtre Escouade : déplacer son perso (dans une escouade, ou une nouvelle ; à un rang), créer, renommer, réordonner, retirer une escouade, renommer son perso ; nomme toujours un perso du joueur (`OwnCharacter`) |
@@ -771,8 +771,17 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
    part pour ce qui change, tout toutes les 5 s. L'inventaire d'une machine suivie devient une entité
    (`Entity::machine`) envoyée à **tous** les joueurs, ouverte ou non ; elle est oubliée quand la
    machine n'est plus suivie (sauf si un joueur l'a ouverte).
+   Une ferme (`FarmBuilding`) envoie aussi ses cultures (`CropState`) ; le journal de l'hôte note
+   les changements d'étape et de récolte (« machine: X crops: stage a -> b, harvested … »).
 3. Le client impose tout (`ApplyResearch`, `ApplyMachine`, `ApplyTownPower`), à l'arrivée puis
-   toutes les 3 s (recherche) / 2 s (machines). Son jeu ne recherche, ne paie, ne lit de plan, ne
+   toutes les 3 s (recherche) / 2 s (machines). `ApplyMachine` reçoit le bâtiment local quand le
+   client le connaît par le netId de sa pose (`Session::LocalBuildingOf`, `buildings_`), sinon le
+   monde le cherche par type et endroit ; une machine introuvable est comptée
+   (`WorkshopView::machinesMissing`) et journalisée une fois, avec la raison (loin de nos persos :
+   pas chargée ici ; près : pas construite ici ?). Une ferme : mêmes plants récoltés
+   (`destroyAPlant`), replantée quand l'hôte replante (`resetFarm`), pousse des plants calée.
+   Une `Command` exécutée peut revenir `Done` avec un texte (`IWorld::TakeOrderNote` : une machine
+   sans travail pour l'instant) : le client l'affiche dans le chat. Son jeu ne recherche, ne paie, ne lit de plan, ne
    prend ni ne retire d'ordre de fabrication et ne calcule plus l'énergie d'une ville dont il a reçu
    les totaux (crochets de `plugin/workshop.cpp`, refusés hors `HostCallScope`).
 4. Les boutons de la fenêtre Recherche (ajouter, retirer), « apprendre » d'un plan, les boutons de la

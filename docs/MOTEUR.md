@@ -260,6 +260,35 @@ pas deux lignes inversées (chaque adresse correspond bien à ses octets). Deux 
 corrigé, et `python tools/check_functions.py` vérifie désormais que chaque entrée correspond au
 commentaire de son énumérateur.
 
+Fermes (`plugin/workshop.cpp`, 0.3.2) :
+
+| Groupe | Enum | Fonction | RVA | Hook | Rôle |
+|---|---|---|---|---|---|
+| ferme | `FnFarmDestroyAPlant` | `FarmBuilding::destroyAPlant()` | `0xE4800` | — | le plant n° `+0x528` récolté : âge -10, sous-parties non statiques à l'échelle 0, `+0x528` + 1, `updateMaterial` ; ce qu'appelle la récolte de `FarmBuilding::operate` (`0xE59E0`) |
+| ferme | `FnFarmReset` | `FarmBuilding::resetFarm()` | `0xE48E0` | — | replante : chaque plant âge `rand × -0,2`, `+0x524` le plus jeune, `+0x528` = 0, `+0x51C` / `+0x520` = 0, `+0x518` = `+0x524`, production `+0x448` à 0 |
+
+### Fermes (`FarmBuilding`, vtable `0x1689948`) [D]
+Trouvées depuis KenshiLib (décalage +0x40 dans la zone `0xD0000`-`0xF8000` : `tryOperate` KenshiLib
+`0xF7FF0` = nôtre `0xF8030`), vérifiées par la vtable (vt 0x4E8 → `0xF6E00`, vt 0x4B0 → `0xE59E0`).
+- `UseableStuff::tryOperate(hand)` (vt 0x4F8, `0xF8030`) : refuse si `dontNeedWorkRightNow()` (vt
+  0x4E8) est vrai, ou si les opérateurs (`+0x3E0`) atteignent `+0x3AC` ; sinon insère dans `+0x3D0`.
+  La tâche 87 (`Task_OperateMachine`, début `0x35B430`) l'appelle dès le départ et s'arrête si c'est
+  refusé : pas d'ouvrier compté, pas de ligne « workers ».
+- `FarmBuilding::dontNeedWorkRightNow` (`0xF6E00`) : vrai si `+0x468 != 0` **et** `+0x518 < 1` **et**
+  `+0x54C > +0x51C` : les cultures poussent, pas de travail. `ResearchBuilding` : vrai sans recherche
+  en file (vu en jeu, banc de Geoffrey).
+- Champs : `+0x468` état de production (2 récolte due ou cultures mortes à nettoyer, 1 sortie pleine,
+  0 / 3 pousse, 3 quand les entrées suivent) ; `+0x4E8` `lektor<Plant>` (nombre `+0x4F0`, données
+  `+0x4F8`, 0x28 octets par plant : âge `+0`, position `+4`, sous-parties `+0x10`) ; `+0x518` pousse
+  (0..1 : âge du plus jeune plant en croissance, recalculé à chaque image ; 1..2 : fenêtre de récolte,
+  `dt / +0x540`) ; `+0x51C` pourriture (au-delà de 2) ; `+0x520` nettoyé ; `+0x524` début ;
+  `+0x528` plants récoltés ; `+0x52C` objets par plant ; `+0x53C` durée de pousse ; `+0x54C` seuil de
+  mort ; `+0x558` hydroponie.
+- `FarmBuilding::update` (`0xE5580`) fait pousser chez tout le monde (eau : `_updateInputs`, sinon
+  `+0x550` sécheresse) et appelle `resetFarm` quand tous les plants sont récoltés ou que `+0x51C` ≥ 1 ;
+  `FarmBuilding::operate` (`0xE59E0`, le fermier) remplit la production `+0x448`, met les objets dans
+  l'inventaire et appelle `destroyAPlant` : seulement chez l'hôte.
+
 ### Autres adresses de fonctions utilisées directement
 
 | RVA | Fonction | Usage |

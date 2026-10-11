@@ -46,7 +46,8 @@ bool Session::IsSettingsCommand(const Command& c) {
     if (c.kind != CommandKind::Task) return false;
     switch (c.via) {
     case TaskVia::SetOrder: case TaskVia::RemovePermajob: case TaskVia::MovePermajob: case TaskVia::RemoveJob: return true;
-    case TaskVia::AddJob: return c.shift;   // a permanent job (the Tâches panel)
+    case TaskVia::AddJob: return c.shift || IsBaseWorkTask(c.task);   // a permanent job (the Tâches panel), or base work
+    case TaskVia::AddOrder: case TaskVia::NewTask: case TaskVia::TaskNearest: return IsBaseWorkTask(c.task);   // base work (a workstation)
     default: return false;
     }
 }

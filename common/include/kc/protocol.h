@@ -21,7 +21,7 @@
 namespace kc {
 
 constexpr uint32_t kMagic = 0x4B434F50; // "KCOP"
-constexpr uint16_t kProtocolVersion = 35;   // 35: the world sent to a joiner is packed (WorldBegin rawBytes, WorldChunk packedSize), JoinQueue also tells players in the world waiting for the character editor, BuildMaterials (87: delivered construction materials), MachineState flag kMachOurs (a mine or node of the player faction); 34: Research, ResearchRequest, Machines, MachineRequest (workshop), SquadState, SquadRequest, JobState (squad window); 33: BagBind (travelling merchants), Result (actor safety), JoinQueue, Diplomacy, MapMarkers and MapPing (map)
+constexpr uint16_t kProtocolVersion = 36;   // 36: MachineState flag kMachFarm and its CropState (a farm's crops: stage, plants harvested, growth, death); 35: the world sent to a joiner is packed (WorldBegin rawBytes, WorldChunk packedSize), JoinQueue also tells players in the world waiting for the character editor, BuildMaterials (87: delivered construction materials), MachineState flag kMachOurs (a mine or node of the player faction); 34: Research, ResearchRequest, Machines, MachineRequest (workshop), SquadState, SquadRequest, JobState (squad window); 33: BagBind (travelling merchants), Result (actor safety), JoinQueue, Diplomacy, MapMarkers and MapPing (map)
 constexpr uint16_t kDefaultPort = 27960;
 constexpr uint8_t kMaxPlayers = 8;
 constexpr size_t kMaxNameLen = 24;
@@ -683,6 +683,11 @@ void Encode(Writer& w, const EditState& m);
 const char* TaskLabel(int task);   // a player order's name, for logs ("?" when unknown)
 constexpr int32_t kTaskTalk = 12, kTaskTalkNearest = 126;   // PLAYER_TALK_TO, and its "nearest" form
 const char* StandingOrderLabel(int order);   // a squad bar toggle's name, for logs
+// The base work of an outpost (workstations): operate a machine, a farm, a bench, a mine, a turret;
+// haul, keep running, unjam, fill, empty, collect; build, repair, find materials; medic, rescue.
+// On a recruit nobody owns, any player may give these (like its AI settings); never on another
+// player's character.
+bool IsBaseWorkTask(int task);
 
 // ---- actor safety: what the subject of a client's order is, as the host's world sees it. Every
 // task id a client can send is checked against what that task expects before the game's order
@@ -1292,6 +1297,21 @@ enum MachineFlags : uint8_t {
     kMachGenerator = 16,
     kMachBattery = 32,
     kMachOurs = 64,              // of the player faction on the host (a mine or a node: once a player character works it)
+    kMachFarm = 128,             // a farm (FarmBuilding, hydroponics and mod farms too): `crop` below means something (protocol 36)
+};
+// A farm's crops (FarmBuilding), as the host's game has them: its plants grow on every machine by
+// themselves, but only the host's farmers harvest them (FarmBuilding::operate) and only the host's
+// game replants after a harvest; a client follows these numbers (plugin/workshop.cpp).
+struct CropState {
+    uint8_t stage = 0;           // the game's production state (+0x468): 2 harvest due (or dead crops to clear), 1 output full, 0 / 3 growing
+    uint16_t plants = 0;         // plants of the field (+0x4F0)
+    uint16_t harvested = 0;      // plants harvested since the last planting (+0x528)
+    float grown = 0;             // 0..1: the youngest plant's growth (+0x518), 1 = ripe
+    float died = 0;              // how far the ripe crops have rotted (+0x51C), dead past the farm's threshold
+    float cleared = 0;           // dead crops cleared by the farmers (+0x520)
+    bool operator==(const CropState& o) const {
+        return stage == o.stage && plants == o.plants && harvested == o.harvested && grown == o.grown && died == o.died && cleared == o.cleared;
+    }
 };
 struct MachineState {
     std::string sid;             // kind and place: buildings have another handle on every machine
@@ -1306,9 +1326,11 @@ struct MachineState {
     float progress = 0;          // the progress bar of the machine (UseableStuff +0x3A4)
     float production = 0;        // the production item's amount (ProductionBuilding)
     std::vector<CraftOrder> crafts;
+    CropState crop;              // kMachFarm only
     bool sameState(const MachineState& o) const {
         return flags == o.flags && maxOperators == o.maxOperators && operatorCount == o.operatorCount && operators == o.operators &&
-               netId == o.netId && power == o.power && stored == o.stored && progress == o.progress && production == o.production && crafts == o.crafts;
+               netId == o.netId && power == o.power && stored == o.stored && progress == o.progress && production == o.production && crafts == o.crafts &&
+               crop == o.crop;
     }
 };
 // The power panel of a player town (outpost): totals the game computes in Town::updatePowerGrid.
@@ -1327,7 +1349,7 @@ struct MachinesMsg {
     std::vector<MachineState> machines;
     std::vector<TownPower> towns;
 };
-constexpr uint32_t kMaxMachinesPerMsg = 128, kMaxMachineOperators = 16, kMaxCraftOrders = 32, kMaxTownPower = 32;
+constexpr uint32_t kMaxMachinesPerMsg = 128, kMaxMachineOperators = 16, kMaxCraftOrders = 32, kMaxTownPower = 32, kMaxFarmPlants = 4096;
 void Encode(Writer& w, const MachinesMsg& m);
 bool Decode(Reader& r, MachinesMsg& m);
 

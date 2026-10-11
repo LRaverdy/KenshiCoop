@@ -4,6 +4,36 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
+## v0.3.2 (en cours)
+
+- **Travaux de base pour les persos de chaque joueur (agriculture, eau, cuisine, artisanat,
+  recherche, énergie, transport)** — corrigé dans le code, à tester en jeu (`coop_test.py
+  workstations`). **Protocole 36** (`MachineState` : drapeau `kMachFarm` et `CropState`).
+  - **Le fermier de rob « jamais compté » (11/10, Ferme Légumes L)** : ce n'était pas une perte
+    d'ordre. L'ordre « utiliser une machine » (87) arrivait et tournait chez l'hôte, mais une ferme
+    dont les cultures poussent n'a pas besoin de travail : `FarmBuilding::dontNeedWorkRightNow`
+    (vt 0x4E8, `0xF6E00`) est vrai et `UseableStuff::tryOperate` (`0xF8030`) refuse alors tout
+    opérateur ; la tâche ponctuelle du clic droit s'arrête aussitôt, sans « workers » (le banc de
+    recherche de Geoffrey faisait pareil tant que rien n'était en file). Le joueur reçoit maintenant
+    la raison en français avec la réponse de l'hôte (« les cultures poussent… donne-lui ce travail
+    en permanent (bouton JOBS) »), ou « toutes les places sont prises (n/m) ».
+  - **Cultures identiques partout** : la ferme d'un client poussait toute seule, mais seuls les
+    fermiers de l'hôte récoltent et seul son jeu replante ; chez le client la ferme restait mûre,
+    puis pourrissait et se replantait à part. L'hôte envoie maintenant l'état des cultures (étape,
+    plants récoltés, pousse, pourriture, nettoyage) ; le client récolte les mêmes plants
+    (`FarmBuilding::destroyAPlant`), replante quand l'hôte replante (`resetFarm`) et cale la pousse.
+  - **Machines de l'hôte « introuvables » chez un client (nass4, 23:48)** : un bâtiment posé par un
+    joueur est retrouvé d'abord par son netId de pose (le client a pu le construire un peu à côté),
+    puis par type et endroit. Le journal dit pourquoi une machine manque (« not loaded here yet » :
+    loin de nos persos, zone pas chargée — c'était le cas de nass4 ; « NOT built here? » sinon), une
+    fois par machine.
+  - **Recrue « à personne »** : n'importe quel joueur peut lui donner un travail de base
+    (`kc::IsBaseWorkTask` : machines, fermes, transport, construction, médecin, secours, tourelles),
+    au clic droit comme en permanent ; toujours refusé, avec message, sur le perso d'un autre joueur.
+  - Commandes de debug `machines`, `crops`, `storage`, `workjob` ; test unitaire
+    `TestWorkstationOrders` (règles de chaque tâche des postes), `TestWorkshop` et `TestSquadWindow`
+    étendus ; expérience `workstations`.
+
 ## v0.3.1 (11 octobre 2026)
 
 - **Antivirus** : l'installeur du zip n'utilise plus PowerShell (`Installer.bat` lançait

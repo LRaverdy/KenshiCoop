@@ -6969,6 +6969,169 @@ def move_squad_out_of_town(host):
     return False
 
 
+# vanilla workstations by id (gamedata.base, names are translated): a field, a well, a stove
+SMALL_FARM = "1911-gamedata.base"          # Small Farm (FarmBuilding)
+HEMP_FARM = "2021-gamedata.base"           # Hemp Farm, if the small one cannot be placed
+WELL = "1921-gamedata.base"
+COOKING_STOVE = "1944-gamedata.base"
+WORKSTATIONS = (("ferme", (SMALL_FARM, HEMP_FARM)), ("cuisiniere", (COOKING_STOVE,)), ("etabli", CRAFT_BENCHES),
+                ("recherche", (RESEARCH_BENCH,)), ("puits", (WELL,)), ("eolienne", (WIND_GENERATOR,)))
+
+
+def machines_map(pid):
+    """'machines' -> {key: {found, ops, on, prod, farm, crafts}} as this game reads each machine the session knows."""
+    t = cmd(pid, "machines")[1]
+    out = {}
+    if not t.startswith("ok "):
+        return out
+    for row in t.split()[2:]:
+        bits = row.split("|")
+        d = {"found": bits[1] if len(bits) > 1 else ""}
+        for b in bits[2:]:
+            k, _, v = b.partition("=")
+            d[k] = v
+        out[bits[0]] = d
+    return out
+
+
+def same_machines(h, c, keys):
+    """Workers, switch, crops (stage, harvested, ripe or not) identical; production within a margin."""
+    bad = []
+    for k in keys:
+        a, b = h.get(k), c.get(k)
+        if not a or not b:
+            bad.append(f"{k}: host {bool(a)} client {bool(b)}")
+            continue
+        if b.get("found") != "found" or "not" in b:
+            bad.append(f"{k}: not found on the client")
+            continue
+        for f in ("ops", "on", "crafts"):
+            if a.get(f) != b.get(f):
+                bad.append(f"{k} {f}: {a.get(f)} / {b.get(f)}")
+        if a.get("farm") or b.get("farm"):
+            fa, fb = (a.get("farm") or "").split(","), (b.get("farm") or "").split(",")
+            if len(fa) < 4 or len(fb) < 4 or fa[:2] != fb[:2] or abs(float(fa[2]) - float(fb[2])) > 0.1:
+                bad.append(f"{k} crops: {a.get('farm')} / {b.get('farm')}")
+        pa, pb = float(a.get("prod", 0) or 0), float(b.get("prod", 0) or 0)
+        if abs(pa - pb) > max(0.2 * max(abs(pa), abs(pb)), 0.6):
+            bad.append(f"{k} prod: {pa} / {pb}")
+    return not bad, "; ".join(bad)
+
+
+def exp_workstations(host, cli, minutes=2.0):
+    """Base work for every player's characters (lot 'travaux de base'). In open desert, everyone in god
+    mode with materials given: the host and the client each place a farm, a stove, a crafting bench,
+    a research bench, a well and a wind turbine; their characters are set to work by right click
+    (workreq: a one-time task 87) and by the Tâches panel (workjob: a permanent job, 87 and hauling
+    88); then workers, crops, storages and job lists are compared on the host and the client, at the
+    start and after `minutes` at speed x3."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    log("client's own character: squad index", own)
+    SANDBOX["home"] = None
+    log("heal everyone:", cmd(host, "console heal all"))
+    log("god mode for everyone:", cmd(host, "console god all"))
+    cmd(host, "console xp all 60")
+    time.sleep(4)
+    out = move_squad_out_of_town(host)
+    check("postes : escouade en plein desert", out, "")
+    if not out:
+        summary()
+        return
+    n = squad_size(host)
+    host_idx = [i for i in range(n) if i != own]
+    # ---- the posts: the host places one row, the client the other (its placements go to the host)
+    placed = {}   # label -> (sid, who)
+    for row, (label, sids) in enumerate(WORKSTATIONS):
+        for who, pid, idx, dz in (("hote", host, 0, -80), ("client", cli, own, 80)):
+            got = None
+            for sid in sids:
+                ok, t, spot = place_valid(pid, sid, idx, -150 + 60 * row, dz)
+                log(f"{who} places {label}", sid, ok, t, spot)
+                if ok:
+                    got = sid
+                    break
+            check(f"postes : {label} pose par {who}", got is not None, sids)
+            if got:
+                placed[f"{label}/{who}"] = (got, who)
+        time.sleep(2)
+    time.sleep(4)
+    for key, (sid, who) in placed.items():   # finished at once (sandbox): the host's workers' progress
+        for _ in range(2):
+            log("finish", key, cmd(host, f"buildprogress {sid} 100000"))
+            time.sleep(1.5)
+    time.sleep(5)
+    keep_anchor_home(host)
+    # ---- materials: water, food, fabrics, books into the posts (host sandbox)
+    for sid, what in ((COOKING_STOVE, "Eau"), (COOKING_STOVE, "Water"), (COOKING_STOVE, "Ble"), (COOKING_STOVE, "Wheat"),
+                      (RESEARCH_BENCH, "Livre"), (RESEARCH_BENCH, "Book"), (CRAFT_BENCHES[0], FABRICS), (CRAFT_BENCHES[0], "Tissus")):
+        log("sandbox: into", sid, what, cmd(host, f"machinegive {sid} {what} 20"))
+    # ---- set to work: the client by right click and by the Tâches panel; the host the same
+    cli_posts = [placed[k][0] for k in placed if k.endswith("/client")]
+    host_posts = [placed[k][0] for k in placed if k.endswith("/hote")]
+    if cli_posts:
+        log("client right click: its character works", cli_posts[0], cmd(cli, f"workreq {own} {cli_posts[0]}"))
+    for sid in cli_posts[1:3]:
+        log("client Tâches panel: permanent job on", sid, cmd(cli, f"workjob {own} {sid} 87"))
+    log("client Tâches panel: hauling (88)", cmd(cli, f"workjob {own} none 88"))
+    for i, sid in zip(host_idx, host_posts):
+        how = "workreq" if i == host_idx[0] else "workjob"
+        log(f"host {how}: member {i} works", sid, cmd(host, f"{how} {i} {sid}" + ("" if how == "workreq" else " 87")))
+    time.sleep(20)   # they walk there
+
+    def compare_all(label):
+        hm, cm = machines_map(host), machines_map(cli)
+        keys = sorted(k for k in hm if any(k.startswith(sid + "@") for sid, _ in placed.values()))
+        log(label, "host machines:", {k: hm[k] for k in keys})
+        log(label, "client machines:", {k: cm.get(k) for k in keys})
+        check(f"postes ({label}) : chaque poste pose est suivi chez l'hote", len(keys) >= len(placed) - 1, f"{len(keys)} / {len(placed)}")
+        ok, why = same_machines(hm, cm, keys)
+        if not ok:   # the numbers move while the message travels: once more
+            time.sleep(3)
+            hm, cm = machines_map(host), machines_map(cli)
+            ok, why = same_machines(hm, cm, keys)
+        check(f"postes ({label}) : ouvriers, marche, cultures et production identiques partout", ok, why)
+        ch = cmd(host, "crops any")[1]
+        cc = cmd(cli, "crops any")[1]
+        log(label, "crops host:", ch, "| client:", cc)
+        if ch.startswith("ok"):
+            fh, fc = mfields(ch), mfields(cc)
+            check(f"postes ({label}) : cultures de la ferme identiques", fh.get("stage") == fc.get("stage") and fh.get("harvested") == fc.get("harvested")
+                  and abs(float(fh.get("grown", 0)) - float(fc.get("grown", -9))) <= 0.1, f"{ch} / {cc}")
+        for sid in set(s for s, _ in placed.values()):
+            sh, sc = cmd(host, f"storage {sid}")[1], cmd(cli, f"storage {sid}")[1]
+            if sh != sc:
+                time.sleep(2)
+                sh, sc = cmd(host, f"storage {sid}")[1], cmd(cli, f"storage {sid}")[1]
+            check(f"postes ({label}) : stock de {sid} identique", sh == sc, f"{sh} / {sc}")
+        for i in range(n):
+            jh, jc = cmd(host, f"jobs {i}")[1], cmd(cli, f"jobs {i}")[1]
+            check(f"postes ({label}) : taches du membre {i} identiques", jh == jc, f"{jh} / {jc}")
+        return hm
+
+    hm0 = compare_all("depart")
+    own_jobs = cmd(host, f"jobs {own}")[1].split()[2:]
+    check("postes : taches permanentes du client chez l'hote (87 et 88)", "87" in own_jobs and "88" in own_jobs, own_jobs)
+    log("speed x3", cmd(host, "speed 3"))
+    end = time.time() + 60 * minutes
+    while time.time() < end:
+        time.sleep(15)
+        keep_anchor_home(host)
+        log("machines:", cmd(host, "machines")[1][:400])
+    log("speed x1", cmd(host, "speed 1"))
+    time.sleep(4)
+    hm1 = compare_all(f"apres {minutes} min a x3")
+    worked = [k for k in hm1 if hm1[k].get("ops", "0/").split("/")[0] not in ("0", "")]
+    log("machines with workers:", worked)
+    check("postes : au moins un poste a des ouvriers", bool(worked), hm1)
+    for line in host_log()[-4000:]:
+        if "machine:" in line and ("workers" in line or "crops" in line or "not found here" in line or "replanted" in line):
+            log("  ", line.strip())
+    summary()
+
+
 def exp_research(host, cli):
     """Workshop: the research (tech tree), the crafting benches, the mines and machines and the power of
     the players' outpost are the host's. The client researches, builds what it unlocked and crafts
@@ -7371,6 +7534,10 @@ def main():
     fo = sub.add_parser("four", help="1 host + 3 clients")
     fo.add_argument("--save", default="kctest_base")
     fo.add_argument("--clients", type=int, default=3)
+    ws = sub.add_parser("workstations", help="base work: farm, stove, bench, research, well, turbine by host and client, compared at x3")
+    ws.add_argument("--save", default="kctest_base")
+    ws.add_argument("--keep", action="store_true")
+    ws.add_argument("--minutes", type=float, default=2.0)
     rs = sub.add_parser("research", help="workshop: research, crafting benches, mines, power (sandbox set up by the host)")
     rs.add_argument("--save", default="kctest_base")
     rs.add_argument("--keep", action="store_true")
@@ -7545,6 +7712,8 @@ def main():
             exp_placevalid(host, cli)
         elif a.what == "mine":
             exp_mine(host, cli)
+        elif a.what == "workstations":
+            exp_workstations(host, cli, minutes=a.minutes)
         elif a.what == "research":
             exp_research(host, cli)
         elif a.what == "admin":

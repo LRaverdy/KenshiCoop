@@ -301,6 +301,8 @@ struct FakeWorld : IWorld {
         r = refusal.empty() ? ResultReason::None : refusalReason;
         return std::exchange(refusal, std::string{});
     }
+    std::string note;   // host: told with the next order that runs (a machine with no work for now)
+    std::string TakeOrderNote() override { return std::exchange(note, std::string{}); }
     bool Order(const Handle& h, const Command& c) override {
         auto it = chars.find(h.serial);
         if (it == chars.end()) return false;
@@ -952,7 +954,9 @@ struct FakeWorld : IWorld {
         }
         return false;
     }
-    bool ApplyMachine(const MachineState& s, const std::vector<Handle>& operators) override {
+    std::map<std::string, Handle> machineLocal;   // client: the local building the session named for each machine
+    bool ApplyMachine(const MachineState& s, const std::vector<Handle>& operators, const Handle& local) override {
+        machineLocal[s.sid] = local;
         auto it = machines.find(s.sid);
         if (it == machines.end()) return false;
         it->second.s = s;
@@ -3782,6 +3786,42 @@ static void TestSquadWindow() {
         Run(all, 1.0);
         CHECK(hw.chars[4].dest.x != 9.0f);
     }
+    {   // base work at a workstation on the recruit (operate a machine, right click): any player's
+        hw.subjectFlags[700] = kTgtBuilding | kTgtMachine | kTgtOurs;
+        Command c; c.seq = 502; c.netId = net[4]; c.kind = CommandKind::Task; c.via = TaskVia::NewTask; c.task = 87; c.subject = FakeWorld::B(700);
+        const size_t before = hw.orderedSerials.size();
+        const int sharedBefore = hw.sharedOrders;
+        Writer w; Encode(w, c);
+        CHECK(host.InjectForTest(cli2.localId(), w));
+        Run(all, 1.0);
+        CHECK(hw.orderedSerials.size() == before + 1 && hw.orderedSerials.back() == 4 && hw.sharedOrders == sharedBefore + 1);
+        // ... and hauling as a permanent job without a subject, from the other client
+        Command j; j.seq = 503; j.netId = net[4]; j.kind = CommandKind::Task; j.via = TaskVia::AddJob; j.task = 88;
+        Writer wj; Encode(wj, j);
+        CHECK(host.InjectForTest(cli.localId(), wj));
+        Run(all, 1.0);
+        CHECK(hw.orderedSerials.size() == before + 2 && hw.orderedSerials.back() == 4);
+        // the same order on the other player's character (cli2's 5): refused, told in French
+        const uint64_t refusals = host.actorRefusals();
+        Command o = c; o.seq = 504; o.netId = net[5];
+        Writer wo; Encode(wo, o);
+        CHECK(host.InjectForTest(cli.localId(), wo));
+        Run(all, 1.0, [&] { return host.actorRefusals() > refusals; });
+        CHECK(host.actorRefusals() == refusals + 1 && hw.orderedSerials.size() == before + 2);
+        bool toldFr = false;
+        for (const auto& l : cli.chatLog()) toldFr = toldFr || l.find("n'est pas le tien") != std::string::npos;
+        CHECK(toldFr);
+        // its own character on a machine with no work for now: done, and the player is told why
+        Run(all, 2.5);   // the client says at most one host answer every 2 s
+        hw.note = "La ferme : les cultures poussent.";
+        Command own = c; own.seq = 505; own.netId = net[2];
+        Writer wn; Encode(wn, own);
+        CHECK(host.InjectForTest(cli.localId(), wn));
+        Run(all, 1.5, [&] { for (auto& l : cli.chatLog()) if (l.find("les cultures poussent") != std::string::npos) return true; return false; });
+        bool noted = false;
+        for (const auto& l : cli.chatLog()) noted = noted || l == "* La ferme : les cultures poussent.";
+        CHECK(noted && hw.orderedSerials.back() == 2);
+    }
 
     // 8. jobs with their targets: the same list on every client (added and ordered, not only removed)
     JobEntry j1; j1.task = 31; j1.subject = FakeWorld::H(1);
@@ -4182,6 +4222,114 @@ static void TestCallScopeRepair() {
     CHECK(!TaskTargetWrongKind(TaskVia::AddJob, 2, F | kTgtBuilding | kTgtUnfinished | kTgtOurs, nullptr));
     CHECK(!TaskTargetWrongKind(TaskVia::AddJob, 31, mate, nullptr));                // follow a squad mate
     for (int task : {0, 1, 17, 22, 40, 55, 118, 124, 599}) CHECK(!TaskTargetWrongKind(TaskVia::AddJob, task, npc, nullptr));
+}
+
+// Workstations (lot "travaux de base"): every task of a farm, a well, a stove, a mine, a bench, a
+// research bench, a generator, a storage, the builder and the medic, through every way the UI gives
+// it (right click: AddOrder / NewTask / TaskNearest; jobs mode and the Tâches panel: AddJob; the
+// panel's cross and drag; the JOBS toggle), with the subject it needs and never another; who may give
+// it (own character, a nobody's recruit: anyone; another player's: refused, see TestSquadWindow).
+static void TestWorkstationOrders() {
+    std::printf("workstations: the order rules of every base work task (farm, water, kitchen, mine, crafting, research, power, hauling, builder, medic)\n");
+    const uint32_t F = kTgtNamed | kTgtFound;
+    const uint32_t mach = F | kTgtBuilding | kTgtMachine;                          // a farm, a well, a stove, a bench, a mine, a turbine
+    const uint32_t machOurs = mach | kTgtOurs;
+    const uint32_t store = F | kTgtBuilding | kTgtContainer | kTgtMachine | kTgtOurs;   // a storage (function 2 or 13: a machine with an inventory)
+    const uint32_t box = F | kTgtContainer | kTgtBuilding, item = F | kTgtItem;
+    const uint32_t site = F | kTgtBuilding | kTgtUnfinished | kTgtOurs, bld = F | kTgtBuilding | kTgtOurs;
+    const uint32_t npc = F | kTgtCharacter | kTgtConscious, npcDown = F | kTgtCharacter | kTgtDown, npcDead = npcDown | kTgtDead;
+    const uint32_t mate = F | kTgtCharacter | kTgtConscious | kTgtSquad, stale = kTgtNamed;
+    const TaskVia ways[] = {TaskVia::AddOrder, TaskVia::NewTask, TaskVia::TaskNearest, TaskVia::AddJob};
+    struct Rule { int task; const char* post; std::vector<uint32_t> ok, refused; };
+    const Rule rules[] = {
+        {87, "operer (ferme, puits, cuisiniere, etabli, recherche, eolienne, mine)", {mach, machOurs, store}, {0, npc, mate, item, box, bld, site, stale}},
+        {152, "machine automatique", {mach, machOurs}, {0, npc, item, bld, stale}},
+        {221, "machine (au repos)", {0, mach}, {npc, item, stale}},
+        {88, "transporter", {0, box, store, bld, item}, {npc, mate, npcDead, stale}},
+        {89, "tout faire tourner", {0, mach, store, box}, {npc, mate, stale}},
+        {90, "debloquer tout", {0, mach}, {npc, stale}},
+        {91, "debloquer", {0, mach}, {npc, stale}},
+        {92, "recolter la sortie", {0, mach, store}, {npc, mate, stale}},
+        {93, "remplir", {0, mach, store}, {npc, stale}},
+        {94, "vouloir remplir", {0, mach}, {npc, stale}},
+        {113, "vider la sortie", {0, mach, store}, {npc, stale}},
+        {151, "vider", {0, mach}, {npc, stale}},
+        {247, "recolter (materiaux)", {0, mach}, {npc, stale}},
+        {114, "deposer les ressources", {0, box, store, item}, {npc, stale}},
+        {241, "ranger les ressources", {0, box, store}, {npc, stale}},
+        {125, "batisseur", {0, site}, {npc, mate, bld, mach, stale}},
+        {2, "construire", {site}, {0, npc, bld, mach}},
+        {71, "apporter les materiaux", {site}, {0, npc, mate}},
+        {95, "reparer", {bld, site, machOurs}, {0, npc, mach}},
+        {58, "medecin", {0, npc, npcDown, mate}, {npcDead, mach, stale}},
+        {148, "secourir", {0, npcDown, mate}, {npcDead, mach, stale}},
+        {105, "secourir (tache)", {0, npcDown}, {mach, stale}},
+        {146, "tourelle", {mach}, {0, npc}},
+        {234, "tourelle (tache)", {mach}, {0, npc}},
+    };
+    for (const auto& r : rules) {
+        CHECK(IsBaseWorkTask(r.task));
+        CHECK(std::string(TaskLabel(r.task)) != "?");
+        for (TaskVia via : ways) {
+            for (uint32_t f : r.ok) {
+                std::string why;
+                const bool got = TaskTargetAllowed(via, r.task, f, &why);
+                if (!got) std::printf("    %s (%d, via %d) refused on %#x: %s\n", r.post, r.task, int(via), unsigned(f), why.c_str());
+                CHECK(got);
+            }
+            for (uint32_t f : r.refused) {
+                std::string why;
+                const bool got = TaskTargetAllowed(via, r.task, f, &why);
+                if (got) std::printf("    %s (%d, via %d) allowed on %#x\n", r.post, r.task, int(via), unsigned(f));
+                CHECK(!got && !why.empty());
+            }
+        }
+        // the Tâches panel: removed, moved, every job of that kind; on the character itself
+        for (TaskVia via : {TaskVia::RemovePermajob, TaskVia::MovePermajob, TaskVia::RemoveJob}) CHECK(TaskTargetAllowed(via, r.task, 0, nullptr));
+        // who: a nobody's recruit takes it from any player (right click, jobs mode), like its AI settings
+        for (TaskVia via : ways) {
+            Command c; c.kind = CommandKind::Task; c.via = via; c.task = r.task; c.shift = false;
+            CHECK(Session::IsSettingsCommand(c));
+        }
+    }
+    // the JOBS toggle (standing order 15) and the panel's edits are settings; not base work: moving,
+    // attacking, talking, looting, dismantling, opening a window
+    Command c; c.kind = CommandKind::Task; c.via = TaskVia::SetOrder; c.task = 15;
+    CHECK(Session::IsSettingsCommand(c) && TaskTargetAllowed(TaskVia::SetOrder, 15, 0, nullptr));
+    for (int task : {4, 5, 12, 26, 29, 44, 96, 118, 124, 166, 284}) {
+        CHECK(!IsBaseWorkTask(task));
+        for (TaskVia via : {TaskVia::AddOrder, TaskVia::NewTask, TaskVia::TaskNearest}) {
+            Command o; o.kind = CommandKind::Task; o.via = via; o.task = task;
+            CHECK(!Session::IsSettingsCommand(o));
+        }
+    }
+    Command mv; mv.kind = CommandKind::MoveTo; CHECK(!Session::IsSettingsCommand(mv));
+    // a job copied from the host's list (JobState) with a machine subject is handed to the game
+    // there; aimed at a character it never is
+    for (int task : {87, 92, 93, 113, 247}) {
+        CHECK(!TaskTargetWrongKind(TaskVia::AddJob, task, mach, nullptr));
+        CHECK(TaskTargetWrongKind(TaskVia::AddJob, task, npc, nullptr));
+    }
+    // a farm's crops travel with the machine (protocol 36): round trip, and a forged count refused
+    MachinesMsg m;
+    MachineState farm; farm.sid = "farm"; farm.pos = {5, 0, 5}; farm.flags = kMachFarm | kMachOurs; farm.maxOperators = 4;
+    farm.crop.stage = 2; farm.crop.plants = 24; farm.crop.harvested = 7; farm.crop.grown = 1.25f; farm.crop.died = 0.1f; farm.crop.cleared = 0;
+    MachineState bench; bench.sid = "bench"; bench.pos = {1, 0, 1}; bench.crop.harvested = 3;   // no farm flag: no crop sent
+    m.machines = {farm, bench};
+    Writer w; Encode(w, m);
+    Reader r(w.data(), w.size());
+    MachinesMsg back;
+    CHECK(PeekType(r) == Msg::Machines && Decode(r, back) && back.machines.size() == 2);
+    if (back.machines.size() == 2) {
+        CHECK(back.machines[0].sameState(farm) && back.machines[0].crop == farm.crop);
+        CHECK(back.machines[1].crop == CropState{});
+    }
+    MachinesMsg bad; MachineState worse = farm; worse.crop.harvested = 30;   // more harvested than plants: clamped when sent
+    bad.machines = {worse};
+    Writer w2; Encode(w2, bad);
+    Reader r2(w2.data(), w2.size());
+    MachinesMsg back2;
+    CHECK(PeekType(r2) == Msg::Machines && Decode(r2, back2) && back2.machines.size() == 1 && back2.machines[0].crop.harvested == 24);
 }
 
 // Forged requests naming a character the sender does not own (the host's, another player's, an NPC,
@@ -4659,6 +4807,13 @@ static void TestWorkshop() {
     FakeWorld::FakeMachine far = bench;
     far.s.sid = "far-bench"; far.s.pos = {9000, 0, 9000}; far.box = 0; far.ops.clear();
     hw.machines["far-bench"] = far;
+    FakeWorld::FakeMachine farm;
+    farm.s.sid = "farm"; farm.s.pos = {250, 0, 0}; farm.s.flags = kMachFarm | kMachOurs; farm.s.maxOperators = 4;
+    farm.s.crop.stage = 3; farm.s.crop.plants = 24; farm.s.crop.grown = 0.4f;
+    hw.machines["farm"] = farm;
+    FakeWorld::FakeMachine mill = far;
+    mill.s.sid = "mill"; mill.s.pos = {320, 0, 0}; mill.s.crafts.clear();   // near the players, not built on the client
+    hw.machines["mill"] = mill;
     TownPower tp; tp.sid = "bench"; tp.pos = {150, 0, 0}; tp.values[0] = 12; tp.values[3] = 7; tp.onBattery = false;
     hw.townPower = {tp};
     std::vector<float> st(kStatCount, 1.0f);
@@ -4670,6 +4825,7 @@ static void TestWorkshop() {
     cw.machines["bench"].s.sid = "bench";
     cw.machines["bench"].s.pos = bench.s.pos;
     cw.machines["far-bench"].s.sid = "far-bench";
+    cw.machines["farm"].s.sid = "farm";
     SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
     std::vector<std::string> hostLog;
     Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
@@ -4687,6 +4843,21 @@ static void TestWorkshop() {
     CHECK(cw.machines["far-bench"].s.crafts.empty());   // far from every player: not sent
     CHECK(cw.boxes[800].items == hw.boxes[800].items);
     CHECK(!cw.townPower.empty() && cw.townPower[0] == tp);
+    // a farm: its crops as on the host; a farmer at work, then a harvest, then the replanting
+    Run(all, 3.0, [&] { return cw.machines["farm"].s.crop == hw.machines["farm"].s.crop; });
+    CHECK(cw.machines["farm"].s.crop == hw.machines["farm"].s.crop && (cw.machines["farm"].s.flags & kMachFarm));
+    hw.machines["farm"].ops = {FakeWorld::H(2)};
+    hw.machines["farm"].s.crop.grown = 1.2f; hw.machines["farm"].s.crop.stage = 2; hw.machines["farm"].s.crop.harvested = 9;
+    Run(all, 3.0, [&] { return cw.machines["farm"].s.crop.harvested == 9 && cw.machines["farm"].ops.size() == 1; });
+    CHECK(cw.machines["farm"].s.crop == hw.machines["farm"].s.crop && cw.machines["farm"].s.operatorCount == 1 && cw.machines["farm"].ops.size() == 1);
+    hw.machines["farm"].s.crop.harvested = 0; hw.machines["farm"].s.crop.grown = 0.0f; hw.machines["farm"].s.crop.stage = 3;
+    Run(all, 3.0, [&] { return cw.machines["farm"].s.crop == hw.machines["farm"].s.crop; });
+    CHECK(cw.machines["farm"].s.crop == hw.machines["farm"].s.crop);
+    // a machine of the host the client's world does not have: counted missing, logged, never applied
+    CHECK(cli.workshopView().machinesMissing == 1 && !cw.machines.count("mill"));
+    bool missingSeen = false;
+    cli.ForEachKnownMachine([&](const std::string& key, const MachineState& st, bool found) { if (st.sid == "mill") missingSeen = !found && key.find("mill@") == 0; });
+    CHECK(missingSeen);
     // a worker leaves: everyone sees it
     hw.machines["bench"].ops = {FakeWorld::H(1)};
     Run(all, 3.0, [&] { return cw.machines["bench"].ops.size() == 1; });
@@ -5891,6 +6062,7 @@ int main() {
     TestDeadSquad();
     TestAdmin();
     TestTaskTargets();   // actor safety
+    TestWorkstationOrders();
     TestCallScopeRepair();   // crash at kenshi_x64+0x883B78
     TestActorSafety();
     TestGuiToDisplay();

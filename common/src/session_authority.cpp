@@ -225,6 +225,12 @@ void Session::OnResult(const Result& m) {
     auto sent = m.request == Msg::Command ? sentOrders_.find(m.seq) : sentOrders_.end();
     if (m.state != ResultState::Rejected) {
         if (sent != sentOrders_.end()) sentOrders_.erase(sent);
+        // done, with something to know (a machine with no work for now): said, not too often
+        const double now = clock_();
+        if (!m.text.empty() && now >= nextResultNote_) {
+            nextResultNote_ = now + 2.0;
+            AddChat("* " + m.text, "host note on a request of ours");
+        }
         return;
     }
     ++rejected_;

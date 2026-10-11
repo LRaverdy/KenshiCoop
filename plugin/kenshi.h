@@ -274,6 +274,9 @@ enum Fn : int {
     FnMedAddWound,              // ? MedicalSystem::addWound(this, bool, int, ptr, 4 stack args)   (makes the damage number, only if the character is in the camera's view: CH_inView)
     FnCharUpdateView,           // uint8 Character::updateView()   (our name, 0x5C9F60: sets CH_inView +0x1A9 every frame from the camera; player-faction characters always in view)
     FnSetInBed,                 // void Character::setInBed(bool on, UseableStuff* bed)   (our name, 0x32E2F0: inSomething 1, inWhat = the bed's hand, the bed's vt 0x4F8 takes it in; setBedMode-like)
+    // ---- farms (plugin/workshop.cpp, 0.3.2)
+    FnFarmDestroyAPlant,        // bool FarmBuilding::destroyAPlant()   (the plant at +0x528 harvested: age -10, hidden, +0x528 one more; what the farmer's harvest calls)
+    FnFarmReset,                // void FarmBuilding::resetFarm()   (replants: new young ages, +0x528 harvested, +0x51C died, +0x520 cleared back to 0)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];

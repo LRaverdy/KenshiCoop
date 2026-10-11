@@ -109,6 +109,9 @@ public:
     // Host side: why the last Order was refused (French, for the player, and the reason); empty when
     // it was not refused.
     virtual std::string TakeOrderRefusal(ResultReason& reason) { reason = ResultReason::None; return {}; }
+    // Host side: what the player should know about an order that ran (French, empty: nothing), e.g. a
+    // machine that needs no worker right now. Sent with the Done result; the client shows it.
+    virtual std::string TakeOrderNote() { return {}; }
     // Client side: the host rejected an order of ours for character `h` (undo what we predicted).
     virtual void OrderRejected(const Handle& h, const Command& c) { (void)h; (void)c; }
     // Host side: a character whose player just left or lost their connection stops what it was
@@ -417,7 +420,11 @@ public:
     virtual bool ExecuteMachineRequest(const MachineRequest& r, const Handle& actor, std::string& refusedFr) {
         (void)r; (void)actor; refusedFr.clear(); return false;
     }
-    virtual bool ApplyMachine(const MachineState& s, const std::vector<Handle>& operators) { (void)s; (void)operators; return false; }
+    // `local`: that building here when the client knows it (a placement of the host it built: found
+    // by its netId), else invalid and the world finds it by kind and place.
+    virtual bool ApplyMachine(const MachineState& s, const std::vector<Handle>& operators, const Handle& local) {
+        (void)s; (void)operators; (void)local; return false;
+    }
     virtual bool ApplyTownPower(const TownPower& t) { (void)t; return false; }
     // Client: what the local player asked in the research, crafting and building windows (never done
     // locally). actor: our character concerned (host handle; invalid: the session picks the player's own).
@@ -614,11 +621,16 @@ public:
     const DiplomacyState& hostDiplomacy() const { return hostDiplo_; }
     // ---- workshop (tests, overlay): counters; the research as this side knows it (host: last sent;
     // client: received); a machine as the host sent it (key "sid@x,y,z", null: unknown here)
-    struct WorkshopView { size_t researchSent = 0, researchReceived = 0, researchApplied = 0, machinesSent = 0, machinesReceived = 0, machinesApplied = 0, requestsDone = 0, requestsRefused = 0, asked = 0; };
+    // machinesMissing (client): machines of the host not found here at the last try (their place not
+    // loaded here, or not built here)
+    struct WorkshopView { size_t researchSent = 0, researchReceived = 0, researchApplied = 0, machinesSent = 0, machinesReceived = 0, machinesApplied = 0, requestsDone = 0, requestsRefused = 0, asked = 0, machinesMissing = 0; };
     WorkshopView workshopView() const { return workshop_; }
     const ResearchState& knownResearch() const { return isHost() ? researchSent_ : hostResearch_; }
     size_t machinesKnown() const { return isHost() ? machinesSent_.size() : clientMachines_.size(); }
     const MachineState* knownMachine(const std::string& key) const;
+    // Every machine this side knows (host: last sent; client: the host's, with whether it was found here
+    // at the last try). Tests and the `machines` command.
+    void ForEachKnownMachine(const std::function<void(const std::string& key, const MachineState& s, bool foundHere)>& fn) const;
     static std::string MachineKey(const std::string& sid, const Vec3& pos);
     const FactionsMsg& hostFactions() const { return hostFactions_; }      // client: the host's relations (host: last sent)
     const BountiesMsg& hostBounties() const { return hostBounties_; }      // client: the host's bounties (host: last sent)
@@ -1095,7 +1107,10 @@ private:
     ResearchState hostResearch_;                 // client
     bool haveResearch_ = false, researchDirty_ = false;
     double researchReapplyAt_ = 0;
-    struct ClientMachine { MachineState state; bool dirty = true; bool found = false; };
+    // local: the building of that placement here (buildings_, by netId), used before kind and place;
+    // missLogged: "not found here" said for it (again only once it was found in between)
+    struct ClientMachine { MachineState state; bool dirty = true; bool found = false; bool tried = false; bool missLogged = false; };
+    Handle LocalBuildingOf(const std::string& sid, const Vec3& pos) const;   // client: a placement of the host built here
     std::unordered_map<std::string, ClientMachine> clientMachines_;
     std::unordered_map<std::string, TownPower> clientTowns_;
     double machinesReapplyAt_ = 0;
@@ -1134,6 +1149,9 @@ public:
     // character? Its own, or one nobody owns (shared; the last request wins).
     bool MaySetSettings(uint8_t player, uint32_t netId) const;
     bool IsShared(uint32_t netId) const { return shared_.count(netId) != 0; }
+    // An AI setting (squad bar toggle, Tâches panel, permanent job) or base work at a workstation
+    // (kc::IsBaseWorkTask: machine, farm, hauling, building, medic): what a nobody's character takes
+    // from any player.
     static bool IsSettingsCommand(const Command& c);
     const SquadStateMsg& squadState() const { return squadState_; }   // host: last sent; client: the host's
     size_t pendingSquadRequests() const { return squadPending_.size(); }   // client
