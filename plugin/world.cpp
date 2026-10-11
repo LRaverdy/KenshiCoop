@@ -199,6 +199,8 @@ void KenshiWorld::ResetWorldBound() {
     taskDropAt_.clear();
     stuck_.clear();
     farSnapAt_.clear();
+    roofBuilding_ = nullptr;
+    navRefreshed_.clear();
     reRagdoll_.clear();
     floorTry_.clear();
     syncErr_.clear();
@@ -232,8 +234,11 @@ void KenshiWorld::EndFrame() {
         // runs a few frames at a crawl (its clock barely moves: the game recomputes it from its own
         // counter and it cannot be set back) while Apply puts every character exactly where the
         // host's stopped.
-        constexpr double kSettleBeforePause = 0.3;
-        constexpr float kCrawl = 0.01f;
+        // 0.8 s at 0.05 (was 0.3 s at 0.01): far from this game's camera a character takes a written
+        // position only on its own, rarer updates; with 0.3 s at 0.01 walkers far away stayed where
+        // they were, 20-35 units behind the host's (faraway test, 11 October)
+        constexpr double kSettleBeforePause = 0.8;
+        constexpr float kCrawl = 0.05f;
         const double now = NowSeconds();
         if (hostTime_.paused && !kenshi::GetPaused()) {
             if (pauseSeenAt_ < 0) {
@@ -253,7 +258,10 @@ void KenshiWorld::EndFrame() {
             pauseSeenAt_ = -1;
             pauseRefusedLogged_ = false;
             if (kenshi::GetPaused()) kenshi::CallUserPause(false);
-            if (std::fabs(kenshi::GetFrameSpeed() - hostTime_.speed) > 1e-3f) kenshi::CallSetFrameSpeed(hostTime_.speed);
+            // the speed buttons' own setter, so that x2 / x3 show on the client's buttons too
+            // (setFrameSpeedMultiplier alone changed the speed and left the buttons on x1)
+            if (std::fabs(kenshi::GetFrameSpeed() - hostTime_.speed) > 1e-3f && !kenshi::CallSetGameSpeedUi(hostTime_.speed))
+                kenshi::CallSetFrameSpeed(hostTime_.speed);
         }
     }
     // While players join, the host's world stays frozen even if someone presses unpause.
@@ -263,10 +271,16 @@ void KenshiWorld::EndFrame() {
     }
     if (active_ && client_ && live_ && !pendingLoot_.empty()) UpdatePendingLoot();
     if (active_ && !client_ && live_ && !pickups_.empty()) UpdatePendingPickups();
+    if (const bool farTalk = active_ && !client_; farTalk != farTalk_) {   // see kenshi::SetFarTalk
+        const bool ok = kenshi::SetFarTalk(farTalk);
+        farTalk_ = farTalk;
+        Log("conversations far from the host's camera: %s", ok ? (farTalk ? "allowed" : "the game's rule again") : "CANNOT PATCH (unexpected bytes)");
+    }
     if (active_ && !client_ && live_ && !pendingTalks_.empty()) UpdatePendingTalks();
     if (active_ && !client_ && live_ && !reRagdoll_.empty()) UpdateReRagdolls();
     if (active_ && client_ && live_) GroundReconcile();
     if (active_ && client_ && live_) UpdateFloorFocus();
+    if (active_ && !client_ && live_) UpdateHostRoof();
     auto v = std::make_shared<HookView>();
     v->active = active_;
     v->client = client_;
@@ -312,8 +326,11 @@ void KenshiWorld::EndFrame() {
                     ++masterChecks;
                     masterCorrections += std::fabs(d) > jump;
                 }
+                // Never a jump any more (11 October, a client far from the host: 2700 jumps in 10 s
+                // over ~100 NPCs, each one's animation popping every half second, "saccadé"): far off,
+                // caught up a third of the way per frame (a few frames, no pop); a little off, a tenth.
                 float t = mine;
-                if (std::fabs(d) > jump) t = want;
+                if (std::fabs(d) > jump) t = mine + d * 0.3f;
                 else if (std::fabs(d) > 0.01f) t = mine + d * 0.1f;
                 t -= std::floor(t);
                 kenshi::WriteAnimMaster(ac, t, tg.masterSpeed);
@@ -326,7 +343,10 @@ void KenshiWorld::EndFrame() {
     if (active_ && client_)
         for (const auto& [h, st] : lastTarget_)
             if (kenshi::Character* c = Find(h); c && v->replicated.count(c))
-                if (void* m = kenshi::MovementOf(c)) v->facing[m] = kenshi::ForwardOf(st.rot);
+                if (void* m = kenshi::MovementOf(c)) {
+                    v->facing[m] = kenshi::ForwardOf(st.rot);
+                    v->orient[m] = {c, st.rot};
+                }
     if (active_) {
         for (const kc::Handle& h : controllable_) {
             auto a = alias_.find(h);
@@ -992,21 +1012,32 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     kenshi::WritePace(c, latest.gait, latest.pace >= 6553.0f ? 999.0f : latest.pace);
     auto it = lastDest_.find(h);
     if (hostMoving) {
-        bool reissue = it == lastDest_.end() || Dist(it->second, latest.dest) > cfg_.destEpsilon;
-        // Twice a second: is our copy really walking to the host's destination? Its own path may
-        // have ended or gone elsewhere (a destination the game dropped) while the one we issued
-        // still matches: it then walked one way while the pull dragged it the other (walking
-        // backwards, up to 180 degrees off in the speed 3 test).
+        // Where our copy walks: the host's destination when it is close; farther, a point 60 units
+        // ahead on the way the host's character really goes. The game turns a walker toward its own
+        // path; with the far destination, its path took another way (the stairs of Okran's Fist and
+        // its Shield: 25-40 walkers in 60 facing backwards while pulled along the host's route, 11
+        // October). A near point keeps that path on the host's way.
+        constexpr float kLookAhead = 60.0f, kFarDest = 90.0f;
+        const kc::Vec3 way = kc::motion::TravelDir(target, latest);
+        kc::Vec3 goal = latest.dest;
+        if (Dist(target.pos, latest.dest) > kFarDest && (way.x * way.x + way.z * way.z) > 0.25f)
+            goal = {target.pos.x + way.x * kLookAhead, target.pos.y, target.pos.z + way.z * kLookAhead};
+        const float epsilon = goal.x == latest.dest.x && goal.z == latest.dest.z ? cfg_.destEpsilon : 20.0f;
+        bool reissue = it == lastDest_.end() || Dist(it->second, goal) > epsilon;
+        // Twice a second: is our copy really walking there? Its own path may have ended or gone
+        // elsewhere (a destination the game dropped) while the one we issued still matches: it then
+        // walked one way while the pull dragged it the other (walking backwards, up to 180 degrees off
+        // in the speed 3 test).
         if (!reissue && now - destCheckAt_[h] > 0.5 && NearestSquadDistance(local) < kSeenRange) {
             destCheckAt_[h] = now;
             kc::Vec3 mineDest;
             bool mineMoving = false;
             float mineSpeed = 0;
-            if (kenshi::GetMovement(c, mineDest, mineMoving, mineSpeed) && Dist(local, latest.dest) > 2.0f &&
-                (!mineMoving || Dist(mineDest, latest.dest) > 2.0f * cfg_.destEpsilon))
+            if (kenshi::GetMovement(c, mineDest, mineMoving, mineSpeed) && Dist(local, goal) > 2.0f &&
+                (!mineMoving || Dist(mineDest, goal) > 2.0f * epsilon))
                 reissue = true;
         }
-        if (reissue && kenshi::SetDestination(c, latest.dest)) lastDest_[h] = latest.dest;
+        if (reissue && kenshi::SetDestination(c, goal)) lastDest_[h] = goal;
     } else if (it != lastDest_.end() || kenshi::IsMoving(c)) {
         kenshi::Halt(c);   // the host stopped: stop walking, the correction below settles it exactly
         lastDest_.erase(h);
@@ -1022,6 +1053,9 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         const kc::Vec3 want = kc::motion::WantFacing(kenshi::ForwardOf(target.rot), travel, hostMoving, fighting);
         const float limit = (!hostMoving || fighting) ? 0.999f : 0.9f;
         if (kenshi::GetFacing(c, mine) && mine.x * want.x + mine.z * want.z < limit) kenshi::FaceDirection(c, want);
+        // the drawn rotation too (hk_moveUpdate does it after the game's movement update; this one
+        // covers the frames the game does not update that character)
+        if (!fighting) kenshi::WriteRotation(c, target.rot);
     }
     // The host paused: its characters stopped mid-stride. Put them exactly there while the game still
     // runs (at a crawl, see EndFrame): paused, it would not commit the position.
@@ -1473,7 +1507,7 @@ void KenshiWorld::UpdateFloorFocus() {
     kc::Handle focus;
     const bool hasFocus = kenshi::FloorFocus(focus);
     for (const auto& [l, c] : mine)
-        if (hasFocus && l == focus) return;
+        if (hasFocus && l == focus) { UpdateRoof(c); return; }
     std::vector<kc::Handle> selected;
     kenshi::SelectedHandles(selected);
     kenshi::Character* pick = mine.front().second;
@@ -1483,6 +1517,55 @@ void KenshiWorld::UpdateFloorFocus() {
         std::string name;
         kenshi::CharacterName(pick, name);
         Log("floor view: follows our '%s' (it followed %s)", name.c_str(), hasFocus ? KeyOf(focus).c_str() : "nobody");
+    }
+    UpdateRoof(pick);
+}
+
+// Host: the same for the host's selected (or else followed) character. The host's game hides the
+// floors above it only in the buildings its own build mode made: one a client placed (made here by
+// the mod) kept its roof over the host's character inside (11 October).
+void KenshiWorld::UpdateHostRoof() {
+    const double now = NowSeconds();
+    if (now < nextHostRoofCheck_) return;
+    nextHostRoofCheck_ = now + 0.5;
+    kenshi::Character* pick = nullptr;
+    std::vector<kc::Handle> selected;   // the selected character first (the one the player plays now)
+    kenshi::SelectedHandles(selected);
+    for (const kc::Handle& h : selected)
+        if ((pick = kenshi::Resolve(h)) != nullptr) break;
+    kc::Handle focus;
+    if (!pick && kenshi::FloorFocus(focus)) pick = kenshi::Resolve(focus);
+    UpdateRoof(pick);
+}
+
+// The floors above the one our followed character is on, in the building it is inside, hidden as the
+// host's game hides them for its own (a cabin's roof is its floor 1: 4092 / 4093-TwoStorey.mod). The
+// client's game did not: the player stood inside under a roof that never went (11 October; the floor
+// view's numbers were the host's, the building and floor of the character right). Shown again when
+// it goes out or into another building.
+void KenshiWorld::UpdateRoof(kenshi::Character* c) {
+    constexpr int kMaxFloors = 6;
+    kc::Handle in;
+    int32_t group = 0;
+    void* building = nullptr;
+    int floor = 0;
+    if (c && kenshi::IndoorsOf(c, in) && in.type != 0xB && in.valid() && kenshi::ReadFloorGroup(c, group) && group >= 9) {
+        building = kenshi::ResolveObject(in);
+        floor = group - 9;
+    }
+    if (roofBuilding_ && (roofBuilding_ != building || roofFloor_ != floor)) {
+        if (kenshi::ResolveObject(roofHandle_) == roofBuilding_)
+            for (int f = roofFloor_ + 1; f < kMaxFloors; ++f) kenshi::SetBuildingFloorVisible(roofBuilding_, f, true);
+        roofBuilding_ = nullptr;
+    }
+    if (building && building != roofBuilding_) {
+        for (int f = floor + 1; f < kMaxFloors; ++f) kenshi::SetBuildingFloorVisible(building, f, false);
+        roofBuilding_ = building;
+        roofHandle_ = in;
+        roofFloor_ = floor;
+        std::string sid;
+        kenshi::ObjectTemplate(building, sid);
+        Log("floor view: inside %s on floor %d, the floors above hidden", sid.c_str(), floor);
     }
 }
 

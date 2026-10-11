@@ -173,11 +173,19 @@ inline bool HostMoving(bool walkingFlag, float speed) { return walkingFlag && st
 // "vitesse 3 : orientation en marchant" measured 167 degrees: at speed 3 a sample is late more often,
 // so the copy was extrapolated more often). A direction to the newest position that turns away from
 // the destination is not the way it goes: the destination's direction is.
+// But a path also leads away from its destination for a while (switchback stairs, around a wall):
+// there the host's character faces the way it really goes, and so does the direction to the newest
+// position; the destination's direction was backwards (Okran's Fist and Shield, 11 October: 25-40
+// walkers in 60 facing backwards on a client). The host's facing settles it: when it agrees with the
+// direction to the newest position (within 60 degrees), that is the way it goes.
+inline Vec3 HostForward(const Quat& q) {   // q * (0,0,1), on the ground
+    return Flat(Vec3{2 * (q.x * q.z + q.w * q.y), 0.0f, 1 - 2 * (q.x * q.x + q.y * q.y)});
+}
 inline Vec3 TravelDir(const EntityState& rendered, const EntityState& latest) {
     Vec3 d = Dir2(rendered.pos, latest.pos, 0.05f);
     const Vec3 toDest = Dir2(rendered.pos, latest.dest, 0.5f);
     if (IsZero2(d)) return toDest;
-    if (!IsZero2(toDest) && Dot2(d, toDest) < 0.0f) return toDest;
+    if (!IsZero2(toDest) && Dot2(d, toDest) < 0.0f && Dot2(d, HostForward(latest.rot)) < 0.5f) return toDest;
     return d;
 }
 

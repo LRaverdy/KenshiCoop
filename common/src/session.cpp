@@ -226,9 +226,18 @@ void Session::Tick(bool worldLive) {
     net_.Flush();
 }
 
+// A frame that took more than a second (the game frozen: a far zone loading kept the host's game
+// still for 2.5 min, 11 October) is not time spent without a world: the first tick after it, still
+// loading, ended the session for everyone. Only the time the game really ran counts.
+void Session::SkipStall(double now) {
+    if (lastTick_ > 0 && now - lastTick_ > 1.0) lastLive_ += now - lastTick_;
+    lastTick_ = now;
+}
+
 // ============================== host ==============================
 
 void Session::HostTick(double now, bool live) {
+    SkipStall(now);
     if (live) lastLive_ = now;
     else if (now - lastLive_ > cfg_.worldLostTimeout) { Fail("world unloaded"); return; }
 
@@ -2934,6 +2943,7 @@ void Session::ClientTick(double now, bool live) {
     }
 
     // Connected
+    SkipStall(now);
     if (live) lastLive_ = now;
     else if (now - lastLive_ > cfg_.worldLostTimeout) { Fail("world unloaded"); return; }
     if (!live) return;

@@ -670,7 +670,7 @@ void DrawDisplaySettings(const OverlayModel& m) {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remet la minicarte dans son coin, à sa taille normale.");
     ImGui::SameLine();
     ImGui::TextDisabled("taille %.0f %%", double(m.optMinimapSize * 100.0f));
-    box("Pings", "pings", m.optPings, "Clic molette ou Alt+clic sur la carte, la minicarte ou le sol.\nMaj : danger, Ctrl : butin, Maj+Ctrl : à l'aide.");
+    box("Pings", "pings", m.optPings, "Ctrl+clic molette ou Alt+clic sur la carte, la minicarte ou le sol (sur la carte et la minicarte, le clic molette seul suffit).\nCtrl+clic molette : Maj danger, Alt butin, Maj+Alt à l'aide.\nAlt+clic : Maj danger, Ctrl butin, Maj+Ctrl à l'aide.");
 }
 
 void DrawMultiplayer(const OverlayModel& m, float w, float h) {

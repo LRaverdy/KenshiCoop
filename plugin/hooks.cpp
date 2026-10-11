@@ -1005,6 +1005,16 @@ uint8_t hk_charUpdateView(void* chr) {
                 if (KenshiWorld* w = TheWorld()) ++w->charsForcedInView;
             }
         }
+        // Host: the world's update loop (0x786EF0) updates a character every frame only when its
+        // +0xE4 byte is set; the others, 6 per frame in turn, catching up their time in one go
+        // (kenshi::CH_everyFrame). Near a client player they moved in 20-unit bounds on the host,
+        // and so on the client (farprobe, 11 October: "saccadé"): set for them.
+        // (Host only: forced on a client too, its game ran its own walk on the copies every frame,
+        // fighting the host's positions and facing: moonwalk and shaking, 11 October.)
+        if (!KenshiWorld::ClientActive()) {
+            auto v = KenshiWorld::View();
+            if (v->active && v->remoteNear && v->remoteNear->count(chr)) *(reinterpret_cast<uint8_t*>(chr) + kenshi::CH_everyFrame) = 1;
+        }
         if (forced) g_forcedInView.insert(chr);
         else g_forcedInView.erase(chr);
     }
@@ -1016,15 +1026,19 @@ uint8_t hk_charUpdateView(void* chr) {
 // flag is set for the duration of the call (0.3.1); the number appears off the host's screen and goes
 // to that player through hk_createLabel. Nothing else in addWound reads that flag (disassembly).
 // Since hk_charUpdateView those characters are usually in view already: counted all the same.
+// The flag was not enough (faraway test, 11 October: forced, no number made): beyond 4000 units of
+// the camera addWound skips the whole visual part before reading it (kenshi::SetFarWoundVisuals).
 using AddWoundFn = uint64_t (*)(void* medical, uint64_t a2, uint64_t a3, void* a4, void* a5, void* a6, void* a7, void* a8);
 AddWoundFn o_addWound = nullptr;
 uint64_t hk_addWound(void* medical, uint64_t a2, uint64_t a3, void* a4, void* a5, void* a6, void* a7, void* a8) {
     uint8_t* flag = nullptr;
+    uint8_t* seen = nullptr;   // the wounded one's CH_inView, when it is near a client player's characters
     if (!KenshiWorld::ClientActive() && medical) {
         auto v = KenshiWorld::View();
         if (v->active && v->remoteNear && !v->remoteNear->empty())
             if (kenshi::Character* c = kenshi::MedicalCharacter(medical); c && v->remoteNear->count(c)) {
                 uint8_t* f = reinterpret_cast<uint8_t*>(c) + kenshi::CH_inView;
+                seen = f;
                 if (*f == 0) {
                     *f = 1;
                     flag = f;
@@ -1034,7 +1048,11 @@ uint64_t hk_addWound(void* medical, uint64_t a2, uint64_t a3, void* a4, void* a5
                 }
             }
     }
+    // more than 4000 units from the host's camera, addWound skips its visual part, damage numbers
+    // included (kenshi::SetFarWoundVisuals): lifted for this call
+    const bool farVisuals = seen && kenshi::SetFarWoundVisuals(true);
     const uint64_t r = o_addWound(medical, a2, a3, a4, a5, a6, a7, a8);
+    if (farVisuals) kenshi::SetFarWoundVisuals(false);
     if (flag && *flag == 1) *flag = 0;   // as it was (the game sets it again on its next frame anyway)
     return r;
 }
@@ -1282,6 +1300,25 @@ void hk_singleAnimUpdate(void* single, float masterTime, float frameTime, bool s
     }
     o_singleAnimUpdate(single, masterTime, frameTime, sounds);
 }
+// Walking, a client's game turns each copy toward its own path (another way up the stairs of Okran's
+// Fist: 25 of 33 walkers there faced backwards while the host's faced forwards, 11 October). Apply's
+// FaceDirection ran before the game's movement update, which turned them back: the host's facing is
+// put back right after it (fights: hk_combatMove).
+using MoveUpdateFn = void (*)(void* mov, float dt);
+MoveUpdateFn o_moveUpdate = nullptr;
+void hk_moveUpdate(void* mov, float dt) {
+    o_moveUpdate(mov, dt);
+    if (!mov || !KenshiWorld::ClientActive()) return;
+    auto v = KenshiWorld::View();
+    auto it = v->facing.find(mov);
+    if (it == v->facing.end()) return;
+    const kc::Vec3& want = it->second;
+    if (want.x * want.x + want.z * want.z < 0.25f) return;
+    kenshi::FaceMovement(mov, want);
+    // the facing alone was not enough: the body's rotation (what is drawn) stayed on the client's
+    // path, 160-180 degrees off (11 October): the host's rotation, written after the update
+    if (auto o = v->orient.find(mov); o != v->orient.end()) kenshi::WriteRotation(static_cast<kenshi::Character*>(o->second.first), o->second.second);
+}
 // In a fight, a client's game turns each fighter toward its own idea of the target: the host's
 // facing replaces it.
 void hk_combatMove(void* mov, float ft, const float* pos, const float* dir, bool moving, float* repulsion, float* facingOut, bool defensive,
@@ -1340,11 +1377,21 @@ void hk_createFromPreviews(void* group) {
 using CreateBuildingFn = void* (*)(void* factory, void* data, const float* pos, void* town, void* faction, const float* rot, void* cb, void* layout,
                                    void* doorOf, void* save, void* indoors, bool invisible, bool completed, bool foliage, int floor, bool outside);
 CreateBuildingFn o_createBuilding = nullptr;
+// createBuilding nests a createBuilding for each upper floor of a building (a cabin's roof, a two-storey
+// house's floor: 4092 / 4093-TwoStorey.mod). Only the outermost call is a placement: the floors come
+// with it on every machine. Captured too, the roof went to the clients as a building of its own, built
+// on top of the cabin's own (which the floor view hides): the client stayed under a roof it never hid
+// (11 October).
+thread_local int g_createDepth = 0;
 void* hk_createBuilding(void* factory, void* data, const float* pos, void* town, void* faction, const float* rot, void* cb, void* layout,
                         void* doorOf, void* save, void* indoors, bool invisible, bool completed, bool foliage, int floor, bool outside) {
     KenshiWorld* w = TheWorld();
-    if (g_buildCapture <= 0 || g_hostCall || !w || !data || !pos || !rot)
-        return o_createBuilding(factory, data, pos, town, faction, rot, cb, layout, doorOf, save, indoors, invisible, completed, foliage, floor, outside);
+    if (g_buildCapture <= 0 || g_hostCall || g_createDepth > 0 || !w || !data || !pos || !rot) {
+        ++g_createDepth;
+        void* b = o_createBuilding(factory, data, pos, town, faction, rot, cb, layout, doorOf, save, indoors, invisible, completed, foliage, floor, outside);
+        --g_createDepth;
+        return b;
+    }
     KenshiWorld::BuildArgs a;
     a.data = data;
     a.pos = {pos[0], pos[1], pos[2]};
@@ -1359,7 +1406,9 @@ void* hk_createBuilding(void* factory, void* data, const float* pos, void* town,
         w->NoteBuildCapture(a, nullptr);
         return nullptr;
     }
+    ++g_createDepth;   // its floors, created inside this call, are not placements of their own
     void* b = o_createBuilding(factory, data, pos, town, faction, rot, cb, layout, doorOf, save, indoors, invisible, completed, foliage, floor, outside);
+    --g_createDepth;
     if (b) w->NoteBuildCapture(a, b);
     return b;
 }
@@ -1759,6 +1808,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnTrackAnimationMovement, reinterpret_cast<void*>(&hk_trackAnimMove), reinterpret_cast<void**>(&o_trackAnimMove)},
         {kenshi::FnSingleAnimUpdate, reinterpret_cast<void*>(&hk_singleAnimUpdate), reinterpret_cast<void**>(&o_singleAnimUpdate)},
         {kenshi::FnCombatMovementUpdate, reinterpret_cast<void*>(&hk_combatMove), reinterpret_cast<void**>(&o_combatMove)},
+        {kenshi::FnCharMovementUpdate, reinterpret_cast<void*>(&hk_moveUpdate), reinterpret_cast<void**>(&o_moveUpdate)},
         // ---- lot A: doors
         {kenshi::FnDoorOpen, reinterpret_cast<void*>(&doorhooks::hk_open), reinterpret_cast<void**>(&doorhooks::o_open)},
         {kenshi::FnDoorClose, reinterpret_cast<void*>(&doorhooks::hk_close), reinterpret_cast<void**>(&doorhooks::o_close)},

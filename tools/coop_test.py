@@ -14,8 +14,10 @@ import os
 import re
 import subprocess
 import sys
+import struct
 import threading
 import time
+import zlib
 
 KENSHI = r"C:\Program Files (x86)\Steam\steamapps\common\Kenshi"
 EXE = os.path.join(KENSHI, "kenshi_x64.exe")
@@ -2020,7 +2022,7 @@ def exp_facing(host, cli):
     log("FACING worst diff while running:", round(worst), "deg | client samples not really moving:", still)
 
 
-# ---- fix G5: client orders never reach the host's characters; the TÃƒÂ¢ches panel; trade windows
+# ---- fix G5: client orders never reach the host's characters; the TÃƒÆ’Ã‚Â¢ches panel; trade windows
 def exp_passive(host, cli):
     """The host's character is passive; the client orders its own character to attack an NPC: only the
     client's character engages. Then the host's selection holds the client's character too: the host's
@@ -2072,7 +2074,7 @@ def find_material(pid, name=None):
     """The building materials' item template (sid), searched by name on that machine."""
     if not name:
         return "580-gamedata.base"   # vanilla "Building Materials" (the names are translated; "construction" matched construction_goods, type 49)
-    for part in ([name] if name else []) + ["Building_Materials", "Matériaux_de_construction", "Materiaux_de_construction", "construction"]:
+    for part in ([name] if name else []) + ["Building_Materials", "MatÃ©riaux_de_construction", "Materiaux_de_construction", "construction"]:
         t = cmd(pid, f"itemtypes {part}")[1]
         log("item templates", part, ":", t[:300])
         parts = t.split()
@@ -2280,7 +2282,7 @@ def exp_construct(host, cli, kinds=("Tente", "Feu", "Coffre", "Lit", "Mur"), mat
         return
     log("money", cmd(host, "givemoney 50000"))
     for i in (own, hidx):
-        log(f"materials for squad member {i}", cmd(host, f"giveitem {mat} 40 {i}"))
+        log(f"materials for squad member {i}", cmd(host, f"giveitem {mat} 40 {i}"), "| backpack worn:", cmd(host, f"bag squad{i}")[1][:120])
     time.sleep(3)
     mh, mc = cmd(host, f"invcount all {mat}")[1], cmd(cli, f"invcount all {mat}")[1]
     check("construction : materiaux recus, memes chiffres chez le client", mh == mc and mh != "ok 0", f"hote {mh} / client {mc}")
@@ -2322,6 +2324,300 @@ def exp_construct(host, cli, kinds=("Tente", "Feu", "Coffre", "Lit", "Mur"), mat
     log("command round trips (ms, best/worst):", frames)
     rep = compare(dump(host, "h_construct_end"), dump(cli, "c_construct_end"), "construct_end")
     check("construction : inventaires identiques a la fin", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    summary()
+
+
+def path_clear_of(samples, center, radius):
+    """Closest a recorded walk came to a point (x/z), from motionrec samples [(t, (x,y,z))]."""
+    return min((math.hypot(q[0] - center[0], q[2] - center[2]) for _, q in samples), default=1e9)
+
+
+def record_walk(pids, key, seconds, label):
+    """motionrec of one character on several games at once: {pid: [(t, (x,y,z))]}."""
+    paths = {}
+    for pid in pids:
+        path = os.path.abspath(os.path.join(OUT_DIR, f"walk_{label}_{pid}.txt"))
+        if os.path.exists(path):
+            os.remove(path)
+        paths[pid] = path
+        cmd(pid, f"motionrec {seconds} 10 {path} {key}")
+    time.sleep(seconds + 1.5)
+    out = {}
+    for pid, path in paths.items():
+        ss = []
+        for _ in range(10):
+            if os.path.exists(path) and open(path, encoding="utf-8", errors="replace").read().rstrip().endswith("end"):
+                break
+            time.sleep(0.5)
+        for ln in (open(path, encoding="utf-8", errors="replace").read().splitlines() if os.path.exists(path) else []):
+            q = ln.split()
+            if len(q) >= 4 and q[0] == "m":
+                ss.append((float(q[1]), tuple(map(float, q[3].split(",")))))
+        out[pid] = ss
+    return out
+
+
+HOUSE = "772-gamedata.base"   # Vieille Maison (base game): a building with walls, a door and room inside
+
+
+def go_to_open_desert(host, check_sid=HOUSE):
+    """Every squad member (the clients' too) on open, flat, dry ground far from every town and clear of
+    rocks, everyone in god mode. Candidates on rings around squad member 0: a 3x3 grid of terrain
+    heights (80 units apart) within 8 units of each other, all dry, more than 4000 from any of the
+    game's 304 places; the flattest first; there, build mode must accept a house at the centre and 150
+    units around it (rocks and walls refuse it). True when found."""
+    log("god mode for everyone:", cmd(host, "admin god all on"))
+    t = cmd(host, "pos 0")[1].split()
+    if len(t) < 2:
+        return False
+    x0, y0, z0 = (float(v) for v in t[1].split(","))
+    n = squad_size(host)
+    known = os.path.join(OUT_DIR, "open_desert.txt")   # the spot found last time: tried first (the search takes minutes)
+    if os.path.exists(known):
+        try:
+            cx, gy, cz = map(float, open(known).read().split())
+            for i in range(n):
+                cmd(host, f"teleport {i} {cx + 12 * i:.0f} {gy + 40:.0f} {cz:.0f}")
+            time.sleep(8)
+            p = pos_xz(host, 0)
+            if p and math.hypot(p[0] - cx, p[1] - cz) < 200 and cmd(host, f"buildcheckat {check_sid} {cx:.0f} {cz + 120:.0f}")[0]:
+                SANDBOX["home"] = (cx, gy, cz)
+                log("open desert (known spot):", (round(cx), round(gy), round(cz)))
+                return True
+        except (ValueError, OSError):
+            pass
+    towns = [tw["pos"] for tw in town_list(host)]
+    cands = []
+    for r in (12000, 20000, 30000, 45000, 60000):
+        for k in range(24):
+            a = k * math.pi / 12
+            cx, cz = x0 + r * math.cos(a), z0 + r * math.sin(a)
+            if any(math.hypot(cx - p[0], cz - p[2]) < 4000 for p in towns):
+                continue
+            hs = [ground_at(host, cx + 80 * i, cz + 80 * j) for i in (-1, 0, 1) for j in (-1, 0, 1)]
+            if any(g is None or g[2] != "land" for g in hs):
+                continue
+            heights = [g[0] for g in hs]
+            if max(heights) - min(heights) <= 8.0:
+                cands.append((max(heights) - min(heights), cx, cz, sum(heights) / len(heights)))
+    log(f"open ground: {len(cands)} flat candidates")
+    for flat, cx, cz, gy in sorted(cands)[:8]:
+        log(f"open ground candidate {cx:.0f},{cz:.0f} (height {gy:.0f}, flat within {flat:.1f})")
+        for i in range(n):
+            cmd(host, f"teleport {i} {cx + 12 * i:.0f} {gy + 40:.0f} {cz:.0f}")
+        time.sleep(8)
+        clear = all(cmd(host, f"buildcheckat {check_sid} {cx + dx:.0f} {cz + dz:.0f}")[0]
+                    for dx, dz in ((0, 120), (150, 120), (-150, 120), (0, 270), (0, -120)))
+        p = pos_xz(host, 0)
+        if clear and p and math.hypot(p[0] - cx, p[1] - cz) < 200:
+            SANDBOX["home"] = (cx, gy, cz)
+            log("open desert:", (round(cx), round(gy), round(cz)))
+            try:
+                open(known, "w").write(f"{cx:.0f} {gy:.0f} {cz:.0f}")
+            except OSError:
+                pass
+            return True
+        log("   not clear there (rocks, a wall or a building): next")
+    return False
+
+
+OUTPOST = "727-gamedata.base"    # Avant-poste s-III: a player building (big, no door: not to walk in)
+CABIN = "4092-TwoStorey.mod"      # Petite Cabane: a small player house with a door; its roof is its floor 1 (4093)
+STORAGE = "1459-gamedata.base"    # Coffre Stock Général: a player's storage chest
+
+
+def give_materials(host, mat, idxs, per=20):
+    """Building materials to those squad members, as much as they carry (a trader's backpack first:
+    in this game's data the materials do not stack, one per slot)."""
+    for i in idxs:
+        cmd(host, f"giveitem {TRADER_BACKPACK} 1 {i}")
+        for _ in range(3):
+            if not cmd(host, f"giveitem {mat} {per} {i}")[0]:
+                break
+    return cmd(host, f"invcount all {mat}")[1]
+
+
+def build_by_everyone(host, cli, sid, site, own_c, host_idxs, mat, label, wait=30):
+    """Every builder works on that site, the players' own way (the client orders its character, the
+    host its own); materials topped up when the work stalls. (host site, client site)."""
+    log(f"[{label}] client builds:", cmd(cli, f"buildreq {own_c} 2 {sid}"))
+    for i in host_idxs:
+        log(f"[{label}] host's member {i} builds:", cmd(host, f"buildreq {i} 2 {sid}"))
+    t0, last, stall = time.time(), -1.0, time.time()
+    while time.time() - t0 < wait:
+        time.sleep(8)
+        h, c = site_at(host, sid, site, 0), site_at(cli, sid, site, 0)
+        log(f"[{label}] t={int(time.time() - t0)}s host {h and h[1]} client {c and c[1]} | materials {cmd(host, f'invcount all {mat}')[1]}")
+        if h and h[2] & 1:
+            break
+        if h and h[1] > last + 0.05:
+            last, stall = h[1], time.time()
+        elif time.time() - stall > 40:   # out of materials or idle: more materials, orders again
+            log(f"[{label}] stalled: materials {give_materials(host, mat, host_idxs, 10)}; orders again")
+            cmd(cli, f"buildreq {own_c} 2 {sid}")
+            for i in host_idxs:
+                cmd(host, f"buildreq {i} 2 {sid}")
+            stall = time.time()
+    # the players' own building work is checked for `wait` seconds (progress the same on both
+    # sides); then the site is finished at once (a big building takes many minutes)
+    h, c = site_at(host, sid, site, 0), site_at(cli, sid, site, 0)
+    if h and not h[2] & 1:
+        log(f"[{label}] progress host {h[1]} client {c and c[1]}: finished at once now", cmd(host, f"buildprogress {sid} 100000"))
+    time.sleep(3)
+    return site_at(host, sid, site, 0), site_at(cli, sid, site, 0)
+
+
+def new_site(host, sid, before, timeout=10):
+    for _ in range(int(timeout * 2)):
+        time.sleep(0.5)
+        new = [x for x in site_list(host, sid, 0, 2500) if x[0] not in before]
+        if new:
+            return new[0][0]
+    return None
+
+
+def exp_buildfull(host, cli):
+    """Buildings for real, the players' way, in the open desert, everyone in god mode: the client places
+    an outpost (a real player building) that every character builds with materials in their hands;
+    the host a storage chest; then the client's character walks in (the game knows it is inside on
+    both sides, the client's floor view follows it: roof gone, screenshot), a research bench placed
+    inside by the client and worked by its character, the chest filled by the client and emptied by
+    the host, and each one dismantles the other's building."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    own_c = own_index(cli)
+    n = squad_size(host)
+    host_idxs = [i for i in range(n) if i != own]
+    hidx = host_idxs[0]
+    mat = find_material(host)
+    shots = os.path.join(OUT_DIR, "buildfull")
+    os.makedirs(shots, exist_ok=True)
+    check("batiments+ : desert degage, tout le monde en mode dieu", go_to_open_desert(host, CABIN))
+    log("money", cmd(host, "givemoney 50000"))
+    log("materials carried:", give_materials(host, mat, list(range(n))))
+    cmd(cli, f"camto {own_c}")
+    # 1. the client's outpost, built by everyone
+    before = {x[0] for x in site_list(host, CABIN, 0, 2500)}
+    log("client places the cabin:", place_valid(cli, CABIN, own_c, 0, 90))
+    site = new_site(host, CABIN, before)
+    check("batiments+ : cabane du client pose chez l'hote", site is not None)
+    if not site:
+        summary()
+        return
+    time.sleep(2)
+    check("batiments+ : et chez le client", site_at(cli, CABIN, site, 0) is not None)
+    h, c = build_by_everyone(host, cli, CABIN, site, own_c, host_idxs, mat, "cabane")
+    check("batiments+ : cabane termine chez l'hote", bool(h and h[2] & 1), h)
+    check("batiments+ : cabane termine pareil chez le client", bool(h and c and h[2] == c[2]), f"{h} / {c}")
+    m = (cmd(host, f"invcount all {mat}")[1], cmd(cli, f"invcount all {mat}")[1])
+    check("batiments+ : memes materiaux des deux cotes", m[0] == m[1], m)
+    cmd(cli, f"camto {own_c}")
+    time.sleep(2)
+    grab_window(cli, os.path.join(shots, "client_outpost.png"))
+    grab_window(host, os.path.join(shots, "host_outpost.png"))
+    # 2. the host's storage chest, built by the host's characters
+    before = {x[0] for x in site_list(host, STORAGE, 0, 2500)}
+    log("host places a storage chest:", place_valid(host, STORAGE, hidx, -70, 0))
+    chest = new_site(host, STORAGE, before)
+    if chest:
+        hc, cc = build_by_everyone(host, cli, STORAGE, chest, own_c, host_idxs, mat, "coffre")
+        check("batiments+ : coffre de l'hote termine des deux cotes", bool(hc and cc and hc[2] & 1 and cc[2] & 1), f"{hc} / {cc}")
+    else:
+        check("batiments+ : coffre de l'hote pose", False)
+    # 3. the client's character walks into the outpost
+    if h and h[2] & 1:
+        for _ in range(4):   # through the door: a few tries until the game has it inside
+            log("client walks in:", cmd(cli, f"move {own_c} {site[0]:.0f} {site[2]:.0f}"))
+            time.sleep(10)
+            if "TwoStorey" in cmd(cli, f"indoors {own_c}")[1]:
+                break
+        ph, pc = where_vec(host, own), where_vec(cli, own_c)
+        fh, fc = cmd(host, f"floor {own}")[1], cmd(cli, f"floor {own_c}")[1]
+        view = cmd(cli, "floorview")[1]
+        log(f"inside? host {ph} floor {fh} | client {pc} floor {fc} | view {view}")
+        check("batiments+ : le perso du client est entre (pres du centre, chez l'hote)", bool(ph and math.hypot(ph[0] - site[0], ph[2] - site[2]) < 25), ph)
+        check("batiments+ : meme position chez le client", bool(ph and pc and math.dist(ph, pc) < 3), f"{ph} / {pc}")
+
+        def grp(t):
+            return int(t.split()[1]) if t.startswith("ok") else -1
+        check("batiments+ : le jeu le sait dedans (etage de batiment) chez l'hote", grp(fh) >= 9, fh)
+        check("batiments+ : et chez le client", grp(fc) >= 9, fc)
+        ih, ic = cmd(host, f"indoors {own}")[1], cmd(cli, f"indoors {own_c}")[1]
+        check("batiments+ : dans la cabane des deux cotes (indoors)", "TwoStorey" in ih and "TwoStorey" in ic, f"{ih} / {ic}")
+        check("batiments+ : la vue des etages du client suit son perso", "focus=none" not in view and "seen=-1" not in view, view)
+        grab_window(cli, os.path.join(shots, "client_inside.png"))
+        # 4. a research bench inside, placed by the client, worked by its character
+        rb = None
+        for dx, dz in ((0, 0), (8, 0), (0, 8), (-8, 0)):
+            before = {x[0] for x in site_list(host, RESEARCH_BENCH, 0, 2500)}
+            r = cmd(cli, f"furnplace {RESEARCH_BENCH} Cabane {dx} {dz}")
+            log(f"client places a research bench inside ({dx},{dz}):", r)
+            rb = new_site(host, RESEARCH_BENCH, before) if r[0] else None
+            if rb:
+                break
+        if rb:
+            rh, rc = build_by_everyone(host, cli, RESEARCH_BENCH, rb, own_c, [], mat, "etabli")
+            check("batiments+ : etabli de recherche termine des deux cotes", bool(rh and rc and rh[2] & 1 and rc[2] & 1), f"{rh} / {rc}")
+            for what in ("Livre", "Book"):
+                cmd(host, f"machinegive {RESEARCH_BENCH} {what} 10")
+            picks = [x.split("=")[0] for x in cmd(cli, "researchpick 3")[1].split()[1:]]
+            if picks:
+                log("client queues", picks[0], cmd(cli, f"researchreq queue {picks[0]}"))
+            log("client works the bench:", cmd(cli, f"workreq {own_c} {RESEARCH_BENCH}"))
+            near = None
+            for _ in range(10):
+                time.sleep(2)
+                ph = where_vec(host, own)
+                near = ph and math.hypot(ph[0] - rb[0], ph[2] - rb[2])
+                if near is not None and near < 12:
+                    break
+            log("client's character to the bench:", near, cmd(host, f"charstate {own}")[1][:100])
+            check("batiments+ : le perso du client va a l'etabli (dedans)", near is not None and near < 12, near)
+        else:
+            check("batiments+ : etabli pose dedans", False)
+    # 5. the chest: filled by the client, emptied by the host
+    if chest:
+        c0 = (cmd(host, "contcount Coffre")[1], cmd(cli, "contcount Coffre")[1])
+        log("client opens the chest:", cmd(cli, f"containerreq {own_c} Coffre"))
+        time.sleep(8)
+        log("client puts building materials in:", cmd(cli, f"conput {own_c} Coffre {mat}"))
+        time.sleep(4)
+        c1 = (cmd(host, "contcount Coffre")[1], cmd(cli, "contcount Coffre")[1])
+        log(f"chest {c0} -> {c1}")
+        check("batiments+ : coffre rempli par le client, vu chez l'hote", c1[0] != c0[0], f"{c0} -> {c1}")
+        check("batiments+ : meme contenu des deux cotes", c1[0] == c1[1], c1)
+        cmd(cli, "closewindows")
+        log("host opens it:", cmd(host, f"containerreq {hidx} Coffre"))
+        time.sleep(8)
+        log("host takes:", cmd(host, f"contake {hidx} Coffre"))
+        time.sleep(4)
+        c2 = (cmd(host, "contcount Coffre")[1], cmd(cli, "contcount Coffre")[1])
+        check("batiments+ : l'hote le reprend, vu chez le client", c2[0] == c0[0] and c2[0] == c2[1], f"{c1} -> {c2}")
+        cmd(host, "closewindows")
+    # 6. each one dismantles the other's building
+    for pid, idx, sid, pos, label in ((host, hidx, CABIN, site, "l'hote demonte la cabane du client"),
+                                      (cli, own_c, STORAGE, chest, "le client demonte le coffre de l'hote")):
+        if not pos:
+            continue
+        log(f"[{label}] confirm:", cmd(pid, f"builddismantle {sid} {idx}"))
+        time.sleep(1.5)
+        log(f"[{label}] dismantle order:", cmd(pid, f"buildreq {idx} 96 {sid}"))
+        gone_h = gone_c = False
+        for _ in range(90):
+            time.sleep(2)
+            gone_h, gone_c = site_at(host, sid, pos, 0) is None, site_at(cli, sid, pos, 0) is None
+            if gone_h and gone_c:
+                break
+        time.sleep(3)
+        m = (cmd(host, f"invcount all {mat}")[1], cmd(cli, f"invcount all {mat}")[1])
+        check(f"batiments+ : {label} : disparu chez l'hote", gone_h)
+        check(f"batiments+ : {label} : disparu chez le client", gone_c)
+        check(f"batiments+ : {label} : memes materiaux ensuite", m[0] == m[1], m)
+    rep = compare(dump(host, "h_buildfull_end"), dump(cli, "c_buildfull_end"), "buildfull_end")
+    check("batiments+ : inventaires identiques a la fin", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    log("god mode off:", cmd(host, "admin god all off"))
     summary()
 
 
@@ -2874,7 +3170,7 @@ def far_zone_sync(players, round_label, rounds, gap):
                 errs.append(e)
                 if e > (FAR_DOWN_TOL if down else FAR_POS_TOL):
                     dy = cv["pos"][1] - near[k]["pos"][1]
-                    off.append((k, round(e, 1), "a terre" if down else "debout", f"dy {dy:+.1f}", f"vue {near[k].get('inview', '?')}/{cv.get('inview', '?')}",
+                    off.append((k, round(e, 1), "a terre" if down else "debout", f"dy {dy:+.1f}", f"vue {near[k].get('inview', '?')}/{cv.get('inview', '?')}", f"etage {near[k].get('floor', '?')}/{cv.get('floor', '?')}",
                                 f"action {near[k].get('action', '?')}/{cv.get('action', '?')}", f"lit {near[k].get('in', '?')}/{cv.get('in', '?')}"))
                 vd = far_vitals_diff(near[k], cv)
                 if vd:
@@ -2930,13 +3226,17 @@ def far_talk(p):
     # thieves and sentinels of the first run had no line for "talk to me" (the host's own start, when
     # the game's never came, said "the NPC has nothing to say" for every one of them)
     shop = far_merchant(p)
-    targets = ([f"name:{shop}"] if shop else []) + [str(k) for k in range(3)]
+    # many town NPCs have no line for "talk to me" (as in solo: the character walks there, nothing
+    # opens; the host's log says "the NPC has nothing to say"): up to six of the nearest are tried
+    targets = ([f"name:{shop}"] if shop else []) + [str(k) for k in range(6)]
+    tried = set()
     for k in targets:
         r = cmd(p.cli, f"talkto {p.own_c} {k}")
         p.log(f"[dialogue {name}] client talks to {k}:", r)
-        if not r[0]:
+        if not r[0] or r[1] in tried:
             continue
-        d = far_wait_dialog(p, True, 45)
+        tried.add(r[1])
+        d = far_wait_dialog(p, True, 12)
         if "open=1" in d:
             who = k
             break
@@ -2974,7 +3274,7 @@ def far_motion_step(p):
         if len(cands_m) >= 2:
             break
         time.sleep(3)
-    walkers = [k for _, k in cands_m[:5]]
+    walkers = [k for _, k in cands_m[:15]]
     if p.own_key:
         p.log("client's character walks too:", cmd(p.cli, f"moverel {p.own_c} 160 60"))
         walkers.append(p.own_key)
@@ -3115,60 +3415,73 @@ def far_ground(p):
             f"hote {n0_h} -> {n1_h} / client {n0_c} -> {n1_c}")
 
 
+FAR_FIGHT_BEAST = "3979-gamedata.base"   # Bonedog: fights back (a copied town NPC fled at 80 units/s or sat down)
+
+
 def far_fight_and_loot(p):
-    """A fight next to the client's character (the host's camera at home): the NPC hurt on the host,
-    the same wounds on the client, damage numbers shown there; then the NPC knocked out and looted the
-    right click's way; then a goat killed and looted."""
+    """A fight next to the client's character (the host's camera at home), ordered by the client the
+    right click's way against a beast that fights back: hurt on the host, the same wounds on the
+    client, damage numbers shown there; then an NPC knocked out and looted the right click's way; then
+    a goat killed and looted."""
     host, cli = p.host, p.cli
     f0_h, f0_c = far_floaters(host), far_floaters(cli)
-    npc = None
-    sp = cmd(host, f"spawnnpc 10 6 {p.own_h}")
-    p.log("host spawns an NPC by the client's character:", sp)
+    beast = None
+    sp = cmd(host, f"spawncreature {FAR_FIGHT_BEAST} 30 10 {p.own_h}")
+    p.log("host spawns a bonedog by the client's character:", sp)
     if sp[0]:
-        npc = sp[1].split()[1]
+        beast = sp[1].split()[1]
         time.sleep(3)
-        pn, pm = where_vec(host, npc), p.me()
+        pn, pm = where_vec(host, beast), p.me()
         if pn and pm and abs(pn[1] - pm[1]) >= 15:
-            # the client's character stands on a roof or a wall (where the teleport put it) and the
-            # NPC fell to the ground (first run: 73 units below, five spots in a row): the character
-            # goes down next to it, the NPC stays where it fell
+            # the client's character stands on a roof or a wall (where the teleport put it): it goes
+            # down next to the beast
             p.log(f"   on another level ({pn} / {pm}): the client's character goes next to it",
                   cmd(host, f"teleport {p.own_h} {pn[0] + 8:.0f} {pn[1] + 5:.0f} {pn[2] + 8:.0f}"))
             time.sleep(3)
             pm = p.me()
-        p.check("combat : PNJ cree pres du perso du client, au meme niveau", bool(pn and pm and abs(pn[1] - pm[1]) < 15), f"{pn} / {pm}")
+        p.check("combat : bete creee pres du perso du client, au meme niveau", bool(pn and pm and abs(pn[1] - pm[1]) < 15), f"{pn} / {pm}")
     else:
-        p.check("combat : PNJ cree pres du perso du client", False, sp)
-    if not npc:
-        return
-    v0 = dump(host, f"h_far_{p.tag}_npc0", FAR_ZONE)["char"].get(npc, {})
-    p.log("fight:", cmd(host, f"fight {p.own_h} {npc}"))
-    hurt = False
-    for _ in range(10):
-        time.sleep(4)
-        hv = dump(host, f"h_far_{p.tag}_fight", FAR_ZONE)["char"].get(npc, {})
-        if hv and far_damaged(hv, v0 or None):
-            hurt = True
-            if far_floaters(cli).get("shown", 0) > f0_c.get("shown", 0):
-                break
-        elif hv and hv.get("cmode", "0") == "0":
-            p.log("   combat dropped: fight again", cmd(host, f"fight {p.own_h} {npc}"))
-    time.sleep(3)
-    hv = dump(host, f"h_far_{p.tag}_fight_end", FAR_ZONE)["char"].get(npc, {})
-    p.check("combat : le PNJ est blesse chez l'hote", hurt or (hv and far_damaged(hv, v0 or None)), hv.get("parts", "")[:120])
-    diffs = []
-    for _ in range(4):   # unpaused (the other players go on): the same once the last vitals arrived
-        h, c = dump(host, f"h_far_{p.tag}_fight_end", FAR_ZONE), dump(cli, f"c_far_{p.tag}_fight_end", FAR_ZONE)
-        diffs = [(k, far_vitals_diff(h["char"][k], c["char"][k])) for k in (npc, p.own_key) if k in h["char"] and k in c["char"]]
-        if npc in c["char"] and all(not d for _, d in diffs):
-            break
+        p.check("combat : bete creee pres du perso du client", False, sp)
+    if beast:
+        v0 = dump(host, f"h_far_{p.tag}_npc0", FAR_ZONE)["char"].get(beast, {})
+        p.log("client orders the attack (right click):", cmd(cli, f"attackreq {p.own_c} {beast}"))
+        hurt = False
+        for i in range(12):
+            time.sleep(3)
+            hv = dump(host, f"h_far_{p.tag}_fight", FAR_ZONE)["char"].get(beast, {})
+            if hv and far_damaged(hv, v0 or None):
+                hurt = True
+                if far_floaters(cli).get("shown", 0) > f0_c.get("shown", 0):
+                    break
+            elif i in (3, 7):
+                p.log("   not hurt yet: attack order again", cmd(cli, f"attackreq {p.own_c} {beast}"))
         time.sleep(2)
-    p.check("combat : memes vitaux et blessures chez le client (sang, etat, membres)",
-            npc in c["char"] and all(not d for _, d in diffs), diffs or "PNJ absent chez le client")
-    f1_h, f1_c = far_floaters(host), far_floaters(cli)
-    p.log("damage numbers: host", f0_h, "->", f1_h, "| client", f0_c, "->", f1_c)
-    p.check("combat : l'hote fait les chiffres de degats hors de sa camera", f1_h.get("forced", 0) > f0_h.get("forced", 0), f"{f0_h} -> {f1_h}")
-    p.check("combat : les chiffres de degats arrivent au client", f1_c.get("shown", 0) > f0_c.get("shown", 0), f"{f0_c} -> {f1_c}")
+        hv = dump(host, f"h_far_{p.tag}_fight_end", FAR_ZONE)["char"].get(beast, {})
+        p.check("combat : la bete est blessee chez l'hote", hurt or (hv and far_damaged(hv, v0 or None)), hv.get("parts", "")[:120])
+        diffs, c = [], {"char": {}}
+        for _ in range(4):   # unpaused (the other players go on): the same once the last vitals arrived
+            h, c = dump(host, f"h_far_{p.tag}_fight_end", FAR_ZONE), dump(cli, f"c_far_{p.tag}_fight_end", FAR_ZONE)
+            diffs = [(k, far_vitals_diff(h["char"][k], c["char"][k])) for k in (beast, p.own_key) if k in h["char"] and k in c["char"]]
+            if beast in c["char"] and all(not d for _, d in diffs):
+                break
+            time.sleep(2)
+        p.check("combat : memes vitaux et blessures chez le client (sang, etat, membres)",
+                beast in c["char"] and all(not d for _, d in diffs), diffs or "bete absente chez le client")
+        f1_h, f1_c = far_floaters(host), far_floaters(cli)
+        p.log("damage numbers: host", f0_h, "->", f1_h, "| client", f0_c, "->", f1_c)
+        p.check("combat : l'hote fait les chiffres de degats hors de sa camera", f1_h.get("made", 0) > f0_h.get("made", 0), f"{f0_h} -> {f1_h}")
+        p.check("combat : les chiffres de degats arrivent au client", f1_c.get("shown", 0) > f0_c.get("shown", 0), f"{f0_c} -> {f1_c}")
+        p.log("the bonedog dies:", cmd(host, f"kill {beast}"))
+        time.sleep(2)
+    npc = None
+    sp = cmd(host, f"spawnnpc 10 6 {p.own_h}")
+    p.log("host spawns an NPC to loot by the client's character:", sp)
+    if sp[0]:
+        npc = sp[1].split()[1]
+        time.sleep(2)
+    if not npc:
+        p.check("fouille : PNJ cree pres du perso du client", False, sp)
+        return
     # looting there: the NPC knocked out, the client loots it the right click's way
     st = cmd(host, f"npcstate {npc}")[1]
     if "down=0" in st:
@@ -3208,7 +3521,13 @@ def far_fight_and_loot(p):
                 if ok_open:
                     break
         p.check(f"fouille : la fenetre s'ouvre chez le client ({how})", ok_open, stats)
-        p.log("client takes one item:", cmd(cli, f"invmove {body} squad{p.own_c} 0"))
+        # the first item may not fit (a full backpack after the trade and the ore: "err no room"):
+        # the next one, as a player would
+        for which in range(6):
+            took = cmd(cli, f"invmove {body} squad{p.own_c} {which}")
+            p.log(f"client takes item {which}:", took)
+            if took[0] or "no room" not in took[1]:
+                break
         time.sleep(4)
         h, c = dump(host, f"h_far_{p.tag}_looted", FAR_ZONE), dump(cli, f"c_far_{p.tag}_looted", FAR_ZONE)
         inv1 = h["char"].get(body, {}).get("inv")
@@ -3358,7 +3677,178 @@ def exp_faraway(host, clis):
     for p in players:
         st = status(p.cli)
         p.check("le client est toujours connecte", st.get("state") == "connected", st)
+        p.log("client corrections:", cmd(p.cli, "robuststats")[1])
+        p.log("frame time (echo round trip, ms) client:", frame_latency(p.cli), "host:", frame_latency(host))
     log("host god mode off:", cmd(host, "admin god all off"))
+    summary()
+
+
+def arrival_facing(p, tag, seconds=20):
+    """Right after the client's character arrived somewhere: every second, how many walkers around it
+    are drawn facing backwards on the client (rotation against the way they move) and how far its
+    copies stand from the host's latest position."""
+    def V(x):
+        return list(map(float, x.split(","))) if isinstance(x, str) else list(x)
+
+    def fw(q):
+        w, x, y, z = V(q)
+        return 2 * (x * z + w * y), 1 - 2 * (x * x + y * y)
+
+    def ang(d, f):
+        n = math.hypot(*d) * math.hypot(*f)
+        return -1 if n < 1e-6 else math.degrees(math.acos(max(-1, min(1, (d[0] * f[0] + d[1] * f[1]) / n))))
+    t0 = time.time()
+    worst = 0
+    while time.time() - t0 < seconds:
+        a = dump(p.cli, f"c_arr_{tag}_a", 2500)["char"]
+        time.sleep(0.3)
+        b = dump(p.cli, f"c_arr_{tag}_b", 2500)["char"]
+        n = back = 0
+        for k, v in b.items():
+            if k not in a or "pos" not in v or "pos" not in a[k]:
+                continue
+            p0, p1 = V(a[k]["pos"]), V(v["pos"])
+            d = (p1[0] - p0[0], p1[2] - p0[2])
+            if math.hypot(*d) < 1.5:
+                continue
+            n += 1
+            back += ang(d, fw(v.get("rot", "1,0,0,0"))) > 100
+        worst = max(worst, back / n if n else 0)
+        log(f"[{tag}] t+{time.time() - t0:4.1f}s client: {n} walkers, {back} drawn backwards")
+        time.sleep(0.4)
+    return worst
+
+
+def exp_farprobe(host, clis, talk=True):
+    """Short diagnosis of faraway's talk and fight (one client): its character in a far town, the host's
+    camera at home. It talks to the shopkeeper; then the client orders an attack on an NPC spawned by it
+    (the right click's way), and the host's state of both is logged every second; then the same with the
+    host's camera on the client's character (does the fight need the host's camera?)."""
+    cli = clis[0] if isinstance(clis, (list, tuple)) else clis
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    p = FarPlayer(host, cli, 0)
+    h0 = dump(host, "h_probe_home", 3000)
+    keys_h = sorted(h0["squad"], key=lambda k: (int(k.split(":")[3]), int(k.split(":")[4])))
+    p.own_key = keys_h[p.own_h] if p.own_h < len(keys_h) else None
+    hidx = (own_indices(host) or [0])[0]
+    home = where_vec(host, hidx)
+    FAR_HOME[0] = home
+    log("god mode:", cmd(host, "admin god all on"), "| host camera home:", cmd(host, f"camto {hidx}"))
+    cands = far_town_candidates(town_list(host), home)
+    far_go(p, cands, "ville", True, [], threading.Lock())
+    if not p.town:
+        check("probe : une ville loin", False)
+        summary()
+        return
+    arrival_facing(p, "arrivee")
+    # a second town, measured from the teleport itself (the player saw everyone moonwalk for a few
+    # seconds after a teleport, then turn right)
+    other = next((t_ for t_ in cands if t_["name"] != p.town["name"] and xz(t_["pos"], p.town["pos"]) > 15000), None)
+    if other:
+        log("teleport to", other["name"], far_teleport(host, p.own_h, other["pos"]))
+        arrival_facing(p, "teleport", 30)
+    time.sleep(5)
+    pass
+
+    def fight_motion(tag, keys):
+        """Both fighters sampled at 20 Hz for 8 s on the host and on the client at once: steps,
+        jumps (more than 6 units in 0.05 s) and back-and-forth (a step against the previous one)."""
+        paths = {}
+        for who, pid in (("host", host), ("client", cli)):
+            path = os.path.abspath(os.path.join(OUT_DIR, f"probe_{tag}_{who}_fightmotion.txt"))
+            if os.path.exists(path):
+                os.remove(path)
+            paths[who] = path
+            cmd(pid, f"motionrec 8 20 {path} {' '.join(k for k in keys if k)}")
+        time.sleep(9.5)
+        for who, path in paths.items():
+            per = {}
+            for _ in range(10):
+                if os.path.exists(path) and open(path, encoding="utf-8", errors="replace").read().rstrip().endswith("end"):
+                    break
+                time.sleep(0.5)
+            for ln in (open(path, encoding="utf-8", errors="replace").read().splitlines() if os.path.exists(path) else []):
+                q = ln.split()
+                if len(q) >= 8 and q[0] == "m":
+                    per.setdefault(q[2], []).append((float(q[1]), tuple(map(float, q[3].split(",")))))
+            for k, ss in per.items():
+                steps = [math.dist(a[1], b[1]) for a, b in zip(ss, ss[1:])]
+                jumps = [round(x, 1) for x in steps if x > 6.0]
+                rev = 0
+                for (a, b, c) in zip(ss, ss[1:], ss[2:]):
+                    v1 = (b[1][0] - a[1][0], b[1][2] - a[1][2])
+                    v2 = (c[1][0] - b[1][0], c[1][2] - b[1][2])
+                    if math.hypot(*v1) > 0.3 and math.hypot(*v2) > 0.3 and v1[0] * v2[0] + v1[1] * v2[1] < 0:
+                        rev += 1
+                dy = [round(b[1][1] - a[1][1], 1) for a, b in zip(ss, ss[1:]) if abs(b[1][1] - a[1][1]) > 2.0]
+                log(f"[{tag}] {who} {k[-10:]}: {len(ss)} samples, mean step {sum(steps) / max(1, len(steps)):.2f}, max {max(steps or [0]):.1f}, "
+                    f"jumps>6 {len(jumps)} {jumps[:8]}, back-and-forth {rev}, height jumps {dy[:8]}")
+
+    def fight_round(tag):
+        sp = cmd(host, f"spawncreature {FAR_FIGHT_BEAST} 30 10 {p.own_h}")
+        log(f"[{tag}] spawn:", sp)
+        if not sp[0]:
+            return False
+        npc = sp[1].split()[1]
+        time.sleep(3)
+        log(f"[{tag}] client attack order:", cmd(cli, f"attackreq {p.own_c} {npc}"))
+        time.sleep(2)
+        fight_motion(tag, [npc, p.own_key])
+        hurt, v0 = False, None
+        for i in range(25):
+            time.sleep(1)
+            h = dump(host, f"h_probe_{tag}", FAR_ZONE)["char"]
+            nv, pv = h.get(npc, {}), h.get(p.own_key, {})
+            v0 = v0 or nv
+            if i % 3 == 0 or not nv:
+                log(f"[{tag}] t={i + 1}s npc cmode={nv.get('cmode')} action={nv.get('action')} inview={nv.get('inview')} speed={nv.get('speed')} "
+                    f"parts={nv.get('parts', '')[:40]} | pc cmode={pv.get('cmode')} action={pv.get('action')} inview={pv.get('inview')} "
+                    f"speed={pv.get('speed')} combat={pv.get('combat')} d={round(dist(nv['pos'], pv['pos'])) if 'pos' in nv and 'pos' in pv else '?'} "
+                    f"| host combat: {cmd(host, f'combat {p.own_h}')[1]}")
+            if nv and far_damaged(nv, v0):
+                hurt = True
+                break
+        log(f"[{tag}] floaters host", far_floaters(host), "client", far_floaters(cli))
+        cmd(host, f"kill {npc}")
+        return hurt
+
+    def talk_round(tag, names):
+        """The same town NPCs each round: does a conversation open? (names from the first round)"""
+        got = {}
+        for nm in names:
+            r = cmd(cli, f"talkto {p.own_c} name:{nm}")
+            d = far_wait_dialog(p, True, 12)
+            got[nm] = "open=1" in d
+            log(f"[{tag}] talk to {nm}: {r} -> {'OPEN' if got[nm] else 'nothing'}")
+            if got[nm]:
+                cmd(cli, "answer leave")
+                far_wait_dialog(p, False, 10)
+        return got
+
+    m = cmd(host, f"merchants {p.own_h}")[1]
+    names = []
+    for nm in re.findall(r" ([^()\[\]]+?)\((\d+)\)", m):
+        n = nm[0].strip().replace(" ", "_")
+        if n not in names:
+            names.append(n)
+    names = names[:4]
+    log("NPCs to talk to each round:", names)
+    rounds = [("loin1", hidx), ("camera", p.own_h)]
+    for tag, cam in rounds:
+        log(f"[{tag}] host camera on squad member {cam}:", cmd(host, f"camto {cam}"))
+        time.sleep(4)
+        got = talk_round(tag, names) if talk else {"(sans dialogue)": True}
+        cmd(cli, "animstats")
+        time.sleep(10)
+        st = cmd(cli, "animstats")[1].split()
+        log(f"[{tag}] client animation clock: {st[1]} catch-ups over {st[2]} checks in 10 s (NPCs walking around)")
+        hurt = fight_round(tag)
+        check(f"probe [{tag}] : au moins une conversation s'ouvre", any(got.values()), got)
+        check(f"probe [{tag}] : combat ordonne par le client, la bete est blessee", hurt)
+    cmd(host, f"camto {hidx}")
+    log("god mode off:", cmd(host, "admin god all off"))
     summary()
 
 
@@ -3443,7 +3933,7 @@ def exp_placevalid(host, cli, kinds=("Tente", "Feu", "Coffre", "Lit", "Mur")):
 
 def exp_jobs(host, cli):
     """The client gives its character a job (follow another squad member), then removes it from its
-    TÃƒÂ¢ches panel (the cross): the job is gone on the host too and does not come back on the client."""
+    TÃƒÆ’Ã‚Â¢ches panel (the cross): the job is gone on the host too and does not come back on the client."""
     time.sleep(6)
     cmd(cli, "editdone")
     time.sleep(3)
@@ -4166,6 +4656,107 @@ def exp_missing(host, cli, minutes=5):
         time.sleep(10)
     check("PNJ manquants : le compte redescend", seen[-1] <= max(2, min(seen)), seen[-6:])
     summary()
+
+
+def exp_floorview(host, cli):
+    """The client player's own character goes up a floor in a town building and down again: on the
+    client the floor view (which floors and roofs show) follows it by itself (PlayerInterface focus,
+    the floor seen and the floor shown). Then the host plays at x2 and x3: the client's speed buttons
+    show it (screenshots with --keep: test_out/floorview_*.png)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own_h, own_c = own_index(host), own_index(cli)
+    log("client camera on its character:", cmd(cli, f"camto {own_c}"))
+    b = cmd(host, f"buildingsnear {own_h} 4000")
+    log("buildings around:", b[1][:300])
+    found = None
+    for item in b[1].split()[2:] if b[0] else []:
+        sid, pos = item.split("|")
+        x, y, z = map(float, pos.split(","))
+        cmd(host, f"teleport {own_h} {x:.0f} {y + 5:.0f} {z:.0f}")
+        time.sleep(2)
+        r = cmd(host, f"floor {own_h} 10")
+        time.sleep(1.5)
+        if cmd(host, f"floor {own_h}")[1] == "ok 10":
+            found = (sid, x, y, z)
+            break
+    log("a building with an upper floor:", found)
+    check("etages : un batiment a etage trouve, le perso du client y est monte (hote)", found is not None)
+    if found:
+        c = h = None
+        for _ in range(16):
+            time.sleep(0.5)
+            c, v = cmd(cli, f"floor {own_c}")[1], cmd(cli, "floorview")[1]
+            if c == "ok 10" and "seen=1" in v:
+                break
+        log("client after going up:", c, "|", v)
+        check("etages : chez le client, son perso est a l'etage", c == "ok 10", c)
+        check("etages : la vue des etages suit son perso (etage 1 vu)", "seen=1" in v and "focus=none" not in v, v)
+        shown_up = re.search(r"shown=(-?\d+)", v)
+        cmd(host, f"floor {own_h} 9")
+        for _ in range(16):
+            time.sleep(0.5)
+            c, v2 = cmd(cli, f"floor {own_c}")[1], cmd(cli, "floorview")[1]
+            if c == "ok 9" and "seen=0" in v2:
+                break
+        log("client after going down:", c, "|", v2)
+        check("etages : redescendu, la vue revient au rez-de-chaussee", "seen=0" in v2, v2)
+        shown_down = re.search(r"shown=(-?\d+)", v2)
+        check("etages : l'etage affiche change avec lui", bool(shown_up and shown_down and shown_up.group(1) != shown_down.group(1)),
+              f"{v} -> {v2}")
+    for sp in (2, 3, 1):
+        cmd(host, f"speed {sp}")
+        got = None
+        for _ in range(10):
+            time.sleep(0.5)
+            got = cmd(cli, "gamespeed")[1]
+            if got.startswith("ok") and abs(float(got.split("=")[1]) - sp) < 0.01:
+                break
+        log(f"host at x{sp}: client", got)
+        check(f"vitesse : le client passe en x{sp}", got and got.startswith("ok") and abs(float(got.split("=")[1]) - sp) < 0.01, got)
+        grab_window(cli, os.path.join(OUT_DIR, f"floorview_speed{sp}.png"))
+    summary()
+
+
+def grab_window(pid, path):
+    """The game window's client area as a PNG (only that window: the user works on the same PC)."""
+    try:
+        import ctypes.wintypes as wt
+        g = ctypes.windll.gdi32
+        hw = [h for h, w, hh in windows_of(pid) if w >= 640][0]
+        r = wt.RECT()
+        user32.GetClientRect(hw, ctypes.byref(r))
+        W, H = r.right, r.bottom
+        hdc = user32.GetDC(hw)
+        mem = g.CreateCompatibleDC(hdc)
+        bmp = g.CreateCompatibleBitmap(hdc, W, H)
+        g.SelectObject(mem, bmp)
+        user32.PrintWindow(hw, mem, 3)
+
+        class BIH(ctypes.Structure):
+            _fields_ = [("biSize", wt.DWORD), ("biWidth", wt.LONG), ("biHeight", wt.LONG), ("biPlanes", wt.WORD), ("biBitCount", wt.WORD),
+                        ("biCompression", wt.DWORD), ("biSizeImage", wt.DWORD), ("biXPelsPerMeter", wt.LONG), ("biYPelsPerMeter", wt.LONG),
+                        ("biClrUsed", wt.DWORD), ("biClrImportant", wt.DWORD)]
+        bi = BIH()
+        bi.biSize, bi.biWidth, bi.biHeight, bi.biPlanes, bi.biBitCount = ctypes.sizeof(BIH), W, -H, 1, 32
+        buf = ctypes.create_string_buffer(W * H * 4)
+        g.GetDIBits(mem, bmp, 0, H, buf, ctypes.byref(bi), 0)
+        rows = []
+        for y in range(H):
+            line = bytearray(buf[y * W * 4:(y + 1) * W * 4])
+            line[0::4], line[2::4] = line[2::4], line[0::4]
+            rows.append(b"\0" + bytes(line))
+
+        def chunk(tag, data):
+            return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xffffffff)
+        png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 6, 0, 0, 0)) +             chunk(b"IDAT", zlib.compress(b"".join(rows), 6)) + chunk(b"IEND", b"")
+        open(path, "wb").write(png)
+        g.DeleteObject(bmp)
+        g.DeleteDC(mem)
+        user32.ReleaseDC(hw, hdc)
+    except Exception as e:
+        log("screenshot failed:", e)
 
 
 def exp_floor(host, cli):
@@ -6281,6 +6872,7 @@ def find_template(pid, parts):
 
 
 # vanilla templates by id (gamedata.base): names are translated, ids are not
+TRADER_BACKPACK = "910-gamedata.base"      # Sac à Dos Commerçant (the biggest backpack)
 RESEARCH_BENCH = "1875-gamedata.base"      # Small Research Bench (unlocked from the start)
 CRAFT_BENCHES = ("2929-gamedata.base", "2262-gamedata.base", "2299-gamedata.base")   # Clothing Bench, Leather / Chain Armour Crafting Bench
 WIND_GENERATOR = "1999-gamedata.base"
@@ -6675,7 +7267,7 @@ def main():
     ad.add_argument("--save", default="kctest_base")
     ad.add_argument("--keep", action="store_true")
     for name, save, helptext in (("passive", "kctest_base", "fix G5: a client's attack leaves the passive host's character alone"),
-                                 ("jobs", "kctest_base", "fix G5: a job removed in the client's TÃƒÂ¢ches panel is gone on the host"),
+                                 ("jobs", "kctest_base", "fix G5: a job removed in the client's TÃƒÆ’Ã‚Â¢ches panel is gone on the host"),
                                  ("tradepaths", "kctest_town", "fix G5: trading by conversation and right click opens on the client only")):
         g5 = sub.add_parser(name, help=helptext)
         g5.add_argument("--save", default=save)
@@ -6695,6 +7287,10 @@ def main():
     fw_.add_argument("--save", default="kctest_town")
     fw_.add_argument("--keep", action="store_true")
     fw_.add_argument("--clients", type=int, default=1, help="client players, each in its own far town (3: the 4-player run)")
+    fp_ = sub.add_parser("farprobe", help="short diagnosis: talk and a client-ordered fight far from the host's camera, then with it")
+    fp_.add_argument("--save", default="kctest_town")
+    fp_.add_argument("--keep", action="store_true")
+    fp_.add_argument("--notalk", action="store_true", help="skip the conversations (motion and fights only)")
     fl_ = sub.add_parser("farlong", help="the client's character far away (>= 30000) for a long time: zone compared every 30 s, fight, building")
     fl_.add_argument("--save", default="kctest_base")
     fl_.add_argument("--keep", action="store_true")
@@ -6708,9 +7304,9 @@ def main():
     td.add_argument("--save", default="kctest_town")
     td.add_argument("--keep", action="store_true")
     td.add_argument("--merchant", default="Marchand", help="part of the merchant's name ('_' for spaces)")
-    for name in ("stuck", "farnpc", "beds", "tpdown", "lootswap", "groundpick", "resyncbar", "fartp", "missing", "floor"):
+    for name in ("stuck", "farnpc", "beds", "tpdown", "lootswap", "groundpick", "resyncbar", "fartp", "missing", "floor", "floorview", "buildfull"):
         e2 = sub.add_parser(name)
-        e2.add_argument("--save", default="kctest_town" if name in ("beds", "groundpick") else "kctest_base")
+        e2.add_argument("--save", default="kctest_town" if name in ("beds", "groundpick", "floorview") else "kctest_base")
         e2.add_argument("--keep", action="store_true")
     fa_ = sub.add_parser("factions", help="lot B: relations, bounties and crimes the host's everywhere")
     fa_.add_argument("--save", default="kctest_base")
@@ -6858,6 +7454,15 @@ def main():
             if not a.keep:
                 kill_launched()
         return
+    if a.what == "farprobe":
+        host, clis, _ids = setup_multi(a.save, 1)
+        tile([host] + clis)
+        try:
+            exp_farprobe(host, clis, talk=not a.notalk)
+        finally:
+            if not a.keep:
+                kill_launched()
+        return
     if a.what == "four":
         host, clis = setup_many(a.save, a.clients)
         arrange_grid([host] + clis)
@@ -6912,6 +7517,10 @@ def main():
             exp_fartp(host, cli)
         elif a.what == "missing":
             exp_missing(host, cli)
+        elif a.what == "buildfull":
+            exp_buildfull(host, cli)
+        elif a.what == "floorview":
+            exp_floorview(host, cli)
         elif a.what == "floor":
             exp_floor(host, cli)
         elif a.what == "factions":

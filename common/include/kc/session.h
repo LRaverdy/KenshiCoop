@@ -1225,6 +1225,8 @@ private:
     double nextPresenceCheck_ = 0;
     double nextVitalsApply_ = 0;
     double lastLive_ = 0;
+    double lastTick_ = 0;       // the last tick (a stall between two is not counted as time without a world)
+    void SkipStall(double now);
     TimeState lastTime_;
     double nextWeather_ = 0;
     double nextInventory_ = 0;

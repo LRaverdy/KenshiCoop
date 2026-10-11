@@ -31,6 +31,7 @@ struct HookView {
     std::unordered_set<const void*> replicated;    // client: characters driven by the host's state
     std::unordered_set<kc::Handle, HandleHash> dropSources;   // client: local handles of the inventories a drop can be asked from
     std::unordered_map<const void*, kc::Vec3> facing;   // client: CharMovement -> where the host's character faces
+    std::unordered_map<const void*, std::pair<void*, kc::Quat>> orient;   // client: CharMovement -> (its character, the host's rotation)
     struct AnimTarget {
         std::vector<kc::AnimEntry> anims;
         float masterTime = 0, masterSpeed = 0;
@@ -216,6 +217,8 @@ public:
     static bool IsPlayerBuilding(void* b);
     static bool IsBuildingForSale(void* b);   // tests: Building::isForSale
     static bool ReadBuildStateOf(void* building, float& progress, uint8_t& flags);   // false: not a building
+    bool SpawnFinishedBuilding(const std::string& sid, const kc::Vec3& at);   // tests (buildspawn)
+    std::string BuildingPhysics(const std::string& part, const kc::Vec3& from, bool fix);   // tests (buildphys)
     void* NearestBuilding(const kc::Vec3& from, const std::string& part, float radius, int want);   // want: 0 any, 1 for sale, 2 ours, 3 ours unfinished
     void TakeEditedCharacters(std::vector<kc::Handle>& out) override;
     bool ReadAppearance(const kc::Handle& h, kc::AppearanceMsg& out) override;
@@ -439,6 +442,8 @@ private:
     std::unordered_map<kc::Handle, std::string, HandleHash> destroyed_;   // client: why the game removed a character (under destroyedMutex_)
     std::unordered_set<kc::Handle, HandleHash> resyncSnap_;               // client: put exactly on the host's spot at the next Apply
     std::shared_ptr<const std::unordered_set<const void*>> remoteNear_;   // host: see HookView::remoteNear
+    bool farTalk_ = false;   // kenshi::SetFarTalk applied (while hosting)
+    std::unordered_set<kc::Handle, kc::HandleHash> navRefreshed_;   // finished buildings whose navigation mesh was regenerated (buildings.cpp)
     // Characters the game destroyed or unloaded with their zone since the last frame (any thread,
     // under destroyedMutex_): every state of ours that holds their address is dropped before it is
     // used again (PurgeDestroyed, game thread). A client's camera jumping away unloads a whole crowd of
@@ -646,6 +651,12 @@ private:
     void UpdateReRagdolls();
     void UpdateFloorFocus();      // client: the floor view follows one of our characters
     double nextFocusCheck_ = 0;
+    void UpdateRoof(kenshi::Character* c);
+    void UpdateHostRoof();   // host: the same for its own followed / selected character
+    double nextHostRoofCheck_ = 0;   // client: floors above our followed character hidden (world.cpp)
+    void* roofBuilding_ = nullptr;
+    kc::Handle roofHandle_;
+    int roofFloor_ = 0;
     std::unordered_map<kc::Handle, float, kc::HandleHash> syncErr_;   // client: last error per standing character
     double nextPauseTry_ = 0;
     bool pauseRefusedLogged_ = false;

@@ -4,7 +4,68 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
-## En cours (pas encore commité)
+## v0.3.1 (11 octobre 2026)
+
+- **Toits : on restait sous le toit à l'intérieur d'une cabane.** (1) Un bâtiment à étages (la Petite
+  Cabane 4092, son toit est son étage 1, 4093) : `createBuilding` crée lui-même chaque étage dans son
+  propre appel, et le mod captait aussi ces appels imbriqués : le toit partait chez les clients comme un
+  bâtiment à part, posé sur celui de la cabane, et jamais masqué. Seul l'appel le plus extérieur est
+  maintenant une pose (`hk_createBuilding`). (2) Le jeu ne masque les étages au-dessus d'un perso que
+  dans les bâtiments que son propre mode construction a faits : le mod le fait pour les autres
+  (`KenshiWorld::UpdateRoof`, `Building::setFloorVisibility` 0x5482E0) pour le perso suivi du client
+  et le perso sélectionné de l'hôte, et les réaffiche quand il sort. (3) Un bâtiment créé par le mod a
+  tous ses étages affichés au départ. Vérifié en jeu (cabane de l'hôte et du client, des deux côtés).
+- Test `buildfull` sur la Petite Cabane : 22/25 (pose, construction, entrée et étage des deux côtés,
+  établi, démontage croisé ; le coffre reste à faire, test à corriger).
+
+- **Bâtiments posés par le mod : on les traversait, chez l'hôte aussi.** Le mode construction du jeu
+  met chaque bâtiment qu'il crée dans une file que le gestionnaire `0x4E4120` passe ensuite à
+  `NavMesh::generate(Aabb)` et, pour un intérieur, `NavMesh::generate(hand)` (KenshiLib `NavMesh.h`,
+  adresses +0x520 ici). Les poses du mod (celles d'un client, refaites chez l'hôte et chez tous) ne
+  passaient pas par cette file : leur bâtiment n'était découpé dans aucune carte de navigation et
+  tout le monde marchait au travers (un mur construit par tous les persos, traversé en ligne droite
+  des deux côtés, la collision physique pourtant allumée). Maintenant fait comme
+  `Building::setDestroyed` (`0x5578A2`) : la boîte du bâtiment (+0x27C centre, +0x288 demi-taille,
+  agrandie de 5) puis son intérieur, à la pose et une fois fini (hôte et clients). Vérifié : les persos
+  contournent le mur (8-9 unités au plus près, contre 0,1), même chemin chez l'hôte et le client.
+- **Ping : Ctrl+clic molette** dans la vue 3D (le clic molette seul tournait aussi la caméra) ; sur la
+  carte et la minicarte le clic molette seul marche toujours. Avec Ctrl+clic molette, Alt = butin.
+- **Fluidité loin de l'hôte.** Le jeu ne met à jour chaque image que les persos dont l'octet
+  `Character+0xE4` est levé (`0x786EF0`) ; les autres, 6 par image à tour de rôle, rattrapent leur
+  temps d'un coup : bonds de 20 unités chez l'hôte loin de sa caméra, recopiés par les clients. Levé
+  chez l'hôte pour les persos proches d'un joueur client. Les recalages d'horloge d'animation se font
+  en douceur au lieu de sauter (2400 sauts en 10 s chez un client). Marche à reculons : la rotation
+  de l'hôte est réécrite après la mise à jour de déplacement du client (`CharMovement::update`,
+  crochet), et la direction de marche suit le regard de l'hôte dans les escaliers en lacets
+  (`kc::motion::TravelDir`, testé) ; la copie marche vers un point 60 unités devant sur la route de
+  l'hôte. Vitesse x2/x3 affichée sur les boutons du client (`0x787E40`).
+- **Session** : un gel du jeu (zone lointaine qui charge) ne compte plus comme « monde perdu ».
+- Tests : `buildfull` (désert dégagé repéré une fois, `open_desert.txt`), `farprobe`, `floorview`,
+  commandes `buildphys`, `buildspawn`, `conput`, `gamespeed`, `floorview`, `buildingsnear`.
+
+- **Loin de l'hôte, troisième passe (essais `faraway --clients 2` et `farprobe`, 11 octobre).**
+  - *Dialogue : la vraie cause.* `Dialogue::startPlayerConversation` (`0x684320`) refuse toute
+    conversation quand le perso est à plus de 9216 unités de la caméra (`0x6843CA`, distance au nœud
+    de la caméra, `ja 0x6843D1`). Chez l'hôte, la caméra reste sur son escouade : un client loin ne
+    pouvait parler à personne (ni l'ordre du jeu, ni la relance du mod). Pendant qu'on héberge, ce saut
+    est remplacé par un NOP (`kenshi::SetFarTalk`, octets vérifiés avant, remis à la fin de la partie).
+    Vérifié : Patch, Tanishi, Rane répondent loin de l'hôte, caméra à la maison.
+  - *Chiffres de dégâts : la vraie cause.* `MedicalSystem::addWound` saute toute sa partie visuelle
+    quand le blessé est à plus de 4000 unités de la caméra (`0x651348`, distance au carré > 16e6,
+    `jbe 0x651359`), avant même de lire le drapeau « en vue » forcé en 0.3.1. `hk_addWound` lève ce
+    saut le temps de l'appel pour un perso proche d'un joueur client (`kenshi::SetFarWoundVisuals`).
+  - *Combat* : marche loin de l'hôte (bête blessée, mêmes blessures chez le client). Les échecs
+    venaient du test : le PNJ copié d'un habitant fuyait à 80 unités/s ou allait s'asseoir. Le test
+    fait attaquer un Bonedog par le client, par son clic droit (`attackreq <i> <clé>`).
+  - *Pause* : un client se recale 0,8 s à vitesse 0,05 avant de se mettre en pause (0,3 s à 0,01) :
+    loin de sa caméra, un perso ne prend une position écrite qu'à ses propres mises à jour, plus rares ;
+    les marcheurs restaient 20 à 35 unités derrière ceux de l'hôte. Essai d'un recalage par
+    téléportation des copies qui dérivent : retiré (3500 téléportations, sauts visibles, pas mieux).
+  - Tests : `talkto … name:<partie>` cherche vraiment par nom (prenait le plus proche) ; le dialogue
+    essaie jusqu'à six PNJ (beaucoup n'ont rien à dire, comme en solo) ; nouveau `farprobe` (dialogue
+    et combat loin, caméra de l'hôte à la maison puis sur le client) ; vidages : `floor=` (étage).
+  - Reste : quelques PNJ 16 à 57 unités plus haut chez le client (même étage des deux côtés sauf un),
+    quelques marches à reculons.
 
 - **Loin de l'hôte, deuxième passe (essai `faraway` 24/33 avec a100038).**
   - *Le crochet `hk_charUpdateView` marche* (contrairement à ce que montrait « vue 0/0 ») : compteurs

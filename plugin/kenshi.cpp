@@ -30,6 +30,11 @@ const FunctionSig kFunctions[FnCount] = {
     {"GameWorld::userPause", 0x787FB0, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x48, 0x89}},
     {"HandleTable::resolve", 0x2676E0, {0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B}},
     {"GameWorld::togglePause", 0x787D40, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48}},
+    // the speed buttons' and keys' setter: setFrameSpeedMultiplier + togglePause(speed == 0) + the speed
+    // buttons shown (0x724880) + a sound when the bool is set (body read: 0x787E40-0x787F89)
+    {"GameWorld::setGameSpeed (UI)", 0x787E40, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x56, 0x57}},
+    // CharMovement vtable +0x58 (0x16FCCE0): the per-frame movement update (path, turning, floor)
+    {"CharMovement::update", 0x65FFA0, {0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56}},
     {"MedicalSystem::applyDamage", 0x64F300, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
     {"MedicalSystem::knockout", 0x644980, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0xF3, 0x0F, 0x10, 0x05, 0xA6, 0xF4}},
     {"Character::declareDead", 0x7A6200, {0x48, 0x8B, 0xC4, 0x55, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48}},
@@ -650,9 +655,64 @@ bool GetHandle(const Character* c, kc::Handle& out) {
     return IsCharacter(c) && ReadHandle(reinterpret_cast<const uint8_t*>(c) + off::RO_handle, out);
 }
 
+namespace {
+bool FloorVisSeh(uintptr_t fn, void* b, int floor, bool vis) {
+    __try { reinterpret_cast<void (*)(void*, int, bool)>(fn)(b, floor, vis); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+bool SetBuildingFloorVisible(void* building, int floor, bool visible) {   // Building::setFloorVisibility (KenshiLib 0x547B60, +0x780 here)
+    return building && FloorVisSeh(Addr(0x5482E0), building, floor, visible);
+}
+
+bool IndoorsOf(const Character* c, kc::Handle& building) {   // RootObject::isInsideBuilding (+0x80, a hand)
+    constexpr uintptr_t RO_isInsideBuilding = 0x80;
+    return IsCharacter(c) && ReadHandle(reinterpret_cast<const uint8_t*>(c) + RO_isInsideBuilding, building);
+}
+
 bool InView(const Character* c) {
     uint8_t v = 0;
     return IsCharacter(c) && Rd(c, CH_inView, v) && v != 0;
+}
+
+bool SetFarTalk(bool on) {
+    static int state = -1;   // -1 unknown, 0 game's bytes, 1 patched, 2 unexpected bytes (left alone)
+    if (state == 2) return false;
+    if (state == int(on)) return true;
+    static constexpr uint8_t kGame[6] = {0x0F, 0x87, 0xFE, 0x00, 0x00, 0x00};   // ja 0x6844D5 (return false)
+    static constexpr uint8_t kNop[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
+    auto* at = reinterpret_cast<uint8_t*>(g_base + 0x6843D1);
+    if (state == -1 && std::memcmp(at, kGame, 6) != 0 && std::memcmp(at, kNop, 6) != 0) {
+        state = 2;
+        return false;
+    }
+    DWORD old = 0;
+    if (!VirtualProtect(at, 6, PAGE_EXECUTE_READWRITE, &old)) return false;
+    std::memcpy(at, on ? kNop : kGame, 6);
+    VirtualProtect(at, 6, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), at, 6);
+    state = int(on);
+    return true;
+}
+
+bool SetFarWoundVisuals(bool on) {
+    static int state = -1;   // as in SetFarTalk
+    if (state == 2) return false;
+    if (state == int(on)) return true;
+    static constexpr uint8_t kGame[6] = {0x0F, 0x86, 0x0A, 0x0C, 0x00, 0x00};   // jbe 0x651F69
+    static constexpr uint8_t kNop[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
+    auto* at = reinterpret_cast<uint8_t*>(g_base + 0x651359);
+    if (state == -1 && std::memcmp(at, kGame, 6) != 0 && std::memcmp(at, kNop, 6) != 0) {
+        state = 2;
+        return false;
+    }
+    DWORD old = 0;
+    if (!VirtualProtect(at, 6, PAGE_EXECUTE_READWRITE, &old)) return false;
+    std::memcpy(at, on ? kNop : kGame, 6);
+    VirtualProtect(at, 6, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), at, 6);
+    state = int(on);
+    return true;
 }
 
 bool GetPosition(Character* c, kc::Vec3& out) {
@@ -669,6 +729,14 @@ bool GetRotation(const Character* c, kc::Quat& out) {
     if (!IsCharacter(c) || !Rd(c, off::RO_rot, q)) return false;
     out = {q[0], q[1], q[2], q[3]};
     return std::isfinite(q[0]) && std::isfinite(q[1]) && std::isfinite(q[2]) && std::isfinite(q[3]);
+}
+
+bool WriteRotation(Character* c, const kc::Quat& q) {
+    if (!IsCharacter(c) || !std::isfinite(q.w) || !std::isfinite(q.x) || !std::isfinite(q.y) || !std::isfinite(q.z)) return false;
+    const float n = q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z;
+    if (n < 0.5f || n > 1.5f) return false;
+    const float v[4] = {q.w, q.x, q.y, q.z};
+    return Wr(c, off::RO_rot, v);
 }
 
 bool GetMovement(const Character* c, kc::Vec3& dest, bool& moving, float& speed) {
@@ -3255,6 +3323,13 @@ bool GetFacing(const Character* c, kc::Vec3& dir) {
     return Finite(dir);
 }
 
+bool FaceMovement(void* m, const kc::Vec3& dir) {
+    constexpr uintptr_t CM_vFaceDirection = 0x30;
+    void* fn = m ? VSlot(m, CM_vFaceDirection) : nullptr;
+    const float d[3] = {dir.x, dir.y, dir.z};
+    return fn && Finite(dir) && CallPtrArg2(fn, m, const_cast<float*>(d));
+}
+
 bool FaceDirection(Character* c, const kc::Vec3& dir) {
     constexpr uintptr_t CM_vFaceDirection = 0x30;
     void* m = Movement(c);
@@ -3500,8 +3575,10 @@ float SyncedAnimTime(const void* sa, float mine, float want, bool looped, float 
             if (d < -length * 0.5f) d += length;
         }
     }
-    // far off: jump to the host's; a little off: ease toward it (no visible step); close: ours
-    if (std::fabs(d) > kTolerance * 2.5f) return mine + d;
+    // far off: jump to the host's (a looping walk or idle: caught up a third of the way per frame
+    // instead, a jump in a loop is a visible pop, 11 October); a little off: ease toward it (no
+    // visible step); close: ours
+    if (std::fabs(d) > kTolerance * 2.5f) return looped ? mine + d * 0.3f : mine + d;
     if (std::fabs(d) > kTolerance * 0.25f) return mine + d * 0.15f;
     return mine;
 }
@@ -3973,6 +4050,17 @@ bool Halt(Character* c) {
 bool CallSetFrameSpeed(float speed) {
     GameWorld* w = World();
     return w && std::isfinite(speed) && CallFloat(FnAddr(FnSetFrameSpeedMultiplier), w, speed);
+}
+
+namespace {
+bool SetGameSpeedUiSeh(void* fn, void* w, float speed) {
+    __try { reinterpret_cast<void (*)(void*, float, bool)>(fn)(w, speed, false); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+bool CallSetGameSpeedUi(float speed) {
+    GameWorld* w = World();
+    return w && std::isfinite(speed) && speed > 0 && SetGameSpeedUiSeh(FnAddr(FnSetGameSpeedUi), w, speed);
 }
 
 bool CallTogglePause(bool paused) {

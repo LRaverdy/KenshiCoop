@@ -22,6 +22,7 @@
 namespace kcp {
 
 namespace {
+bool RefreshNavmesh(void* b);   // below: the navigation mesh around a building (createBuildings' queue)
 // Building
 constexpr uintptr_t BU_interior = 0x1F0;           // BuildingInterior*
 constexpr uintptr_t IN_layout = 0x30;               // BuildingInterior: its Layout (embedded)
@@ -73,8 +74,8 @@ void* Slot(const void* obj, uintptr_t slot) {
 }
 
 void* CreateSeh(void* fn, void* factory, void* data, const float* pos, void* town, void* faction, const float* rot, void* cb, void* layout,
-                void* indoors, int floor, bool outside) {
-    __try { return reinterpret_cast<FnCreateSig>(fn)(factory, data, pos, town, faction, rot, cb, layout, nullptr, nullptr, indoors, false, false, false, floor, outside); }
+                void* indoors, int floor, bool outside, bool completed = false) {
+    __try { return reinterpret_cast<FnCreateSig>(fn)(factory, data, pos, town, faction, rot, cb, layout, nullptr, nullptr, indoors, false, completed, false, floor, outside); }
     __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
 }
 bool VoidSeh(void* fn, void* self) {
@@ -379,6 +380,10 @@ bool KenshiWorld::ExecutePlacement(const kc::BuildPlace& p, kc::Handle& created,
             // what build mode does to a fresh building
             if (void* fn = Slot(b, BV_setupMiningResourceLevel)) VoidSeh(fn, b);
             VoidSeh(kenshi::FnAddr(kenshi::FnClearUsageNodes), b);
+            RefreshNavmesh(b);   // and what its queue does later (RefreshNavmesh)
+            // every floor shown: build mode sets the new building's floors to the view's; created
+            // here, a cabin's roof (its floor 1) stayed hidden for good, on the host too (11 October)
+            for (int f = 0; f < 6; ++f) kenshi::SetBuildingFloorVisible(b, f, true);
         }
     }
     if (snapCb) FreeSeh(snapCb);
@@ -525,6 +530,37 @@ bool EnsureCollision(void* b) {
     return on != 0;
 }
 
+// The navigation mesh around a building. Build mode queues every building it creates (createBuildings,
+// 0x4D7963-0x4D7A20) for a manager that later calls NavMesh::generate(Aabb) on its box and, for one
+// with an interior, NavMesh::generate(hand) (0x4E4120; KenshiLib NavMesh.h, RVAs +0x520 here). The
+// mod's own placements (a client's building, built on the host and copied everywhere) never went
+// through that queue: their walls were cut out of nobody's navmesh and every character walked
+// through them, the host's too (11 October: a wall built by all the characters, crossed in straight
+// lines on both sides). Done as Building::setDestroyed does it (0x5578A2): its box (+0x27C centre,
+// +0x288 half size) grown by 5 for the call, then the interior's.
+constexpr uintptr_t kNavMeshPtr = 0x21345C0;          // NavMesh* (GameWorld::navmesh)
+constexpr uintptr_t kNavGenerateBox = 0x3A66C0;       // void NavMesh::generate(const Ogre::Aabb&)
+constexpr uintptr_t kNavGenerateBuilding = 0x3ABF20;  // void NavMesh::generate(const hand& building)
+constexpr uintptr_t BU_aabb = 0x27C, BU_handle = 0x58;
+using FnNavPtr = void (*)(void* navmesh, const void* arg);
+bool NavCallSeh(uintptr_t fn, void* nav, const void* arg) {
+    __try { reinterpret_cast<FnNavPtr>(kenshi::Addr(fn))(nav, arg); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool RefreshNavmesh(void* b) {
+    void* nav = nullptr;
+    float box[6] = {};
+    if (!b || !Rd(reinterpret_cast<void*>(kenshi::Addr(kNavMeshPtr)), 0, nav) || !nav || !Rd(b, BU_aabb, box)) return false;
+    for (float v : box) if (!std::isfinite(v)) return false;
+    box[3] += 5.0f;
+    box[4] += 5.0f;
+    box[5] += 5.0f;
+    bool ok = NavCallSeh(kNavGenerateBox, nav, box);
+    void* interior = nullptr;
+    if (Rd(b, BU_interior, interior) && interior)
+        ok = NavCallSeh(kNavGenerateBuilding, nav, reinterpret_cast<uint8_t*>(b) + BU_handle) && ok;
+    return ok;
+}
+
 bool MaterialEntries(void* b, std::vector<void*>& out) {
     out.clear();
     void* st = BuildState(b);
@@ -540,12 +576,55 @@ bool MaterialEntries(void* b, std::vector<void*>& out) {
 }
 } // namespace
 
+// tests: a building's physics state (complete, visible +0x19D, physical +0x268, physics on +0x269)
+std::string KenshiWorld::BuildingPhysics(const std::string& part, const kc::Vec3& from, bool fix) {
+    void* b = NearestBuilding(from, part, 3000.0f, 0);
+    if (!b) return "err no such building";
+    void* st = BuildState(b);
+    uint8_t complete = 0, visible = 0, physical = 0, on = 0;
+    if (st) Rd(st, CS_complete, complete);
+    Rd(b, BU_visible, visible);
+    Rd(b, BU_physical, physical);
+    Rd(b, BU_physicsOn, on);
+    char buf[160];
+    snprintf(buf, sizeof buf, "ok complete=%d visible=%d physical=%d physicsOn=%d", int(complete), int(visible), int(physical), int(on));
+    std::string out = buf;
+    if (fix) {
+        HostCallScope scope;
+        void* fn = Slot(b, BV_refreshState);
+        const bool called = fn && VoidSeh(fn, b);
+        Rd(b, BU_physicsOn, on);
+        out += std::string(" | vt 0xE0 ") + (called ? "called" : "failed") + ", physicsOn now " + std::to_string(int(on)) +
+               " | navmesh " + (RefreshNavmesh(b) ? "regenerated" : "FAILED");
+    }
+    return out;
+}
+
+// tests (buildspawn): a building created finished, as a save's buildings are, on this machine only
+bool KenshiWorld::SpawnFinishedBuilding(const std::string& sid, const kc::Vec3& at) {
+    kenshi::GameWorld* w = kenshi::World();
+    void* data = kenshi::GameDataBySid(sid);
+    void* factory = nullptr;
+    if (!w || !data || !Rd(w, kenshi::off::GW_factory, factory) || !factory) return false;
+    const float pos[3] = {at.x, 0.0f, at.z};
+    const float rot[4] = {1, 0, 0, 0};
+    HostCallScope scope;
+    void* b = CreateSeh(kenshi::FnAddr(kenshi::FnCreateBuilding), factory, data, pos, nullptr, PlayerFaction(), rot, kenshi::Player(), nullptr, nullptr, 0,
+                        false, true);
+    return b != nullptr;
+}
+
 bool KenshiWorld::ReadBuildState(const kc::Handle& h, float& progress, uint8_t& flags) {
     void* b = kenshi::ResolveObject(h);
     if (!ReadBuildStateOf(b, progress, flags)) return false;
     // host: a followed building finished here gets its collision too (nothing if the game did it)
     if (!client_ && (flags & kc::kSiteComplete) && !(flags & kc::kSiteDismantling)) {
         HostCallScope scope;
+        if (navRefreshed_.insert(h).second && RefreshNavmesh(b)) {
+            std::string sid;
+            kenshi::ObjectTemplate(b, sid);
+            Log("building %s finished: the navigation mesh around it regenerated", sid.c_str());
+        }
         if (EnsureCollision(b)) {
             std::string sid;
             kenshi::ObjectTemplate(b, sid);
@@ -614,6 +693,11 @@ void KenshiWorld::ApplyBuildState(const kc::Handle& h, float progress, uint8_t f
     const uint8_t paused = (flags & kc::kSitePaused) ? 1 : 0, dismantled = (flags & kc::kSiteDismantling) ? 1 : 0;
     Wr(st, CS_paused, paused);
     Wr(st, CS_dismantled, dismantled);
+    if ((flags & kc::kSiteComplete) && !(flags & kc::kSiteDismantling) && navRefreshed_.insert(h).second && RefreshNavmesh(b)) {
+        std::string sid;
+        kenshi::ObjectTemplate(b, sid);
+        Log("building %s finished here: the navigation mesh around it regenerated", sid.c_str());
+    }
     if (EnsureCollision(b)) {
         std::string sid;
         kenshi::ObjectTemplate(b, sid);
