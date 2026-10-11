@@ -825,7 +825,89 @@ void SquadBarUpkeep() {
         r.badTabs, r.tabs, r.badItems, r.firstBad.c_str(), r.repairedTabs, r.staleTabs);
 }
 
+// 3b: what our own per-frame work costs (the whole tick, the session's part with Apply, EndFrame),
+// against the frame itself, measured on live ticks. A line a minute in our log ("sync perf" on a
+// client, "host perf" on the host), which a client's log forwarding puts in the host's log next to its
+// "sync:" line; the debug command "perf" reads its own window.
+struct PerfWindow {
+    double start = -1, lastTickAt = -1;
+    uint64_t ticks = 0, frames = 0;
+    double tickMs = 0, sessionMs = 0, endMs = 0, worstTickMs = 0, frameMs = 0, worstFrameMs = 0;
+    long long forced = 0, leftFar = 0, moveFull = 0, moveOut = 0, moveLong = 0, moveSplit = 0;
+    void Restart(double now) {
+        *this = PerfWindow{};
+        start = now;
+        if (g_world) {
+            forced = g_world->charsForcedInView.load();
+            leftFar = g_world->charsLeftFar.load();
+            moveFull = g_world->moveNearFull.load();
+            moveOut = g_world->moveNearOutOfView.load();
+            moveLong = g_world->moveNearLongStep.load();
+            moveSplit = g_world->moveNearSplit.load();
+            g_world->moveNearMaxStepMs.store(0);
+        }
+    }
+    void Add(double now, double tick, double session, double end) {
+        if (start < 0) Restart(now);
+        ++ticks;
+        tickMs += tick;
+        sessionMs += session;
+        endMs += end;
+        worstTickMs = std::max(worstTickMs, tick);
+        if (lastTickAt >= 0) {
+            const double f = (now - lastTickAt) * 1000.0;
+            ++frames;
+            frameMs += f;
+            worstFrameMs = std::max(worstFrameMs, f);
+        }
+        lastTickAt = now;
+    }
+    std::string Describe(double now) const {
+        const double secs = std::max(1e-3, now - start);
+        const double n = double(std::max<uint64_t>(1, ticks)), fn = double(std::max<uint64_t>(1, frames));
+        char b[400];
+        snprintf(b, sizeof(b), "our work %.2f ms per frame (session %.2f, end of frame %.2f; worst %.1f ms), frame %.1f ms (%.0f fps, worst %.0f ms)",
+                 tickMs / n, sessionMs / n, endMs / n, worstTickMs, frameMs / fn, frames ? 1000.0 * fn / frameMs : 0.0, worstFrameMs);
+        std::string s = b;
+        if (!g_world) return s;
+        if (g_session->isClient()) {
+            const kc::Session::StandInStats st = g_session->standInStats();
+            snprintf(b, sizeof(b),
+                     "; host characters %zu followed, %zu here: %zu within %.0f of ours, %zu farther (%zu dormant, %zu left to the game's far update); "
+                     "stand-ins %zu near, %zu far; full updates forced %.0f/s, left far %.0f/s",
+                     st.followed, st.present, st.nearUs, st.radius, st.farFromUs, st.dormant, st.leftFar, st.standInsNear, st.standInsFar,
+                     double(g_world->charsForcedInView.load() - forced) / secs, double(g_world->charsLeftFar.load() - leftFar) / secs);
+            s += b;
+        } else if (g_session->isHost()) {
+            snprintf(b, sizeof(b), "; movement near client players: %lld full, %lld out of view, %lld long steps split, %lld left whole, longest step %d ms",
+                     g_world->moveNearFull.load() - moveFull, g_world->moveNearOutOfView.load() - moveOut, g_world->moveNearSplit.load() - moveSplit,
+                     g_world->moveNearLongStep.load() - moveLong, g_world->moveNearMaxStepMs.load());
+            s += b;
+        }
+        return s;
+    }
+};
+PerfWindow g_perfLog, g_perfCmd;
+constexpr double kPerfLogEvery = 60.0;
+
+void PerfNote(double t0, double tSession, double tEnd) {
+    const double now = NowSeconds();
+    const double tick = (now - t0) * 1000.0;
+    g_perfLog.Add(now, tick, tSession * 1000.0, tEnd * 1000.0);
+    g_perfCmd.Add(now, tick, tSession * 1000.0, tEnd * 1000.0);
+    const bool inSession = g_session->isHost() || g_session->state() == kc::SessionState::Connected;
+    if (!inSession) {
+        g_perfLog.Restart(now);
+        return;
+    }
+    if (now - g_perfLog.start < kPerfLogEvery) return;
+    Log("%s perf: %s", g_session->isClient() ? "sync" : "host", g_perfLog.Describe(now).c_str());
+    g_perfLog.Restart(now);
+}
+
 void Tick(bool live) {
+    const double tickStart = NowSeconds();
+    double sessionSecs = 0, endSecs = 0, debugSecs = 0;
     SetCrashPhase("tick: begin frame");
     g_world->BeginFrame(live);
     for (auto& t : g_world->TakeToasts()) Toast(t);
@@ -848,7 +930,11 @@ void Tick(bool live) {
     }
     if (live) g_menuWindowShown = true;
     SetCrashPhase("tick: debug commands");
-    if (g_cfg.debugCommands) DebugPoll(*g_session, *g_world, live);
+    if (g_cfg.debugCommands) {   // (the test channel's own time is not counted as our work)
+        const double t = NowSeconds();
+        DebugPoll(*g_session, *g_world, live);
+        debugSecs = NowSeconds() - t;
+    }
     SetCrashPhase("tick: steam");
     SteamUpkeep();
     if (live) g_session->CountFrame();
@@ -856,7 +942,11 @@ void Tick(bool live) {
     if (live || !g_session->isHost()) AdminUpkeep(*g_session, *g_world);   // god modes follow their players
     LogAndConsoleUpkeep();
     SetCrashPhase("tick: session");
-    g_session->Tick(live);
+    {
+        const double t = NowSeconds();
+        g_session->Tick(live);
+        sessionSecs = NowSeconds() - t;
+    }
     SetCrashPhase("tick: map scene");
     UpdateMapScene(*g_session, *g_world, g_cfg, live);   // map markers, minimap, heads, squad bar, pings
     SetCrashPhase("tick: resync");
@@ -865,8 +955,13 @@ void Tick(bool live) {
     SetCrashPhase("tick: squad bar check");
     if (live && g_world->Ready()) SquadBarUpkeep();
     SetCrashPhase("tick: end frame");
-    if (live) g_world->EndFrame();
+    if (live) {
+        const double t = NowSeconds();
+        g_world->EndFrame();
+        endSecs = NowSeconds() - t;
+    }
     PublishOverlay();
+    if (live) PerfNote(tickStart + debugSecs, sessionSecs, endSecs);
     SetCrashPhase("game (outside KenshiCoop's tick)");
 }
 
@@ -1024,6 +1119,14 @@ bool Start() {
 } // namespace
 
 KenshiWorld* TheWorld() { return g_world.get(); }
+
+std::string FramePerfReport() {   // debug "perf": since the previous call (game thread)
+    const double now = NowSeconds();
+    if (g_perfCmd.start < 0 || !g_session) return "no live frame measured yet";
+    std::string s = g_perfCmd.Describe(now);
+    g_perfCmd.Restart(now);
+    return s;
+}
 
 } // namespace kcp
 

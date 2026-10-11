@@ -4,6 +4,11 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
+## v0.3.2 (en cours)
+
+- **FPS des clients quand les joueurs s'éloignent (3b).** Chez un client, les persos de l'hôte qu'il ne reçoit plus (loin de ses persos, en sommeil) étaient quand même mis « dans la vue » par `hk_charUpdateView` : déplacement complet et animation à chaque image pour ~200 persos que personne ne voit (Geoffrey 133 → 46 fps, nass4 jusqu'à 10). Ils sont laissés à la mise à jour lointaine du jeu (`IWorld::SetFarCharacters`, `HookView::farAway`) ; jamais un membre d'escouade, et un perso renvoyé par l'hôte repasse en complet dans la même image. Mesure : ligne `sync perf` par minute (notre travail par image, fps, persos près / loin), `host perf` chez l'hôte, commandes `perf`, `standins`, `farleave`. Test `farfps --clients 3`. Pas de changement de protocole (35). À tester en jeu.
+- **Murs traversés loin de la caméra de l'hôte (3f).** Désassemblage : ni le navmesh ni la physique des bâtiments ne dépendent de la caméra. La mise à jour complète du déplacement (murs du navmesh) exige un pas de moins de 0,5 s de temps de jeu (`0x660A47`) : chez l'hôte, un pas plus long d'un perso près d'un joueur client (gel de l'hôte à x2/x3) est coupé en morceaux de 0,4 s (`hk_moveUpdate`). Compteurs `movestats`, `navcheck`, `navat`, `wallsnear` ; test `farwalls`. À tester en jeu.
+
 ## v0.3.1 (11 octobre 2026)
 
 - **Antivirus** : l'installeur du zip n'utilise plus PowerShell (`Installer.bat` lançait

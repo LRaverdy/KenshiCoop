@@ -237,6 +237,11 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
         Il faut garder la cohérence au retour (recréation propre, cf. « stand-in … can be
         recreated »).
      3. Retester avec 3 clients éloignés et comparer les fps.
+   - **Corrigé dans le code, à tester en jeu** (branche du lot 3b/3f, v0.3.2 en cours) :
+     - mesure : ligne `sync perf` par minute chez chaque client (recopiée chez l'hôte sous `[nom]`), commandes `perf` et `standins` ;
+     - cause trouvée dans notre code : chez le client, `hk_charUpdateView` mettait « dans la vue » **tous** les persos que pilote l'hôte, y compris les ~200 en sommeil près des autres joueurs (pilotés 2 fois/s mais présents dans `replicated`) : déplacement complet et animation à chaque image pour des persos que personne ne voit ici. Ils sont maintenant laissés à la mise à jour lointaine du jeu (`IWorld::SetFarCharacters`, `HookView::farAway`) ; jamais un membre d'escouade ; un perso que l'hôte renvoie repasse en complet dans la même image. Pas de destruction ni de recréation de doublures (risque de plantage) ;
+     - reste : le jeu du client charge lui-même les zones autour des persos de tous les joueurs (ils sont de sa faction) et y fait vivre leurs PNJ : non touché (risque de perdre des membres d'escouade) ;
+     - test : `python tools/coop_test.py farfps --clients 3` (ensemble, puis loin avec `farleave 0` puis `farleave 1`).
    - Vu en même temps, à vérifier :
      - « captivity from the host: a merchant caged » environ 2 fois par seconde chez les 3 clients
        (22:26:08-14) : un état réappliqué en boucle ?
@@ -330,6 +335,11 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
         positions des clients comme pour `hk_charUpdateView`.
    - Test : `coop_test.py`, un client dans une ville loin de l'hôte, combat contre un ennemi de l'autre
      côté d'un mur, et relever les positions.
+   - **Corrigé en partie dans le code, à tester en jeu** (même branche que 3b) :
+     - lu au désassemblage (docs/MOTEUR.md, « Déplacement loin de la caméra ») : **ni le navmesh ni la physique des bâtiments ne dépendent de la caméra** ; ils dépendent du chargement de la zone, que les persos des joueurs activent aussi. L'hypothèse de départ ne tient donc pas ;
+     - ce qui dépend de la distance : la mise à jour complète du déplacement (`0x660A3D`) exige le perso « dans la vue » **et** un pas de moins de 0,5 s de temps de jeu (`0x660A47`). Au-delà, `moveAlongPath` sans les murs. Le premier est déjà levé (`hk_charUpdateView`) ; le second arrive quand le jeu de l'hôte gèle (zones lointaines qui se chargent avec 3 joueurs éparpillés) à x2/x3. `hk_moveUpdate` coupe maintenant ces pas en morceaux de 0,4 s pour les persos près d'un joueur client ;
+     - mesure : `movestats` et la ligne `host perf` (déplacements complets, hors vue, pas coupés, plus long pas) ; `navcheck` (sur le navmesh ou non) ;
+     - test : `python tools/coop_test.py farwalls` (combat de part et d'autre d'un bâtiment, caméra de l'hôte à la maison puis sur le combat). Si les persos traversent encore avec `out of view`/`left whole` à 0 et `nav=1`, la cause est ailleurs (navmesh de la ville sans ce mur : `navat` sur le mur).
 
 3g. **rob suit Geoffrey avec la caméra mais ne voit pas les PNJ qui le frappent (22:47)**
    - Cause : `Session::UpdateStreams` (`common/src/session_streaming.cpp:44`) n'envoie à un joueur que les

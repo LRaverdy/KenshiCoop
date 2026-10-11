@@ -214,6 +214,8 @@ void KenshiWorld::ResetWorldBound() {
     resolved_.clear();
     factoryRefused_.Clear();
     resyncSnap_.clear();
+    farSet_.reset();
+    farLeaveEnabled = true;
     { std::lock_guard<std::mutex> lk(destroyedMutex_); destroyed_.clear(); }
     ResetGround();
     { std::lock_guard<std::mutex> lk(doorMutex_); doorReqs_.clear(); doorCache_.clear(); }
@@ -299,6 +301,7 @@ void KenshiWorld::EndFrame() {
     }
     v->gameSpeed = kenshi::GetFrameSpeed();
     if (active_ && !client_) v->remoteNear = remoteNear_;
+    if (active_ && client_ && farLeaveEnabled) v->farAway = farSet_;
     if (active_ && client_) {
         // fighting and fallen characters play the host's combat and fall animations: their master
         // clock is still corrected, but not counted (the tests measure walking cycles)
@@ -340,9 +343,10 @@ void KenshiWorld::EndFrame() {
     } else {
         animTargets_.clear();
     }
+    // (3b: not for the far ones, standing where the host last sent them, on the game's far update)
     if (active_ && client_)
         for (const auto& [h, st] : lastTarget_)
-            if (kenshi::Character* c = Find(h); c && v->replicated.count(c))
+            if (kenshi::Character* c = Find(h); c && v->replicated.count(c) && !(farLeaveEnabled && farSet_ && farSet_->count(c)))
                 if (void* m = kenshi::MovementOf(c)) {
                     v->facing[m] = kenshi::ForwardOf(st.rot);
                     v->orient[m] = {c, st.rot};
@@ -1811,6 +1815,21 @@ void KenshiWorld::SetRemoteInterest(const std::vector<kc::Handle>& handles) {
     remoteNear_ = std::move(set);
 }
 
+// Client (3b): the host's characters it no longer streams to us; see Session::UpdateFarCharacters.
+// Resolved here, on the game thread; the addresses are only looked up by hk_charUpdateView, never
+// read, and an address the game frees leaves the set at once (PurgeDestroyed).
+void KenshiWorld::SetFarCharacters(const std::vector<kc::Handle>& handles) {
+    if (!client_ || handles.empty()) {
+        farSet_.reset();
+        return;
+    }
+    auto set = std::make_shared<std::unordered_set<const void*>>();
+    set->reserve(handles.size());
+    for (const kc::Handle& h : handles)
+        if (kenshi::Character* c = Find(h)) set->insert(c);
+    farSet_ = std::move(set);
+}
+
 void KenshiWorld::ResyncCharacter(const kc::Handle& h) {
     if (client_) resyncSnap_.insert(h);
 }
@@ -1870,6 +1889,16 @@ void KenshiWorld::PurgeDestroyed() {
     for (auto it = handTools_.begin(); it != handTools_.end();) {
         if (dead.count(it->second.who)) { it = handTools_.erase(it); ++n; }
         else ++it;
+    }
+    if (farSet_) {   // 3b: an address of the far set may come back as another, near, character
+        size_t hit = 0;
+        for (const void* p : gone) hit += farSet_->count(p);
+        if (hit) {
+            auto kept = std::make_shared<std::unordered_set<const void*>>(*farSet_);
+            for (const void* p : gone) kept->erase(p);
+            farSet_ = std::move(kept);
+            n += hit;
+        }
     }
     const size_t editedBefore = edited_.size();
     edited_.erase(std::remove_if(edited_.begin(), edited_.end(), [&](kenshi::Character* c) { return dead.count(c) != 0; }), edited_.end());

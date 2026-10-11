@@ -15,5 +15,7 @@
 namespace kcp {
 
 void DebugPoll(kc::Session& session, KenshiWorld& world, bool live);
+// 3b: our per-frame work and the frame time since the previous call (main.cpp, "perf")
+std::string FramePerfReport();
 
 } // namespace kcp

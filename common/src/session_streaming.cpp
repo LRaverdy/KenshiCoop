@@ -203,6 +203,55 @@ void Session::UpdateMyCentres() {
 
 bool Session::Dormant(const Entity& e, double now) const { return now - e.streamAt > kDormantAfter; }
 
+// 3b (11 October evening: with the players spread out, each client followed 290-307 characters, the
+// host sending it only the few around its own; Geoffrey 133 -> 46 fps, nass4 down to 10): the
+// characters the host stopped streaming to us stay in our game where it loaded them, yet our game
+// gave every one of them the full update of a character in view (hk_charUpdateView, Apply's set):
+// movement physics and animation every frame for people nobody here can see. Those go back to the
+// game's own far update. Never a squad member (every player's characters are always sent); a
+// character the host sends again leaves the list on that frame.
+void Session::UpdateFarCharacters(double now) {
+    bool changed = false;
+    size_t n = 0;
+    for (auto& [id, e] : entities_) {
+        const bool farOff = e.present && !e.container && !e.squad && !e.buf.empty() && Dormant(e, now);
+        if (farOff != e.farGiven) {
+            e.farGiven = farOff;
+            changed = true;
+        }
+        n += farOff ? 1 : 0;
+    }
+    // given again every few seconds too: a stand-in made again here is another object in our game
+    if (!changed && now < farRefreshAt_) return;
+    farGiven_ = n;
+    farRefreshAt_ = now + 5.0;
+    std::vector<Handle> hs;
+    hs.reserve(n);
+    for (const auto& [id, e] : entities_)
+        if (e.farGiven) hs.push_back(e.handle);
+    world_.SetFarCharacters(hs);
+}
+
+Session::StandInStats Session::standInStats() const {
+    StandInStats s;
+    s.radius = cfg_.standInRadius;
+    const double now = clock_();
+    for (const auto& [id, e] : entities_) {
+        if (e.container) continue;
+        ++s.followed;
+        if (e.squad) ++s.squad;
+        if (!e.present) continue;
+        ++s.present;
+        if (!e.squad && Dormant(e, now)) ++s.dormant;
+        if (e.farGiven) ++s.leftFar;
+        const bool close = cfg_.standInRadius <= 0 || myCentres_.empty() || e.buf.empty() ||
+                          WithinAny(e.buf.back().s.pos, myCentres_, cfg_.standInRadius);
+        ++(close ? s.nearUs : s.farFromUs);
+        if (e.spawned && !e.squad) ++(close ? s.standInsNear : s.standInsFar);
+    }
+    return s;
+}
+
 // A host character we may recreate here: the host still sends it to us, and it is near one of our own
 // characters (where our game has the land loaded). Without characters of our own: anywhere sent.
 bool Session::InMyArea(const Entity& e, double now) const {
