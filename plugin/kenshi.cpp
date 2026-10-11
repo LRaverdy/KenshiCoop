@@ -655,6 +655,46 @@ bool InView(const Character* c) {
     return IsCharacter(c) && Rd(c, CH_inView, v) && v != 0;
 }
 
+bool SetFarTalk(bool on) {
+    static int state = -1;   // -1 unknown, 0 game's bytes, 1 patched, 2 unexpected bytes (left alone)
+    if (state == 2) return false;
+    if (state == int(on)) return true;
+    static constexpr uint8_t kGame[6] = {0x0F, 0x87, 0xFE, 0x00, 0x00, 0x00};   // ja 0x6844D5 (return false)
+    static constexpr uint8_t kNop[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
+    auto* at = reinterpret_cast<uint8_t*>(g_base + 0x6843D1);
+    if (state == -1 && std::memcmp(at, kGame, 6) != 0 && std::memcmp(at, kNop, 6) != 0) {
+        state = 2;
+        return false;
+    }
+    DWORD old = 0;
+    if (!VirtualProtect(at, 6, PAGE_EXECUTE_READWRITE, &old)) return false;
+    std::memcpy(at, on ? kNop : kGame, 6);
+    VirtualProtect(at, 6, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), at, 6);
+    state = int(on);
+    return true;
+}
+
+bool SetFarWoundVisuals(bool on) {
+    static int state = -1;   // as in SetFarTalk
+    if (state == 2) return false;
+    if (state == int(on)) return true;
+    static constexpr uint8_t kGame[6] = {0x0F, 0x86, 0x0A, 0x0C, 0x00, 0x00};   // jbe 0x651F69
+    static constexpr uint8_t kNop[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
+    auto* at = reinterpret_cast<uint8_t*>(g_base + 0x651359);
+    if (state == -1 && std::memcmp(at, kGame, 6) != 0 && std::memcmp(at, kNop, 6) != 0) {
+        state = 2;
+        return false;
+    }
+    DWORD old = 0;
+    if (!VirtualProtect(at, 6, PAGE_EXECUTE_READWRITE, &old)) return false;
+    std::memcpy(at, on ? kNop : kGame, 6);
+    VirtualProtect(at, 6, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), at, 6);
+    state = int(on);
+    return true;
+}
+
 bool GetPosition(Character* c, kc::Vec3& out) {
     if (!IsCharacter(c)) return false;
     void* fn = VSlot(c, slot::RO_getPosition);

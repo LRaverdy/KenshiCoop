@@ -439,6 +439,7 @@ private:
     std::unordered_map<kc::Handle, std::string, HandleHash> destroyed_;   // client: why the game removed a character (under destroyedMutex_)
     std::unordered_set<kc::Handle, HandleHash> resyncSnap_;               // client: put exactly on the host's spot at the next Apply
     std::shared_ptr<const std::unordered_set<const void*>> remoteNear_;   // host: see HookView::remoteNear
+    bool farTalk_ = false;   // kenshi::SetFarTalk applied (while hosting)
     // Characters the game destroyed or unloaded with their zone since the last frame (any thread,
     // under destroyedMutex_): every state of ours that holds their address is dropped before it is
     // used again (PurgeDestroyed, game thread). A client's camera jumping away unloads a whole crowd of

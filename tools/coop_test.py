@@ -2874,7 +2874,7 @@ def far_zone_sync(players, round_label, rounds, gap):
                 errs.append(e)
                 if e > (FAR_DOWN_TOL if down else FAR_POS_TOL):
                     dy = cv["pos"][1] - near[k]["pos"][1]
-                    off.append((k, round(e, 1), "a terre" if down else "debout", f"dy {dy:+.1f}", f"vue {near[k].get('inview', '?')}/{cv.get('inview', '?')}",
+                    off.append((k, round(e, 1), "a terre" if down else "debout", f"dy {dy:+.1f}", f"vue {near[k].get('inview', '?')}/{cv.get('inview', '?')}", f"etage {near[k].get('floor', '?')}/{cv.get('floor', '?')}",
                                 f"action {near[k].get('action', '?')}/{cv.get('action', '?')}", f"lit {near[k].get('in', '?')}/{cv.get('in', '?')}"))
                 vd = far_vitals_diff(near[k], cv)
                 if vd:
@@ -2930,13 +2930,17 @@ def far_talk(p):
     # thieves and sentinels of the first run had no line for "talk to me" (the host's own start, when
     # the game's never came, said "the NPC has nothing to say" for every one of them)
     shop = far_merchant(p)
-    targets = ([f"name:{shop}"] if shop else []) + [str(k) for k in range(3)]
+    # many town NPCs have no line for "talk to me" (as in solo: the character walks there, nothing
+    # opens; the host's log says "the NPC has nothing to say"): up to six of the nearest are tried
+    targets = ([f"name:{shop}"] if shop else []) + [str(k) for k in range(6)]
+    tried = set()
     for k in targets:
         r = cmd(p.cli, f"talkto {p.own_c} {k}")
         p.log(f"[dialogue {name}] client talks to {k}:", r)
-        if not r[0]:
+        if not r[0] or r[1] in tried:
             continue
-        d = far_wait_dialog(p, True, 45)
+        tried.add(r[1])
+        d = far_wait_dialog(p, True, 30)
         if "open=1" in d:
             who = k
             break
@@ -3115,60 +3119,73 @@ def far_ground(p):
             f"hote {n0_h} -> {n1_h} / client {n0_c} -> {n1_c}")
 
 
+FAR_FIGHT_BEAST = "3979-gamedata.base"   # Bonedog: fights back (a copied town NPC fled at 80 units/s or sat down)
+
+
 def far_fight_and_loot(p):
-    """A fight next to the client's character (the host's camera at home): the NPC hurt on the host,
-    the same wounds on the client, damage numbers shown there; then the NPC knocked out and looted the
-    right click's way; then a goat killed and looted."""
+    """A fight next to the client's character (the host's camera at home), ordered by the client the
+    right click's way against a beast that fights back: hurt on the host, the same wounds on the
+    client, damage numbers shown there; then an NPC knocked out and looted the right click's way; then
+    a goat killed and looted."""
     host, cli = p.host, p.cli
     f0_h, f0_c = far_floaters(host), far_floaters(cli)
-    npc = None
-    sp = cmd(host, f"spawnnpc 10 6 {p.own_h}")
-    p.log("host spawns an NPC by the client's character:", sp)
+    beast = None
+    sp = cmd(host, f"spawncreature {FAR_FIGHT_BEAST} 30 10 {p.own_h}")
+    p.log("host spawns a bonedog by the client's character:", sp)
     if sp[0]:
-        npc = sp[1].split()[1]
+        beast = sp[1].split()[1]
         time.sleep(3)
-        pn, pm = where_vec(host, npc), p.me()
+        pn, pm = where_vec(host, beast), p.me()
         if pn and pm and abs(pn[1] - pm[1]) >= 15:
-            # the client's character stands on a roof or a wall (where the teleport put it) and the
-            # NPC fell to the ground (first run: 73 units below, five spots in a row): the character
-            # goes down next to it, the NPC stays where it fell
+            # the client's character stands on a roof or a wall (where the teleport put it): it goes
+            # down next to the beast
             p.log(f"   on another level ({pn} / {pm}): the client's character goes next to it",
                   cmd(host, f"teleport {p.own_h} {pn[0] + 8:.0f} {pn[1] + 5:.0f} {pn[2] + 8:.0f}"))
             time.sleep(3)
             pm = p.me()
-        p.check("combat : PNJ cree pres du perso du client, au meme niveau", bool(pn and pm and abs(pn[1] - pm[1]) < 15), f"{pn} / {pm}")
+        p.check("combat : bete creee pres du perso du client, au meme niveau", bool(pn and pm and abs(pn[1] - pm[1]) < 15), f"{pn} / {pm}")
     else:
-        p.check("combat : PNJ cree pres du perso du client", False, sp)
-    if not npc:
-        return
-    v0 = dump(host, f"h_far_{p.tag}_npc0", FAR_ZONE)["char"].get(npc, {})
-    p.log("fight:", cmd(host, f"fight {p.own_h} {npc}"))
-    hurt = False
-    for _ in range(10):
-        time.sleep(4)
-        hv = dump(host, f"h_far_{p.tag}_fight", FAR_ZONE)["char"].get(npc, {})
-        if hv and far_damaged(hv, v0 or None):
-            hurt = True
-            if far_floaters(cli).get("shown", 0) > f0_c.get("shown", 0):
-                break
-        elif hv and hv.get("cmode", "0") == "0":
-            p.log("   combat dropped: fight again", cmd(host, f"fight {p.own_h} {npc}"))
-    time.sleep(3)
-    hv = dump(host, f"h_far_{p.tag}_fight_end", FAR_ZONE)["char"].get(npc, {})
-    p.check("combat : le PNJ est blesse chez l'hote", hurt or (hv and far_damaged(hv, v0 or None)), hv.get("parts", "")[:120])
-    diffs = []
-    for _ in range(4):   # unpaused (the other players go on): the same once the last vitals arrived
-        h, c = dump(host, f"h_far_{p.tag}_fight_end", FAR_ZONE), dump(cli, f"c_far_{p.tag}_fight_end", FAR_ZONE)
-        diffs = [(k, far_vitals_diff(h["char"][k], c["char"][k])) for k in (npc, p.own_key) if k in h["char"] and k in c["char"]]
-        if npc in c["char"] and all(not d for _, d in diffs):
-            break
+        p.check("combat : bete creee pres du perso du client", False, sp)
+    if beast:
+        v0 = dump(host, f"h_far_{p.tag}_npc0", FAR_ZONE)["char"].get(beast, {})
+        p.log("client orders the attack (right click):", cmd(cli, f"attackreq {p.own_c} {beast}"))
+        hurt = False
+        for i in range(12):
+            time.sleep(3)
+            hv = dump(host, f"h_far_{p.tag}_fight", FAR_ZONE)["char"].get(beast, {})
+            if hv and far_damaged(hv, v0 or None):
+                hurt = True
+                if far_floaters(cli).get("shown", 0) > f0_c.get("shown", 0):
+                    break
+            elif i in (3, 7):
+                p.log("   not hurt yet: attack order again", cmd(cli, f"attackreq {p.own_c} {beast}"))
         time.sleep(2)
-    p.check("combat : memes vitaux et blessures chez le client (sang, etat, membres)",
-            npc in c["char"] and all(not d for _, d in diffs), diffs or "PNJ absent chez le client")
-    f1_h, f1_c = far_floaters(host), far_floaters(cli)
-    p.log("damage numbers: host", f0_h, "->", f1_h, "| client", f0_c, "->", f1_c)
-    p.check("combat : l'hote fait les chiffres de degats hors de sa camera", f1_h.get("forced", 0) > f0_h.get("forced", 0), f"{f0_h} -> {f1_h}")
-    p.check("combat : les chiffres de degats arrivent au client", f1_c.get("shown", 0) > f0_c.get("shown", 0), f"{f0_c} -> {f1_c}")
+        hv = dump(host, f"h_far_{p.tag}_fight_end", FAR_ZONE)["char"].get(beast, {})
+        p.check("combat : la bete est blessee chez l'hote", hurt or (hv and far_damaged(hv, v0 or None)), hv.get("parts", "")[:120])
+        diffs, c = [], {"char": {}}
+        for _ in range(4):   # unpaused (the other players go on): the same once the last vitals arrived
+            h, c = dump(host, f"h_far_{p.tag}_fight_end", FAR_ZONE), dump(cli, f"c_far_{p.tag}_fight_end", FAR_ZONE)
+            diffs = [(k, far_vitals_diff(h["char"][k], c["char"][k])) for k in (beast, p.own_key) if k in h["char"] and k in c["char"]]
+            if beast in c["char"] and all(not d for _, d in diffs):
+                break
+            time.sleep(2)
+        p.check("combat : memes vitaux et blessures chez le client (sang, etat, membres)",
+                beast in c["char"] and all(not d for _, d in diffs), diffs or "bete absente chez le client")
+        f1_h, f1_c = far_floaters(host), far_floaters(cli)
+        p.log("damage numbers: host", f0_h, "->", f1_h, "| client", f0_c, "->", f1_c)
+        p.check("combat : l'hote fait les chiffres de degats hors de sa camera", f1_h.get("forced", 0) > f0_h.get("forced", 0), f"{f0_h} -> {f1_h}")
+        p.check("combat : les chiffres de degats arrivent au client", f1_c.get("shown", 0) > f0_c.get("shown", 0), f"{f0_c} -> {f1_c}")
+        p.log("the bonedog dies:", cmd(host, f"kill {beast}"))
+        time.sleep(2)
+    npc = None
+    sp = cmd(host, f"spawnnpc 10 6 {p.own_h}")
+    p.log("host spawns an NPC to loot by the client's character:", sp)
+    if sp[0]:
+        npc = sp[1].split()[1]
+        time.sleep(2)
+    if not npc:
+        p.check("fouille : PNJ cree pres du perso du client", False, sp)
+        return
     # looting there: the NPC knocked out, the client loots it the right click's way
     st = cmd(host, f"npcstate {npc}")[1]
     if "down=0" in st:
@@ -3208,7 +3225,13 @@ def far_fight_and_loot(p):
                 if ok_open:
                     break
         p.check(f"fouille : la fenetre s'ouvre chez le client ({how})", ok_open, stats)
-        p.log("client takes one item:", cmd(cli, f"invmove {body} squad{p.own_c} 0"))
+        # the first item may not fit (a full backpack after the trade and the ore: "err no room"):
+        # the next one, as a player would
+        for which in range(6):
+            took = cmd(cli, f"invmove {body} squad{p.own_c} {which}")
+            p.log(f"client takes item {which}:", took)
+            if took[0] or "no room" not in took[1]:
+                break
         time.sleep(4)
         h, c = dump(host, f"h_far_{p.tag}_looted", FAR_ZONE), dump(cli, f"c_far_{p.tag}_looted", FAR_ZONE)
         inv1 = h["char"].get(body, {}).get("inv")
@@ -3359,6 +3382,92 @@ def exp_faraway(host, clis):
         st = status(p.cli)
         p.check("le client est toujours connecte", st.get("state") == "connected", st)
     log("host god mode off:", cmd(host, "admin god all off"))
+    summary()
+
+
+def exp_farprobe(host, clis):
+    """Short diagnosis of faraway's talk and fight (one client): its character in a far town, the host's
+    camera at home. It talks to the shopkeeper; then the client orders an attack on an NPC spawned by it
+    (the right click's way), and the host's state of both is logged every second; then the same with the
+    host's camera on the client's character (does the fight need the host's camera?)."""
+    cli = clis[0] if isinstance(clis, (list, tuple)) else clis
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    p = FarPlayer(host, cli, 0)
+    h0 = dump(host, "h_probe_home", 3000)
+    keys_h = sorted(h0["squad"], key=lambda k: (int(k.split(":")[3]), int(k.split(":")[4])))
+    p.own_key = keys_h[p.own_h] if p.own_h < len(keys_h) else None
+    hidx = (own_indices(host) or [0])[0]
+    home = where_vec(host, hidx)
+    FAR_HOME[0] = home
+    log("god mode:", cmd(host, "admin god all on"), "| host camera home:", cmd(host, f"camto {hidx}"))
+    cands = far_town_candidates(town_list(host), home)
+    far_go(p, cands, "ville", True, [], threading.Lock())
+    if not p.town:
+        check("probe : une ville loin", False)
+        summary()
+        return
+    time.sleep(5)
+    pass
+
+    def fight_round(tag):
+        sp = cmd(host, f"spawncreature {FAR_FIGHT_BEAST} 30 10 {p.own_h}")
+        log(f"[{tag}] spawn:", sp)
+        if not sp[0]:
+            return False
+        npc = sp[1].split()[1]
+        time.sleep(3)
+        log(f"[{tag}] client attack order:", cmd(cli, f"attackreq {p.own_c} {npc}"))
+        hurt, v0 = False, None
+        for i in range(25):
+            time.sleep(1)
+            h = dump(host, f"h_probe_{tag}", FAR_ZONE)["char"]
+            nv, pv = h.get(npc, {}), h.get(p.own_key, {})
+            v0 = v0 or nv
+            if i % 3 == 0 or not nv:
+                log(f"[{tag}] t={i + 1}s npc cmode={nv.get('cmode')} action={nv.get('action')} inview={nv.get('inview')} speed={nv.get('speed')} "
+                    f"parts={nv.get('parts', '')[:40]} | pc cmode={pv.get('cmode')} action={pv.get('action')} inview={pv.get('inview')} "
+                    f"speed={pv.get('speed')} combat={pv.get('combat')} d={round(dist(nv['pos'], pv['pos'])) if 'pos' in nv and 'pos' in pv else '?'} "
+                    f"| host combat: {cmd(host, f'combat {p.own_h}')[1]}")
+            if nv and far_damaged(nv, v0):
+                hurt = True
+                break
+        log(f"[{tag}] floaters host", far_floaters(host), "client", far_floaters(cli))
+        cmd(host, f"kill {npc}")
+        return hurt
+
+    def talk_round(tag, names):
+        """The same town NPCs each round: does a conversation open? (names from the first round)"""
+        got = {}
+        for nm in names:
+            r = cmd(cli, f"talkto {p.own_c} name:{nm}")
+            d = far_wait_dialog(p, True, 40)
+            got[nm] = "open=1" in d
+            log(f"[{tag}] talk to {nm}: {r} -> {'OPEN' if got[nm] else 'nothing'}")
+            if got[nm]:
+                cmd(cli, "answer leave")
+                far_wait_dialog(p, False, 10)
+        return got
+
+    m = cmd(host, f"merchants {p.own_h}")[1]
+    names = []
+    for nm in re.findall(r" ([^()\[\]]+?)\((\d+)\)", m):
+        n = nm[0].strip().replace(" ", "_")
+        if n not in names:
+            names.append(n)
+    names = names[:4]
+    log("NPCs to talk to each round:", names)
+    rounds = [("loin1", hidx), ("camera", p.own_h), ("loin2", hidx)]
+    for tag, cam in rounds:
+        log(f"[{tag}] host camera on squad member {cam}:", cmd(host, f"camto {cam}"))
+        time.sleep(4)
+        got = talk_round(tag, names)
+        hurt = fight_round(tag)
+        check(f"probe [{tag}] : au moins une conversation s'ouvre", any(got.values()), got)
+        check(f"probe [{tag}] : combat ordonne par le client, la bete est blessee", hurt)
+    cmd(host, f"camto {hidx}")
+    log("god mode off:", cmd(host, "admin god all off"))
     summary()
 
 
@@ -6695,6 +6804,9 @@ def main():
     fw_.add_argument("--save", default="kctest_town")
     fw_.add_argument("--keep", action="store_true")
     fw_.add_argument("--clients", type=int, default=1, help="client players, each in its own far town (3: the 4-player run)")
+    fp_ = sub.add_parser("farprobe", help="short diagnosis: talk and a client-ordered fight far from the host's camera, then with it")
+    fp_.add_argument("--save", default="kctest_town")
+    fp_.add_argument("--keep", action="store_true")
     fl_ = sub.add_parser("farlong", help="the client's character far away (>= 30000) for a long time: zone compared every 30 s, fight, building")
     fl_.add_argument("--save", default="kctest_base")
     fl_.add_argument("--keep", action="store_true")
@@ -6854,6 +6966,15 @@ def main():
         tile([host] + clis)
         try:
             exp_faraway(host, clis)
+        finally:
+            if not a.keep:
+                kill_launched()
+        return
+    if a.what == "farprobe":
+        host, clis, _ids = setup_multi(a.save, 1)
+        tile([host] + clis)
+        try:
+            exp_farprobe(host, clis)
         finally:
             if not a.keep:
                 kill_launched()

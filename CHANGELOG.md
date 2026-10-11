@@ -6,6 +6,30 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+- **Loin de l'hôte, troisième passe (essais `faraway --clients 2` et `farprobe`, 11 octobre).**
+  - *Dialogue : la vraie cause.* `Dialogue::startPlayerConversation` (`0x684320`) refuse toute
+    conversation quand le perso est à plus de 9216 unités de la caméra (`0x6843CA`, distance au nœud
+    de la caméra, `ja 0x6843D1`). Chez l'hôte, la caméra reste sur son escouade : un client loin ne
+    pouvait parler à personne (ni l'ordre du jeu, ni la relance du mod). Pendant qu'on héberge, ce saut
+    est remplacé par un NOP (`kenshi::SetFarTalk`, octets vérifiés avant, remis à la fin de la partie).
+    Vérifié : Patch, Tanishi, Rane répondent loin de l'hôte, caméra à la maison.
+  - *Chiffres de dégâts : la vraie cause.* `MedicalSystem::addWound` saute toute sa partie visuelle
+    quand le blessé est à plus de 4000 unités de la caméra (`0x651348`, distance au carré > 16e6,
+    `jbe 0x651359`), avant même de lire le drapeau « en vue » forcé en 0.3.1. `hk_addWound` lève ce
+    saut le temps de l'appel pour un perso proche d'un joueur client (`kenshi::SetFarWoundVisuals`).
+  - *Combat* : marche loin de l'hôte (bête blessée, mêmes blessures chez le client). Les échecs
+    venaient du test : le PNJ copié d'un habitant fuyait à 80 unités/s ou allait s'asseoir. Le test
+    fait attaquer un Bonedog par le client, par son clic droit (`attackreq <i> <clé>`).
+  - *Pause* : un client se recale 0,8 s à vitesse 0,05 avant de se mettre en pause (0,3 s à 0,01) :
+    loin de sa caméra, un perso ne prend une position écrite qu'à ses propres mises à jour, plus rares ;
+    les marcheurs restaient 20 à 35 unités derrière ceux de l'hôte. Essai d'un recalage par
+    téléportation des copies qui dérivent : retiré (3500 téléportations, sauts visibles, pas mieux).
+  - Tests : `talkto … name:<partie>` cherche vraiment par nom (prenait le plus proche) ; le dialogue
+    essaie jusqu'à six PNJ (beaucoup n'ont rien à dire, comme en solo) ; nouveau `farprobe` (dialogue
+    et combat loin, caméra de l'hôte à la maison puis sur le client) ; vidages : `floor=` (étage).
+  - Reste : quelques PNJ 16 à 57 unités plus haut chez le client (même étage des deux côtés sauf un),
+    quelques marches à reculons.
+
 - **Loin de l'hôte, deuxième passe (essai `faraway` 24/33 avec a100038).**
   - *Le crochet `hk_charUpdateView` marche* (contrairement à ce que montrait « vue 0/0 ») : compteurs
     `forced` 1,3 M chez l'hôte et 1,46 M chez le client ; hors pause, 78 à 79 persos sur 107-117 sont

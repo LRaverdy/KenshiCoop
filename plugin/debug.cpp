@@ -97,6 +97,7 @@ void DumpCharacter(std::ostream& o, const char* tag, KenshiWorld& w, const kc::H
     if (kenshi::Character* ch = w.Find(h)) o << " class=" << std::hex << kenshi::ClassRvas(ch) << std::dec;
     if (kenshi::Character* ch = w.Find(h)) o << " inview=" << int(kenshi::InView(ch));
     if (int in = 0; kenshi::Character* ch = w.Find(h)) o << " in=" << (kenshi::ReadInSomething(ch, in) ? in : -1);   // 0 nothing, 1 bed, 2 cage
+    if (int32_t fg = 0; kenshi::Character* ch = w.Find(h)) o << " floor=" << (kenshi::ReadFloorGroup(ch, fg) ? fg : -1);   // CharMovement floor group (9+: a building floor)
     if (std::string nm; kenshi::Character* ch = w.Find(h)) {   // the character's name ('_' for spaces): who is who with 3+ players
         if (kenshi::CharacterName(ch, nm) && !nm.empty()) {
             for (char& ch2 : nm) if (ch2 == 32 || ch2 == 61 || (unsigned char)ch2 < 32) ch2 = 95;   // spaces, =, control chars -> _
@@ -1215,11 +1216,11 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         return "ok " + std::to_string(m) + " " + std::to_string(style);
     }
     // ---- fix G5
-    if (cmd == "attackreq") {   // attackreq <selectIndex>: that member alone is ordered to attack the last spawned NPC (a right click's addOrderSelectedCharacters)
+    if (cmd == "attackreq") {   // attackreq <selectIndex> [key]: that member alone is ordered to attack the last spawned NPC or that one (a right click's addOrderSelectedCharacters)
         size_t sel = 0;
         in >> sel;
         auto squad = SortedSquad(w);
-        kenshi::Character* t = w.Find(lastSpawned_);
+        kenshi::Character* t = w.Find(SpawnedOr(in));
         kc::Vec3 tp;
         if (sel >= squad.size() || !t || !kenshi::GetPosition(t, tp)) return "err need a squad member and a spawned NPC";
         if (auto r = LocalTaskRefused(s, w, w.FindSquad(squad[sel]), kc::TaskVia::AddOrder, 5, t); !r.empty()) return r;
@@ -1917,7 +1918,17 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
                 nearby.emplace_back((p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z), c);
             }
             std::sort(nearby.begin(), nearby.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-            if (k < nearby.size()) npc = nearby[k].second;
+            if (which.rfind("name:", 0) == 0) {   // the nearest whose name (or race-job name) has that part
+                std::string part = which.substr(5);
+                for (char& ch : part) if (ch == '_') ch = ' ';
+                for (const auto& [d, c] : nearby) {
+                    std::string nm;
+                    if (kenshi::CharacterName(c, nm) && nm.find(part) != std::string::npos) { npc = c; break; }
+                }
+                if (!npc) return "err no NPC named " + part + " around";
+            } else if (k < nearby.size()) {
+                npc = nearby[k].second;
+            }
         }
         if (!npc) return "err no such NPC";
         if (auto r = LocalTaskRefused(s, w, me, kc::TaskVia::TaskNearest, kc::kTaskTalk, npc); !r.empty()) return r;

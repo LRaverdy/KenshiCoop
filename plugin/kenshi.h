@@ -774,6 +774,18 @@ inline constexpr uintptr_t kAddWoundBegin = 0x6508D0, kAddWoundEnd = 0x651FF1;
 // set (0x651DF5): the host's game makes none for characters its camera does not see (0.3.1).
 inline constexpr uintptr_t CH_inView = 0x1A9;
 bool InView(const Character* c);   // CH_inView as the game (and hk_charUpdateView) left it this frame
+// Dialogue::startPlayerConversation (0x684320) refuses a conversation when the player's character is
+// more than 9216 units from the camera (0x6843CA: Vector3::distance to the camera node, > 0x1700514,
+// ja 0x6843D1 -> return false). On the host a client player far from the host's camera could never
+// talk to anyone (faraway test, 11 October: every talk order of both clients, the game's and the
+// mod's start alike). On while hosting: that jump is replaced by a NOP; off: the game's bytes back.
+// Main thread only. False if the bytes there are not the expected ones (another game version).
+bool SetFarTalk(bool on);
+// MedicalSystem::addWound skips its whole visual part (damage numbers included) when the wounded one
+// is more than 4000 units from the camera (0x651348: squaredDistance > 16e6 at 0x16EAC6C, jbe
+// 0x651359 -> 0x651F69). hk_addWound lifts it for the call, for characters near a client player's
+// own (faraway test, 11 October: forced in view, no damage number made). Game thread only.
+bool SetFarWoundVisuals(bool on);
 Character* CharacterOfHand(const void* hand);
 // Items on the ground
 bool ItemOnGround(void* item);                             // in the world, not in an inventory

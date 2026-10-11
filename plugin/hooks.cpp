@@ -1016,15 +1016,19 @@ uint8_t hk_charUpdateView(void* chr) {
 // flag is set for the duration of the call (0.3.1); the number appears off the host's screen and goes
 // to that player through hk_createLabel. Nothing else in addWound reads that flag (disassembly).
 // Since hk_charUpdateView those characters are usually in view already: counted all the same.
+// The flag was not enough (faraway test, 11 October: forced, no number made): beyond 4000 units of
+// the camera addWound skips the whole visual part before reading it (kenshi::SetFarWoundVisuals).
 using AddWoundFn = uint64_t (*)(void* medical, uint64_t a2, uint64_t a3, void* a4, void* a5, void* a6, void* a7, void* a8);
 AddWoundFn o_addWound = nullptr;
 uint64_t hk_addWound(void* medical, uint64_t a2, uint64_t a3, void* a4, void* a5, void* a6, void* a7, void* a8) {
     uint8_t* flag = nullptr;
+    uint8_t* seen = nullptr;   // the wounded one's CH_inView, when it is near a client player's characters
     if (!KenshiWorld::ClientActive() && medical) {
         auto v = KenshiWorld::View();
         if (v->active && v->remoteNear && !v->remoteNear->empty())
             if (kenshi::Character* c = kenshi::MedicalCharacter(medical); c && v->remoteNear->count(c)) {
                 uint8_t* f = reinterpret_cast<uint8_t*>(c) + kenshi::CH_inView;
+                seen = f;
                 if (*f == 0) {
                     *f = 1;
                     flag = f;
@@ -1034,7 +1038,11 @@ uint64_t hk_addWound(void* medical, uint64_t a2, uint64_t a3, void* a4, void* a5
                 }
             }
     }
+    // more than 4000 units from the host's camera, addWound skips its visual part, damage numbers
+    // included (kenshi::SetFarWoundVisuals): lifted for this call
+    const bool farVisuals = seen && kenshi::SetFarWoundVisuals(true);
     const uint64_t r = o_addWound(medical, a2, a3, a4, a5, a6, a7, a8);
+    if (farVisuals) kenshi::SetFarWoundVisuals(false);
     if (flag && *flag == 1) *flag = 0;   // as it was (the game sets it again on its next frame anyway)
     return r;
 }

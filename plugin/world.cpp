@@ -232,8 +232,11 @@ void KenshiWorld::EndFrame() {
         // runs a few frames at a crawl (its clock barely moves: the game recomputes it from its own
         // counter and it cannot be set back) while Apply puts every character exactly where the
         // host's stopped.
-        constexpr double kSettleBeforePause = 0.3;
-        constexpr float kCrawl = 0.01f;
+        // 0.8 s at 0.05 (was 0.3 s at 0.01): far from this game's camera a character takes a written
+        // position only on its own, rarer updates; with 0.3 s at 0.01 walkers far away stayed where
+        // they were, 20-35 units behind the host's (faraway test, 11 October)
+        constexpr double kSettleBeforePause = 0.8;
+        constexpr float kCrawl = 0.05f;
         const double now = NowSeconds();
         if (hostTime_.paused && !kenshi::GetPaused()) {
             if (pauseSeenAt_ < 0) {
@@ -263,6 +266,11 @@ void KenshiWorld::EndFrame() {
     }
     if (active_ && client_ && live_ && !pendingLoot_.empty()) UpdatePendingLoot();
     if (active_ && !client_ && live_ && !pickups_.empty()) UpdatePendingPickups();
+    if (const bool farTalk = active_ && !client_; farTalk != farTalk_) {   // see kenshi::SetFarTalk
+        const bool ok = kenshi::SetFarTalk(farTalk);
+        farTalk_ = farTalk;
+        Log("conversations far from the host's camera: %s", ok ? (farTalk ? "allowed" : "the game's rule again") : "CANNOT PATCH (unexpected bytes)");
+    }
     if (active_ && !client_ && live_ && !pendingTalks_.empty()) UpdatePendingTalks();
     if (active_ && !client_ && live_ && !reRagdoll_.empty()) UpdateReRagdolls();
     if (active_ && client_ && live_) GroundReconcile();
