@@ -2377,6 +2377,87 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         return "ok " + std::to_string(n) + out;
     }
+    if (cmd == "animalshop") {
+        // animalshop <buyerSquadIndex> [radius] [basePrice]: what a farmer's "animals for sale?" does: the
+        // game's animal window between that squad member and the nearest NPC (not an animal), offering
+        // every live animal of no squad within radius (default 500) of the member. On the host, for
+        // another player's character, it opens on that player's screen.
+        size_t sel = 0;
+        float radius = 500.0f;
+        int price = 0;
+        in >> sel;
+        if (!(in >> radius)) radius = 500.0f;
+        if (!(in >> price)) price = 0;
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kc::Vec3 mp, p;
+        if (!kenshi::GetPosition(me, mp)) return "err";
+        std::vector<kenshi::Character*> all, animals;
+        kenshi::ActiveCharacters(all);
+        kenshi::Character* seller = nullptr;
+        float bestD = 1e30f;
+        for (kenshi::Character* c : all) {
+            kc::Handle h;
+            if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsDown(c) || kenshi::InPlayerSquad(c) || !kenshi::GetPosition(c, p)) continue;
+            const float d = (p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z);
+            if (kenshi::IsAnimal(c)) { if (d <= radius * radius) animals.push_back(c); continue; }
+            if (d < bestD) { bestD = d; seller = c; }
+        }
+        if (!seller) return "err no NPC around to sell";
+        if (animals.empty()) return "err no animal of no squad within " + std::to_string(int(radius));
+        std::string name;
+        kenshi::CharacterName(seller, name);
+        return kenshi::OpenAnimalShopWindow(seller, me, animals, price, nullptr) ? "ok seller=" + name + " animals=" + std::to_string(animals.size())
+                                                                                 : "err the game's window could not be made";
+    }
+    if (cmd == "animalshopstate") {   // animalshopstate: the animal window here (entries price:ticked), offers kept / animals sold (host), offer open (client)
+        void* win = kenshi::TradingWindow();
+        void* h = win ? kenshi::TradingWindowHandler(win) : nullptr;
+        std::vector<kenshi::ShopEntry> entries;
+        if (h) kenshi::AnimalShopEntries(h, entries);
+        std::string list;
+        for (const auto& e : entries) list += " " + Key(e.animal) + ":" + std::to_string(e.price) + (e.ticked ? ":x" : "");
+        return "ok window=" + std::to_string(win ? 1 : 0) + " visible=" + std::to_string(win && kenshi::TradingWindowVisible(win) ? 1 : 0) + " entries=" +
+               std::to_string(entries.size()) + " offers=" + std::to_string(s.animalOffers()) + " sold=" + std::to_string(s.animalsSold()) + " offer=" +
+               std::to_string(s.animalShopOpen()) + " |" + list;
+    }
+    if (cmd == "animalbuy") {   // animalbuy <entry> [entry...]: tick those animals in the open animal window and press its confirm button
+        void* win = kenshi::TradingWindow();
+        void* h = win ? kenshi::TradingWindowHandler(win) : nullptr;
+        if (!h || !kenshi::TradingWindowVisible(win)) return "err no animal window open here";
+        size_t i = 0;
+        int n = 0;
+        while (in >> i) { if (!kenshi::TickAnimalEntry(h, i, true)) return "err no entry " + std::to_string(i); ++n; }
+        if (!n) return "err usage: animalbuy <entry> [entry...]";
+        int32_t before = 0, after = 0;
+        kenshi::ReadPlayerMoney(before);
+        const bool ok = kenshi::PressTradingConfirm(win);
+        kenshi::ReadPlayerMoney(after);
+        return (ok ? "ok " : "err ") + std::string("cats ") + std::to_string(before) + "->" + std::to_string(after) + " window=" +
+               std::to_string(kenshi::TradingWindow() && kenshi::TradingWindowVisible(kenshi::TradingWindow()) ? 1 : 0);
+    }
+    if (cmd == "prospect") {   // prospect <squadIndex>: select that member alone and press the orders bar's PROSPECT button (as a click)
+        size_t sel = 0;
+        in >> sel;
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        bool ok = false;
+        kenshi::WithSelection(me, [&] { ok = kenshi::PressProspectButton(); });
+        return ok ? "ok" : "err call failed";
+    }
+    if (cmd == "prospectstate") {   // prospectstate: the prospecting window here: visible, and the place, skill and name it shows
+        bool visible = false;
+        kc::Vec3 p;
+        float skill = 0;
+        std::string name;
+        if (!kenshi::ProspectingState(visible, p, skill, name)) return "err no prospecting window";
+        std::replace(name.begin(), name.end(), ' ', '_');
+        std::ostringstream o;
+        o << "ok visible=" << (visible ? 1 : 0) << " pos=" << int(p.x) << "," << int(p.z) << " skill=" << skill << " name=" << name;
+        return o.str();
+    }
     if (cmd == "caravan" || cmd == "caravanbeast" || cmd == "caravanopen") {
         // caravan: the nearest living stranger without a home building whose squad has pack animals
         // (a travelling trader): "trader=<name> key=<key> home=0 members=N animals=M stock=<stacks of

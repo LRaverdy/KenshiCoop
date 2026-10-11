@@ -1751,6 +1751,17 @@ extern void (*o_openButton)(void*, void*);
 extern void (*o_lockButton)(void*, void*);
 } // namespace doorhooks
 // ---- end lot A
+// ---- animal shops and prospecting (plugin/shops.cpp)
+namespace shophooks {
+void* hk_animalCtor(void*, kenshi::Character*, kenshi::Character*, void*, int);
+bool hk_animalConfirm(void*);
+void hk_tradeWindowShow(void*, bool);
+void hk_prospectButton(void*, void*);
+extern void* (*o_animalCtor)(void*, kenshi::Character*, kenshi::Character*, void*, int);
+extern bool (*o_animalConfirm)(void*);
+extern void (*o_tradeWindowShow)(void*, bool);
+extern void (*o_prospectButton)(void*, void*);
+} // namespace shophooks
 // ---- workshop (plugin/workshop.cpp)
 namespace workshophooks {
 bool hk_start(void*, void*);
@@ -1914,6 +1925,11 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnUpdatePowerGrid, reinterpret_cast<void*>(&workshophooks::hk_grid), reinterpret_cast<void**>(&workshophooks::o_grid)},
         {kenshi::FnTogglePowerButton, reinterpret_cast<void*>(&workshophooks::hk_power), reinterpret_cast<void**>(&workshophooks::o_power)},
         {kenshi::FnToggleBattButton, reinterpret_cast<void*>(&workshophooks::hk_batt), reinterpret_cast<void**>(&workshophooks::o_batt)},
+        // ---- animal shops and prospecting
+        {kenshi::FnAnimalTradeCtor, reinterpret_cast<void*>(&shophooks::hk_animalCtor), reinterpret_cast<void**>(&shophooks::o_animalCtor)},
+        {kenshi::FnAnimalTradeConfirm, reinterpret_cast<void*>(&shophooks::hk_animalConfirm), reinterpret_cast<void**>(&shophooks::o_animalConfirm)},
+        {kenshi::FnCharTradeWindowShow, reinterpret_cast<void*>(&shophooks::hk_tradeWindowShow), reinterpret_cast<void**>(&shophooks::o_tradeWindowShow)},
+        {kenshi::FnProspectButton, reinterpret_cast<void*>(&shophooks::hk_prospectButton), reinterpret_cast<void**>(&shophooks::o_prospectButton)},
         // ---- crash report
         {kenshi::FnWriteCrashDump, reinterpret_cast<void*>(&hk_writeCrashDump), reinterpret_cast<void**>(&o_writeCrashDump)},
     };

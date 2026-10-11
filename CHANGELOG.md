@@ -98,6 +98,23 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
     étendus ; expérience `workstations`.
 - **FPS des clients quand les joueurs s'éloignent (3b).** Chez un client, les persos de l'hôte qu'il ne reçoit plus (loin de ses persos, en sommeil) étaient quand même mis « dans la vue » par `hk_charUpdateView` : déplacement complet et animation à chaque image pour ~200 persos que personne ne voit (Geoffrey 133 → 46 fps, nass4 jusqu'à 10). Ils sont laissés à la mise à jour lointaine du jeu (`IWorld::SetFarCharacters`, `HookView::farAway`) ; jamais un membre d'escouade, et un perso renvoyé par l'hôte repasse en complet dans la même image. Mesure : ligne `sync perf` par minute (notre travail par image, fps, persos près / loin), `host perf` chez l'hôte, commandes `perf`, `standins`, `farleave`. Test `farfps --clients 3`. Pas de changement de protocole (35). À tester en jeu.
 - **Murs traversés loin de la caméra de l'hôte (3f).** Désassemblage : ni le navmesh ni la physique des bâtiments ne dépendent de la caméra. La mise à jour complète du déplacement (murs du navmesh) exige un pas de moins de 0,5 s de temps de jeu (`0x660A47`) : chez l'hôte, un pas plus long d'un perso près d'un joueur client (gel de l'hôte à x2/x3) est coupé en morceaux de 0,4 s (`hk_moveUpdate`). Compteurs `movestats`, `navcheck`, `navat`, `wallsnear` ; test `farwalls`. À tester en jeu.
+- **Achat d'animaux par un client (A_FAIRE 3i).** « T'as des animaux à vendre ? » dans la
+  conversation d'un client ouvrait la fenêtre d'achat d'animaux sur l'écran de l'hôte. L'action de
+  dialogue (`CHOOSE_ANIMALS_BUYING`) fait un gestionnaire d'achat (`0x6A9440`) puis une
+  `CharacterTradingWindow` (`0x72A880`) : l'hôte note le gestionnaire fait pour le perso d'un autre
+  joueur, garde la fenêtre cachée et envoie l'offre à ce joueur (**protocole 36** : `AnimalShop`,
+  `AnimalBuy`). Le client ouvre la même fenêtre du jeu avec ses copies ; sa validation part chez
+  l'hôte, qui vérifie l'acheteur (le sien), l'offre et l'argent, puis vend avec le gestionnaire gardé
+  (`confirm` du jeu : recrutement, cats prises). L'animal est au joueur et rejoint l'escouade de son
+  perso (`Session::AnimalFollowsOwner`, aussi après une recrue). Fichiers : `common/src/session_animals.cpp`,
+  `plugin/shops.cpp`. Tests : `TestAnimalShop`, `coop_test.py animalshop`. À tester en jeu.
+- **Prospection chez un client (A_FAIRE 3p).** Le bouton PROSPECT (`0x721800`) donne la tâche 150
+  par `Character::addOrder` (aucun crochet d'ordre ne la voyait) et la fenêtre s'ouvre à la fin de la
+  tâche, qui ne tourne jamais chez un client : rien ne s'ouvrait, rien dans le journal. Le client
+  ouvre maintenant la fenêtre tout de suite pour son perso (`ProspectingWindow::showT` : position,
+  science, nom ; la fenêtre ne lit que les données du jeu). L'hôte ne peut plus prospecter avec le
+  perso d'un autre joueur. Test : `coop_test.py prospect`. À tester en jeu.
+- Commandes de debug : `animalshop`, `animalshopstate`, `animalbuy`, `prospect`, `prospectstate`.
 
 ## v0.3.1 (11 octobre 2026)
 

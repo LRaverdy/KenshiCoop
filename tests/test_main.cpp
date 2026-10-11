@@ -550,6 +550,36 @@ struct FakeWorld : IWorld {
         return true;
     }
     bool JoinSquadOf(const Handle& who, const Handle& leader) override { joins.emplace_back(who.serial, leader.serial); return true; }
+    // animal shops: host offers the game made, the sales it ran, the offers it freed; client windows and choices
+    std::vector<AnimalOffer> animalOffersQ;
+    std::vector<uint32_t> animalsSoldHere;
+    std::vector<uint64_t> animalOffersDropped;
+    int32_t animalPrice = 100;       // per animal
+    std::string animalSaleFails;     // non-empty: SellAnimals refuses with this reason
+    int animalShopOpens = 0;
+    std::vector<Handle> animalShopShown;
+    int32_t animalShopBase = -1;
+    std::vector<AnimalChoice> animalChoicesQ;
+    void TakeAnimalOffers(std::vector<AnimalOffer>& out) override { out.swap(animalOffersQ); animalOffersQ.clear(); }
+    bool SellAnimals(uint64_t, const std::vector<Handle>& animals, int32_t& price, std::string& why) override {
+        price = 0;
+        if (!animalSaleFails.empty()) { why = animalSaleFails; return false; }
+        for (const Handle& h : animals) {
+            chars[h.serial].squad = true;   // recruited: it joins the player faction (same handle here)
+            animalsSoldHere.push_back(h.serial);
+            price += animalPrice;
+        }
+        money -= price;
+        return true;
+    }
+    void DropAnimalOffer(uint64_t key) override { animalOffersDropped.push_back(key); }
+    bool OpenAnimalShop(const Handle&, const Handle&, const std::vector<Handle>& animals, int32_t basePrice) override {
+        ++animalShopOpens;
+        animalShopShown = animals;
+        animalShopBase = basePrice;
+        return true;
+    }
+    void TakeAnimalChoices(std::vector<AnimalChoice>& out) override { out.swap(animalChoicesQ); animalChoicesQ.clear(); }
     int TheftCheck(const Handle& thief, const Handle& from, const ItemState& item) override {
         (void)thief; (void)from; (void)item;
         ++thefts;
@@ -3031,6 +3061,119 @@ static void TestTrade() {
     hw.tradeReqs.push_back({FakeWorld::H(me), FakeWorld::H(51)});
     Run({{&host, &hw}, {&cli, &cw}}, 1.5);
     CHECK(!cli.tradeView().open && !cli.tradeView().pending && host.hostTrades() == 0);
+}
+
+// Animal shops (A_FAIRE 3i): the host's game offers animals to a client player's character; the window
+// opens on that player's screen; their choice is sold by the host's game, the animals become theirs
+// and follow their squad; forged or stale answers are refused.
+static void TestAnimalShop() {
+    std::printf("session: animal shop offered to the player, bought through the host, the animals theirs\n");
+    {   // the messages (protocol 36)
+        AnimalShopMsg m; m.offerId = 7; m.sellerNetId = 3; m.buyerNetId = 4; m.basePrice = 1200; m.animals = {9, 10};
+        Writer w; Encode(w, m);
+        Reader r(w.data(), w.size());
+        AnimalShopMsg d;
+        CHECK(PeekType(r) == Msg::AnimalShop && Decode(r, d) && d.offerId == 7 && d.sellerNetId == 3 && d.buyerNetId == 4 && d.basePrice == 1200 && d.animals == m.animals);
+        AnimalBuyMsg b; b.offerId = 7; b.buyerNetId = 4; b.animals = {10}; b.shownPrice = 3000;
+        Writer wb; Encode(wb, b);
+        Reader rb(wb.data(), wb.size());
+        AnimalBuyMsg db;
+        CHECK(PeekType(rb) == Msg::AnimalBuy && Decode(rb, db) && db.animals == b.animals && db.shownPrice == 3000);
+        b.buyerNetId = 0;   // no actor named: malformed
+        Writer wz; Encode(wz, b);
+        Reader rz(wz.data(), wz.size());
+        CHECK(PeekType(rz) == Msg::AnimalBuy && !Decode(rz, db));
+        CHECK(MessageRuleFor(Msg::AnimalShop)->role == AuthRole::HostOnly && MessageRuleFor(Msg::AnimalBuy)->subject == AuthSubject::OwnCharacter);
+    }
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    FakeChar seller; seller.squad = false; seller.pos = {10, 0, -20}; seller.dest = seller.pos;
+    hw.chars[60] = seller;
+    for (uint32_t a : {70u, 71u, 72u}) {
+        FakeChar beast; beast.squad = false; beast.animal = true; beast.pos = {12.0f + float(a - 70) * 3, 0, -22}; beast.dest = beast.pos;
+        hw.chars[a] = beast;
+    }
+    hw.money = 1000;
+    AtMenu(cw);
+    SessionConfig hc; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    std::vector<std::string> hostLog;
+    Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(cli.Join("127.0.0.1", hc.port, &err));
+    const uint32_t me = 5000;   // the client player's own character
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}};
+    std::map<uint32_t, uint32_t> net;
+    auto nets = [&] { net.clear(); host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { net[h.serial] = id; }); };
+    Run(all, 3.0, [&] { nets(); return cw.money == 1000 && net.count(60) && net.count(70) && net.count(71) && net.count(72) && cw.chars.count(71); });
+    nets();
+    CHECK(cw.money == 1000 && net.count(60) && net.count(71));
+    // 1. the dialogue's "animals for sale?" in the client's conversation: the offer goes to them
+    hw.animalOffersQ.push_back({0xA1, FakeWorld::H(60), FakeWorld::H(me), 0, {FakeWorld::H(70), FakeWorld::H(71), FakeWorld::H(72)}});
+    Run(all, 2.0, [&] { return cw.animalShopOpens == 1 && cli.animalShopOpen() != 0; });
+    CHECK(cw.animalShopOpens == 1 && cli.animalShopOpen() != 0 && host.animalOffers() == 1);
+    CHECK(cw.animalShopShown.size() == 3 && cw.animalShopBase == 0);
+    // 2. they buy one: the host's game sells it with the offer it kept, takes the cats, the animal is
+    //    theirs and joins their own character's squad; the money is the same everywhere
+    cw.animalChoicesQ.push_back({{FakeWorld::H(71)}, 100});
+    Run(all, 4.0, [&] { return host.animalsSold() == 1 && cw.money == 900; });
+    CHECK(host.animalsSold() == 1 && hw.animalsSoldHere == std::vector<uint32_t>{71} && hw.money == 900 && cw.money == 900);
+    CHECK(std::count(hw.animalOffersDropped.begin(), hw.animalOffersDropped.end(), uint64_t(0xA1)) == 1 && host.animalOffers() == 0);
+    CHECK(cli.animalShopOpen() == 0);
+    Run(all, 3.0, [&] { nets(); uint8_t o = 0; host.ForEachEntity([&](uint32_t, const Handle& h, uint8_t ow, bool, bool) { if (h.serial == 71) o = ow; }); return o == cli.localId(); });
+    uint8_t owner71 = 0;
+    host.ForEachEntity([&](uint32_t, const Handle& h, uint8_t ow, bool, bool) { if (h.serial == 71) owner71 = ow; });
+    CHECK(owner71 == cli.localId());
+    CHECK(std::find(hw.joins.begin(), hw.joins.end(), std::make_pair(71u, me)) != hw.joins.end());
+    // 3. a forged answer naming an animal that offer does not hold (the seller): refused, nothing sold
+    nets();
+    hw.animalOffersQ.push_back({0xA2, FakeWorld::H(60), FakeWorld::H(me), 0, {FakeWorld::H(70)}});
+    Run(all, 2.0, [&] { return cw.animalShopOpens == 2; });
+    CHECK(cw.animalShopOpens == 2 && cw.animalShopShown.size() == 1);
+    const uint32_t refusals0 = host.actorRefusals();
+    {
+        AnimalBuyMsg b; b.offerId = cli.animalShopOpen(); b.buyerNetId = net[me]; b.animals = {net[60]};
+        Writer w; Encode(w, b); CHECK(host.InjectForTest(cli.localId(), w));
+    }
+    Run(all, 1.0);
+    CHECK(host.animalsSold() == 1 && host.actorRefusals() == refusals0 + 1 && host.animalOffers() == 0);
+    CHECK(std::count(hw.animalOffersDropped.begin(), hw.animalOffersDropped.end(), uint64_t(0xA2)) == 1);
+    // 4. an answer for another player's character (the host's): refused by the authority check
+    {
+        AnimalBuyMsg b; b.offerId = 99; b.buyerNetId = net[1]; b.animals = {net[70]};
+        Writer w; Encode(w, b); CHECK(host.InjectForTest(cli.localId(), w));
+    }
+    Run(all, 0.5);
+    CHECK(host.animalsSold() == 1 && host.actorRefusals() == refusals0 + 2);
+    // 5. the game cannot sell (not enough cats): the player is told, the offer freed, nothing changes
+    hw.animalOffersQ.push_back({0xA3, FakeWorld::H(60), FakeWorld::H(me), 500, {FakeWorld::H(70), FakeWorld::H(72)}});
+    Run(all, 2.0, [&] { return cw.animalShopOpens == 3; });
+    CHECK(cw.animalShopOpens == 3 && cw.animalShopBase == 500);
+    Run(all, 2.1);   // (the refusals above were told: the next note waits 2 s)
+    hw.animalSaleFails = "pas assez d'argent";
+    cw.animalChoicesQ.push_back({{FakeWorld::H(70), FakeWorld::H(72)}, 200});
+    Run(all, 2.0, [&] { return std::count(hw.animalOffersDropped.begin(), hw.animalOffersDropped.end(), uint64_t(0xA3)) == 1; });
+    CHECK(host.animalsSold() == 1 && hw.money == 900 && !hw.chars[70].squad);
+    bool told = false;
+    Run(all, 1.0, [&] { for (const auto& l : cli.chatLog()) told |= l.find("pas assez d'argent") != std::string::npos; return told; });
+    CHECK(told);
+    hw.animalSaleFails.clear();
+    // 6. the window closed without buying: the offer is freed
+    hw.animalOffersQ.push_back({0xA4, FakeWorld::H(60), FakeWorld::H(me), 0, {FakeWorld::H(72)}});
+    Run(all, 2.0, [&] { return cw.animalShopOpens == 4; });
+    CHECK(host.animalOffers() == 1);
+    cw.animalChoicesQ.push_back({});
+    Run(all, 2.0, [&] { return host.animalOffers() == 0; });
+    CHECK(host.animalOffers() == 0 && host.animalsSold() == 1 && !hw.chars[72].squad);
+    CHECK(std::count(hw.animalOffersDropped.begin(), hw.animalOffersDropped.end(), uint64_t(0xA4)) == 1);
+    // 7. an offer for the host's own character never leaves the host
+    const int opens = cw.animalShopOpens;
+    hw.animalOffersQ.push_back({0xA5, FakeWorld::H(60), FakeWorld::H(1), 0, {FakeWorld::H(72)}});
+    Run(all, 1.0);
+    CHECK(cw.animalShopOpens == opens && host.animalOffers() == 0);
+    CHECK(std::count(hw.animalOffersDropped.begin(), hw.animalOffersDropped.end(), uint64_t(0xA5)) == 1);
+    CHECK(host.state() == SessionState::Hosting && cli.state() == SessionState::Connected);
 }
 
 static void TestTravellingTrade() {
@@ -6164,6 +6307,7 @@ int main() {
     TestClientDropGate();
     TestTrade();
     TestTravellingTrade();
+    TestAnimalShop();   // A_FAIRE 3i
     TestCrashRejoin();
     TestBuildings();
     TestRanged();   // lot C

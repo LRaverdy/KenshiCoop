@@ -335,7 +335,7 @@ Ordre dans `Tick()` (`main.cpp`) :
 
 ## Messages (`common/include/kc/protocol.h`)
 
-Version du protocole : **36** (36 : `MachineState` porte le drapeau `kMachFarm` et l'état des cultures d'une ferme, `CropState` ; 35 : monde envoyé compressé : `WorldBegin` et `WorldChunk` portent les tailles décompressées ; `JoinQueue` aussi pour un joueur dans le monde qui attend l'éditeur ; 34 : atelier : `Research`, `ResearchRequest`, `Machines`, `MachineRequest` ; fenêtre Escouade : `SquadState`, `SquadRequest`, `JobState` ; 33 : sacs à dos portés : `BagBind` ; sécurité des acteurs : `Result` ; file d'attente des arrivées : `JoinQueue` ; diplomatie : `Diplomacy` ; carte : `MapMarkers`, `MapPing`) au moment de la rédaction. Elle augmente à chaque changement de
+Version du protocole : **36** (36 : boutique d'animaux (`AnimalShop`, `AnimalBuy`) ; `MachineState` porte le drapeau `kMachFarm` et l'état des cultures d'une ferme, `CropState` ; 35 : monde envoyé compressé : `WorldBegin` et `WorldChunk` portent les tailles décompressées ; `JoinQueue` aussi pour un joueur dans le monde qui attend l'éditeur ; 34 : atelier : `Research`, `ResearchRequest`, `Machines`, `MachineRequest` ; fenêtre Escouade : `SquadState`, `SquadRequest`, `JobState` ; 33 : sacs à dos portés : `BagBind` ; sécurité des acteurs : `Result` ; file d'attente des arrivées : `JoinQueue` ; diplomatie : `Diplomacy` ; carte : `MapMarkers`, `MapPing`) au moment de la rédaction. Elle augmente à chaque changement de
 format, et une version différente est refusée à la connexion.
 
 Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51, 63 à 67, 69, 73 à 79, 81, 84,
@@ -383,6 +383,8 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | 37 | ContainerOpened | H→C | il y est : netId du contenant (son contenu suit en `Inventory`) |
 | 38 | ContainerClose | ⇄ | fenêtre fermée (client) ou à fermer (hôte : vol repéré, trop loin) |
 | 39 | TradeOpen | H→C | commerce avec un marchand : ses comptoirs (ou les sacs portés de sa caravane : `ownerNetId`), ses cats ; leurs objets suivent en `Inventory` |
+| 91 | AnimalShop | H→C | protocole 36 : les animaux qu'un vendeur propose au perso du joueur (« T'as des animaux à vendre ? ») : vendeur, acheteur, prix de base, netIds des animaux ; ou une note si rien ne peut s'ouvrir |
+| 92 | AnimalBuy | C→H | protocole 36 : les animaux cochés dans cette fenêtre (aucun : fermée sans achat) ; acteur = l'acheteur (règle `OwnCharacter`) |
 | 40 | Doors | H→C | portes et serrures près des joueurs : ouverte/fermée, verrouillée, niveau de serrure, cassée (lot A) |
 | 41 | DoorRequest | C→H | le joueur a cliqué un bouton du panneau d'une porte (ouvrir, verrouiller) (lot A) |
 | 43 | Factions | H→C | relations de la faction du joueur avec chaque faction, dans les deux sens ; rang et réputation |
@@ -719,6 +721,32 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 5. La fermeture vient du client (fenêtre fermée), ou de l'hôte : vol repéré, ou personnage à plus
    de 50 unités.
 
+### Boutique d'animaux (`session_animals.cpp`, `plugin/shops.cpp`)
+1. Dans la conversation d'un client, la réponse « T'as des animaux à vendre ? » lance chez l'hôte
+   l'action de dialogue `CHOOSE_ANIMALS_BUYING` : le jeu fait son gestionnaire d'achat (vendeur,
+   acheteur, une entrée par animal avec son prix) puis sa fenêtre.
+2. L'hôte note ce gestionnaire quand l'acheteur est le perso d'un autre joueur (`hk_animalCtor`),
+   garde la fenêtre cachée et retire le gestionnaire de la fenêtre (`hk_tradeWindowShow`) : c'est
+   l'offre, gardée jusqu'à la réponse (5 min au plus, une par joueur).
+3. `HostAnimalShops` envoie `AnimalShop` à ce joueur, avec les animaux qu'il suit (sinon une note).
+4. Le client fait la même fenêtre du jeu avec ses copies du vendeur, de son perso et des animaux
+   (`OpenAnimalShop`). Sa validation ne vend rien sur place (`hk_animalConfirm`) : les animaux
+   cochés partent en `AnimalBuy` et la fenêtre se ferme ; une fenêtre fermée sans achat envoie un
+   `AnimalBuy` vide.
+5. L'hôte vérifie l'acheteur (`Authorize`, `OwnCharacter`), l'offre (la sienne, ces animaux-là),
+   puis vend avec le gestionnaire gardé (`SellAnimals`) : vendeur et acheteur toujours les mêmes,
+   animaux vivants et hors escouade, assez de cats, entrées cochées, `confirm()` du jeu (recrute
+   chaque animal, prend les cats). Le gestionnaire est ensuite libéré comme le fait la fenêtre.
+6. Chaque animal vendu est une recrue du joueur (`pendingRecruits_`) : il lui appartient dès qu'il
+   rejoint la faction (`RecruitJoined`) et va dans l'escouade de son perso (`AnimalFollowsOwner`).
+   L'argent, l'escouade et la position suivent par la synchro habituelle.
+
+### Prospection
+Le bouton PROSPECT donne la tâche 150 par `Character::addOrder`, sans passer par les fonctions
+d'ordres détournées, et la fenêtre ne s'ouvre qu'à la fin de la tâche, qui ne tourne pas chez un
+client. Chez un client, `hk_prospectButton` ouvre donc la fenêtre tout de suite pour son perso
+(position, compétence science, nom : la fenêtre ne lit ensuite que les cartes de ressources du jeu,
+les mêmes partout) ; rien ne part vers l'hôte. Chez l'hôte, le bouton refuse le perso d'un autre joueur.
 ### Carte, minicarte, repères, pings (`session_map.cpp`, `plugin/map.cpp`, `plugin/overlay_map.cpp`)
 1. L'hôte construit toutes les 1/3 s le flux de carte (`HostMapMarkers`) : joueurs, chaque perso de
    l'escouade (netId, joueur, « son » perso, à terre, mort, position lue chez l'hôte) et les
@@ -929,6 +957,8 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | `common/src/protocol_map.cpp`, `src/session_map.cpp` | messages et session de la carte : flux de carte, pings |
 | `common/src/protocol_workshop.cpp`, `src/session_workshop.cpp` | atelier : messages et session de la recherche, des établis, des machines et de l'énergie ; noms français des compétences |
 | `plugin/workshop.cpp` | atelier : lecture et imposition de la recherche, des machines et de l'énergie ; crochets ; commandes de test |
+| `common/src/session_animals.cpp` | boutique d'animaux : offres de l'hôte, réponses des joueurs, fenêtre du client |
+| `plugin/shops.cpp` | boutique d'animaux (gestionnaire et fenêtre du jeu, crochets) et bouton PROSPECT |
 | `plugin/map.cpp`, `map.h`, `map_view.h` | carte : escouades hostiles (hôte), scène de chaque image, projections, hooks des portraits |
 | `plugin/overlay_map.cpp`, `overlay_map.h` | dessin de la carte, de la minicarte, des repères, des cadres et des pings ; souris |
 | `plugin/host_console.cpp`, `host_console.h` | console Windows hors du jeu |

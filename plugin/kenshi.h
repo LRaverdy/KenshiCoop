@@ -286,6 +286,19 @@ enum Fn : int {
     // ---- farms (plugin/workshop.cpp, 0.3.2)
     FnFarmDestroyAPlant,        // bool FarmBuilding::destroyAPlant()   (the plant at +0x528 harvested: age -10, hidden, +0x528 one more; what the farmer's harvest calls)
     FnFarmReset,                // void FarmBuilding::resetFarm()   (replants: new young ages, +0x528 harvested, +0x51C died, +0x520 cleared back to 0)
+    // ---- animal shops (plugin/shops.cpp): the dialogue's CHOOSE_ANIMALS_BUYING (action 0x30 of Dialogue::_doActions)
+    FnAnimalTradeCtor,          // AnimalTradingHandler* <ctor>(this, Character* seller, Character* buyer, lektor<Character*>* animals, int basePrice)   (our name, 0x6A9440)
+    FnAnimalTradeConfirm,       // bool <AnimalTradingHandler>::confirm()   (vt 0, 0x6AAC20: recruits the ticked animals, takes the cats)
+    FnCharTradeHandlerDtor,     // CharacterTradingHandler::~CharacterTradingHandler()   (non-deleting; the window frees it with the CRT's delete)
+    FnCharTradeWindowCtor,      // CharacterTradingWindow::CharacterTradingWindow(CharacterTradingHandler*)   (deletes the previous Instance)
+    FnCharTradeWindowShow,      // void CharacterTradingWindow::show(bool)   (false: close(), which frees the handler and the window)
+    FnCharTradeConfirmButton,   // void CharacterTradingWindow::confirmButton(MyGUI::Widget*)   (handler->confirm(); true: handler freed, window closed)
+    // ---- prospecting (plugin/shops.cpp)
+    FnProspectButton,           // void OrdersPanel::prospectingButton(MyGUI::Widget*)   (toggles the window; else addOrder(150) on the chosen character)
+    FnProspectSingleton,        // static ProspectingWindow* ProspectingWindow::getSingleton()
+    FnProspectShow,             // void ProspectingWindow::showT(const Vector3& pos, float skill, const std::string& name)   (what task 150 calls once done)
+    FnCameraTarget,             // Vector3* GameWorld::<camera target>(Vector3* out)   (our name, 0x785F90: PlayerInterface+0x30 camera's node position)
+    FnNearestSelected,          // Character* PlayerInterface::<selected character nearest>(const Vector3&)   (our name, 0x7F4BA0)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -1009,5 +1022,36 @@ struct WeaponMaker {
     std::vector<std::pair<std::string, std::string>> models; // sid, name; best first
 };
 void SpawnCatalog(std::vector<SpawnTemplate>& items, std::vector<WeaponMaker>& makers);
+
+// ---- animal shops (plugin/shops.cpp). The dialogue's "animals for sale" builds an
+// AnimalTradingHandler (seller, buyer, one entry per animal: its hand, price, ticked) and shows it in
+// the CharacterTradingWindow (one at a time: CharacterTradingWindow::Instance).
+struct ShopEntry {
+    kc::Handle animal;
+    int32_t price = 0;
+    bool ticked = false;
+};
+// The game's own animal window between these characters (what the dialogue action does): the handler
+// made with the game's allocator and constructor, the window made and shown. Goes through the hooks
+// (on the host, a buyer of another player's: hidden and offered to that player instead).
+bool OpenAnimalShopWindow(Character* seller, Character* buyer, const std::vector<Character*>& animals, int32_t basePrice, void** handlerOut);
+bool AnimalShopEntries(const void* handler, std::vector<ShopEntry>& out);
+bool AnimalShopParties(const void* handler, Character*& seller, Character*& buyer);
+bool TickAnimalEntry(void* handler, size_t index, bool on);
+bool CallAnimalConfirm(void* handler, bool& sold);     // the handler's confirm (through the hook)
+bool FreeAnimalHandler(void* handler);                  // its destructor and the CRT's delete, as the window does
+void* TradingWindow();                                  // CharacterTradingWindow::Instance (null: none)
+void* TradingWindowHandler(const void* window);         // its handler (+0xD0)
+bool DetachTradingWindowHandler(void* window);          // the window forgets its handler (it no longer frees it)
+bool TradingWindowVisible(const void* window);
+bool HideTradingWindow(void* window);                   // its widget hidden (nothing freed, the game not unpaused)
+bool PressTradingConfirm(void* window);                 // tests: the window's confirm button
+// ---- prospecting (plugin/shops.cpp)
+Character* ProspectingCharacter();                      // the selected character the PROSPECT button acts on (the nearest to the camera)
+bool ProspectingWindowVisible();
+// The prospecting window for that character's place, its science skill and name (what task 150 shows).
+bool ShowProspectingWindow(Character* c);
+bool ProspectingState(bool& visible, kc::Vec3& pos, float& skill, std::string& name);   // tests: what it shows
+bool PressProspectButton();                             // tests: the orders bar's PROSPECT button, through the hook
 
 } // namespace kenshi
