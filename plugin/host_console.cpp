@@ -18,7 +18,9 @@ ConsoleModel g_model;
 bool g_modelDirty = false;
 std::vector<std::string> g_commands;
 
-std::thread g_thread;
+// Not a global std::thread: Kenshi quits through exit() without always calling dllStopPlugin, and a
+// joinable std::thread destroyed at exit calls std::terminate (the host crashed on quit, 0xC0000409).
+std::atomic<bool> g_running{false};
 std::atomic<HWND> g_wnd{nullptr};
 std::atomic<bool> g_visible{false};
 std::atomic<bool> g_quit{false};
@@ -220,13 +222,18 @@ void ThreadMain() {
     g_wnd = nullptr;
 }
 
+void ThreadEntry() {
+    ThreadMain();
+    g_running = false;
+}
+
 } // namespace
 
 void HostConsoleShow(bool show) {
-    if (show && !g_thread.joinable()) {
+    if (show && !g_running.exchange(true)) {
         g_quit = false;
         g_visible = true;
-        g_thread = std::thread(ThreadMain);
+        std::thread(ThreadEntry).detach();
         Log("host console window opened");
         return;
     }
@@ -255,7 +262,7 @@ std::vector<std::string> HostConsoleTakeCommands() {
 void HostConsoleShutdown() {
     g_quit = true;
     if (HWND w = g_wnd.load()) PostMessageW(w, WM_CLOSE, 0, 0), PostMessageW(w, WM_QUIT, 0, 0);
-    if (g_thread.joinable()) g_thread.detach();   // the process is going away: never block the game's exit
+    // the thread was detached at start: the process is going away, never block the game's exit
 }
 
 } // namespace kcp

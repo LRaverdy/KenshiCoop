@@ -2,6 +2,536 @@
 
 Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a vu.
 
+## Lot à faire : travaux de base (agriculture, cuisine, artisanat…) donnés aux persos de chaque joueur
+
+Demande de l'utilisateur (12/10 00:00) : « faire bien la réplication et les tests pour les attributions
+de tâches sur les persos des autres players pour gérer agriculture, cuisine, etc. Tout ce qu'il faut. »
+À traiter **après** le crash des sacs (point 0), sur lequel tout transport d'objets repose.
+
+**But** : un joueur (hôte ou client) donne à ses persos n'importe quel travail de base, depuis le clic
+droit ou le panneau Tâches, en tâche unique ou permanente (JOBS). Le perso le fait vraiment chez
+l'hôte, et chacun voit le même résultat : la machine qui tourne, ce qu'elle produit, ses stocks, les
+cultures qui poussent, la récolte, les sacs et coffres qui se remplissent. Ça doit marcher loin de
+l'hôte et à x2/x3.
+
+**Postes à couvrir** (une ligne de test chacun, gabarits du jeu de base d'abord, puis un de mod) :
+- **Agriculture** : champ extérieur (planter, arroser si besoin, récolter), hydroponie intérieure,
+  stockage de récolte. Pousse visible chez le client. Ferme de mod (« Ferme Légumes L ») en plus.
+- **Eau** : puits, collecteur, réservoir ; remplir et vider.
+- **Cuisine et transformation** : four, cuisinière, moulin, brasserie, distillerie (pain,
+  ragoût, farine, grog, rhum). Entrée, sortie, et « récolter la sortie » (tâches 88-94, 113, 151, 247).
+- **Mines et matériaux** : minerai de fer, cuivre, pierre ; fonderie et raffinage (plaques de fer,
+  matériaux de construction, tissu, cuir…).
+- **Artisanat** : établis d'armes, armures, sacs, robotique, médecine, tissage, maroquinerie.
+- **Recherche** : établi de recherche, livres, progression partagée (cf. le clic droit qu'il faut
+  maintenir sur l'établi).
+- **Énergie** : éolienne, générateur, batteries ; l'état allumé ou éteint d'une machine selon le courant.
+- **Transport** (tâche 88) : porter vers le bon stockage ; perso « tout faire tourner » ; rangement
+  automatique.
+- **Construction et entretien** : bâtisseur (125), réparer, démanteler (déjà testés en partie, à
+  refaire dans le même lot).
+- **Garde, médecin, secours** (58, 148) : déjà couverts, à remettre dans la suite.
+
+**Pour chaque poste, vérifier** :
+1. **Qui donne l'ordre** : le joueur pour son propre perso (client et hôte) ; n'importe qui pour une
+   recrue « à personne » ; refus pour le perso d'un autre joueur, avec un message.
+2. **Comment** : clic droit sur la machine, panneau Tâches (ajout, retrait, ordre), bouton JOBS
+   (permanent), sélection de plusieurs persos de plusieurs joueurs (chacun ne commande que les siens).
+3. **Chez l'hôte** : la tâche est bien dans la liste du perso, le perso va au poste, « workers » de la
+   machine augmente (ligne `machine: … workers`), la production avance.
+4. **Chez tous les clients** : même liste de tâches (`JobState`), perso animé au poste, état de la
+   machine, contenu des stocks d'entrée et de sortie, cultures, et objets portés dans le
+   **sac** sans le bug du point 0.
+5. **Robustesse** : propriétaire qui change (raccourci G), joueur qui part et revient, resync, zone
+   déchargée chez le client (stand-in), pause et x3, sauvegarde puis rechargement.
+
+**Tests à écrire** :
+- unitaires : règles d'ordres (qui peut quoi) pour chaque numéro de tâche de ces postes, ajoutés à
+  `TestTaskTargets` ;
+- en jeu (`coop_test.py`), nouvelle expérience `workstations` en plein désert, tout le monde en mode
+  dieu et matériaux fournis :
+  1. l'hôte et un client posent chacun une ferme, un four, un établi, un puits et une éolienne ;
+  2. chacun met ses persos au travail par le clic droit et par le panneau Tâches ;
+  3. on relève `workers`, les stocks, les cultures et les listes de tâches chez l'hôte et chez
+     chaque client, au départ et après 2 min à x3 ;
+  4. on vérifie les inventaires des sacs après chaque transport.
+- Un soak de 20 min à x3 avec ces postes, 3 clients loin de l'hôte.
+
+**Ce qui manque sûrement** (constats du 11/10) :
+- fermier de rob sur sa ferme : pas de ligne `workers`, donc peut-être jamais compté ;
+- bâtiments des clients absents chez nass4 (« machine … of the host not found here ») ;
+- fenêtre Prospecter (3p) et boutique d'animaux (3i) qui ne s'ouvrent pas chez le client ;
+- hauteur fausse des poses de client (3o).
+
+## 11 octobre 2026, soir : partie entre amis en v0.3.1, soucis pour rejoindre
+
+Journal de l'hôte (session de 22:05, `KenshiCoop.log`) :
+- 22:10:16 : rob se reconnecte après 6,2 s de silence, alors qu'il est encore dans l'éditeur de perso.
+- 22:10:38 : « > resync » tapé par l'hôte : il recharge nass4 et Geoffrey. Ces déconnexions sont
+  **voulues** (ce n'est pas un bug).
+- 22:11:03 et 22:11:30 : rob part pendant qu'il rejoint, « connection lost: their game quit or
+  crashed while loading ».
+- 22:11:32 : nass4 part pendant qu'il rejoint.
+- 22:11:11 : Geoffrey se reconnecte après 4,3 s de silence.
+
+On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
+
+**À faire :**
+1. **Récupérer les journaux de rob et nass4** : `KenshiCoop.log` dans leur dossier Kenshi, et un
+   éventuel `.dmp` dans `%LOCALAPPDATA%\CrashDumps`. Chercher pourquoi le jeu quitte ou plante
+   pendant le chargement du monde.
+2. **Plantage de l'hôte en quittant Kenshi (trouvé, correction écrite mais pas encore compilée ni
+   testée).**
+   - Constat : 21:57:46, kenshi_x64 pid 65828, module `KenshiCoop.dll` (build de 21:43), offset
+     0x27F189, code 0xC0000409. Dump : `%LOCALAPPDATA%\CrashDumps\kenshi_x64.exe.65828.dmp`.
+   - Lecture de la pile : `exit` de Kenshi → `ExitProcess` → déchargement de la DLL (destructeurs
+     statiques) → `std::terminate` → `abort`. 0x27F189 est `abort`, 0x285470 est `terminate`.
+   - Cause : `g_thread` (fenêtre console de l'hôte, `plugin/host_console.cpp`) est un `std::thread`
+     global encore « joinable ». Kenshi quitte par `exit()` sans toujours appeler `dllStopPlugin`,
+     donc `HostConsoleShutdown` ne le détache pas. Tout hôte qui a la console ouverte (ouverte
+     automatiquement avec `hostConsole`) plante en quittant. Ça ne gêne pas les joueurs qui rejoignent,
+     mais un client voit « lost connection to host » à ce moment-là.
+   - Correction (déjà dans `host_console.cpp`, non commitée) : plus de `std::thread` global. Le thread
+     est détaché dès le départ, avec `std::atomic<bool> g_running` pour savoir s'il tourne
+     (`ThreadEntry` le remet à false). En bonus, la console peut se rouvrir après avoir été fermée.
+   - Reste à faire :
+     - compiler et lancer `kc_tests` ;
+     - en jeu : héberger, ouvrir la console, quitter Kenshi par le menu, et vérifier qu'il n'y a
+       aucun nouveau `.dmp` ni d'erreur 1000 dans le journal Windows ;
+     - CHANGELOG, et publier quand l'utilisateur donne son accord.
+   - Les autres threads sont sans risque : `Net::keepThread_` est joint par `~Net` → `Close`, et
+     `steam_link` garde son `Link` derrière un pointeur jamais détruit.
+0. **PRIORITÉ : plantage de l'hôte à 23:04:22 (pid 56496), en pleine partie à 4**
+   - Rapport du mod : `CRASH (unhandled) code=c0000005 at kenshi_x64.exe+0x7494cf … addr=FFFFFFFFFFFFFFFF
+     phase='game (outside KenshiCoop's tick)'`. Dump :
+     `%LOCALAPPDATA%\CrashDumps\kenshi_x64.exe.56496.dmp`. Le journal complet est dans
+     `KenshiCoop.log` de l'hôte, ligne ~12225.
+   - Lecture du code : 0x7494C0-0x7494CF est une boucle d'une fonction d'`Inventory` (zone
+     0x745000-0x74C000, voisine de `buyItem` 0x74A630). Elle parcourt un tableau d'objets
+     (`[r12+0x20]`, nombre en `+0x18`) et appelle `item->vt[0x20]` (son type, comparé à 4). L'objet
+     `rbx=0x1dc30e350` a une vtable illisible (`rax=0x6369ad00000000`) : c'est **un objet détruit resté
+     dans la liste d'un inventaire** (pointeur pendant).
+   - Appelant : `0x5CB3D1`, une fonction de `Character` juste avant `giveItem` (0x5CB400). Pile :
+     0x5a5c6a, 0x60f354, 0x61c927, 0x61e8bd, 0x61f00b, soit une mise à jour du jeu, pas notre tick.
+   - **Analyse du dump (11/10 23:15).** Le dump ne contient pas le tas, seulement les piles. La chaîne
+     d'appels est reconstruite depuis la pile ; les noms viennent des en-têtes KenshiLib, dont les
+     adresses valent les nôtres − 0x780 dans cette zone :
+     `AI::periodicUpdate` (0x5112B0) → `AI::periodicUpdate(time)` (0x511130) → `AI::chooseGoal`
+     (0x510EF0) → `AI::choosePermaJob` (0x50E5B0) → `Tasker::score` (0x60FD80) → `runTargetFind`
+     (0x60F460) → … → `Character::findResourceDestinationForMe` (0x5A70A0) →
+     `Character::findResourceDestinationFor(forwhat, out, includeMyInventoryContents)` (0x5A59A0) →
+     fonction d'`Inventory` 0x749490, qui parcourt `allItems` (+0x10) et plante sur l'objet n°0.
+     `hasABackpackOn` (0x5CB320) est aussi sur la pile.
+   - Ce qui s'est passé : un perso avec un **travail permanent de ressources** (porter du minerai ou
+     des matériaux vers un stockage, comme les « operate machine » sur la Petite Ressource Fer de
+     nass4) cherche où déposer sa ressource. Il parcourt un inventaire, sans doute **son sac à dos**,
+     dont le **premier objet est détruit** mais toujours dans la liste. Ça s'est passé sur le thread
+     de travail du jeu, pendant la mise à jour de l'IA.
+   - Suspect n°1 : la fusion de piles de `MoveInventoryItem` dans un sac (`backpack_content`). Elle
+     appelle `CallRemoveDestroy(src, best, qty)` puis change la quantité de la pile visée. Vérifier
+     que l'objet détruit quitte aussi `allItems` de l'inventaire du **sac** (un `ContainerItem` a son
+     propre inventaire) et pas seulement sa section. Les achats de matériaux de rob dans son sac
+     (22:28-22:29) et les « pick up Matériaux Construction » de nass4 et Geoffrey vont dans ce sens.
+   - **Cause probable trouvée dans notre code** :
+     - `InventoryItems(inv)` (`plugin/kenshi.cpp:2229`) réunit `allItems` et les objets de **toutes les
+       sections** de `sectionsInSearchOrder`, y compris la section `backpack_content` que l'inventaire
+       du perso montre. Mais les objets de cette section appartiennent à l'inventaire du **sac**
+       (`ContainerItem`), qui a son propre `allItems`.
+     - `MoveInventoryItem` trouve donc un objet du sac (`FindStack`), puis le retire ou le détruit avec
+       les fonctions de l'inventaire **du perso** (`CallRemoveDestroy` / `CallRemoveReturns` sur `src`).
+       L'objet est détruit, mais le `allItems` du sac garde le pointeur.
+     - Plus tard, l'IA du perso (`findResourceDestinationFor` avec `includeMyInventoryContents`, via
+       `hasABackpackOn`) parcourt le sac et plante sur ce pointeur. C'est exactement la chaîne du dump.
+     - Même risque dans l'autre sens : `PlaceItem` dans `backpack_content` passe par la section
+       (`SECV_addAt`) sans que l'inventaire du sac le compte forcément.
+   - **Reproduit en direct à 23:29 et 23:31 (rob, Matériaux de Construction 580)** :
+     - rob jette la pile au sol. L'hôte : « client item move done: 580-gamedata.base  ->  0,0 », avec une
+       section source **vide** ;
+     - l'objet de l'hôte `886:3829345792` est « dropped » deux fois (23:29:08 et 23:31:46). Il est
+       **à la fois au sol et encore dans la liste d'inventaire** de rob chez l'hôte, sans section ;
+     - les clients reçoivent alors un inventaire qui le contient : « inventory rebuild incomplete:
+       cannot place 580-gamedata.base at  » (section vide), 60 fois. Le matériau revient dans
+       l'inventaire de rob ;
+     - c'est le même mélange d'inventaires perso/sac que pour le plantage : `INVV_drop` de
+       l'inventaire du perso sur un objet du sac le pose au sol, mais `allItems` du sac le garde.
+       Si l'objet au sol disparaît, le pointeur reste : c'est le plantage de 23:04.
+   - **Même chose chez Geoffrey (23:37-23:38)** : « inventory of 46:0:0:3322:757324224 not as on the host:
+     580-gamedata.base x4 at  0,0 here at backpack_content 0,0 », et « inventory rebuild incomplete …
+     (nowhere: lost here) ». Le handle de type 46 est **son sac** (un `ContainerItem`). Chez l'hôte, la
+     liste du sac contient 4 matériaux **sans section**. Les déplacements de Geoffrey sur ces
+     matériaux sont refusés en boucle (« item not found », ~15 fois en 40 s).
+   - **2e plantage de l'hôte, 23:48:30 (pid 45172)** : `CRASH (game crash reporter) code=c0000005 at
+     kenshi_x64.exe+0x74932e … addr=FFFFFFFFFFFFFFFF phase='game main loop'`, `rax=0x304952d00000000`
+     (vtable illisible). Toujours le code d'`Inventory` : fonctions 0x749160 ← 0x749A6C ← 0x74B660, ce
+     coup-ci appelées depuis la boucle principale de `GameWorld` (0x788100), pas depuis l'IA. Même
+     objet détruit resté dans une liste. Il est arrivé 17 minutes après les sacs abîmés de rob et
+     Geoffrey (23:29-23:38). Rapport du jeu : `crashDump1.0.68_x64.zip` (23:48) ; pas de .dmp Windows.
+   - Vu juste avant : « [nass4] machine: Éolienne / Petit Établi Rech. / Ferme Légumes L of the host not
+     found here » (23:48:25). Les bâtiments posés par les clients manquent chez nass4. À regarder
+     à part.
+   - **Extrait du journal de Geoffrey** (`Downloads/KenshiCoop-erreurs-inventaire-2026-10-11.txt` : seulement
+     ses 374 lignes d'erreurs d'inventaire, tirées de `KenshiCoop-2026-10-11_23-41-20.log`, sans la fin
+     du journal ni rapport de plantage) :
+     - le **premier** objet sans section dans un sac apparaît **dès 22:39:04**, 25 minutes avant le
+       plantage de 23:04 : « inventory of 46:0:0:1815:2497558528 not as on the host: 580-gamedata.base
+       x1 at  0,0 here at backpack_content 0,3 ». Ce sont encore des Matériaux de Construction, dans
+       le sac de Geoffrey ;
+     - au total, 86 lignes d'objets sans section dans un sac : 580 (32) et **1866-gamedata.base**
+       (54) ; 9 « (nowhere: lost here) ». Le bug touche donc aussi un autre objet que les
+       matériaux ;
+     - pour le reste, ce sont des vêtements de PNJ (chemise 61, chapeaux chris_r.mod 18) et
+       « unknown item Étrippeurs_23 » (22:44, nom d'objet au lieu d'un identifiant, à regarder).
+   - Pour le plantage de Geoffrey à 23:41, il faut **le journal complet**
+     (`KenshiCoop-logs/KenshiCoop-2026-10-11_23-41-20.log`, la fin avec `CRASH` et `stack[…]`).
+   - **Correction** : pour toute opération sur un objet, retrouver l'inventaire qui le **possède**
+     (celui dont `allItems` le contient : le perso ou le sac) et utiliser ses fonctions à lui pour
+     retirer, détruire ou ajouter. Pour `backpack_content`, passer par l'inventaire du `ContainerItem`
+     (`hasABackpackOn`, puis son inventaire). Après la correction, garde-fou dans les tests : vérifier
+     chaque `allItems` après chaque opération.
+   - Reproduction visée : un client pose des piles dans son sac (fusion, achat, ramassage), puis un
+     perso avec un travail de minage ou de transport de ressources tourne quelques minutes à x3. Hors
+     partie, avec un garde-fou : vérifier après chaque opération que chaque `allItems` ne contient
+     que des objets vivants (vtable valide).
+   - Suspects : nos manipulations d'objets chez l'hôte, qui détruisent ou déplacent un objet sans que
+     toutes les listes le lâchent.
+     - Fusion de piles dans `MoveInventoryItem` (`CallRemoveDestroy`, puis écriture de la quantité de
+       la pile visée).
+     - Commerce avec les comptoirs de boutique (« trade window closed for a moment: the merchant's
+       stock changed », très fréquent ce soir).
+     - Ramassage et dépose au sol par les clients (« host picked up / dropped item »).
+     - Mise en cage et chaînes des esclaves (« Servant Inférieur now chained », 23:03).
+   - À faire :
+     1. ouvrir le dump : quel inventaire (r12 et son propriétaire), quel objet (rbx, son GameData s'il
+        est encore lisible), qui a appelé (remonter la pile) ;
+     2. relire chaque chemin qui retire ou détruit un objet chez l'hôte : un objet retiré d'une
+        section doit aussi quitter la liste de l'inventaire, et ne jamais être détruit s'il est
+        encore référencé ;
+     3. soak test commerce, piles et sol, à x2/x3, avec 3 clients.
+
+3. **Silences de 4 à 6 s** (rob, Geoffrey) avant une reconnexion : regarder s'ils viennent d'un long
+   chargement chez eux (éditeur de perso, zone qui se charge) ou du réseau. `SkipStall` ne couvre que
+   les arrêts de l'hôte.
+
+3b. **Les FPS des clients baissent quand les joueurs s'éloignent les uns des autres** (22:15-22:27, les 3
+   joueurs partis exprès loin de l'hôte).
+   - Nombre de persos suivis par chaque client / fps, une ligne par minute :
+     - Geoffrey : 93 persos / 133 fps → 249 / 119 → **289 / 46**.
+     - nass4 : 94 / 186 → 98 / 76-94 → 261 / **10** (pointe à 22:26:06) → **288 / 53**.
+     - rob1 : 93 / 164 → 249 / 94 → 307 / 112.
+   - Explication probable :
+     - l'hôte garde chargées les zones autour de **chaque** joueur ;
+     - chaque client reçoit et garde **tous** ces persos, soit 290-307 au lieu d'une centaine ;
+     - le flux ne met pourtant à jour que ceux autour du joueur (« sent 5 of 253 ») ;
+     - le jeu du client fait donc vivre des persos d'endroits qu'il ne voit pas, en plus de notre
+       boucle d'application par perso.
+   - Le réseau va bien : 16 à 170 KB/s par joueur, ping 14-23 ms, 1-2 % de pertes. Synchro bonne :
+     décalage max 0,2-2,8, sauf un perso à 119 chez nass4 à 22:26:26 qui s'est recalé à la minute
+     suivante.
+   - nass4 a de base la machine la plus lente (80-100 fps contre 130-190) et des mods (rebirth.mod,
+     changes_otto.mod). Son horloge prend du retard 69 fois, contre 16 et 45 pour les autres.
+   - **À faire :**
+     1. Mesurer chez un client ce qui coûte : notre `Apply` par perso, ou la simulation du jeu.
+        Ajouter le temps de notre frame dans la ligne `sync` du journal.
+     2. Côté client, ne pas faire vivre les persos loin du joueur local, puisque le flux ne les met
+        pas à jour. Pistes : ne pas les créer tant qu'ils ne sont pas proches, ou les geler/cacher.
+        Il faut garder la cohérence au retour (recréation propre, cf. « stand-in … can be
+        recreated »).
+     3. Retester avec 3 clients éloignés et comparer les fps.
+   - Vu en même temps, à vérifier :
+     - « captivity from the host: a merchant caged » environ 2 fois par seconde chez les 3 clients
+       (22:26:08-14) : un état réappliqué en boucle ?
+     - 73 refus « conversation refused: that NPC is in conversation with another player's
+       character » par rafales (22:18-22:22, jusqu'à 36 en une minute) : une demande répétée à chaque
+       image ?
+     - Inventaire de nass4 : « inventory rebuild incomplete: cannot place … at shirt » 6 fois
+       (objet de mod ?).
+
+3c. **rob n'arrive pas à acheter chez le marchand (22:28-22:29)** : refus « no room » / « trade refused: the
+   item could not move » quand il pose des Matériaux de Construction (580-gamedata.base) **dans son
+   sac** (`backpack_content`). Vers l'inventaire principal (`main`), ça passe.
+   - Quelques achats dans le sac passent (22:29:10-17), puis tout est refusé, même en vendant et en
+     rachetant. Le sac de rob se remplit donc chez l'hôte alors qu'il a l'air vide chez lui.
+   - Cause probable : `MoveInventoryItem` (`plugin/kenshi.cpp:2531`) ne fusionne avec la pile visée que
+     si `have > 1 || qty > 1`. Rob pose 1 unité sur 1 unité : son jeu en fait une pile de 2 dans la
+     même case, mais l'hôte ne fusionne pas. `PlaceItem` met alors l'unité dans une autre case libre
+     du sac. Chaque achat prend une nouvelle case chez l'hôte jusqu'à ce que le sac soit plein, et là
+     tout est refusé.
+   - Correction : fusionner quand l'objet s'empile (taille de pile max > 1, lue dans les données de
+     l'objet ou via la fonction du jeu), et garder l'échange de place pour ce qui ne s'empile pas
+     (deux épées). Le chemin d'achat et de vente doit suivre la même règle.
+   - Test : `coop_test.py`, un client achète 10 matériaux un par un dans son sac, puis on compare
+     l'inventaire du client et celui de l'hôte.
+   - En attendant : rob peut acheter dans son inventaire principal, puis ranger les piles entières.
+   - Confirmé en jeu (22:30) : dans son sac de marchand, les objets ne s'empilent pas ; le reste du
+     commerce marche (livres achetés et vendus sans souci).
+
+3d. **Conversations : refus en rafale, et rob ne peut pas parler au « Barman sacré » (22:30-22:35)**
+   - `dialogs` sur l'hôte à 22:33 : 1784 refus « occupé » (`dialogsBusyRefused`) depuis le début de la
+     session.
+   - Cas vu en direct (22:34:16, nass4 et Streak) :
+     - l'ordre « parler » part avec **deux persos de nass4** sélectionnés (nass4 et Logan) ;
+     - la conversation 17 s'ouvre pour nass4 ;
+     - le jeu de l'hôte refait alors en boucle la tentative pour Logan, et `ConversationAllowed`
+       (`plugin/world.cpp:2254`) la refuse comme si Logan était le perso d'un autre joueur ;
+     - résultat : des dizaines de refus par seconde, et nass4 reçoit « Streak est occupé » en
+       pleine conversation.
+   - Correction :
+     - dans `ConversationAllowed`, quand celui qui demande appartient au même joueur que `r.pc`,
+       refuser **sans** message « occupé » et sans le compter : le second perso n'a pas à parler, comme
+       dans le jeu de base ;
+     - ou bien n'envoyer l'ordre « parler » que pour un seul perso de la sélection.
+   - rob et le Barman sacré : aucune ligne côté hôte quand il essaie (pas d'ordre « talk », pas de
+     refus). Son jeu n'envoie donc rien, ou refuse avant d'envoyer.
+     - Pistes : le barman est-il chez rob un « stand-in » d'un perso de l'hôte, est-il assis ou au lit
+       (les états « caged »/« in its bed » qu'on réapplique), ou une conversation restée ouverte
+       dans `remoteDialogs_` ?
+     - Il faut le journal de rob, ou le refaire en test avec `talkto name:Barman` chez un client dans
+       la ville sainte.
+     - rob a suivi le barman (ordre « stay close », tâche 31) pour qu'on l'identifie, mais le journal
+       ne donne pas le nom de la cible de l'ordre. À ajouter au journal des ordres client : le nom de
+       la cible.
+
+3e. **Recrues des dialogues absentes chez les clients : Streak et Stone (22:34-22:39)**
+   - nass4 recrute Streak (`41370-Dialogue.mod`, « hire engineer wall man », payé 5000 cats), puis Stone
+     (`41299-Dialogue.mod`, « Sword for hire ex-slave »).
+   - Chez l'hôte : « a new squad character (Streak) goes to nass4 » et « 1 character(s) now controlled
+     by nass4 ».
+   - Chez les 3 clients : « cannot recreate host character 41370-Dialogue.mod: factory did not return
+     a character (template type 1 …) », réessayé à 30, 60, 120 puis 240 s. Ensuite « 2 squad members
+     missing » à chaque relevé. nass4 ne voit pas ses deux recrues.
+   - `CreateCharacter` (`plugin/kenshi.cpp:1838`) appelle `createRandomCharacter(factory, faction, pos,
+     template, age)`. Ce gabarit de recrue, un perso de type 1 venant de Dialogue.mod, revient nul.
+     Le jeu crée sans doute ces recrues autrement (l'action de dialogue d'embauche, avec le gabarit
+     et la race choisis à ce moment-là).
+   - À faire :
+     - reproduire hors partie : `spawnnpc 41370-Dialogue.mod` sur un client ;
+     - voir comment le dialogue d'embauche crée le perso (KenshiLib : `DialogActionEnum`, `HIRE`, la
+       fonction de fabrique qu'il appelle) ;
+     - au besoin, créer chez le client avec la race et l'apparence que l'hôte envoie (comme pour les
+       persos de joueur), plutôt que le gabarit seul.
+   - Conséquence signalée à 22:52 : « rob ne voit plus certains portraits, pareil pour nass4 ». Ce sont
+     sans doute ceux de Streak et Stone : un perso que le client n'a pas n'a pas de portrait dans
+     la barre d'escouade. À confirmer avec les noms. Si d'autres portraits manquent, regarder
+     `hk_portraitUpdate` et les « removed the local character … the host does not have it ».
+   - Contournement pendant la partie : `resync` depuis la console de l'hôte. Les clients rechargent le
+     monde de l'hôte, qui contient les recrues (courte déconnexion).
+
+3f. **Combat de nass4 loin de l'hôte : sa squad et les ennemis traversent les murs (22:45)**
+   - Synchro bonne pendant ce combat : décalage max 1,7, aucun perso décalé. nass4 voit donc ce que
+     simule l'hôte, et c'est la simulation de l'hôte qui fait passer les persos à travers les murs.
+   - Hypothèse : loin de la caméra de l'hôte, le jeu ne charge pas ou ne génère pas la collision et le
+     navmesh des bâtiments. Les persos de cette zone se déplacent alors en ligne droite (poursuite,
+     recul en combat). Même famille que les « portes de distance caméra » déjà levées pour le dialogue
+     (`SetFarTalk`) et les dégâts (`SetFarWoundVisuals`).
+   - Vérifications :
+     1. l'hôte place sa caméra sur le combat de nass4 : les persos contournent-ils les murs ?
+     2. si oui, trouver la condition « distance caméra » qui active la collision des bâtiments ou le
+        navmesh autour d'un joueur (`NavMesh` 0x21345C0, `generate(Aabb)`), et l'étendre aux
+        positions des clients comme pour `hk_charUpdateView`.
+   - Test : `coop_test.py`, un client dans une ville loin de l'hôte, combat contre un ennemi de l'autre
+     côté d'un mur, et relever les positions.
+
+3g. **rob suit Geoffrey avec la caméra mais ne voit pas les PNJ qui le frappent (22:47)**
+   - Cause : `Session::UpdateStreams` (`common/src/session_streaming.cpp:44`) n'envoie à un joueur que les
+     persos autour de **ses propres persos**, plus les membres d'escouade proches d'eux. La caméra du
+     client n'est pas prise en compte.
+   - Geoffrey, membre d'escouade, est envoyé à tout le monde. Sa cible de combat aussi : la passe
+     « what a streamed character fights goes with it » va du combattant vers sa cible. Mais les PNJ qui
+     **attaquent** Geoffrey ne suivent pas : rien ne va de la cible vers ses attaquants.
+   - Corrections :
+     1. sans changer le protocole : dans cette passe, ajouter le sens inverse. Un perso dont la
+        `combatTarget` est envoyée à un joueur lui est envoyé aussi, au moins pour les cibles membres
+        d'escouade ;
+     2. plus complet : le client envoie la position de sa caméra (spectateur, carte), et l'hôte s'en
+        sert comme centre d'intérêt en plus de ses persos. Ça change le protocole, donc il faut l'accord
+        de l'utilisateur pour le changement de version.
+   - Test : un client place sa caméra sur le combat d'un autre joueur loin de lui, et on compte les PNJ
+     visibles chez lui et chez l'hôte.
+
+3h. **Journal de Geoffrey (22:12-22:51)**
+   - **FPS** : 120-190 au début, **63-94 depuis 22:44** (46 au plus bas à 22:27, au moment où les joueurs
+     s'éloignaient). Même cause probable qu'en 3b.
+   - **Porte en boucle** : « door: Storm Shack Door stays 0 (host 3) » toutes les ~3 s depuis 22:26 :
+     163 fois chez Geoffrey, 228 chez rob1, 113 chez nass4. Le client n'arrive pas à mettre cette porte
+     dans l'état 3 de l'hôte et réessaie sans fin. Il faut trouver ce qu'est l'état 3 (cassée ?
+     verrouillée et ouverte ?) et, si le client ne peut pas l'appliquer, arrêter de réessayer
+     (abandon après N essais ou nouvel essai seulement quand l'hôte change).
+   - **Cadavres décalés** : à la fouille d'araignées, le corps de l'hôte est à 93-128 unités de celui du
+     client (sur 23 fouilles : médiane 10, max 235). La correction « stood up to fall where the host's
+     lies » existe, mais les corps tombés en combat restent souvent loin. Le pilleur va déjà au corps
+     de l'hôte, donc ça marche, mais c'est visible.
+   - **Vêtements des stand-ins** : « inventory rebuild incomplete: cannot place …-gamedata.base at
+     shirt » 27 fois. Une chemise portée chez l'hôte ne va pas sur le slot chemise chez le client (slot
+     occupé ou désactivé ?). Elle finit dans le sac.
+   - **Recrues de dialogue** manquantes chez lui aussi (cf. 3e) : 12 échecs « cannot recreate host
+     character …-Dialogue.mod ».
+   - Horloge en retard 100 fois et en avance 13 fois (recalée à chaque fois).
+
+3i. **Achat d'animaux : la fenêtre s'ouvre chez l'hôte, pas chez le client (22:50, rob et le Chef Ferme
+   Sacré)**
+   - Dans le journal : rob parle au Chef Ferme Sacré (« Qu'est-ce que tu veux ? » 1. Je veux juste
+     commercer | 2. T'as des animaux à vendre ? | 3. Rien). Il répond 2, la conversation se ferme, et
+     **rien n'est envoyé à rob**. La fenêtre d'achat d'animaux s'ouvre sur l'écran de l'hôte. À
+     22:51:32, « the animal Taureau Domestiqué joins its owner's squad ».
+   - Cause : l'action de dialogue « animaux à vendre » ouvre une autre fenêtre que le commerce
+     d'objets. `hk_showTrade` (`plugin/hooks.cpp:735`, `ForgottenGUI::showTradeWindow`) n'intercepte
+     que le commerce d'objets (type 1 ou 3) pour l'envoyer au joueur. La fenêtre des animaux passe à
+     côté.
+   - À faire (souhait de l'utilisateur : le client gère lui-même sa fenêtre) :
+     1. trouver la fonction du jeu qui ouvre la boutique d'animaux (action de dialogue d'achat
+        d'animaux dans KenshiLib, fonction `ForgottenGUI` voisine de `showTradeWindow`) et la
+        hooker comme `hk_showTrade` : chez l'hôte, pour le perso d'un autre joueur, ne pas l'ouvrir et
+        envoyer une demande à ce joueur ;
+     2. chez le client : ouvrir la même fenêtre avec la liste d'animaux de l'hôte (race, prix) ;
+     3. l'achat (et la vente) passe par l'hôte comme le commerce d'objets : argent retiré, animal
+        créé chez l'hôte et ajouté à l'escouade du joueur, puis renvoyé par la synchro habituelle
+        (« joins its owner's squad » marche déjà).
+     - Probablement un nouveau message réseau, donc un changement de protocole : accord de
+       l'utilisateur.
+   - Test : un client parle à un vendeur d'animaux, répond « animaux à vendre », achète un animal, et
+     on vérifie la fenêtre chez le client, l'argent et l'animal dans son escouade chez tous.
+
+3j. **Portraits absents chez rob et nass4 : Nei, Skinner, Kihaku (signalé à 22:55)**
+   - Ce sont des recrues de nass4, des PNJ de bar recrutés par dialogue : Kihaku à 22:32:19, Skinner à
+     22:33:23, Nei à 22:33:42. Contrairement à Streak et Stone, ces persos existent chez les clients
+     (primes, vue d'étage « follows our 'Nei' » chez nass4).
+   - Chez l'hôte, `squadsfull` à 22:55 donne : Sans-Nom_0 = Scratch, Geoffrey | Rob = rob, Taureau
+     Domestiqué | **fasme = Nei, Skinner, Kihaku, Logan, nass4, Stone, Streak**.
+   - Ce qui s'est passé :
+     - l'hôte a fait tourner le contrôle de chaque recrue avec le raccourci « confier » (G) : vous →
+       Geoffrey → rob1 → nass4 en ~2 s, 6 fois entre 22:32 et 22:37 ;
+     - nass4 a ensuite déplacé ses persos dans l'escouade « fasme » (squad request « move to squad »
+       à 22:32:41, 22:33:57, 22:34:03) ;
+     - barre d'escouade de nass4 à ce moment : « player portraits 5: 3-4 hidden ».
+   - Pistes :
+     1. chez le client, le PNJ recruté reste un stand-in de PNJ et n'est pas mis dans l'escouade
+        locale « fasme ». Il n'a donc pas de cellule de portrait. Vérifier l'application de la
+        composition d'escouade (squadsfull chez le client) après un recrutement ;
+     2. le passage rapide de main en main laisse un état incohérent chez un client : ajouté, retiré,
+        puis rajouté, alors que le jeu ne recrée pas sa cellule de portrait.
+   - Test : un client recrute un PNJ par dialogue, l'hôte le confie avec G jusqu'au client, puis le
+     client le range dans une autre escouade. Comparer `squadsfull` chez l'hôte et chez le client, et
+     compter les portraits.
+   - Contournement pendant la partie : `resync` (les clients rechargent le monde de l'hôte avec ses
+     escouades).
+
+3k. **`resync` de 22:56:38**
+   - Les 3 joueurs reviennent : rob1 en 26 s, Geoffrey en 31 s, nass4 en 39 s. Monde envoyé : 1,7 MB
+     chacun, 12 persos de joueur.
+   - Geoffrey : « 1 squad members missing » juste après son retour. nass4 : 45 PNJ « not there yet »
+     et ~10 persos d'une même escouade (1:344:…) qui « ne restent pas couchés après 2 chutes ». rob1 :
+     tout bon à 22:58, 371 fps.
+   - **Perso parasite « rob1 »** : « NPC rob1 joined the player faction: a squad character now » à
+     22:56:46, pendant le nettoyage des départs. `squadsfull` le montre ensuite dans l'escouade
+     **fasme** de nass4. C'est sans doute le perso que rob avait commencé dans l'éditeur à 22:10-22:13
+     (« never finished making their character … the editor opens again »), resté dans le monde.
+     Il faut supprimer un perso d'éditeur abandonné au lieu de le laisser vivre, et ne pas l'adopter
+     comme recrue (`Session::JoinSquad`, `common/src/session.cpp:1922`).
+   - L'utilisateur trouve que « ça a l'air de bugger fort » après le resync. Ce qu'ils voient est à
+     préciser.
+
+3l. **Caméra de Geoffrey « complètement folle, elle va partout » (23:20, nouvelle partie)**
+   - Son journal répète toutes les 0,5 s « floor view: follows our 'Geoffrey' (it followed nobody) ».
+     Son jeu remet sans cesse le focus de `PlayerInterface` (+0x270 `PI_focusHand`) à « personne », et
+     `UpdateFloorFocus` (`plugin/world.cpp:1497`) le remet sur Geoffrey à chaque fois, avec
+     `PI_focusFloor = -1`. Déjà 149 fois dans la partie précédente.
+   - Hypothèse : ce focus est aussi celui que la **caméra suit**. Le jeu le lâche quand le joueur
+     déplace sa caméra lui-même ; le mod le reprend, la caméra est ramenée sur Geoffrey, et ainsi de
+     suite. D'où une caméra qui saute entre ce que le joueur fait et son perso.
+   - Correction :
+     - ne poser ce focus qu'une fois, au chargement (le focus du monde de l'hôte ne vaut rien chez le
+       client), puis le laisser au joueur, même s'il revient à « personne » ;
+     - les toits et étages au-dessus de nos persos passent déjà par `UpdateRoof` : l'appeler pour le
+       perso choisi sans réécrire le focus ;
+     - vérifier dans le jeu de base (0x7F5400, 0x801630) si `PI+0x270` pilote la caméra.
+   - Test : client, déplacer la caméra avec les touches et la souris loin de son perso, monter un
+     étage, entrer dans un bâtiment. La caméra ne doit jamais revenir seule, et les toits doivent
+     se cacher.
+
+3m. **nass4 ne peut plus diriger Stone (23:27, nouvelle partie)**
+   - 23:27:26-27, chez les 3 clients : « our copy of the host's 1:317:56274416:1:1129150336 changed squads
+     here (now 1:46:853759744:6:1129150336): followed ». `1:46:853759744:6` est le handle de Stone, le
+     6e de l'escouade fasme (c'était le focus du monde chargé à 23:08, et l'hôte téléporte ce handle à
+     23:30:45).
+   - Le client a donc pris **Stone** pour la copie d'un **autre** perso de l'hôte (1:317…:1, peut-être
+     un PNJ du même gabarit 41299 « Sword for hire ex-slave », ou le Vert-Landais à terre que nass4
+     fouillait à 23:27:12). Le vrai Stone de l'hôte n'a plus de copie chez le client.
+   - Ensuite : « refused locally: order for a character this player does not own: not a squad member »
+     dès 23:27:35, puis « order for a character the host does not know » à partir de 23:27:42, jusqu'à
+     ~900 fois par minute. Rob et Geoffrey reçoivent aussi « inventory change refused: that character
+     belongs to nass4 ».
+   - À faire :
+     - trouver qui associe une copie locale à un perso de l'hôte (appariement des stand-ins par
+       gabarit et position, ou suivi « changed squads here … followed ») ;
+     - interdire d'associer un **membre d'escouade** local à un autre perso de l'hôte que le sien ;
+     - si deux persos de l'hôte se disputent une même copie, garder celui qui a le même handle ;
+     - ne pas journaliser le refus à chaque image (900 lignes par minute).
+   - Contournement : `resync`.
+
+3n. **Le mode construction de l'hôte met tout le monde en pause (23:35, demande de l'utilisateur :
+   « c'est chiant »)**
+   - Le jeu de base met en pause quand on entre en mode construction. L'hôte simule le monde pour tout
+     le monde, donc sa pause arrête tout le monde.
+   - Souhait : l'hôte construit sans arrêter les autres.
+   - À faire :
+     - chez l'hôte en partie, trouver où le mode construction met le jeu en pause (entrée dans
+       `PlayerInterface` / `BuildMode`, appel à la vitesse 0, cf. le setter UI 0x787E40) ;
+     - ne pas appliquer cette pause-là pendant une session, ou la lever tout de suite, sauf si l'hôte
+       avait déjà mis pause lui-même ;
+     - chez un client, son mode construction ne doit rien changer pour les autres (à vérifier).
+   - Test : l'hôte entre en mode construction pendant qu'un client marche et se bat. Le client ne doit
+     pas s'arrêter, et la pose du bâtiment doit marcher.
+   - Contournement à essayer : relancer le temps (Espace / bouton vitesse) une fois en mode
+     construction.
+
+3o. **Agriculture : « pour planter c'est compliqué » (rob, 23:30-23:44)**
+   - Ce qui marche :
+     - rob pose « Ferme Légumes L » (`18968-small_changes_otto.mod`) à 23:30:44 ; elle est construite
+       chez tout le monde, finie à 23:36:16, puis « machine: Ferme Légumes L switched on » ;
+     - rob ordonne trois fois « operate machine » sur la ferme (23:36:21, 23:36:58, 23:37:06), et
+       ouvre deux fois son stockage (23:37:10, 23:37:27).
+   - Ce qui manque : aucune ligne « machine: Ferme Légumes L workers 0 -> 1/… » côté hôte, alors que la
+     mine de fer en a. Le fermier n'a peut-être jamais été compté au travail chez l'hôte, ou
+     l'ordre est rejoué chez l'hôte sans prendre.
+   - Le symptôme exact reste à préciser (pas de plantation, pas de pousse, récolte impossible,
+     différence entre hôte et client).
+   - À tester : un client pose un champ (gabarit de base `gamedata.base`, pas seulement de mod), le fait
+     construire, met un perso « fermier » dessus, à x3. Vérifier l'ordre, les « workers », la pousse et
+     la récolte, chez l'hôte et chez le client.
+   - Remarque de hauteur : les poses de client arrivent avec une hauteur fausse (rob -13,6 → hôte
+     268,1 ; Geoffrey -19,4 → 931,1). L'hôte recale sur le sol, mais il faudra voir pourquoi le client
+     envoie une hauteur pareille.
+
+3p. **La fenêtre « Prospecter » ne s'ouvre pas chez le client (23:47)**
+   - Le bouton PROSPECT de la barre d'ordres (`OrdersPanel`, `0x72B540`) ouvre normalement la fenêtre de
+     prospection (fertilité, eau, minerais à l'endroit du perso sélectionné). Chez le client, rien ne
+     s'ouvre, et le journal ne montre rien : ni ordre, ni tâche 150, ni refus.
+   - Pistes :
+     1. la fenêtre lit des données du lieu (`checkProspectingIsNotZero`, docs/MOTEUR.md §…) que le jeu
+        du client n'a pas, ou elle demande un perso « vraiment » à lui (faction, `PlayerInterface`) ;
+     2. le mod intercepte le clic sur ce bouton (relecture des boutons de la barre d'ordres côté
+        client) et l'avale sans rien envoyer ni ouvrir ;
+     3. la tâche 150 part vers l'hôte et la fenêtre s'ouvre chez l'hôte, comme la boutique d'animaux
+        (3i). À vérifier : l'hôte voit-il une fenêtre de prospection s'ouvrir ?
+   - Test : client, sélectionner un perso, PROSPECT, en plein désert et près d'une ville. Comparer avec
+     l'hôte et noter chaque étape dans le journal.
+
+Outil : `tools/dump_stack.py <fichier.dmp>` lit la pile d'un dump avec le paquet Python `minidump` (le dump n'a pas
+le code de la DLL : on compare les offsets avec `dumpbin /disasm /range:` sur la même build).
+dbghelp n'a pas su lire le PDB.
+
+## Bâtiments, reste à faire (après les tests du 11 octobre)
+- **Test du coffre** dans `buildfull` (3 échecs sur 25) : `conput` cherche les matériaux « par
+  terre » alors qu'ils sont dans le sac, et `contcount` ne trouve pas de conteneur sur un bâtiment de
+  stockage.
+- **Établi de recherche** : le test le pose hors de la cabane ; le poser à l'intérieur pour de vrai.
+- **Bâtiments achetés en ville** : le test `buyhouse` n'a pas encore été lancé (navigation, meubles,
+  coffres, établis, pour l'hôte et pour le client).
+- **Clic droit sur l'établi de recherche** : il faut garder le bouton appuyé pour voir les options
+  (signalé par l'utilisateur).
+- **PNJ dans les villes lointaines** : encore 16 à 57 unités d'écart en hauteur dans certaines villes
+  (moins prioritaire).
+
 ## 11 octobre 2026, essai `faraway` (client dans une autre ville, caméra de l'hôte à la maison)
 
 **Deuxième essai (12:48, a100038) : 24/33.** Écarts de position inchangés : ce sont des PNJ qui dorment
