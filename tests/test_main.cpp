@@ -5497,6 +5497,16 @@ static void TestMotion() {
         EntityState turnR = walker(0, 100), turnL = walker(0, 100);
         turnL.pos = {1, 0, 1};
         CHECK(TravelDir(turnR, turnL).z > 0.7f);
+        // switchback stairs (11 October): the path leads away from the destination for a while; the
+        // host faces the way it goes, so that is the way (not the destination's direction)
+        EntityState from = walker(0, 100), to = walker(0, 100);
+        to.pos = {-1, 0, 0};                                  // moving away from the destination (+x)
+        const float s2 = std::sqrt(0.5f);
+        to.rot = {s2, 0, -s2, 0};                             // facing -x
+        CHECK(HostForward(to.rot).x < -0.99f);
+        CHECK(TravelDir(from, to).x < -0.99f);                // the way it goes
+        to.rot = {s2, 0, s2, 0};                              // facing +x: extrapolated past the newest
+        CHECK(TravelDir(from, to).x > 0.99f);                 // the destination's way, as before
     }
     // 4b. the host paused (suite "pause en pleine course", 5.8 units off): exactly its newest state,
     // never extrapolated past where its runner stopped

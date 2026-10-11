@@ -1014,6 +1014,31 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         for (auto& [k, n] : kinds) o << " " << k << "x" << n;
         return o.str();
     }
+    if (cmd == "buildingsnear") {   // buildingsnear <squadIndex> <radius>: buildings around it, nearest first: sid|x,y,z
+        size_t idx = 0;
+        float r = 1000;
+        in >> idx >> r;
+        auto squad = SortedSquad(w);
+        kc::Vec3 p;
+        if (idx >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[idx]), p)) return "err";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(p, r, objs);
+        std::vector<std::pair<float, std::string>> out;
+        for (void* o : objs) {
+            kc::Handle bh;
+            kc::Vec3 q;
+            std::string sid;
+            if (kenshi::IsCharacter(o) || !kenshi::ObjectHandle(o, bh) || bh.type != 0 || !kenshi::ObjectPosition(o, q) || !kenshi::ObjectTemplate(o, sid)) continue;
+            char b[160];
+            snprintf(b, sizeof(b), "%s|%.0f,%.0f,%.0f", sid.c_str(), q.x, q.y, q.z);
+            out.emplace_back((q.x - p.x) * (q.x - p.x) + (q.z - p.z) * (q.z - p.z), b);
+        }
+        std::sort(out.begin(), out.end());
+        std::ostringstream o;
+        o << "ok " << out.size();
+        for (size_t i = 0; i < out.size() && i < 40; ++i) o << ' ' << out[i].second;
+        return o.str();
+    }
     // ---- squad window and AI settings (experiment squadui). Characters by name, '_' for spaces.
     auto squadChar = [&](std::string n) -> kenshi::Character* {
         std::replace(n.begin(), n.end(), '_', ' ');
@@ -1529,6 +1554,24 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         return "ok " + std::to_string(cur);
     }
+    if (cmd == "gamespeed") {   // gamespeed: the game's speed as this machine runs it (the speed buttons show the same value)
+        char b[48];
+        snprintf(b, sizeof b, "ok speed=%.3f", double(kenshi::GetFrameSpeed()));
+        return b;
+    }
+    if (cmd == "floorview") {   // floorview: the character the floor view follows, its floor as last seen, the floor shown
+        void* pi = kenshi::Player();
+        if (!pi) return "err";
+        kc::Handle focus;
+        const bool has = kenshi::FloorFocus(focus);
+        const int32_t seen = *reinterpret_cast<const int32_t*>(reinterpret_cast<const uint8_t*>(pi) + kenshi::off::PI_focusFloor);
+        const int32_t shown = *reinterpret_cast<const int32_t*>(reinterpret_cast<const uint8_t*>(pi) + kenshi::off::PI_viewFloor);
+        std::string name;
+        if (kenshi::Character* fc = has ? kenshi::Resolve(focus) : nullptr) kenshi::CharacterName(fc, name);
+        for (char& ch : name) if (ch == ' ') ch = '_';
+        return "ok focus=" + (has ? Key(w.HostHandleOf(focus)) : std::string("none")) + " name=" + (name.empty() ? "-" : name) +
+               " seen=" + std::to_string(seen) + " shown=" + std::to_string(shown);
+    }
     if (cmd == "consolewin") {   // consolewin: is the host console window there, and how much log does it show
         HWND wnd = FindWindowA("KenshiCoopHostConsole", nullptr);
         if (!wnd) return "ok none";
@@ -1615,9 +1658,10 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         return o.str();
     }
-    if (cmd == "containerreq" || cmd == "contake") {
+    if (cmd == "containerreq" || cmd == "contake" || cmd == "conput") {
         // containerreq <selectIndex> <name part>: right click on the nearest container with that name (loot order)
         // contake <selectIndex> <name part>: in the open window, take its first item into that member's bag
+        // conput <selectIndex> <name part>: in the open window, put that member's first loose item into the container
         size_t sel = 0;
         std::string part;
         in >> sel >> part;
@@ -1648,6 +1692,23 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             bool ok = false;
             kenshi::WithSelection(me, [&] { ok = kenshi::CallAddTaskNearestObject(26, best, op); });
             return (ok ? "ok " : "err ") + bestName + " at " + std::to_string(int(std::sqrt(bestD)));
+        }
+        if (cmd == "conput") {
+            std::vector<kc::ItemState> mine;
+            kenshi::ReadInventory(me, mine);
+            const kc::ItemState* loose = nullptr;
+            for (const auto& it : mine) if (!it.equipped) { loose = &it; break; }
+            if (!loose) return "err nothing loose to put";
+            kc::InvOp mv;
+            mv.kind = kc::InvOpKind::Move;
+            mv.item = *loose;
+            mv.toSection = "main";
+            mv.toX = -1;
+            mv.toY = -1;
+            std::string why;
+            HostCallScope scope;   // the window's own move (the client's diff then asks the host)
+            const bool ok = kenshi::MoveInventoryItem(me, best, mv, &why);
+            return (ok ? "ok put " : "err ") + loose->templateSid + (ok ? "" : " " + why) + " into " + bestName;
         }
         std::vector<kc::ItemState> items;
         kenshi::ReadInventory(best, items);
@@ -2423,13 +2484,17 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         // buildbuy <name part>: confirm buying the nearest building for sale (as its window does)
         // builddismantle <name part>: confirm dismantling the nearest building of ours (as its window does)
         // buildforsale [name part]: the nearest building for sale and its price
+        // builddismantle <name part> [squadIndex]: near that squad member (default 0)
         std::string part = "any";
         float amount = 0;
-        in >> part >> amount;
+        size_t nearIdx = 0;
+        in >> part;
+        if (cmd == "builddismantle") { if (!(in >> nearIdx)) nearIdx = 0; }
+        else in >> amount;
         std::replace(part.begin(), part.end(), '_', ' ');
         auto squad = SortedSquad(w);
         kc::Vec3 me;
-        if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), me)) return "err no squad";
+        if (nearIdx >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[nearIdx]), me)) return "err no squad";
         const int want = cmd == "buildprogress" ? 3 : (cmd == "builddismantle" ? 2 : 1);
         void* b = w.NearestBuilding(me, part, 3000.0f, want);
         std::string sid;
@@ -2528,7 +2593,8 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         kenshi::Character* me = w.FindSquad(squad[sel]);
         kc::Vec3 mp, bp;
         if (!kenshi::GetPosition(me, mp)) return "err";
-        void* b = w.NearestBuilding(mp, part, 3000.0f, 3);
+        // dismantling (96) works on a finished building too
+        void* b = w.NearestBuilding(mp, part, 3000.0f, task == 96 ? 2 : 3);
         std::string sid;
         if (!b || !kenshi::ObjectTemplate(b, sid) || !kenshi::ObjectPosition(b, bp)) return "err no unfinished building of ours";
         bool ok = false;
@@ -2536,6 +2602,24 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         char where[160];
         snprintf(where, sizeof(where), "%s@%.1f,%.1f,%.1f", sid.c_str(), bp.x, bp.y, bp.z);
         return (ok ? "ok " : "err call failed ") + std::string(where);
+    }
+    if (cmd == "buildspawn") {   // buildspawn <sid> <dx> <dz>: (this machine only) a building created finished next to squad member 0
+        std::string sid;
+        float dx = 0, dz = 0;
+        in >> sid >> dx >> dz;
+        auto squad = SortedSquad(w);
+        kc::Vec3 me;
+        if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), me)) return "err no squad";
+        return w.SpawnFinishedBuilding(sid, {me.x + dx, me.y, me.z + dz}) ? "ok" : "err";
+    }
+    if (cmd == "buildphys") {   // buildphys <name part> [fix]: the nearest building's physics state (fix: call vt 0xE0)
+        std::string part, fix;
+        in >> part >> fix;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        kc::Vec3 me;
+        if (squad.empty() || !kenshi::GetPosition(w.FindSquad(squad[0]), me)) return "err no squad";
+        return w.BuildingPhysics(part, me, fix == "fix");
     }
     if (cmd == "buildinfo") {   // buildinfo [name part] [squadIndex]: the nearest building (any owner): sid@pos forsale ours price
         std::string part = "any";
@@ -2813,7 +2897,12 @@ void DebugPoll(kc::Session& s, KenshiWorld& w, bool live) {
                 bool mv = false;
                 float sp = 0;
                 if (!c || !kenshi::GetPosition(c, p)) continue;
-                const bool face = kenshi::GetFacing(c, fd);
+                // the drawn rotation's forward (what a player sees; the movement's facing vector can
+                // differ from it: the moonwalk of 11 October had the facing right, the body reversed)
+                kc::Quat rq;
+                bool face = kenshi::GetRotation(c, rq);
+                if (face) fd = kenshi::ForwardOf(rq);
+                else face = kenshi::GetFacing(c, fd);
                 kenshi::GetMovement(c, dest, mv, sp);
                 g_motion.out << "m " << (now - g_motion.t0) << ' ' << Key(h) << ' ' << p.x << ',' << p.y << ',' << p.z << ' '
                              << (face ? fd.x : 0.0f) << ',' << (face ? fd.z : 0.0f) << ' ' << int(mv) << ' ' << sp << ' '

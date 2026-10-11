@@ -248,7 +248,7 @@ void DrawMapScreen(const MapScene& s, float w, float h) {
     swatch(kEnemy);
     ImGui::TextUnformatted("Ennemis qui nous visent");
     ImGui::TextDisabled("Gros point : perso du joueur, petit : recrue");
-    if (s.showPings) ImGui::TextDisabled("Ping : clic molette ou Alt+clic");
+    if (s.showPings) ImGui::TextDisabled("Ping : Ctrl+clic molette ou Alt+clic");
     ImGui::End();
     if (!tip.empty() && cx >= s.clipX0 && cx <= s.clipX1 && cy >= s.clipY0 && cy <= s.clipY1) Tooltip(cx, cy, tip);
 }
@@ -495,11 +495,14 @@ void DrawMinimap(const MapScene& s, float w, float h, ID3D11Device* dev) {
 }
 
 // ---- input
-kc::PingKind KindFromModifiers() {
-    const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0, ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-    if (shift && ctrl) return kc::PingKind::Help;
+// The kind of ping: Shift danger, the other modifier loot, both help. The other modifier is Ctrl
+// for Alt+click, Alt for Ctrl+middle click (Ctrl is what makes that middle click a ping).
+kc::PingKind KindFromModifiers(bool ctrlIsTrigger = false) {
+    const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    const bool other = (GetKeyState(ctrlIsTrigger ? VK_MENU : VK_CONTROL) & 0x8000) != 0;
+    if (shift && other) return kc::PingKind::Help;
     if (shift) return kc::PingKind::Danger;
-    if (ctrl) return kc::PingKind::Loot;
+    if (other) return kc::PingKind::Loot;
     return kc::PingKind::Go;
 }
 
@@ -521,12 +524,12 @@ bool PointedSpot(float x, float y, kc::Vec3& out) {
     return false;
 }
 
-void PlacePing(float x, float y) {
+void PlacePing(float x, float y, bool ctrlIsTrigger = false) {
     kc::Vec3 at;
     if (!PointedSpot(x, y, at)) return;
     OverlayAction a;
     a.kind = OverlayAction::Kind::Ping;
-    a.index = int(KindFromModifiers());
+    a.index = int(KindFromModifiers(ctrlIsTrigger));
     a.x = at.x; a.y = at.y; a.z = at.z;
     OverlayPushAction(std::move(a));
 }
@@ -767,23 +770,21 @@ bool MapOverlayMessage(UINT msg, WPARAM wp, float x, float y) {
         return over;
     case WM_MBUTTONDOWN: {
         if (!pings) return false;
+        const bool ctrl = (wp & MK_CONTROL) != 0;
         bool onMap = false;
         {
             std::lock_guard<std::mutex> lk(g_mx);
             onMap = g_inScene.mapOpen && g_inScene.showMap && InMapClip(g_inScene, x, y);
         }
-        if (over || onMap) { PlacePing(x, y); return true; }
-        // in the 3D view the middle button also turns the camera: a ping only for a short click
-        g_midDownX = int(x); g_midDownY = int(y);
-        g_midDownAt = NowSeconds();
+        if (over || onMap) { PlacePing(x, y, ctrl); return true; }
+        // in the 3D view the middle button turns the camera: a ping only with Ctrl held (a plain
+        // middle click turned the camera and pinged at once), and the game never sees that click
+        if (ctrl) { PlacePing(x, y, true); g_midDownX = -2; return true; }
         return false;
     }
     case WM_MBUTTONUP: {
-        if (!pings || g_midDownX < 0) return over;
-        const bool click = std::abs(int(x) - g_midDownX) <= 5 && std::abs(int(y) - g_midDownY) <= 5 && NowSeconds() - g_midDownAt < 0.35;
-        g_midDownX = -1;
-        if (click) PlacePing(x, y);
-        return false;
+        if (g_midDownX == -2) { g_midDownX = -1; return true; }   // the release of a Ctrl+middle ping
+        return over;
     }
     default:
         return false;

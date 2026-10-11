@@ -78,6 +78,8 @@ enum Fn : int {
     FnUserPause,                // void GameWorld::userPause(bool)
     FnHandleResolve,            // RootObject* resolve(HandleTable*, const hand*, bool)
     FnTogglePause,              // void GameWorld::togglePause(bool)
+    FnSetGameSpeedUi,           // void GameWorld::<speed buttons' setter>(float speed, bool sound)   (0x787E40: also shows the speed buttons)
+    FnCharMovementUpdate,       // void CharMovement::update(float)   (vtable +0x58: path, turning)
     FnMedApplyDamage,           // void MedicalSystem::applyDamage(HealthPartStatus*, const Damages&, bool loadingSavestate, bool canSever, const Vector3& force)
     FnMedKnockout,              // void MedicalSystem::knockout(float skill01)
     FnDeclareDead,              // void Character::declareDead()
@@ -719,6 +721,8 @@ bool Teleport(Character* c, const kc::Vec3& pos, const kc::Quat& rot);
 bool SetDestination(Character* c, const kc::Vec3& dest);
 bool GetFacing(const Character* c, kc::Vec3& dir);   // CharMovement facing direction
 bool FaceDirection(Character* c, const kc::Vec3& dir);   // the game turns the character that way
+bool FaceMovement(void* movement, const kc::Vec3& dir);   // the same on a CharMovement (hooks)
+bool WriteRotation(Character* c, const kc::Quat& q);    // RO_rot, the body's drawn rotation (hooks, after the movement update)
 void* MovementOf(const Character* c);                    // CharMovement*
 kc::Vec3 ForwardOf(const kc::Quat& q);                   // where a character with this rotation faces
 bool ReadPace(const Character* c, uint8_t& gait, float& pace);         // speed order and desired speed
@@ -773,6 +777,11 @@ inline constexpr uintptr_t kAddWoundBegin = 0x6508D0, kAddWoundEnd = 0x651FF1;
 // distance to the camera, 0x7F2A20, and frustum tests). addWound shows a damage number only when it is
 // set (0x651DF5): the host's game makes none for characters its camera does not see (0.3.1).
 inline constexpr uintptr_t CH_inView = 0x1A9;
+// Character +0xE4: the world's update loop (GameWorld, 0x786EF0) runs Character::update (vtable +0xE0)
+// every frame for those with it set; the others 6 per frame in turn, their time summed in +0xC0 and
+// caught up at once (0x787053). Written by 0x5CA1CF (with the floor visibility byte +0xE5) and
+// 0x2AF1E0 from where the camera is.
+inline constexpr uintptr_t CH_everyFrame = 0xE4;
 bool InView(const Character* c);   // CH_inView as the game (and hk_charUpdateView) left it this frame
 // Dialogue::startPlayerConversation (0x684320) refuses a conversation when the player's character is
 // more than 9216 units from the camera (0x6843CA: Vector3::distance to the camera node, > 0x1700514,
@@ -847,6 +856,7 @@ bool SetPositionSimple(Character* c, const kc::Vec3& pos);
 bool IsMoving(const Character* c);
 bool Halt(Character* c);
 bool CallSetFrameSpeed(float speed);
+bool CallSetGameSpeedUi(float speed);   // as the speed buttons and keys do (no sound): the buttons show it too
 bool CallUserPause(bool paused);
 bool CallTogglePause(bool paused);
 // Writes host health into the local copy (does not trigger death/knockout by itself).

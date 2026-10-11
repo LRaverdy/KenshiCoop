@@ -1090,9 +1090,10 @@ la fenêtre du client.
   convertis à chaque image de la taille de la vue MyGUI vers celle du tampon d'affichage (celle où
   l'overlay dessine), axe par axe ; la souris, elle, va des pixels de la fenêtre (DPI compris) à ceux
   du tampon. Aucune position n'est gardée d'une image à l'autre.
-- **Pings** : clic molette ou Alt+clic sur la carte, sur la minicarte ou sur le sol (un clic
-  molette court : le clic molette tenu tourne toujours la caméra). Sans touche : « Aller ici » ;
-  Maj : « Danger / ennemis » ; Ctrl : « Butin » ; Maj+Ctrl : « À l'aide ». Le ping apparaît chez
+- **Pings** : Ctrl+clic molette ou Alt+clic sur la carte, sur la minicarte ou sur le sol (sur la
+  carte et la minicarte le clic molette seul suffit ; dans la vue 3D il faut Ctrl, le clic molette
+  seul ne fait que tourner la caméra). Sans autre touche : « Aller ici » ; Maj : « Danger /
+  ennemis » ; Alt (avec Ctrl+clic molette) ou Ctrl (avec Alt+clic) : « Butin » ; les deux : « À l'aide ». Le ping apparaît chez
   tout le monde à la couleur et au nom de son joueur : sur la carte, la minicarte et en 3D au-dessus
   du point avec la distance ; il s'efface en 10 s. Au plus un ping toutes les 0,5 s et 5 en même
   temps par joueur (le plus ancien part). Un ping ne change rien au monde. Pas de son (aucun son

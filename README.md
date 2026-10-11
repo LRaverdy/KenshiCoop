@@ -67,7 +67,7 @@ Raccourcis (Kenshi au premier plan) :
 | Ctrl+Shift+N | afficher ou masquer la minicarte |
 | clic gauche maintenu sur la minicarte | la déplacer (« Réinitialiser la position » ou le choix d'un coin dans « Affichage » la remet en place) |
 | Ctrl+molette sur la minicarte, ou sa poignée en bas à droite | la redimensionner (la molette seule zoome) |
-| clic molette / Alt+clic | ping sur la carte, la minicarte ou le sol (Maj : danger, Ctrl : butin, Maj+Ctrl : à l'aide) |
+| Ctrl+clic molette / Alt+clic | ping sur la carte, la minicarte ou le sol (clic molette seul : sur la carte et la minicarte). Ctrl+clic molette : Maj danger, Alt butin, Maj+Alt à l'aide ; Alt+clic : Maj danger, Ctrl butin, Maj+Ctrl à l'aide |
 
 1. L'hôte charge sa partie et appuie sur **Ctrl+Shift+H**.
 2. L'ami clique **Rejoindre** à côté du nom de l'hôte dans sa fenêtre Multijoueur (ou colle son code

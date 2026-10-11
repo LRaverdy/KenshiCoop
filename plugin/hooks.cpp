@@ -1005,6 +1005,16 @@ uint8_t hk_charUpdateView(void* chr) {
                 if (KenshiWorld* w = TheWorld()) ++w->charsForcedInView;
             }
         }
+        // Host: the world's update loop (0x786EF0) updates a character every frame only when its
+        // +0xE4 byte is set; the others, 6 per frame in turn, catching up their time in one go
+        // (kenshi::CH_everyFrame). Near a client player they moved in 20-unit bounds on the host,
+        // and so on the client (farprobe, 11 October: "saccadé"): set for them.
+        // (Host only: forced on a client too, its game ran its own walk on the copies every frame,
+        // fighting the host's positions and facing: moonwalk and shaking, 11 October.)
+        if (!KenshiWorld::ClientActive()) {
+            auto v = KenshiWorld::View();
+            if (v->active && v->remoteNear && v->remoteNear->count(chr)) *(reinterpret_cast<uint8_t*>(chr) + kenshi::CH_everyFrame) = 1;
+        }
         if (forced) g_forcedInView.insert(chr);
         else g_forcedInView.erase(chr);
     }
@@ -1289,6 +1299,25 @@ void hk_singleAnimUpdate(void* single, float masterTime, float frameTime, bool s
         }
     }
     o_singleAnimUpdate(single, masterTime, frameTime, sounds);
+}
+// Walking, a client's game turns each copy toward its own path (another way up the stairs of Okran's
+// Fist: 25 of 33 walkers there faced backwards while the host's faced forwards, 11 October). Apply's
+// FaceDirection ran before the game's movement update, which turned them back: the host's facing is
+// put back right after it (fights: hk_combatMove).
+using MoveUpdateFn = void (*)(void* mov, float dt);
+MoveUpdateFn o_moveUpdate = nullptr;
+void hk_moveUpdate(void* mov, float dt) {
+    o_moveUpdate(mov, dt);
+    if (!mov || !KenshiWorld::ClientActive()) return;
+    auto v = KenshiWorld::View();
+    auto it = v->facing.find(mov);
+    if (it == v->facing.end()) return;
+    const kc::Vec3& want = it->second;
+    if (want.x * want.x + want.z * want.z < 0.25f) return;
+    kenshi::FaceMovement(mov, want);
+    // the facing alone was not enough: the body's rotation (what is drawn) stayed on the client's
+    // path, 160-180 degrees off (11 October): the host's rotation, written after the update
+    if (auto o = v->orient.find(mov); o != v->orient.end()) kenshi::WriteRotation(static_cast<kenshi::Character*>(o->second.first), o->second.second);
 }
 // In a fight, a client's game turns each fighter toward its own idea of the target: the host's
 // facing replaces it.
@@ -1767,6 +1796,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnTrackAnimationMovement, reinterpret_cast<void*>(&hk_trackAnimMove), reinterpret_cast<void**>(&o_trackAnimMove)},
         {kenshi::FnSingleAnimUpdate, reinterpret_cast<void*>(&hk_singleAnimUpdate), reinterpret_cast<void**>(&o_singleAnimUpdate)},
         {kenshi::FnCombatMovementUpdate, reinterpret_cast<void*>(&hk_combatMove), reinterpret_cast<void**>(&o_combatMove)},
+        {kenshi::FnCharMovementUpdate, reinterpret_cast<void*>(&hk_moveUpdate), reinterpret_cast<void**>(&o_moveUpdate)},
         // ---- lot A: doors
         {kenshi::FnDoorOpen, reinterpret_cast<void*>(&doorhooks::hk_open), reinterpret_cast<void**>(&doorhooks::o_open)},
         {kenshi::FnDoorClose, reinterpret_cast<void*>(&doorhooks::hk_close), reinterpret_cast<void**>(&doorhooks::o_close)},

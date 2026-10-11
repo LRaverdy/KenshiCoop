@@ -6,6 +6,31 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+- **Bâtiments posés par le mod : on les traversait, chez l'hôte aussi.** Le mode construction du jeu
+  met chaque bâtiment qu'il crée dans une file que le gestionnaire `0x4E4120` passe ensuite à
+  `NavMesh::generate(Aabb)` et, pour un intérieur, `NavMesh::generate(hand)` (KenshiLib `NavMesh.h`,
+  adresses +0x520 ici). Les poses du mod (celles d'un client, refaites chez l'hôte et chez tous) ne
+  passaient pas par cette file : leur bâtiment n'était découpé dans aucune carte de navigation et
+  tout le monde marchait au travers (un mur construit par tous les persos, traversé en ligne droite
+  des deux côtés, la collision physique pourtant allumée). Maintenant fait comme
+  `Building::setDestroyed` (`0x5578A2`) : la boîte du bâtiment (+0x27C centre, +0x288 demi-taille,
+  agrandie de 5) puis son intérieur, à la pose et une fois fini (hôte et clients). Vérifié : les persos
+  contournent le mur (8-9 unités au plus près, contre 0,1), même chemin chez l'hôte et le client.
+- **Ping : Ctrl+clic molette** dans la vue 3D (le clic molette seul tournait aussi la caméra) ; sur la
+  carte et la minicarte le clic molette seul marche toujours. Avec Ctrl+clic molette, Alt = butin.
+- **Fluidité loin de l'hôte.** Le jeu ne met à jour chaque image que les persos dont l'octet
+  `Character+0xE4` est levé (`0x786EF0`) ; les autres, 6 par image à tour de rôle, rattrapent leur
+  temps d'un coup : bonds de 20 unités chez l'hôte loin de sa caméra, recopiés par les clients. Levé
+  chez l'hôte pour les persos proches d'un joueur client. Les recalages d'horloge d'animation se font
+  en douceur au lieu de sauter (2400 sauts en 10 s chez un client). Marche à reculons : la rotation
+  de l'hôte est réécrite après la mise à jour de déplacement du client (`CharMovement::update`,
+  crochet), et la direction de marche suit le regard de l'hôte dans les escaliers en lacets
+  (`kc::motion::TravelDir`, testé) ; la copie marche vers un point 60 unités devant sur la route de
+  l'hôte. Vitesse x2/x3 affichée sur les boutons du client (`0x787E40`).
+- **Session** : un gel du jeu (zone lointaine qui charge) ne compte plus comme « monde perdu ».
+- Tests : `buildfull` (désert dégagé repéré une fois, `open_desert.txt`), `farprobe`, `floorview`,
+  commandes `buildphys`, `buildspawn`, `conput`, `gamespeed`, `floorview`, `buildingsnear`.
+
 - **Loin de l'hôte, troisième passe (essais `faraway --clients 2` et `farprobe`, 11 octobre).**
   - *Dialogue : la vraie cause.* `Dialogue::startPlayerConversation` (`0x684320`) refuse toute
     conversation quand le perso est à plus de 9216 unités de la caméra (`0x6843CA`, distance au nœud
