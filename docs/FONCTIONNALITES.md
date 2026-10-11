@@ -1138,6 +1138,13 @@ la fenêtre du client.
   même combat à côté.
 - **Limite connue** : le jeu ne déplace les PNJ lointains que quelques fois par seconde. Ceux qui
   marchent loin des joueurs peuvent être décalés de quelques dizaines de centimètres à 1 ou 2 m.
+- **PNJ autour d'un client loin de l'hôte (à vérifier en jeu, `faraway --clients 3`)** : « lointain »
+  veut dire hors de la vue de la caméra ; l'hôte met dans la vue les PNJ près des persos d'un client,
+  et le client les copies que l'hôte pilote (`hk_charUpdateView`) : les deux jeux les déplacent avec
+  la même mise à jour complète (mêmes sols, mêmes murs, chaque image). Un dialogue demandé par un
+  client loin de la caméra de l'hôte est lancé par l'hôte quand le perso est arrivé
+  (`UpdatePendingTalks`) ; le marchand d'une ville chargée après l'arrivée du client reçoit le
+  bâtiment de ses comptoirs (`GiveShopHome`, cherché autour des comptoirs).
 
 ### Recherche, fabrication, mines et machines, énergie 🟡 (implémenté, protocole 34, tests unitaires ; à vérifier en jeu)
 - **Ce qui existait avant** : rien de propre à la recherche ni à la fabrication. Les ordres

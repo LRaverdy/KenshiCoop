@@ -6,6 +6,49 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+- **Loin de l'hôte : positions exactes, dialogue, commerce, combat (`faraway`, 30/42 au premier
+  essai).** Causes trouvées dans les journaux et le désassemblage ; pas encore relancé en jeu.
+  - *Positions* (Admag 33 à 51 unités d'écart, Bouclier d'Okran 8 à 68, tolérance 3) : presque
+    toujours **en hauteur seulement** (x et z identiques au millième), des gardes sur les remparts
+    d'Admag et des paladins sur la forteresse ; ailleurs 12,8 unités à plat pour des paladins qui
+    « marchent » vers leur lit chez l'hôte sans jamais bouger (vitesse 0) et y sont arrivés chez le
+    client. Ni le débit (20 positions/s pour tout perso diffusé, sans budget) ni la pause (les vidages
+    en pause et hors pause donnent les mêmes écarts) : le jeu a **deux mises à jour de déplacement**.
+    `Character+0x1A9` (« dans la vue de la caméra », recalculé à chaque image par `0x5C9F60`) choisit
+    dans `CharMovement` (`0x660A3D`) la mise à jour complète (`0x147FD0` : physique, vrais sols et
+    murs, chaque image) ou une version réduite (`0x148AC0` : quelques pas par seconde, une autre idée
+    du sol). Les persos de la faction du joueur sont toujours « dans la vue » (`0x5C79C0`, faction
+    +0x250), les PNJ seulement près de la caméra : chez l'hôte, les PNJ autour d'un client lointain
+    prenaient la version réduite, leurs copies chez le client (sous sa caméra) la complète ; et une
+    position écrite sur une copie hors de la vue du client n'était pas prise. **Correction** : détour
+    `hk_charUpdateView` sur `0x5C9F60` (`FnCharUpdateView`) : après le calcul du jeu, chez l'hôte les
+    PNJ près des persos d'un client (`HookView::remoteNear`, l'ensemble des chiffres de dégâts), chez
+    un client tous les persos pilotés par l'hôte, sont mis « dans la vue ». Les deux jeux font alors la
+    même mise à jour complète. Compteur `charsForcedInView`, commande `inview`, champ `inview=` des
+    vidages.
+  - *Dialogue* : l'ordre « parler » arrive et tourne (`client task 12 … ok`), le perso marche jusqu'au
+    PNJ, mais l'étape « arrivé : parler » du jeu ne vient jamais loin de la caméra. L'hôte
+    (`UpdatePendingTalks`) la fait lui-même quand le perso est depuis 1,5 s à moins de 45 unités du PNJ
+    sans conversation (`sendEvent` du PNJ, sinon l'événement forcé), par nos crochets comme d'habitude ;
+    un autre ordre du perso l'annule. Test : 45 s d'attente par PNJ (la marche prend 20-30 s ; il
+    passait au suivant, plus loin, toutes les 20 s).
+  - *Commerce* : `GiveShopHome` n'a jamais trouvé le bâtiment (« could not be given their building ») :
+    il le cherchait par `+0x238` des comptoirs, toujours vide pour un meuble de ville. Il cherche
+    maintenant parmi les bâtiments autour des comptoirs (intérieur dont le plan pointe vers eux) celui
+    dont les meubles de boutique en couvrent le plus. Les comptoirs arrivaient bien au client (32
+    comptoirs, 181 piles : « tous les conteneurs vont à tout le monde » est vérifié).
+  - *Combat* (test et commandes de debug) : `spawnnpc` copiait le premier PNJ de la liste du jeu, un
+    bandit de chez l'hôte : sa copie repartait vers son escouade à 35000 unités, et `fight` n'engageait
+    que le perso du client, dont le mode combat retombait. `spawnnpc` copie la personne la plus proche
+    et l'arrête ; `fight` engage les deux ; `fight`, `ko`, `kill`, `npcstate` prennent une clé.
+    Le compteur `forced` des chiffres de dégâts compte aussi ceux faits grâce à `hk_charUpdateView`.
+  - *Fouille des créatures* (`lootcreature` 30/32 : araignée à peau, bête à bec) : « the looter is
+    still 71 units from the body … it never walked » : le cadavre du client n'est pas où est celui de
+    l'hôte (70 à 79 unités pour une araignée), le pilleur était envoyé au bord du cadavre local et
+    bloqué chez l'hôte. Il va au bord du corps de l'hôte et la fenêtre s'ouvre à portée de l'un ou de
+    l'autre (`kc::loot::InReachEither`, testé).
+  - *Test `faraway --clients N`* : 3 clients chacun dans sa ville, loin de l'hôte et les uns des
+    autres, toutes les étapes en même temps, points « loin [J2] : … » ; voir docs/TESTS.md.
 - **Expérience `faraway` : tout marche avec les joueurs loin l'un de l'autre, sans que l'hôte regarde.**
   Session réelle : un client à 900 m dans une autre ville avait des PNJ absents, des PNJ saccadés ou
   qui marchaient à reculons, aucun dégât affiché tant que la caméra de l'hôte n'allait pas sur lui,

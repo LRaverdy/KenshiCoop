@@ -152,6 +152,9 @@ Ordre dans `Tick()` (`main.cpp`) :
 - `giveItem` et `dropItem` : les objets au sol ;
 - les hooks d'animation ;
 - `createScreenLabel`, `setTracking`, `setColor` : les chiffres de dégâts créés par `addWound` ;
+- `Character::updateView` (`0x5C9F60`, `hk_charUpdateView`, hôte et client) : les PNJ près d'un
+  client (hôte) et les persos pilotés par l'hôte (client) sont mis « dans la vue », pour que les deux
+  jeux les déplacent avec la même mise à jour complète loin de la caméra de l'hôte ;
 - `WeatherRegion::updateBT` : la météo de chaque région ;
 - `EffectHandler::EffectHandler` : chez un client, pour placer l'effet à l'endroit de l'hôte.
 

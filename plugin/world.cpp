@@ -206,6 +206,7 @@ void KenshiWorld::ResetWorldBound() {
     remoteDialogs_.clear();
     turretCache_.clear();
     pickups_.clear();
+    pendingTalks_.clear();
     captiveHold_.clear();
     captiveMissing_.clear();
     resolved_.clear();
@@ -262,6 +263,7 @@ void KenshiWorld::EndFrame() {
     }
     if (active_ && client_ && live_ && !pendingLoot_.empty()) UpdatePendingLoot();
     if (active_ && !client_ && live_ && !pickups_.empty()) UpdatePendingPickups();
+    if (active_ && !client_ && live_ && !pendingTalks_.empty()) UpdatePendingTalks();
     if (active_ && !client_ && live_ && !reRagdoll_.empty()) UpdateReRagdolls();
     if (active_ && client_ && live_) GroundReconcile();
     if (active_ && client_ && live_) UpdateFloorFocus();
@@ -1882,6 +1884,8 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
             return false;
         }
     }
+    // any other order of that character cancels a talk it was walking to (UpdatePendingTalks)
+    if (!client_ && !(cmd.kind == kc::CommandKind::Task && (cmd.task == kc::kTaskTalk || cmd.task == kc::kTaskTalkNearest))) pendingTalks_.erase(h);
     HostCallScope scope;   // lets the call through our own order-blocking hooks
     switch (cmd.kind) {
     case kc::CommandKind::MoveTo: return CallPlayerMoveOrder(c, cmd.pos);
@@ -2024,6 +2028,10 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
         }
         const bool ok = RunPlayerTask(c, cmd, subject, building, &orderRefusal_);
         if (!ok && !orderRefusal_.empty()) orderRefusalReason_ = kc::ResultReason::SelectionBusy;
+        if (!client_ && ok && (cmd.task == kc::kTaskTalk || cmd.task == kc::kTaskTalkNearest) && subject && kenshi::IsCharacter(subject)) {
+            kc::Handle nh;
+            if (kenshi::GetHandle(static_cast<kenshi::Character*>(subject), nh)) pendingTalks_[h] = {nh, NowSeconds() + 60.0, 0};
+        }
         Log("client task %d (via %d) run for a character: %s", cmd.task, int(cmd.via), ok ? "ok" : "failed");
         return ok;
     }
@@ -2032,6 +2040,48 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
 }
 
 // ---- conversations
+// Far from the host's camera the game walked a client's character to the NPC it was told to talk to
+// and never ran the "arrived: talk" step (faraway test: six orders in a row at Admag and at Okran's
+// Shield, the character standing next to the NPC, no conversation; near the host's camera it opens
+// some 8 s after the order). Once the character has stood next to that NPC for 1.5 s with no
+// conversation, it is started here, the game's own way (the NPC's default conversation with it,
+// through our hooks: ConversationAllowed and the client's window apply as usual).
+void KenshiWorld::UpdatePendingTalks() {
+    constexpr float kTalkReach = 45.0f, kTalkStep = 40.0f;
+    constexpr double kGameFirst = 1.5;
+    const double now = NowSeconds();
+    for (auto it = pendingTalks_.begin(); it != pendingTalks_.end();) {
+        kenshi::Character* pc = FindSquad(it->first);
+        kenshi::Character* npc = kenshi::Resolve(it->second.npc);
+        void* d = npc ? kenshi::CharacterDialogue(npc) : nullptr;
+        if (!pc || !npc || kenshi::IsDead(npc) || kenshi::IsDown(npc) || now > it->second.until ||
+            (d && !kenshi::DialogueEnded(d) && kenshi::DialogueTarget(d) == pc)) {   // gone, too late, or the game did it
+            it = pendingTalks_.erase(it);
+            continue;
+        }
+        kc::Vec3 a, b;
+        const bool close = kenshi::GetPosition(pc, a) && kenshi::GetPosition(npc, b) && std::hypot(a.x - b.x, a.z - b.z) < kTalkReach &&
+                           std::fabs(a.y - b.y) < kTalkStep;
+        if (!close) {
+            it->second.nearSince = 0;
+            ++it;
+            continue;
+        }
+        if (it->second.nearSince == 0) it->second.nearSince = now;
+        if (now - it->second.nearSince < kGameFirst) { ++it; continue; }   // the game's own step first
+        bool started = false;
+        {
+            HostCallScope scope;
+            kenshi::Halt(pc);
+            started = kenshi::CallStartPlayerConversation(npc, pc);
+            if (!started) started = kenshi::CallDialogueEvent(npc, pc, 1);   // EV_PLAYER_TALK_TO_ME, forced
+        }
+        Log("talk: %s next to its NPC for %.1f s without a conversation (far from the host's camera?): started by the mod (%s)",
+            KeyOf(it->first).c_str(), kGameFirst, started ? "ok" : "the NPC has nothing to say");
+        it = pendingTalks_.erase(it);
+    }
+}
+
 void KenshiWorld::NoteSay(void* dialogue, const std::string& text) {
     kenshi::Character* me = kenshi::DialogueOwner(dialogue);
     kc::Handle h;
@@ -2442,6 +2492,14 @@ void KenshiWorld::QueueLocalOrder(const kc::Handle& h, const kc::Command& c) {
 // root of its ragdoll, is ~25 times as far from where a looter can stand as a human's). Until 0.3.1
 // it was a flat 12 units in 3D: big animals (leviathans, beak things, swamp turtles, gorillos,
 // spiders...) never opened, the order silently expired after 30 s.
+// Client: where the host's copy of that character (our local handle) is, from its last state.
+bool KenshiWorld::HostBodyPos(const kc::Handle& local, kc::Vec3& out) const {
+    auto it = lastTarget_.find(HostHandleOf(local));
+    if (it == lastTarget_.end()) return false;
+    out = it->second.pos;
+    return true;
+}
+
 void KenshiWorld::RequestLoot(const kc::Handle& looter, kenshi::Character* target) {
     kc::Handle t;
     kc::Vec3 tp, lp;
@@ -2453,10 +2511,12 @@ void KenshiWorld::RequestLoot(const kc::Handle& looter, kenshi::Character* targe
     std::string race;
     kenshi::ReadBodySize(target, body, &race);
     const float dist = kc::loot::GroundDist(lp, tp);
-    Log("loot order: %.0f units to go (%s %s, race %s, scale %.2f, body radius %.0f, reach %.0f)", dist,
+    kc::Vec3 hp;
+    const bool haveHost = HostBodyPos(t, hp);
+    Log("loot order: %.0f units to go (%s %s, race %s, scale %.2f, body radius %.0f, reach %.0f; the host's body %.0f units from ours)", dist,
         kenshi::IsAnimal(target) ? "animal" : "human", kenshi::IsDead(target) ? "dead" : kenshi::IsDown(target) ? "down" : "standing",
-        race.c_str(), body.scale, kc::loot::BodyRadius(body), kc::loot::Reach(body));
-    if (kc::loot::InReach(lp, tp, body)) {
+        race.c_str(), body.scale, kc::loot::BodyRadius(body), kc::loot::Reach(body), haveHost ? kc::loot::GroundDist(tp, hp) : -1.0f);
+    if (kc::loot::InReachEither(lp, tp, haveHost ? &hp : nullptr, body)) {
         kenshi::OpenLootWindow(me, target);
         ++lootOpened;
         Log("loot window opened at %.0f units", dist);
@@ -2464,7 +2524,7 @@ void KenshiWorld::RequestLoot(const kc::Handle& looter, kenshi::Character* targe
     }
     kc::Command c;
     c.kind = kc::CommandKind::MoveTo;
-    c.pos = kc::loot::ApproachPoint(lp, tp, body);
+    c.pos = kc::loot::ApproachPoint(lp, haveHost ? hp : tp, body);   // the host's looter walks to the host's body
     QueueLocalOrder(looter, c);
     pendingLoot_.push_back({looter, t, body, race, kc::loot::StartOrder(NowSeconds(), dist)});
 }
@@ -2493,11 +2553,14 @@ void KenshiWorld::UpdatePendingLoot() {
         if (paused && it->clock.pausedFor == 0) Log("loot order waits: the game is paused");
         kc::loot::Tick(it->clock, now, paused, moving);
         const bool stopped = kc::loot::Stopped(it->clock, now);
-        if (havePos && (kc::loot::InReach(lp, tp, it->body) || (stopped && kc::loot::InReach(lp, tp, it->body, kc::loot::kStoppedSlack)))) {
+        kc::Vec3 hp;
+        const kc::Vec3* host = havePos && HostBodyPos(it->target, hp) ? &hp : nullptr;
+        if (havePos && (kc::loot::InReachEither(lp, tp, host, it->body) ||
+                        (stopped && kc::loot::InReachEither(lp, tp, host, it->body, kc::loot::kStoppedSlack)))) {
             kenshi::OpenLootWindow(me, target);
             ++lootOpened;
             Log("loot window opened at %.0f units (%s, reach %.0f%s)", kc::loot::GroundDist(lp, tp), it->race.c_str(), kc::loot::Reach(it->body),
-                kc::loot::InReach(lp, tp, it->body) ? "" : ", stopped by the body");
+                kc::loot::InReachEither(lp, tp, host, it->body) ? "" : ", stopped by the body");
             it = pendingLoot_.erase(it);
         } else if (kc::loot::Expired(it->clock, now)) {
             Log("loot order dropped: the looter is still %.0f units from the body (%s, reach %.0f, %s, paused %.0f s)",

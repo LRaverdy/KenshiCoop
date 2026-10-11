@@ -976,11 +976,46 @@ void* hk_createLabel(void* gui, const void* text, const float* colour, int size,
     }
     return label;
 }
+// Far-zone sync (faraway test, 11 October): the game runs two movement updates for a character. In
+// the camera's view (Character +0x1A9, CH_inView, set every frame by 0x5C9F60), CharMovement takes
+// the full path (0x147FD0, through 0x660A3D: physics, the real floors and walls, every frame); out of
+// it, a cut-down one (0x148AC0: a few steps a second, another idea of the ground). Player-faction
+// characters are always in view (0x5C79C0, faction +0x250), NPCs only near the camera. On the host,
+// NPCs around a client player far from the host's camera took the cut-down path while the client's
+// copies, in its camera's view, took the full one: 33 to 68 units of height apart (guards on Admag's
+// walls, paladins on Okran's Shield), sleepers walking to their bed on the client and not on the host,
+// and positions written on a client's copy out of its own view not taken at all. Both games now run
+// the full update for those characters: on the host, the NPCs near a client player's own characters
+// (HookView::remoteNear, also the damage numbers' set); on a client, every character the host drives.
+using CharUpdateViewFn = uint8_t (*)(void* chr);
+CharUpdateViewFn o_charUpdateView = nullptr;
+// the characters whose CH_inView this hook set (the game's own test said "not in view"), for
+// hk_addWound's count of damage numbers made off the host's camera (game thread only)
+std::unordered_set<const void*> g_forcedInView;
+uint8_t hk_charUpdateView(void* chr) {
+    const uint8_t r = o_charUpdateView(chr);
+    if (chr) {
+        uint8_t* f = reinterpret_cast<uint8_t*>(chr) + kenshi::CH_inView;
+        bool forced = false;
+        if (*f == 0) {
+            auto v = KenshiWorld::View();
+            forced = v->active && (v->client ? v->replicated.count(chr) > 0 : (v->remoteNear && v->remoteNear->count(chr) > 0));
+            if (forced) {
+                *f = 1;
+                if (KenshiWorld* w = TheWorld()) ++w->charsForcedInView;
+            }
+        }
+        if (forced) g_forcedInView.insert(chr);
+        else g_forcedInView.erase(chr);
+    }
+    return r;
+}
 // The host's game makes a damage number only for a character its camera sees (Character +0x1A9,
 // kenshi::CH_inView): a client player fighting away from the host's camera saw none until the host
 // looked at them (10 October session). For a character near a client player's own characters, the
 // flag is set for the duration of the call (0.3.1); the number appears off the host's screen and goes
 // to that player through hk_createLabel. Nothing else in addWound reads that flag (disassembly).
+// Since hk_charUpdateView those characters are usually in view already: counted all the same.
 using AddWoundFn = uint64_t (*)(void* medical, uint64_t a2, uint64_t a3, void* a4, void* a5, void* a6, void* a7, void* a8);
 AddWoundFn o_addWound = nullptr;
 uint64_t hk_addWound(void* medical, uint64_t a2, uint64_t a3, void* a4, void* a5, void* a6, void* a7, void* a8) {
@@ -993,6 +1028,8 @@ uint64_t hk_addWound(void* medical, uint64_t a2, uint64_t a3, void* a4, void* a5
                 if (*f == 0) {
                     *f = 1;
                     flag = f;
+                    if (KenshiWorld* w = TheWorld()) ++w->woundsForcedInView;
+                } else if (g_forcedInView.count(c)) {   // in view only through hk_charUpdateView: off the host's camera too
                     if (KenshiWorld* w = TheWorld()) ++w->woundsForcedInView;
                 }
             }
@@ -1693,6 +1730,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnInventoryDropItem, reinterpret_cast<void*>(&hk_invDrop), reinterpret_cast<void**>(&o_invDrop)},
         {kenshi::FnCreateScreenLabel, reinterpret_cast<void*>(&hk_createLabel), reinterpret_cast<void**>(&o_createLabel)},
         {kenshi::FnMedAddWound, reinterpret_cast<void*>(&hk_addWound), reinterpret_cast<void**>(&o_addWound)},
+        {kenshi::FnCharUpdateView, reinterpret_cast<void*>(&hk_charUpdateView), reinterpret_cast<void**>(&o_charUpdateView)},
         {kenshi::FnLabelSetTracking, reinterpret_cast<void*>(&hk_labelTrack), reinterpret_cast<void**>(&o_labelTrack)},
         {kenshi::FnLabelSetColor, reinterpret_cast<void*>(&hk_labelColor), reinterpret_cast<void**>(&o_labelColor)},
         {kenshi::FnRagdollMode, reinterpret_cast<void*>(&hk_ragdollMode), reinterpret_cast<void**>(&o_ragdollMode)},

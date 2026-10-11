@@ -184,6 +184,7 @@ chez l'hôte, il observe et diffuse.
 | 0x168BAF0 | vtable lektor | `kenshi.h`:32, **en double** `kenshi.cpp`:3057 |
 | 0x16F9EB8 … 0x168C128, 0x16D3F78, 0x16D5258, 0x16D5138 | vtables (Character, AI, effets, tourelles) | `kenshi.h`:34-47, 634-636 |
 | 0x6508D0–0x651FF1 | bornes de addWound | `kenshi.h`:573 |
+| 0x5C9F60 | `Character::updateView` (+0x1A9 « dans la vue », détour `hk_charUpdateView`) | `kenshi.cpp` (`kFunctions`) |
 | 0x16DFB00 | callback d'aimantation de bâtiment | `buildings.cpp`:33 |
 | 0x2134100 | `TownList*` (villes) ; slots vt 0x40, 0x58, 0x268, 0x2A0 de `TownBase` | `buildings.cpp` (`TownTooClose`, sous `__try`) |
 | 0x21337B0 (+0x1C0), 0x16EFE88 | GUI / éditeur, vtable lektor<Character*> | `kenshi.cpp`:837-839, `debug.cpp`:575 |

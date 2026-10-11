@@ -2377,6 +2377,19 @@ static void TestLootCreatures() {
         }
     }
     CHECK(animals >= 23 && humans >= 15);
+    {   // a spider's ragdoll here 74 units from the host's body (lootcreature, 11/10): the looter stopped
+        // by the host's body, 71 units from ours, is in reach; with no host position, ours only
+        const BodySize sp = SizeOf(*FindCreatureRace("43870-rebirth.mod"), 1);
+        const Vec3 ours = {0, 50, 0}, host = {74, 50, 0};
+        const Vec3 looter = {74 - BodyRadius(sp) - 3, 50, 0};
+        CHECK(InReachEither(looter, ours, &host, sp));
+        CHECK(InReachEither(looter, ours, nullptr, sp) == InReach(looter, ours, sp));
+        const Vec3 far = {400, 50, 0};
+        CHECK(!InReachEither(far, ours, &host, sp));
+        // sent to the host's body's edge: in reach of it once there
+        const Vec3 to = ApproachPoint({-500, 50, 0}, host, sp);
+        CHECK(InReachEither(to, ours, &host, sp));
+    }
     // the creatures of the bug report, by race
     struct Want { const char* sid; const char* name; bool animal; };
     const Want wants[] = {

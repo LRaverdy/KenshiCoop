@@ -337,6 +337,8 @@ public:
         return false;
     }
     void UpdatePendingPickups();   // host: characters walking to an item a client asked them to take
+    bool HostBodyPos(const kc::Handle& local, kc::Vec3& out) const;   // client: the host's position of that character (last state)
+    void UpdatePendingTalks();     // host: a client's character next to the NPC it was told to talk to, no conversation yet
     std::string PickedItemWhere(kenshi::Character* c, const kc::Handle& itemHandle);
     void TakeLocalDrops(std::vector<std::pair<kc::Handle, kc::ItemState>>& out) override;
     void SetDropSources(const std::vector<kc::Handle>& handles) override;
@@ -373,6 +375,8 @@ public:
     // tests ("floaters"): damage numbers. Host: made by addWound and sent (floatersMade), made off its
     // camera for a character near a client player (woundsForcedInView, hk_addWound). Client: shown here.
     std::atomic<int> floatersMade{0}, woundsForcedInView{0}, floatersShown{0};
+    // tests ("inview"): character updates switched to the in-view (full) path by hk_charUpdateView
+    std::atomic<long long> charsForcedInView{0};
     std::string lastSay;
     // Client: the player dropped it from that character or that building's inventory (any thread).
     void QueueLocalDrop(void* holder, void* item);
@@ -676,6 +680,11 @@ private:
     struct PendingPickup { kc::Handle item; double until; bool gameOrder = false; double checkAt = 0; float startDist = 0; bool pauseLogged = false; };
     double lastPickupTick_ = 0;   // host: last UpdatePendingPickups (paused time is not counted)
     std::unordered_map<kc::Handle, PendingPickup, kc::HandleHash> pickups_;   // host: character -> item it goes to take             // client: last damage number shown on each               // client: "<char>|<anim>" -> last attempt
+    struct PendingTalk {
+        kc::Handle npc;
+        double until = 0, nearSince = 0;
+    };
+    std::unordered_map<kc::Handle, PendingTalk, kc::HandleHash> pendingTalks_;   // host: client's character -> NPC it walks to talk to
     std::mutex toastMutex_;
     std::vector<std::string> toasts_;
 

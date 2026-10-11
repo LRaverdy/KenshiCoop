@@ -68,6 +68,14 @@ inline float GroundDist(const Vec3& a, const Vec3& b) {
 inline bool InReach(const Vec3& looter, const Vec3& body, const BodySize& b, float slack = 1.0f) {
     return GroundDist(looter, body) <= Reach(b) * slack && std::fabs(looter.y - body.y) <= VerticalReach(b) * slack;
 }
+// A body as both games have it: our ragdoll (what the player sees) and the host's (where the host's
+// looter can really walk). A collapsing body does not lie where the host's does: a skin spider's or a
+// beak thing's ended 70-79 units off (stress4, lootcreature 11/10: the looter, sent to our body's edge,
+// was blocked by the host's body and never walked; the order expired 71 units from ours). The looter
+// is sent to the host's body, and the window opens in reach of either.
+inline bool InReachEither(const Vec3& looter, const Vec3& ours, const Vec3* host, const BodySize& b, float slack = 1.0f) {
+    return InReach(looter, ours, b, slack) || (host && InReach(looter, *host, b, slack));
+}
 // Where the looter is sent: the body's edge on the looter's side (the centre of a big body is inside
 // it; a human's edge is a few units from its centre, as before).
 inline Vec3 ApproachPoint(const Vec3& looter, const Vec3& body, const BodySize& b) {

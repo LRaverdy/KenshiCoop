@@ -26,6 +26,17 @@ namespace {
 
 double g_nextPoll = 0;
 kc::Handle lastSpawned_;
+// An optional character key ("type:container:serial:index:serial") next on the line, else the last
+// spawned NPC: several players' fights at once (faraway with 3 clients) each name their own NPC.
+kc::Handle SpawnedOr(std::istringstream& in) {
+    std::string k;
+    kc::Handle h = lastSpawned_;
+    if (in >> k) {
+        kc::Handle t;
+        if (sscanf(k.c_str(), "%u:%u:%u:%u:%u", &t.type, &t.container, &t.containerSerial, &t.index, &t.serial) == 5) h = t;
+    }
+    return h;
+}
 // motionrec: characters sampled at a fixed rate on the game's thread (tests: moonwalk, jumps)
 struct MotionRec {
     bool on = false;
@@ -84,6 +95,7 @@ void DumpCharacter(std::ostream& o, const char* tag, KenshiWorld& w, const kc::H
     const kc::Handle hostHandle = w.HostHandleOf(h);   // stand-ins are reported under the host's handle
     o << tag << ' ' << Key(hostHandle) << " read=" << ok << " standin=" << (hostHandle != h);
     if (kenshi::Character* ch = w.Find(h)) o << " class=" << std::hex << kenshi::ClassRvas(ch) << std::dec;
+    if (kenshi::Character* ch = w.Find(h)) o << " inview=" << int(kenshi::InView(ch));
     if (std::string nm; kenshi::Character* ch = w.Find(h)) {   // the character's name ('_' for spaces): who is who with 3+ players
         if (kenshi::CharacterName(ch, nm) && !nm.empty()) {
             for (char& ch2 : nm) if (ch2 == 32 || ch2 == 61 || (unsigned char)ch2 < 32) ch2 = 95;   // spaces, =, control chars -> _
@@ -323,12 +335,25 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         HostCallScope scope;
         // a person, never an animal (the 0.3.1 dialogue run copied a garru, which says nothing: the
         // test's conversations had nobody to talk with); animals only when there is nobody else
-        std::stable_partition(all.begin(), all.end(), [](kenshi::Character* c) { return !kenshi::IsAnimal(c); });
+        // The person nearest the spot, not the first in the game's list: far from the host's squad the
+        // first one was a bandit from the host's home, and its copy walked back to its squad there,
+        // 35000 units away, instead of fighting (faraway test, 11 October: the NPC was never hurt).
+        const kc::Vec3 at{base.x + dx, base.y, base.z + dz};
+        auto d2 = [&](kenshi::Character* c) {
+            kc::Vec3 p;
+            return kenshi::GetPosition(c, p) ? (p.x - at.x) * (p.x - at.x) + (p.z - at.z) * (p.z - at.z) : 1e30f;
+        };
+        std::stable_sort(all.begin(), all.end(), [&](kenshi::Character* a, kenshi::Character* b) {
+            const bool aa = kenshi::IsAnimal(a), ba = kenshi::IsAnimal(b);
+            if (aa != ba) return !aa;
+            return d2(a) < d2(b);
+        });
         for (kenshi::Character* src : all) {
             kc::Handle h;
             if (!kenshi::GetHandle(src, h) || w.FindSquad(h) || kenshi::IsDead(src) || !kenshi::ReadSpawnSource(src, info)) continue;
-            kenshi::Character* c = kenshi::CreateCharacter(info, {base.x + dx, base.y, base.z + dz}, &e);
+            kenshi::Character* c = kenshi::CreateCharacter(info, at, &e);
             if (!c || !kenshi::GetHandle(c, h)) { Log("spawnnpc: %s: %s", info.templateSid.c_str(), e.c_str()); continue; }
+            kenshi::Halt(c);   // no walk inherited from the one it copies
             lastSpawned_ = h;
             return "ok " + Key(h) + " " + info.templateSid;
         }
@@ -385,14 +410,21 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
           << " reach=" << kc::loot::Reach(b) << " dead=" << kenshi::IsDead(c) << " down=" << kenshi::IsDown(c) << " ragdoll=" << kenshi::IsRagdoll(c);
         return o.str();
     }
-    if (cmd == "fight") {   // fight <index>: squad member engages the NPC created by the last spawnnpc
+    if (cmd == "fight") {   // fight <index> [key]: squad member and the NPC created by the last spawnnpc (or that one) fight each other
         size_t idx = 0;
         in >> idx;
+        const kc::Handle npcH = SpawnedOr(in);
         auto squad = SortedSquad(w);
-        kenshi::Character* t = w.Find(lastSpawned_);
+        kenshi::Character* t = w.Find(npcH);
         if (idx >= squad.size() || !t) return "err need a squad member and a spawned NPC";
         HostCallScope scope;
-        return kenshi::StartCombat(w.FindSquad(squad[idx]), lastSpawned_) ? "ok" : "err initCombatMode failed";
+        // both ways: the NPC engages back (a one-sided order let it walk off and the squad member's
+        // combat mode dropped by itself, faraway test)
+        kc::Handle me;
+        kenshi::Character* mc = w.FindSquad(squad[idx]);
+        const bool a = kenshi::StartCombat(mc, npcH);
+        const bool b = mc && kenshi::GetHandle(mc, me) && kenshi::StartCombat(t, me);
+        return a ? (b ? "ok" : "ok (the NPC did not engage)") : "err initCombatMode failed";
     }
     if (cmd == "wake") {   // wake: the NPC created by the last spawnnpc gets up immediately
         kenshi::Character* c = w.Find(lastSpawned_);
@@ -400,19 +432,20 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         HostCallScope scope;
         return kenshi::StandUp(c) ? "ok" : "err";
     }
-    if (cmd == "npcstate") {   // npcstate: posture/vitals of the last spawned NPC, as this machine sees it
-        kenshi::Character* c = w.Find(lastSpawned_);
+    if (cmd == "npcstate") {   // npcstate [key]: posture/vitals of the last spawned NPC (or that one), as this machine sees it
+        kenshi::Character* c = w.Find(SpawnedOr(in));
         if (!c) return "err no spawned NPC";
         std::ostringstream o;
         o << "ok down=" << kenshi::IsDown(c) << " unconscious=" << kenshi::IsUnconscious(c) << " dead=" << kenshi::IsDead(c);
         return o.str();
     }
-    if (cmd == "ko" || cmd == "kill") {   // ko|kill: knock out / kill the NPC created by the last spawnnpc
-        kenshi::Character* c = w.Find(lastSpawned_);
+    if (cmd == "ko" || cmd == "kill") {   // ko|kill [key]: knock out / kill the NPC created by the last spawnnpc (or that one)
+        const kc::Handle th = SpawnedOr(in);
+        kenshi::Character* c = w.Find(th);
         if (!c) return "err no spawned NPC";
         HostCallScope scope;
         const bool ok = cmd == "ko" ? kenshi::ForceKnockout(c, 60.0f) : kenshi::CallDeclareDead(c);
-        return ok ? "ok " + Key(lastSpawned_) : "err call failed";
+        return ok ? "ok " + Key(th) : "err call failed";
     }
     if (cmd == "rollweather") return "ok " + std::to_string(w.ExpireAllWeather());
     if (cmd == "anims") {   // anims <file>: every squad member's playing animations
@@ -1725,6 +1758,8 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
     }
     if (cmd == "towns") return w.TownPositions();   // towns: every town, "sid|name|x,y,z|owner" each
     if (cmd == "campos") return DescribeCamera();   // campos: this machine's camera eye, world units "ok x,y,z fwd=fx,fz"
+    if (cmd == "inview")   // inview: character updates switched to the game's in-view (full) path by hk_charUpdateView since the start
+        return "ok forced=" + std::to_string(w.charsForcedInView.load());
     if (cmd == "floaters")   // floaters: damage numbers made and sent (host), made off the host's camera for a client's zone, shown here (client)
         return "ok made=" + std::to_string(w.floatersMade.load()) + " forced=" + std::to_string(w.woundsForcedInView.load()) +
                " shown=" + std::to_string(w.floatersShown.load());

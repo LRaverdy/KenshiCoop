@@ -228,6 +228,7 @@ const FunctionSig kFunctions[FnCount] = {
     {"GameClock::setHourOfDay", 0x66CF30, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x0F, 0x2E, 0x0D, 0x8F, 0xB4, 0x01}},
     // ---- per-player streaming (0.3.1)
     {"MedicalSystem::addWound", 0x6508D0, {0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56}},
+    {"Character::updateView", 0x5C9F60, {0x40, 0x53, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x68, 0x44, 0x0F, 0xB6, 0xB1}},
 };
 
 namespace {
@@ -646,6 +647,11 @@ Character* Resolve(const kc::Handle& h) {
 
 bool GetHandle(const Character* c, kc::Handle& out) {
     return IsCharacter(c) && ReadHandle(reinterpret_cast<const uint8_t*>(c) + off::RO_handle, out);
+}
+
+bool InView(const Character* c) {
+    uint8_t v = 0;
+    return IsCharacter(c) && Rd(c, CH_inView, v) && v != 0;
 }
 
 bool GetPosition(Character* c, kc::Vec3& out) {
@@ -2693,8 +2699,36 @@ int GiveShopHome(Character* trader, const std::vector<void*>& counters) {
     if (ShopCounters(trader, now) && covered(now) == counters.size()) return 0;
     // the buildings the counters are furniture of; the one whose shop furniture holds most of them
     std::vector<void*> parents;
+    auto addParent = [&](void* b) {
+        if (b && std::find(parents.begin(), parents.end(), b) == parents.end()) parents.push_back(b);
+    };
+    for (void* c : counters) addParent(FurnitureParent(c));
+    // Town furniture has no link to its building (+0x238 empty, docs/MOTEUR.md): FurnitureParent found
+    // nothing for a town shop, and every stand-in merchant of a town generated after the join kept an
+    // empty window ("could not be given their building", faraway test, Admag). The candidates are then
+    // the buildings around the counters: objects whose interior's Layout (+0x30) points back at them
+    // (+0x90), as buildings.cpp checks a building.
+    constexpr uintptr_t IN_layout = 0x30, LA_building = 0x90;
+    kc::Vec3 mid{};
+    size_t np = 0;
     for (void* c : counters)
-        if (void* p = FurnitureParent(c); p && std::find(parents.begin(), parents.end(), p) == parents.end()) parents.push_back(p);
+        if (kc::Vec3 p; ObjectPosition(c, p)) {
+            mid.x += p.x;
+            mid.y += p.y;
+            mid.z += p.z;
+            ++np;
+        }
+    if (np) {
+        mid = {mid.x / float(np), mid.y / float(np), mid.z / float(np)};
+        std::vector<void*> around;
+        ObjectsNear(mid, 1500.0f, around);
+        for (void* o : around) {
+            void* interior = nullptr;
+            void* back = nullptr;
+            if (Rd(o, BU_interior, interior) && interior && Rd(reinterpret_cast<uint8_t*>(interior) + IN_layout, LA_building, back) && back == o)
+                addParent(o);
+        }
+    }
     void* best = nullptr;
     size_t bestN = 0;
     constexpr uint32_t kCap = 256;

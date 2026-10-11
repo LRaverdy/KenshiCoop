@@ -203,6 +203,7 @@ Les signatures sont celles du commentaire du code.
 | escouade | `FnSquadSetName` | `ActivePlatoon::setName(const std::string&)` | `0x4BE480` | — | [D] affecte `Platoon` (+0x78) +0x18 ; sans appelant direct dans 1.0.68 : la case de nom de la fenêtre (`onNameChanged` `0x48DF00`) écrit le même champ à chaque frappe |
 | tâches | `FnCharGetPermajobData` | `Character::getPermajobData(int slot) const` | `0x5C8F10` | — | [D] `Character::ai` (+0x650) → `orders` (+0x20) → `OrdersReceiver::getPermajobData` : le `Tasker*` de la tâche (sujet `hand` +0x10, lieu +0x58) |
 | dégâts | `FnMedAddWound` | `MedicalSystem::addWound(this, bool, int, ptr, 4 arguments sur la pile)` (signature lue au désassemblage : `dl`, `r8d`, `r9`, `[rsp+0x28..0x40]`, retour `rax`) | `0x6508D0` | hôte | [D, 0.3.1] crée le chiffre de dégâts (`createScreenLabel` en `0x651E46`) seulement si l'option des chiffres (`[0x2133AE0]`), l'interface (`0x7F5710`) et `Character+0x1A9` (vu par la caméra) le permettent. Détour `hk_addWound` : pour un perso près d'un perso d'un joueur client, +0x1A9 mis à 1 le temps de l'appel puis remis à 0 ; rien d'autre de la fonction ne le lit |
+| vue | `FnCharUpdateView` | `Character::updateView()` (notre nom ; rend l'octet +0xE4) | `0x5C9F60` | hôte et client | [D] recalcule à chaque image +0x1A9 « dans la vue » (voir `Character`) ; appelé pour chaque perso par la boucle `0x787AF9` / `0x787B44`. Détour `hk_charUpdateView` : après le calcul du jeu, met +0x1A9 à 1 pour les PNJ près des persos d'un client (hôte) et pour les persos pilotés par l'hôte (client) : ils prennent la mise à jour de déplacement complète, comme les persos des joueurs |
 | heure | `FnClockSetHourOfDay` | `GameClock::setHourOfDay(float)` (notre nom) | `0x66CF30` | — | [D] l'objet de `0x21303D0` : écrit l'heure du jour (0..24) dans l'horloge du ciel (+0x20 → +0x1C), appelle sa vt 0x8 (mise à jour, 0 s), recalcule les heures (+0xA0 = jour × 24 + heure du jour) et heure / minute (+0x0 / +0x4). Une nouvelle partie l'appelle avec 0 puis écrit le jour 1 (+0x8, `0x36CFB4`) ; le mod fait de même pour recaler l'horloge d'un client (`kenshi::SetGameHours`) |
 
 | validité | `FnTerrainHeight` | `UtilityT::getTerrainHeight(float x, float z)` | `0x9B3710` | — | le sol sous l'eau éventuelle ; -99 où aucun terrain n'est connu (saut vers `getTerrainHeightFast(x, z, nullptr)` `0x9B32F0`) |
@@ -382,7 +383,7 @@ Vtables (pour reconnaître un objet) :
 | +0x2F8 | `inSomething` : 0 rien, 1 au lit, 2 en prison / cage ; `inWhat` (`hand`) à +0x300 |
 | +0x348 / +0x380 | porte quelqu'un (bool) / `hand` du corps porté |
 | +0x418 | rang dans l'escouade (int) |
-| +0x1A9 | **vu par la caméra** (bool, `kenshi::CH_inView`) : recalculé à chaque image par `0x5C9F60` (distance² à la caméra, `0x7F2A20` = `PlayerInterface+0x30` caméra → position, comparée à un seuil, puis tests de cadrage `0x6AE7B0` / `0x6AE710`) ; lu par l'animation (`0x51E59C`, `0x5B562A`), le rendu, et `addWound` pour le chiffre de dégâts (`0x651DF5`) [D, 0.3.1] |
+| +0x1A9 | **vu par la caméra** (bool, `kenshi::CH_inView`) : recalculé à chaque image par `0x5C9F60` (distance² à la caméra, `0x7F2A20` = `PlayerInterface+0x30` caméra → position, comparée à un seuil, puis tests de cadrage `0x6AE7B0` / `0x6AE710`) ; lu par l'animation (`0x51E59C`, `0x5B562A`), le rendu, et `addWound` pour le chiffre de dégâts (`0x651DF5`) [D, 0.3.1]. **Choisit aussi la mise à jour de déplacement** : `CharMovement` (`+0x3A8` → perso) teste +0x1A9 en `0x660A3D` : à 1, la mise à jour complète `0x147FD0` (physique, sols et murs, chaque image) ; à 0, la version réduite `0x148AC0` (le PNJ « lointain » déplacé quelques fois par seconde, une autre hauteur : 33 à 68 unités d'écart sur les remparts d'Admag et la forteresse d'Okran) ; lu aussi en `0x65F425`, `0x65F489`, `0x660089`. Au début de `0x5C9F60`, `0x5C79C0` laisse à 1 tout perso dont la faction a +0x250 non nul (la faction du joueur) : les persos des joueurs sont toujours « dans la vue », où qu'ils soient [D, faraway] |
 | +0x448 | `AnimationClass*` |
 | +0x450 | `CharStats*` (son `me` à +0x10) |
 | +0x458 | `MedicalSystem` (en ligne) |
@@ -957,11 +958,16 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
   Il faut suivre l'identité du personnage, pas le handle.
 - Meubles, machines et maisons d'une ville ont **un handle différent sur chaque machine**, même
   avec la même sauvegarde. Il faut les retrouver par type et endroit. Les meubles de ville n'ont
-  pas de lien vers leur bâtiment (`isFurnitureOf`, +0x238, est vide).
+  pas de lien vers leur bâtiment (`isFurnitureOf`, +0x238, est vide) : on le retrouve parmi les
+  objets autour dont l'intérieur (+0x1F0) a un plan (+0x30) qui pointe vers eux (+0x90)
+  (`GiveShopHome`).
 
 **Mouvement**
 - Les PNJ lointains ne sont déplacés que quelques fois par seconde le long de leur chemin. Une
   position écrite sur eux ne tient pas ; les personnages du joueur l'acceptent à chaque image.
+  « Lointain » = hors de la vue de la caméra (`Character+0x1A9` à 0) : c'est la mise à jour réduite de
+  `CharMovement` (`0x148AC0`) ; les persos de la faction du joueur sont toujours dans la vue. Le mod
+  met dans la vue les PNJ qu'un client voit (`hk_charUpdateView`) [D, faraway].
 - **Pendant la pause, le jeu n'enregistre aucune position écrite** sur un personnage.
 
 **Ragdolls**

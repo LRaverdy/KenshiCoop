@@ -270,6 +270,7 @@ enum Fn : int {
     FnClockSetHourOfDay,        // void GameClock::setHourOfDay(float hours 0..24)   (our name: the object at rva::GameClockOwner; a new game calls it with 0 then sets day 1)
     // ---- per-player streaming (0.3.1)
     FnMedAddWound,              // ? MedicalSystem::addWound(this, bool, int, ptr, 4 stack args)   (makes the damage number, only if the character is in the camera's view: CH_inView)
+    FnCharUpdateView,           // uint8 Character::updateView()   (our name, 0x5C9F60: sets CH_inView +0x1A9 every frame from the camera; player-faction characters always in view)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -771,6 +772,7 @@ inline constexpr uintptr_t kAddWoundBegin = 0x6508D0, kAddWoundEnd = 0x651FF1;
 // distance to the camera, 0x7F2A20, and frustum tests). addWound shows a damage number only when it is
 // set (0x651DF5): the host's game makes none for characters its camera does not see (0.3.1).
 inline constexpr uintptr_t CH_inView = 0x1A9;
+bool InView(const Character* c);   // CH_inView as the game (and hk_charUpdateView) left it this frame
 Character* CharacterOfHand(const void* hand);
 // Items on the ground
 bool ItemOnGround(void* item);                             // in the world, not in an inventory

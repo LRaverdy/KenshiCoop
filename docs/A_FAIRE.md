@@ -2,6 +2,24 @@
 
 Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a vu.
 
+## 11 octobre 2026, essai `faraway` (client dans une autre ville, caméra de l'hôte à la maison)
+
+30/42. Tout ce qui suit est corrigé dans le mod ou le test, **à revérifier en jeu** avec
+`coop_test.py faraway --clients 3` (4 joueurs, chacun dans sa ville) :
+- **Positions** : 33 à 51 unités d'écart à Admag, 8 à 68 au Bouclier d'Okran (tolérance 3), en hauteur
+  (gardes sur les remparts, paladins sur la forteresse) ou vers un lit (paladins arrêtés chez l'hôte,
+  arrivés chez le client). Cause : mise à jour de déplacement réduite hors de la vue de la caméra de
+  l'hôte (`Character+0x1A9`) ; correction `hk_charUpdateView`. Avant : pire écart 51 (Admag), 68
+  (Okran) ; après : à mesurer (la synchro du test donne maintenant le pire écart de chaque relevé,
+  `dy` et `inview` de chaque écart).
+- **Dialogue** : aucune conversation loin de la caméra de l'hôte (le perso arrive, l'étape « parler »
+  ne vient jamais) ; l'hôte la lance lui-même (`UpdatePendingTalks`). Le test attend 45 s par PNJ.
+- **Commerce** : fenêtre vide, `GiveShopHome` ne trouvait jamais le bâtiment d'une boutique de ville.
+- **Combat** : le PNJ de test copiait un bandit de chez l'hôte et repartait chez lui ; `fight` à sens
+  unique. Commandes de debug corrigées (`spawnnpc`, `fight`, clé pour `ko`/`kill`/`npcstate`).
+- **Fouille de l'araignée à peau et de la bête à bec** (`lootcreature` 30/32) : pilleur envoyé au
+  cadavre local, à 70-79 unités de celui de l'hôte ; il va maintenant à celui de l'hôte.
+
 ## 10 octobre 2026, partie réelle en v0.3.0 (soir, 4 joueurs par Steam)
 
 - **~3000 refus « refused an inventory move … 556-gamedata.base (may not take from there) »** dans
@@ -177,7 +195,10 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   envoyés par l'hôte quand il ne vend pas déjà depuis eux (`kenshi::GiveShopHome`, journal « trade:
   the merchant here did not sell from the host's N counter(s) … given the shop's building ») ; la
   réouverture (3 fois) est supprimée, une fenêtre vide est seulement notée au journal.
-  À vérifier en jeu : commercer dans une ville chargée après l'arrivée du client.
+  **Essai `faraway` (11/10, Admag) : ne marchait pas** (« could not be given their building », stock
+  vide, achat refusé) : `GiveShopHome` cherchait le bâtiment par `+0x238` des comptoirs, vide pour un
+  meuble de ville. Il le cherche maintenant parmi les bâtiments autour des comptoirs. Les comptoirs et
+  leur contenu arrivaient bien au client lointain. À revérifier : `coop_test.py faraway`.
 - **PNJ saccadés et « moonwalk » chez le joueur 3 dans un village de la Ruche** (beaucoup de
   monde), quand il était à ~900 m de l'hôte : mouvements très saccadés, PNJ qui glissent à
   reculons. Pistes : débit par client trop faible pour une zone dense loin de l'hôte (priorité /
@@ -185,6 +206,12 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   trop espacées, orientation / animation de marche pas mise à jour (marche jouée à l'envers quand
   le PNJ est déplacé vers l'arrière de sa direction). Mesurer : fréquence des positions reçues
   par PNJ chez ce client, écart d'orientation.
+  **Cause trouvée (faraway, 11/10)** : loin de la caméra de l'hôte, son jeu déplace les PNJ avec une
+  mise à jour réduite (`Character+0x1A9` à 0 : quelques pas par seconde, une autre hauteur), alors que
+  le client, qui les a sous sa caméra, fait la complète. L'hôte envoie bien 20 positions/s de chaque
+  perso diffusé (pas de budget par joueur), mais ces positions avancent par sauts. Le détour
+  `hk_charUpdateView` met dans la vue les PNJ près d'un client (hôte) et les copies pilotées (client).
+  À revérifier : `coop_test.py faraway --clients 3` (mouvement, synchro).
 - ~~**Client 2 (nass4) : armes jetées / échangées sur un perso de son escouade**~~ : changé chez lui,
   **Corrigé côté client (0.3.1, non revérifié en jeu)** : positions répétées fusionnées, retard de
   rendu par perso selon sa cadence, courte extrapolation, rappel jamais en arrière contre la
@@ -398,6 +425,11 @@ journaux des clients `KenshiCoop-<pid>.log` de chacun).
   et chez le client, avec 0,000 au sol ; la copie du client tient exactement la position de l'hôte.
   Hypothèse : l'hôte n'a pas de caméra dans ces régions et n'y a pas le même sol. Le test tolère
   15 en hauteur ; à confirmer (hauteur du terrain sous le perso chez l'un et l'autre).
+  **Confirmé et corrigé (faraway, 11/10, à revérifier)** : 33 à 68 unités en hauteur seulement (x, z
+  identiques) à Admag et au Bouclier d'Okran. Hors de la vue de sa caméra, le jeu prend pour un PNJ
+  la mise à jour de déplacement réduite (`0x148AC0`) au lieu de la complète (`0x147FD0`), selon
+  `Character+0x1A9` ; les persos de joueurs sont toujours dans la vue. `hk_charUpdateView` met dans la
+  vue les PNJ près d'un client (hôte) et les persos pilotés par l'hôte (client).
 
 - **Un join qui garde l'hôte en pause** (fix G6) : vérifié. Un joueur qui rejoint est retiré après
   `loadTimeout` (300 s). Si son jeu plante pendant le chargement, ENet le coupe en 15 s et l'hôte
