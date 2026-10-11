@@ -1602,6 +1602,24 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         return "ok focus=" + (has ? Key(w.HostHandleOf(focus)) : std::string("none")) + " name=" + (name.empty() ? "-" : name) +
                " seen=" + std::to_string(seen) + " shown=" + std::to_string(shown);
     }
+    if (cmd == "logcount") {   // logcount <text>: log lines containing it ('_' for spaces) since the first logcount of that text
+        std::string text;
+        in >> text;
+        std::replace(text.begin(), text.end(), '_', ' ');
+        return text.empty() ? "err" : "ok " + std::to_string(LogWatch(text));
+    }
+    if (cmd == "camerafree") {   // camerafree: what moving the camera with the keys does (stopTrackCharacter: the tracked character dropped)
+        return kenshi::StopTrackCharacter() ? "ok" : "err";
+    }
+    if (cmd == "buildmode") {   // buildmode [0|1]: open / close build mode as the B key does; then: active, paused, speed, build-mode pauses lifted
+        int on = -1;
+        in >> on;
+        if ((on == 0 || on == 1) && !kenshi::SetBuildMode(on == 1)) return "err";   // no HostCallScope: as the player's own key
+        char b[96];
+        snprintf(b, sizeof b, "ok active=%d paused=%d speed=%.2f unpaused=%d", int(kenshi::BuildModeActive()), int(kenshi::GetPaused()),
+                 double(kenshi::GetFrameSpeed()), w.hostBuildUnpaused);
+        return b;
+    }
     if (cmd == "consolewin") {   // consolewin: is the host console window there, and how much log does it show
         HWND wnd = FindWindowA("KenshiCoopHostConsole", nullptr);
         if (!wnd) return "ok none";
@@ -2380,7 +2398,8 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
     // of its name ('_' for spaces).
     if (cmd == "doors" || cmd == "doorstate" || cmd == "doorset" || cmd == "doorlocal" || cmd == "doorbutton" || cmd == "doororder" ||
         cmd == "doorsknown") {
-        if (cmd == "doorsknown") return "ok known=" + std::to_string(s.doorsKnown()) + " applied=" + std::to_string(s.doorsApplied());
+        if (cmd == "doorsknown")
+            return "ok known=" + std::to_string(s.doorsKnown()) + " applied=" + std::to_string(s.doorsApplied()) + " givenup=" + std::to_string(w.DoorsGivenUp());
         size_t who = 0;
         std::string what = "door", action;
         int task = 0;

@@ -588,6 +588,28 @@ void hk_setInDialog(void* d, bool on) {
     }
     o_setInDialog(d, on);
 }
+// Build mode: in single player the game pauses while it is open (PlayerBuildMode::activate,
+// 0x4E65E0, calls GameWorld::togglePause(true) first). The host's pause stops every player, so with
+// other players in the game it does not (A_FAIRE 3n): togglePause(false) right after, which leaves
+// the game paused only if the host had paused it himself (togglePause keeps the pause while the
+// speed is 0, as userPause leaves it). A client's own build mode pauses only its game, and its
+// clock follows the host's again on the next frame (KenshiWorld::EndFrame).
+using BuildActivateFn = void (*)(void* bm, bool levelEditor);
+BuildActivateFn o_buildActivate = nullptr;
+void hk_buildActivate(void* bm, bool levelEditor) {
+    auto v = KenshiWorld::View();
+    const bool coop = v->active && !v->client && !v->squadForeign.empty() && !levelEditor;
+    const bool before = kenshi::GetPaused();
+    o_buildActivate(bm, levelEditor);
+    if (!coop || before || !kenshi::GetPaused()) return;
+    KenshiWorld* w = TheWorld();
+    if (kenshi::CallTogglePause(false) && !kenshi::GetPaused()) {
+        if (w) ++w->hostBuildUnpaused;
+        Log("the host's build mode: the game is not paused in co-op");
+    } else {
+        Log("the host's build mode: the game stays paused (could not lift the build mode's pause)");
+    }
+}
 using DialogFn = void (*)(void* d);
 DialogFn o_setResponses = nullptr, o_setReplyText = nullptr;
 void hk_setResponses(void* d) {
@@ -1755,6 +1777,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnSetSlaveState, reinterpret_cast<void*>(&hk_slaveState), reinterpret_cast<void**>(&o_slaveState)},
         {kenshi::FnDialogueSay, reinterpret_cast<void*>(&hk_say), reinterpret_cast<void**>(&o_say)},
         {kenshi::FnDialogueSetInDialog, reinterpret_cast<void*>(&hk_setInDialog), reinterpret_cast<void**>(&o_setInDialog)},
+        {kenshi::FnBuildModeActivate, reinterpret_cast<void*>(&hk_buildActivate), reinterpret_cast<void**>(&o_buildActivate)},
         {kenshi::FnDialogueSetResponses, reinterpret_cast<void*>(&hk_setResponses), reinterpret_cast<void**>(&o_setResponses)},
         {kenshi::FnDialogueSetReplyText, reinterpret_cast<void*>(&hk_setReplyText), reinterpret_cast<void**>(&o_setReplyText)},
         {kenshi::FnDialogueSendEvent, reinterpret_cast<void*>(&hk_sendEvent), reinterpret_cast<void**>(&o_sendEvent)},

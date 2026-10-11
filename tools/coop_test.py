@@ -4719,6 +4719,143 @@ def exp_floorview(host, cli):
     summary()
 
 
+def exp_camfocus(host, cli):
+    """A_FAIRE 3l: on the client the camera's tracked character (the floor view's focus) is set once
+    after loading, then left to the player: moving the camera drops it (camerafree does what the keys
+    do) and the mod never takes it back. Roofs are still hidden by UpdateRoof (see floorview)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(4)
+    follows = cmd(cli, "logcount floor_view:_follows_our")[1]
+    v0 = cmd(cli, "floorview")[1]
+    log("client floor view after loading:", v0, "| lines so far:", follows)
+    check("camera : apres le chargement, le focus est sur un perso du client", "focus=none" not in v0, v0)
+    log("the player moves the camera:", cmd(cli, "camerafree"))
+    seen = []
+    for _ in range(12):
+        time.sleep(0.5)
+        seen.append(cmd(cli, "floorview")[1])
+    log("client floor view afterwards:", seen[-1])
+    check("camera : le focus reste a 'aucun' 6 s apres que le joueur a bouge la camera",
+          all("focus=none" in v for v in seen), " | ".join(seen[-3:]))
+    after = cmd(cli, "logcount floor_view:_follows_our")[1]
+    check("camera : plus de ligne 'floor view: follows our' en boucle", after == "ok 0" or after == follows, f"{follows} -> {after}")
+    summary()
+
+
+def exp_buildpause(host, cli):
+    """A_FAIRE 3n: the host opens build mode while a client walks: the host's game is not paused
+    (unless the host had paused it himself) and the client keeps walking; a client's own build mode
+    changes nothing for the host."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(4)
+    own_c = own_index(cli)
+    cmd(host, "pause 0")
+    cmd(host, "speed 1")
+    time.sleep(1)
+
+    def walked(seconds=3.0):
+        a = cmd(cli, f"pos {own_c}")[1]
+        cmd(cli, f"moverel {own_c} 300 0")
+        time.sleep(seconds)
+        b = cmd(cli, f"pos {own_c}")[1]
+        try:
+            pa = [float(x) for x in a.split()[1].split(",")]
+            pb = [float(x) for x in b.split()[1].split(",")]
+            return math.hypot(pb[0] - pa[0], pb[2] - pa[2]), f"{a} -> {b}"
+        except Exception:
+            return 0.0, f"{a} -> {b}"
+
+    r = cmd(host, "buildmode 1")
+    time.sleep(1)
+    log("host opens build mode:", r, "| host:", cmd(host, "paused")[1], "| client:", cmd(cli, "paused")[1])
+    check("construction : mode construction ouvert chez l'hote", "active=1" in cmd(host, "buildmode")[1], r)
+    check("construction : la partie de l'hote n'est pas en pause", cmd(host, "paused")[1].startswith("ok 0"), cmd(host, "paused")[1])
+    d, why = walked()
+    log("client walked during the host's build mode:", round(d, 1), why)
+    check("construction : le client marche pendant le mode construction de l'hote", d > 30, why)
+    cmd(host, "buildmode 0")
+    # the host paused himself first: build mode keeps the pause
+    cmd(host, "pause 1")
+    time.sleep(1)
+    cmd(host, "buildmode 1")
+    time.sleep(1)
+    p = cmd(host, "paused")[1]
+    check("construction : pause de l'hote avant le mode construction, la pause reste", p.startswith("ok 1"), p)
+    cmd(host, "buildmode 0")
+    cmd(host, "pause 0")
+    time.sleep(1)
+    # the client's own build mode
+    log("client opens build mode:", cmd(cli, "buildmode 1"))
+    time.sleep(2)
+    hp, cp = cmd(host, "paused")[1], cmd(cli, "paused")[1]
+    log("host:", hp, "| client:", cp)
+    check("construction : le mode construction du client ne met pas l'hote en pause", hp.startswith("ok 0"), hp)
+    check("construction : le client suit l'horloge de l'hote (pas en pause)", cp.startswith("ok 0"), cp)
+    cmd(cli, "buildmode 0")
+    summary()
+
+
+def exp_quietlogs(host, clis, minutes=3):
+    """A_FAIRE 3h: doors whose state the client cannot take, and captivity changes, no longer fill
+    the clients' logs (counted for `minutes` at x3; play it in a town at night for beds)."""
+    time.sleep(6)
+    for c in clis:
+        cmd(c, "editdone")
+    time.sleep(4)
+    texts = ("stays", "captivity_from_the_host", "door:_")
+    for c in clis:
+        for t in texts:
+            cmd(c, f"logcount {t}")
+    cmd(host, "speed 3")
+    time.sleep(minutes * 60)
+    cmd(host, "speed 1")
+    for c in clis:
+        got = {t: cmd(c, f"logcount {t}")[1] for t in texts}
+        log(f"client {c}:", got, "|", cmd(c, "doorsknown")[1])
+        n = {t: int(v.split()[1]) if v.startswith("ok") else -1 for t, v in got.items()}
+        check(f"journaux : porte 'stays' rare chez {c} ({n['stays']} en {minutes} min)", 0 <= n["stays"] <= 5 * minutes, got)
+        check(f"journaux : captivite rare chez {c} ({n['captivity_from_the_host']} en {minutes} min)",
+              0 <= n["captivity_from_the_host"] <= 40 * minutes, got)
+    summary()
+
+
+def exp_attackers(host, cli):
+    """A_FAIRE 3g: an NPC fights the host's character far from the client's: the client is sent it
+    anyway and makes it, so a player watching another player's fight sees who hits them."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(4)
+    own_h = own_index(host)
+    hi = 0 if own_h != 0 else 1
+    hp = cmd(host, f"pos {hi}")[1]
+    try:
+        x, y, z = [float(v) for v in hp.split()[1].split(",")]
+    except Exception:
+        check("attaquants : position du perso de l'hote", False, hp)
+        return summary()
+    log("client's character goes 6 km away:", cmd(host, f"teleport {own_h} {x + 6000:.0f} {y + 5:.0f} {z:.0f}"))
+    time.sleep(6)
+    sp = cmd(host, f"spawnnpc 15 10 {hi}")
+    log("NPC next to the host's character:", sp)
+    key = sp[1].split()[1] if sp[0] and len(sp[1].split()) > 1 else None
+    if not key:
+        check("attaquants : PNJ cree", False, sp)
+        return summary()
+    log("it fights the host's character:", cmd(host, f"fight {hi} {key}"))
+    log("client camera on the host's character:", cmd(cli, f"camto {hi}"))
+    seen = None
+    for _ in range(30):
+        time.sleep(0.5)
+        seen = cmd(cli, f"where {key}")
+        if seen[0]:
+            break
+    log("the attacker on the client:", seen)
+    check("attaquants : le PNJ qui frappe le perso de l'hote existe chez le client lointain", bool(seen and seen[0]), seen)
+    summary()
+
+
 def grab_window(pid, path):
     """The game window's client area as a PNG (only that window: the user works on the same PC)."""
     try:
@@ -7580,6 +7717,16 @@ def main():
         e2 = sub.add_parser(name)
         e2.add_argument("--save", default="kctest_town" if name in ("beds", "groundpick", "floorview") else "kctest_base")
         e2.add_argument("--keep", action="store_true")
+    for name_, hlp_, save_ in (("camfocus", "3l: the client's camera focus is set once, then left to the player", "kctest_town"),
+                               ("buildpause", "3n: the host's build mode does not pause anyone; a client's changes nothing for the host", "kctest_base"),
+                               ("attackers", "3g: an NPC fighting the host's character is made on a client 6 km away", "kctest_base")):
+        sp_ = sub.add_parser(name_, help=hlp_)
+        sp_.add_argument("--save", default=save_)
+        sp_.add_argument("--keep", action="store_true")
+    ql_ = sub.add_parser("quietlogs", help="3h: door 'stays' and captivity lines counted on every client for 3 min at x3")
+    ql_.add_argument("--save", default="kctest_town")
+    ql_.add_argument("--keep", action="store_true")
+    ql_.add_argument("--clients", type=int, default=1)
     fa_ = sub.add_parser("factions", help="lot B: relations, bounties and crimes the host's everywhere")
     fa_.add_argument("--save", default="kctest_base")
     fa_.add_argument("--keep", action="store_true")
@@ -7719,6 +7866,16 @@ def main():
             if not a.keep:
                 kill_launched()
         return
+    if a.what == "quietlogs":
+        # door and captivity log lines on every client, counted over a few minutes at x3
+        host, clis, _ids = setup_multi(a.save, max(1, a.clients))
+        tile([host] + clis)
+        try:
+            exp_quietlogs(host, clis)
+        finally:
+            if not a.keep:
+                kill_launched()
+        return
     if a.what == "faraway":
         # every client in its own far town at once (setup_multi: each joins in turn, editor closed)
         host, clis, _ids = setup_multi(a.save, max(1, a.clients))
@@ -7806,6 +7963,12 @@ def main():
             exp_buildfull(host, cli)
         elif a.what == "floorview":
             exp_floorview(host, cli)
+        elif a.what == "camfocus":
+            exp_camfocus(host, cli)
+        elif a.what == "buildpause":
+            exp_buildpause(host, cli)
+        elif a.what == "attackers":
+            exp_attackers(host, cli)
         elif a.what == "floor":
             exp_floor(host, cli)
         elif a.what == "factions":

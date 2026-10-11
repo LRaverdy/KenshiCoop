@@ -277,6 +277,12 @@ enum Fn : int {
     // ---- inventories (v0.3.2: backpack corruption)
     FnItemIsStackable,          // int Item::isStackable(InventorySection*) const   (the most of that item one cell holds: 1 for weapons, armour, backpacks; else game data "stackable", with the section's stacking bonus)
     FnSectionRemoveItem,        // bool InventorySection::removeItem(Item*)   (out of its cells, then its parent inventory's list (+0xC8, vt 0x50 -> _removeFromList))
+    // ---- 0.3.2: build mode and the camera's tracked character
+    FnBuildModeInstance,        // PlayerBuildMode* <getInstance>()   (our name, 0x296D10: made on first use, kept at 0x212DE48; the B key (0x7884D9) and the main bar's button use it)
+    FnBuildModeActivate,        // void PlayerBuildMode::activate(bool levelEditor)   (our name, 0x4E65E0: GameWorld::togglePause(true) first, then the BuildModeWindow at +0x28)
+    FnBuildModeDeactivate,      // void PlayerBuildMode::deactivate()   (our name, 0x4D1870: deletes the window +0x28, then togglePause(false))
+    FnBuildModeIsActive,        // bool PlayerBuildMode::isActive() const   (our name, 0x4D1860: +0x28 != null)
+    FnStopTrackCharacter,       // void PlayerInterface::stopTrackCharacter()   (0x7F2780: +0x270 = none, +0x290 = -1, Camera::stopFollowing; called by CameraClass::move and teleport)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -882,6 +888,9 @@ bool CallSetFrameSpeed(float speed);
 bool CallSetGameSpeedUi(float speed);   // as the speed buttons and keys do (no sound): the buttons show it too
 bool CallUserPause(bool paused);
 bool CallTogglePause(bool paused);
+bool BuildModeActive();               // the player's build mode is open (PlayerBuildMode::isActive)
+bool SetBuildMode(bool on);           // open / close it as the B key does (activate(false) / deactivate); main thread only
+bool StopTrackCharacter();            // what moving the camera does: PlayerInterface::stopTrackCharacter
 // Writes host health into the local copy (does not trigger death/knockout by itself).
 bool WriteVitals(Character* c, const kc::EntityVitals& v);
 // The irreversible transitions; callers must hold a HostCallScope on clients.

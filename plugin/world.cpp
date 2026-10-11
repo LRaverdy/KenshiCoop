@@ -255,6 +255,9 @@ void KenshiWorld::ResetWorldBound() {
     stuck_.clear();
     farSnapAt_.clear();
     roofBuilding_ = nullptr;
+    focusPlaced_ = false;
+    loadFocus_ = {};
+    focusRetakes_ = 0;
     navRefreshed_.clear();
     reRagdoll_.clear();
     floorTry_.clear();
@@ -271,7 +274,7 @@ void KenshiWorld::ResetWorldBound() {
     resyncSnap_.clear();
     { std::lock_guard<std::mutex> lk(destroyedMutex_); destroyed_.clear(); }
     ResetGround();
-    { std::lock_guard<std::mutex> lk(doorMutex_); doorReqs_.clear(); doorCache_.clear(); }
+    { std::lock_guard<std::mutex> lk(doorMutex_); doorReqs_.clear(); doorCache_.clear(); doorTries_.clear(); }
     { std::lock_guard<std::mutex> lk(tradeMutex_); tradeReqs_.clear(); hostTradeLooter_ = {}; hostTradeTrader_ = {}; }
     { std::lock_guard<std::mutex> lk(buildMutex_); trackedBuildings_.clear(); localPlacements_.clear(); localBuildActions_.clear(); removedBuildings_.clear(); }
     { std::lock_guard<std::mutex> lk(dialogMutex_); dialogEvents_.clear(); }
@@ -1570,14 +1573,22 @@ void KenshiWorld::ApplyFloor(const kc::Handle& h, uint8_t group) {
         ok ? "" : ", call failed", t.tries >= 3 && after != group ? ": the game keeps its own floor, giving up" : "");
 }
 
-// The floor view (which floors and roofs show) follows the PlayerInterface's focus character as it
-// takes stairs or enters a building, as in solo. A client's game keeps the focus of the save it
-// loaded (the host's character, or nothing): it is pointed at one of ours, the selected one first.
-// A focus already on one of ours is the player's own choice (double-tap on a squad key, a portrait).
+// The floor view (which floors and roofs show) follows the PlayerInterface's tracked character as it
+// takes stairs or enters a building, as in solo. That hand (+0x270) is the camera's "track this
+// character" (PlayerInterface::startTrackCharacter 0x7F5400 / stopTrackCharacter 0x7F2780): the game
+// drops it (type 0xB) whenever the player moves the camera himself (CameraClass::move, 0x6AE5D1, and
+// teleport, 0x6AF934, call stopTrackCharacter). Taking it back every 0.5 s (0.3.1) fought the
+// player's camera all the time ("follows our 'Geoffrey' (it followed nobody)" twice a second, a
+// camera that "goes everywhere", 11 October). So it is set once per loaded world: a client's game
+// keeps the focus of the save it loaded (the host's character, or nothing), pointed at one of ours,
+// the selected one first; taken back afterwards only if it is found on that save's character again
+// (a few times at most). Nothing (the player moved the camera) or one of ours is the player's choice.
+// The roofs above our character are hidden either way (UpdateRoof), without touching the focus.
 void KenshiWorld::UpdateFloorFocus() {
     const double now = NowSeconds();
     if (now < nextFocusCheck_) return;
     nextFocusCheck_ = now + 0.5;
+    constexpr int kMaxRetakes = 3;
     std::vector<std::pair<kc::Handle, kenshi::Character*>> mine;   // local handles
     for (const kc::Handle& h : controllable_) {
         kc::Handle local;
@@ -1586,19 +1597,31 @@ void KenshiWorld::UpdateFloorFocus() {
     if (mine.empty()) return;
     kc::Handle focus;
     const bool hasFocus = kenshi::FloorFocus(focus);
+    kenshi::Character* followed = nullptr;
     for (const auto& [l, c] : mine)
-        if (hasFocus && l == focus) { UpdateRoof(c); return; }
+        if (hasFocus && l == focus) followed = c;
     std::vector<kc::Handle> selected;
     kenshi::SelectedHandles(selected);
     kenshi::Character* pick = mine.front().second;
     for (const auto& [l, c] : mine)
         if (std::find(selected.begin(), selected.end(), l) != selected.end()) { pick = c; break; }
-    if (kenshi::SetFloorFocus(pick)) {
-        std::string name;
-        kenshi::CharacterName(pick, name);
-        Log("floor view: follows our '%s' (it followed %s)", name.c_str(), hasFocus ? KeyOf(focus).c_str() : "nobody");
+    if (!focusPlaced_ && followed) {
+        focusPlaced_ = true;   // already one of ours (the player double-tapped a squad key before we looked)
+    } else if (!followed) {
+        const bool first = !focusPlaced_;
+        if (first) loadFocus_ = hasFocus ? focus : kc::Handle{};
+        const bool backOnSave = focusPlaced_ && hasFocus && loadFocus_.valid() && focus == loadFocus_ && focusRetakes_ < kMaxRetakes;
+        if ((first || backOnSave) && kenshi::SetFloorFocus(pick)) {
+            focusPlaced_ = true;
+            if (backOnSave) ++focusRetakes_;
+            followed = pick;
+            std::string name;
+            kenshi::CharacterName(pick, name);
+            Log("floor view: follows our '%s' (it followed %s%s); the camera is the player's from now on", name.c_str(),
+                hasFocus ? KeyOf(focus).c_str() : "nobody", backOnSave ? ", the save's character again" : "");
+        }
     }
-    UpdateRoof(pick);
+    UpdateRoof(followed ? followed : pick);
 }
 
 // Host: the same for the host's selected (or else followed) character. The host's game hides the

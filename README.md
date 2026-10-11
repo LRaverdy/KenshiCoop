@@ -165,7 +165,10 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
   son éditeur de perso, quand le jeu en propose un, s'ouvre chez toi, pas chez l'hôte).
 - **Heure, vitesse et pause** : celles de l'hôte, imposées en permanence. Les clients ne peuvent
   pas les changer ; un client figé un moment (une zone qui charge) est remis à l'heure de l'hôte
-  d'un coup.
+  d'un coup. Le mode construction ne met plus personne en pause (sauf si l'hôte avait déjà mis
+  pause lui-même).
+- **Caméra** : libre chez chaque joueur ; le mod ne la ramène plus sur ton perso quand tu la
+  déplaces. En suivant de loin le combat d'un autre joueur, on voit les PNJ qui le frappent.
 - **Météo** (pluie, tempêtes, éclairs, nuages de gaz…) : celle de l'hôte, région par région.
 - **Inventaires et équipement** de tous les personnages proches, sacs à dos compris : ranger,
   sortir, empiler (une unité posée sur une unité fait une pile, comme dans le jeu) et lâcher au sol

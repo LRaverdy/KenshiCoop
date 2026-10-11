@@ -49,6 +49,26 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 - Tests : `coop_test.py recruits` ; commandes de debug `squadcheck`, `talksel`, `recruitnpc`,
   `squadidx`, `dialogs same=`, `spawncreature … unique=`. Test unitaire : un seul ordre « parler »
   pour deux persos sélectionnés. Rien n'est encore vérifié en jeu. Protocole inchangé (35).
+- **Caméra d'un client « qui va partout »** (A_FAIRE 3l) : le perso que suit la vue des étages
+  (`PlayerInterface+0x270`) est celui que la caméra suit, et le jeu le lâche dès que le joueur bouge la
+  caméra (`CameraClass::move` / `teleport` → `stopTrackCharacter`). Le mod le reprenait toutes les
+  0,5 s. Il n'est plus posé qu'une fois par monde chargé ; les toits restent cachés par `UpdateRoof`.
+- **Le mode construction de l'hôte ne met plus tout le monde en pause** (3n) : détour de
+  `PlayerBuildMode::activate` (`0x4E65E0`) ; avec d'autres joueurs, `togglePause(false)` juste après,
+  qui garde la pause si l'hôte l'avait mise lui-même. Celui d'un client ne touche que son jeu.
+- **Portes en boucle** (3h) : « Storm Shack Door stays 0 (host 3) » toutes les 3 s chez tous les
+  clients. 3 = « en fermeture » : fermée chez le client, c'est juste (`DoorState::sameSettled`) ; une
+  porte que le jeu du client refuse est laissée après 3 essais jusqu'au prochain changement de l'hôte.
+- **Journal « captivity from the host »** (3h) : chaque changement n'est écrit qu'une fois (même
+  renvoyé par les rafraîchissements de 5 s), avec le meuble, 6 lignes par 10 s au plus.
+- **Combats suivis de loin** (3g, sans changer le protocole) : qui combat un perso envoyé à un joueur
+  lui est envoyé aussi, et un client recrée, même loin de ses persos, un PNJ qui combat un membre
+  d'escouade : en suivant le combat d'un autre joueur, on voit ses attaquants.
+- **Hauteur des poses des clients** (3o) : pas un bug. La hauteur d'une pose est relative au sol
+  (`createBuildings` retire `getTerrainWithWaterHeight`, `0x4D7512`) ; le journal du client le dit.
+- Tests : unitaires (portes « en fermeture », captivité répétée et en rafale, attaquants envoyés et
+  recréés) ; expériences `camfocus`, `buildpause`, `quietlogs`, `attackers` ; commandes de debug
+  `buildmode`, `camerafree`, `logcount`, `doorsknown` (`givenup=`).
 
 ## v0.3.1 (11 octobre 2026)
 

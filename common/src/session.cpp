@@ -186,7 +186,7 @@ void Session::Leave() {
     floorSent_.clear(); floors_.clear(); nextFloors_ = nextFloorsFull_ = 0; floorPlayers_ = 0;   // fix G6
     ResetJobs();   // fix G5
     ResetSquads();   // squad window and AI settings
-    captiveSent_.clear(); captives_.clear(); captivesDirty_.clear();   // lot D: prisons
+    captiveSent_.clear(); captives_.clear(); captivesDirty_.clear(); captiveLogged_.clear();   // lot D: prisons
     ResetMap();   // map markers and pings
     haveMoneyBase_ = false;
     unsentSpend_ = 0;
@@ -3121,7 +3121,7 @@ void Session::ClientTick(double now, bool live) {
     // loaded the land, and drops what we create there at once.
     auto spawnable = [&](const Entity& e) {
         return !e.present && (!e.squad || e.owner != localId_ || e.adopt) && e.hasSpawn && !e.buf.empty() && now - e.missingSince >= kSpawnGrace &&
-               (e.squad || InMyArea(e, now));
+               (e.squad || InMyArea(e, now) || FightsSquad(e, now));
     };
     // Characters the local game made on its own have no place in the host's world: they stand in
     // for missing host characters of the same kind, or go away.

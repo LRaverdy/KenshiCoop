@@ -170,6 +170,11 @@ Les signatures sont celles du commentaire du code.
 | — | `FnSetInBed` | `Character::setInBed(bool, UseableStuff* lit)` (notre nom) | `0x32E2F0` | — | [D, faraway] inSomething (+0x2F8) = 1, inWhat (+0x300) = le `hand` du lit (+0x58), le lit le prend (vt 0x4F8) ; déjà dans ce lit : rien. Le client met la copie d'un dormeur dans le même lit (`ApplyCaptive`) |
 | — | `FnItemIsStackable` | `Item::isStackable(InventorySection*)` | `0x75E090` | — | [D, v0.3.2] maximum d'une case pour cet objet dans cette section (1 : ne s'empile pas) ; règle de fusion des piles des déplacements et achats rejoués par l'hôte |
 | — | `FnSectionRemoveItem` | `InventorySection::removeItem(Item*)` | `0x749A20` | — | [D, v0.3.2] retire l'objet de la section puis de la liste de son inventaire (+0xC8) ; réparation des sacs abîmés (`CheckInventories` en mode réparation) |
+| — | `FnBuildModeInstance` | `PlayerBuildMode` : l'instance (notre nom) | `0x296D10` | — | [D, 0.3.2] créée au premier appel, gardée en `0x212DE48` ; la touche B (`0x7884D9` : `isActive` ? `deactivate` : `activate(false)`) et le bouton de la barre (`0x720F80`) s'en servent |
+| — | `FnBuildModeActivate` | `PlayerBuildMode::activate(bool éditeur de niveau)` (notre nom) | `0x4E65E0` | oui (hôte) | [D, 0.3.2] appelle d'abord `GameWorld::togglePause(true)` (`0x4E6608`), puis crée la `BuildModeWindow` (+0x28). Détour `hk_buildActivate` : chez l'hôte avec d'autres joueurs, `togglePause(false)` juste après (A_FAIRE 3n) |
+| — | `FnBuildModeDeactivate` | `PlayerBuildMode::deactivate()` (notre nom) | `0x4D1870` | — | [D] détruit la fenêtre +0x28 puis `togglePause(false)` (`0x4D18CE`) |
+| — | `FnBuildModeIsActive` | `PlayerBuildMode::isActive()` (notre nom) | `0x4D1860` | — | [D] +0x28 non nul |
+| — | `FnStopTrackCharacter` | `PlayerInterface::stopTrackCharacter` | `0x7F2780` | — | [D, 0.3.2] +0x270 = aucun, +0x290 = -1, `Camera::stopFollowing` ; appelé par `CameraClass::move` (`0x6AE5D1`) et `CameraClass::teleport` (`0x6AF934`) : déplacer la caméra lâche le perso suivi |
 | 117 | `FnSetChainedMode` | `Character::setChainedMode` | `0x32E590` | oui | lot D : menottes (crée l'objet si besoin) |
 | 118 | `FnSetSlaveState` | `StateBroadcastData::setSlaveState` | `0x5A4940` | oui | lot D : état d'esclave |
 | 116 | `FnGunShoot` | `GunClass::shoot` | `0x43A730` | oui | (lot C) void shoot(Character* me, RootObject* cible, StatsEnumerated stat, const Vector3& visée) : tire un projectile ; hôte : noté pour les clients ; client : seuls les tirs rejoués par le mod passent |
@@ -210,7 +215,7 @@ Les signatures sont celles du commentaire du code.
 | heure | `FnClockSetHourOfDay` | `GameClock::setHourOfDay(float)` (notre nom) | `0x66CF30` | — | [D] l'objet de `0x21303D0` : écrit l'heure du jour (0..24) dans l'horloge du ciel (+0x20 → +0x1C), appelle sa vt 0x8 (mise à jour, 0 s), recalcule les heures (+0xA0 = jour × 24 + heure du jour) et heure / minute (+0x0 / +0x4). Une nouvelle partie l'appelle avec 0 puis écrit le jour 1 (+0x8, `0x36CFB4`) ; le mod fait de même pour recaler l'horloge d'un client (`kenshi::SetGameHours`) |
 
 | validité | `FnTerrainHeight` | `UtilityT::getTerrainHeight(float x, float z)` | `0x9B3710` | — | le sol sous l'eau éventuelle ; -99 où aucun terrain n'est connu (saut vers `getTerrainHeightFast(x, z, nullptr)` `0x9B32F0`) |
-| validité | `FnTerrainWithWaterHeight` | `UtilityT::getTerrainWithWaterHeight(float x, float z)` | `0x9B3720` | — | max(sol, 100) : la hauteur que `createBuildings` retire à la position (appel vérifié à `0x4D7512`) |
+| validité | `FnTerrainWithWaterHeight` | `UtilityT::getTerrainWithWaterHeight(float x, float z)` | `0x9B3720` | — | max(sol, 100) : la hauteur que `createBuildings` retire à la position (appel vérifié à `0x4D7512` : `y -= hauteur(x, z)` en `0x4D751C`). La hauteur d'une pose (`BuildPlace::pos.y`, journal « build mode placement ») est donc **relative au sol** : -13,6 chez rob = 268,1 dans le monde chez l'hôte (A_FAIRE 3o, pas un bug) |
 | validité | `FnIsIndoors` | `UtilityT::isIndoors(const Vector3&)` | `0x9B2BA0` | — | le bâtiment dont l'intérieur contient ce point (rayons vers le haut et le bas, groupe 0x2000) ; appelée par `isIndoorsOK` et le clic du mode construction |
 | validité | `FnGetNearestTown` | `TownList::getNearestTown(pos, owner, except, mine, TownType)` | `0x927F10` | — | appelée par `placementVerification` (`0x4DBAF6`, type 10) |
 | validité | `FnWithinBordersRange` | `TownBase::withinBordersRange(pos, mult) const` | `0x926D50` | — | (rayon vt 0x2A0 × mult)² > distance² au sol ; faux pour le type 8 |
@@ -363,6 +368,20 @@ Vtables (pour reconnaître un objet) :
   Chez un client, +0x270 restait le perso de la partie chargée (celui de l'hôte) : le mod
   (`kenshi::SetFloorFocus`, `KenshiWorld::UpdateFloorFocus`) écrit les champs du `hand` d'un perso
   du joueur et +0x290 = -1, sans toucher à la caméra.
+- **+0x270 est le perso que la caméra « suit »** [D, 0.3.2] : `0x7F5400` est
+  `PlayerInterface::startTrackCharacter`, `0x7F2780` `stopTrackCharacter` (+0x270 = aucun,
+  +0x290 = -1, puis `Camera::stopFollowing` sur `PlayerInterface+0x30`), `0x7F27E0`
+  `isTrackingCharacter`. `CameraClass::move` (`0x6AE5D1`, touches et bords d'écran) et
+  `CameraClass::teleport` (`0x6AF934`, clic sur la carte) appellent `stopTrackCharacter` : dès que le
+  joueur bouge la caméra, le jeu remet +0x270 à « aucun ». Le mod 0.3.1 le reprenait toutes les 0,5 s
+  et se battait avec la caméra du joueur (A_FAIRE 3l) ; depuis 0.3.2 il ne le pose qu'une fois par
+  monde chargé (ou s'il revient sur le perso de la sauvegarde de l'hôte, 3 fois au plus), et les toits
+  au-dessus du perso sélectionné sont masqués par `UpdateRoof` sans toucher à ce focus.
+- **Le mode construction met le jeu en pause** [D, 0.3.2] : `PlayerBuildMode::activate`
+  (`0x4E65E0`) appelle `GameWorld::togglePause(true)` (`0x787D40`), qui écrit `GameWorld+0x8B9`
+  (= demande || vitesse +0x700 nulle) sans changer la vitesse ; `deactivate` (`0x4D1870`) appelle
+  `togglePause(false)`. `togglePause(false)` laisse donc la pause si le joueur l'avait mise lui-même
+  (`userPause(true)` met la vitesse à 0). `0x4D1920` (`togglePause(true)` seul) n'a pas d'appelant.
 
 - `PlayerInterface::playerMove(const Vector3& pos, Building*)` (détourné) reçoit le point du sol où
   le joueur a cliqué droit pour un déplacement, hauteur du sol comprise : l'administration le garde
@@ -1392,6 +1411,13 @@ fermée, 73 « fermer » si ouverte).
 | `DoorStuff::setDoorState` | `0x299000` | écrit l'état et pose aussitôt l'ouverture (chargement) |
 | `DoorLock::isBroken` | `0x297D60` | propriétaire cassé, ou +0x21 |
 | `CharStats::xpLockpicking` | `0x8C62E0` | expérience de crochetage (traduit de KenshiLib, non lu) |
+
+- **Une porte peut rester « en fermeture » (3) pour de bon** chez l'hôte (11 octobre : « Storm Shack
+  Door stays 0 (host 3) » toutes les 3 s pendant 40 min chez les trois clients ; sans doute loin de la
+  caméra de l'hôte, où la porte n'est pas mise à jour, ou bloquée). Pour un client, fermée (0) et en
+  fermeture (3) reviennent au même, comme ouverte (1) et en ouverture (2) : `DoorState::sameSettled`.
+  Depuis 0.3.2 le client ne réapplique plus une porte déjà dans le bon sens, et abandonne après 3
+  essais une porte que son jeu ne veut pas tourner, jusqu'à ce que l'état de l'hôte change.
 
 ## 8. Recherche : vol et crimes [D]
 

@@ -61,7 +61,7 @@ l'hôte et à x2/x3.
 - fermier de rob sur sa ferme : pas de ligne `workers`, donc peut-être jamais compté ;
 - bâtiments des clients absents chez nass4 (« machine … of the host not found here ») ;
 - fenêtre Prospecter (3p) et boutique d'animaux (3i) qui ne s'ouvrent pas chez le client ;
-- hauteur fausse des poses de client (3o).
+- hauteur fausse des poses de client (3o) : **pas un bug** (hauteur relative au sol, voir 3o).
 
 ## 11 octobre 2026, soir : partie entre amis en v0.3.1, soucis pour rejoindre
 
@@ -264,7 +264,11 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
      3. Retester avec 3 clients éloignés et comparer les fps.
    - Vu en même temps, à vérifier :
      - « captivity from the host: a merchant caged » environ 2 fois par seconde chez les 3 clients
-       (22:26:08-14) : un état réappliqué en boucle ?
+       (22:26:08-14) : un état réappliqué en boucle ? **Corrigé dans le code, à tester en jeu** (0.3.2) :
+       chaque changement n'est écrit qu'une fois (les rafraîchissements de 5 s le renvoyaient quand
+       l'entrée du client avait été oubliée), avec le meuble (un lit compte comme « caged » : une ville
+       qui se couche, c'est des dizaines de changements), 6 lignes par 10 s au plus. Expérience
+       `quietlogs`.
      - 73 refus « conversation refused: that NPC is in conversation with another player's
        character » par rafales (22:18-22:22, jusqu'à 36 en une minute) : une demande répétée à chaque
        image ?
@@ -392,6 +396,10 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
         de l'utilisateur pour le changement de version.
    - Test : un client place sa caméra sur le combat d'un autre joueur loin de lui, et on compte les PNJ
      visibles chez lui et chez l'hôte.
+   - **Option 1 corrigée dans le code, à tester en jeu** (0.3.2, sans changer le protocole) : dans
+     `UpdateStreams`, qui combat un perso envoyé à un joueur lui est envoyé aussi ; le client recrée, même
+     loin de ses persos, un PNJ qui combat un membre d'escouade (`Session::FightsSquad`). Test unitaire
+     dans `TestPerPlayerStreaming`, expérience `attackers`. L'option 2 (caméra du client) reste à faire.
 
 3h. **Journal de Geoffrey (22:12-22:51)**
    - **FPS** : 120-190 au début, **63-94 depuis 22:44** (46 au plus bas à 22:27, au moment où les joueurs
@@ -401,6 +409,11 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
      dans l'état 3 de l'hôte et réessaie sans fin. Il faut trouver ce qu'est l'état 3 (cassée ?
      verrouillée et ouverte ?) et, si le client ne peut pas l'appliquer, arrêter de réessayer
      (abandon après N essais ou nouvel essai seulement quand l'hôte change).
+     **Corrigé dans le code, à tester en jeu** (0.3.2) : 3 = « en fermeture ». La porte de l'hôte reste en
+     fermeture (loin de sa caméra, ou bloquée) ; fermée chez le client, c'est juste
+     (`DoorState::sameSettled`) : plus réappliquée. Une porte que le jeu du client refuse est laissée
+     après 3 essais jusqu'au prochain changement de l'hôte (`doorsknown` : `givenup=`). Expérience
+     `quietlogs`.
    - **Cadavres décalés** : à la fouille d'araignées, le corps de l'hôte est à 93-128 unités de celui du
      client (sur 23 fouilles : médiane 10, max 235). La correction « stood up to fall where the host's
      lies » existe, mais les corps tombés en combat restent souvent loin. Le pilleur va déjà au corps
@@ -505,6 +518,12 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
    - Test : client, déplacer la caméra avec les touches et la souris loin de son perso, monter un
      étage, entrer dans un bâtiment. La caméra ne doit jamais revenir seule, et les toits doivent
      se cacher.
+   - **Corrigé dans le code, à tester en jeu** (0.3.2). Vérifié dans le jeu : +0x270 est le perso
+     « suivi » de la caméra (`startTrackCharacter` 0x7F5400, `stopTrackCharacter` 0x7F2780) ;
+     `CameraClass::move` (0x6AE5D1) et `teleport` (0x6AF934) appellent `stopTrackCharacter`. Le focus
+     n'est plus posé qu'une fois par monde chargé (ou s'il revient sur le perso de la sauvegarde, 3 fois
+     au plus) ; `UpdateRoof` cache les toits au-dessus du perso sélectionné sans toucher au focus.
+     Expérience `camfocus` (commande `camerafree`).
 
 3m. **nass4 ne peut plus diriger Stone (23:27, nouvelle partie)**
    - **Corrigé dans le code, à tester en jeu** (0.3.2, `coop_test.py recruits`, étape 5). Le suivi
@@ -548,6 +567,11 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
      pas s'arrêter, et la pose du bâtiment doit marcher.
    - Contournement à essayer : relancer le temps (Espace / bouton vitesse) une fois en mode
      construction.
+   - **Corrigé dans le code, à tester en jeu** (0.3.2) : `PlayerBuildMode::activate` (0x4E65E0) appelle
+     `GameWorld::togglePause(true)`. Détour `hk_buildActivate` : chez l'hôte avec d'autres joueurs,
+     `togglePause(false)` juste après ; `togglePause` garde la pause si la vitesse est 0, donc si l'hôte
+     avait mis pause lui-même. Le mode construction d'un client ne met en pause que son jeu, qui reprend
+     l'horloge de l'hôte à l'image suivante (`EndFrame`). Expérience `buildpause`.
 
 3o. **Agriculture : « pour planter c'est compliqué » (rob, 23:30-23:44)**
    - Ce qui marche :
@@ -566,6 +590,10 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
    - Remarque de hauteur : les poses de client arrivent avec une hauteur fausse (rob -13,6 → hôte
      268,1 ; Geoffrey -19,4 → 931,1). L'hôte recale sur le sol, mais il faudra voir pourquoi le client
      envoie une hauteur pareille.
+     **Expliqué, pas un bug** (0.3.2) : la hauteur d'une pose est relative au sol (`createBuildings`
+     retire `getTerrainWithWaterHeight(x, z)` en 0x4D7512 / 0x4D751C, et `createBuilding` l'ajoute) ;
+     -13,6 = 13,6 sous le sol, 268,1 dans le monde. Le journal du client le dit maintenant
+     (« … (-13.6 from the ground) »).
 
 3p. **La fenêtre « Prospecter » ne s'ouvre pas chez le client (23:47)**
    - Le bouton PROSPECT de la barre d'ordres (`OrdersPanel`, `0x72B540`) ouvre normalement la fenêtre de

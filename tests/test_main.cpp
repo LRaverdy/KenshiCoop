@@ -2839,6 +2839,16 @@ static void TestDoors() {
     auto door = [](const char* sid, Vec3 p, DoorKind k, uint8_t state, uint8_t flags, int level) {
         DoorState d; d.sid = sid; d.pos = p; d.kind = k; d.state = state; d.flags = flags; d.lockLevel = level; return d;
     };
+    // A_FAIRE 3h: a door closed here while the host's is still closing (state 3, for good) is right
+    {
+        const DoorState closed = door("d", {}, DoorKind::Door, 0, 0, 0), open = door("d", {}, DoorKind::Door, 1, 0, 0);
+        const DoorState opening = door("d", {}, DoorKind::Door, 2, 0, 0), closing = door("d", {}, DoorKind::Door, 3, 0, 0);
+        CHECK(closed.sameSettled(closing) && closing.sameSettled(closed) && open.sameSettled(opening));
+        CHECK(!closed.sameSettled(open) && !closed.sameSettled(opening) && !open.sameSettled(closing));
+        CHECK(!closed.sameState(closing));   // still a change for the host to send
+        const DoorState locked = door("d", {}, DoorKind::Door, 0, kDoorHasLock | kDoorLocked, 10);
+        CHECK(!closed.sameSettled(locked) && !locked.sameSettled(door("d", {}, DoorKind::Door, 3, kDoorHasLock | kDoorLocked, 20)));
+    }
     hw.doors["gate"] = door("gate", {120, 0, 10}, DoorKind::Door, 0, kDoorHasLock, 30);
     hw.doors["chest"] = door("chest", {210, 0, 5}, DoorKind::Lock, 0, kDoorHasLock | kDoorLocked, 60);
     hw.doors["far"] = door("far", {9000, 0, 0}, DoorKind::Door, 0, 0, 0);
@@ -3369,7 +3379,13 @@ static void TestCaptives() {
     AtMenu(cw);
     SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
     Session host(hw, hc, Now, Quiet("host"));
-    Session cli(cw, cc, Now, Quiet("cli"));
+    std::vector<std::string> cliLog;
+    Session cli(cw, cc, Now, [&](const std::string& l) { cliLog.push_back(l); });
+    auto toldCaptivity = [&] {
+        int n = 0;
+        for (const auto& l : cliLog) n += l.find("captivity from the host") != std::string::npos ? 1 : 0;
+        return n;
+    };
     std::string err;
     host.Host(&err);
     CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 4));
@@ -3385,6 +3401,11 @@ static void TestCaptives() {
     CHECK(cw.chars[20].cap == p);
     CHECK(host.captiveCount() == 2 && cli.captiveCount() == 2);
     CHECK(cw.chars[1].cap.free() && cw.chars[3].cap.free());
+    // A_FAIRE 3h: the same state again with every full refresh (5 s) is not written again
+    const int toldOnce = toldCaptivity();
+    CHECK(toldOnce >= 2);
+    Run({{&host, &hw}, {&cli, &cw}}, 11.0);
+    CHECK(toldCaptivity() == toldOnce);
     // our copy drifting (the local game would have let it out): imposed again
     cw.chars[2].cap = CaptiveState{};
     Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return cw.chars[2].cap == s; });
@@ -3404,6 +3425,22 @@ static void TestCaptives() {
     const int applies = cw.captiveApplies;
     Run({{&host, &hw}, {&cli, &cw}}, 2.5);
     CHECK(cw.captiveApplies == applies);
+    // a whole town going to bed at once: every one imposed, at most a few lines a while in the log
+    std::printf("session: many captivity changes at once are all applied, the log stays short\n");
+    for (uint32_t i = 0; i < 20; ++i) {
+        FakeChar sleeper = npc; sleeper.pos = sleeper.dest = {140.0f + float(i), 0, 0};
+        sleeper.cap.caged = true; sleeper.cap.cageSid = "bed"; sleeper.cap.cagePos = {140.0f + float(i), 0, 1};
+        hw.chars[300 + i] = sleeper;
+    }
+    const int toldBefore = toldCaptivity();
+    Run({{&host, &hw}, {&cli, &cw}}, 8.0, [&] {
+        for (uint32_t i = 0; i < 20; ++i) if (!cw.chars.count(300 + i) || !cw.chars[300 + i].cap.caged) return false;
+        return true;
+    });
+    for (uint32_t i = 0; i < 20; ++i) CHECK(cw.chars.count(300 + i) && cw.chars[300 + i].cap.caged);
+    const int told = toldCaptivity() - toldBefore;
+    if (told > 12) std::printf("    %d captivity lines for 20 changes\n", told);
+    CHECK(told >= 1 && told <= 12);
 }
 
 // The overlay's GUI -> display conversion (plugin/map_view.h): MyGUI view pixels to back buffer pixels.
@@ -5800,6 +5837,33 @@ static void TestPerPlayerStreaming() {
         return false;
     };
     CHECK(interest(70) && interest(71) && interest(first) && !interest(72));
+    // A_FAIRE 3g: NPCs hitting the second player's character far away go to the first player too
+    // (whose camera may follow that fight), and are made there; an NPC beside them that fights
+    // nobody does not. Once the fight ends they leave the first player's stream again.
+    std::printf("streaming: whoever fights a squad member is sent to every player\n");
+    npc(73, {20150, 0, 40});
+    npc(74, {20120, 0, -30});
+    hw.chars[73].fights = second;
+    Run(all, 8.0, [&] { return aw.chars.count(73) != 0 && bw.chars.count(73) != 0; });
+    CHECK(host.streamsTo(FakeWorld::H(73), idA) && host.streamsTo(FakeWorld::H(73), idB));
+    CHECK(!host.streamsTo(FakeWorld::H(74), idA) && host.streamsTo(FakeWorld::H(74), idB));
+    CHECK(aw.chars.count(73) == 1 && aw.chars.count(74) == 0);
+    CHECK(bw.chars.count(73) == 1);
+    // whoever fights an NPC that a player is sent goes with it as well (the reverse of "what a
+    // streamed character fights goes with it")
+    npc(75, {24000, 0, 0});   // 4 km from the second player's character: not theirs by distance (hysteresis included)
+    Run(all, 2.0);
+    CHECK(!host.streamsTo(FakeWorld::H(75), idB));
+    hw.chars[75].fights = 71;
+    Run(all, 2.0);
+    CHECK(host.streamsTo(FakeWorld::H(75), idB) && !host.streamsTo(FakeWorld::H(75), idA));
+    hw.chars[73].fights = 0;
+    hw.chars[75].fights = 0;
+    Run(all, 2.0);
+    CHECK(!host.streamsTo(FakeWorld::H(73), idA) && host.streamsTo(FakeWorld::H(73), idB));
+    CHECK(!host.streamsTo(FakeWorld::H(75), idB));
+    for (uint32_t s : {73u, 74u, 75u}) hw.chars.erase(s);
+    Run(all, 2.0);
     // the second player comes back: the NPCs there are sent to them at once, with their state
     hw.chars[second].pos = hw.chars[second].dest = {60, 0, -20};
     Run(all, 8.0, [&] { return bw.chars.count(70) && Dist(bw.chars[70].pos, hw.chars[70].pos) < 1e-3f && bw.chars[70].vit.blood == 50; });
