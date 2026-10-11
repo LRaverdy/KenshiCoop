@@ -388,7 +388,9 @@ bool KenshiWorld::ExecuteResearchRequest(const kc::ResearchRequest& req, const k
         if (!item || kenshi::ItemTemplate(item) != req.sid) { why = "Ce plan n'est pas dans l'inventaire de ton personnage chez l'hôte."; return false; }
         bool learnt = false;
         if (!CallLearn(item, learnt) || !learnt) { why = "Plan non appris : technologie déjà connue ou prérequis manquants."; return false; }
-        if (void* inv = kenshi::InventoryOfHolder(c)) CallRemoveItem(inv, item);   // the blueprint is used up, as the game's own "learn" does
+        // the blueprint is used up, as the game's own "learn" does, through the inventory that owns it (one in
+        // a worn backpack belongs to the backpack's inventory)
+        if (void* inv = kenshi::OwningInventory(c, item)) CallRemoveItem(inv, item);
         return true;
     }
     void* gd = kenshi::GameDataBySid(req.sid);
@@ -999,7 +1001,7 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
             if (!item) continue;
             bool learnt = false;
             CallLearn(item, learnt);
-            if (s.isHost() && learnt) CallRemoveItem(inv, item);
+            if (s.isHost() && learnt) CallRemoveItem(kenshi::OwningInventory(c, item), item);
             return "ok " + it.templateSid + (s.isHost() ? (learnt ? " learnt" : " refused") : " asked");
         }
         return "err no such item";

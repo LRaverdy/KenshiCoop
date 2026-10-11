@@ -547,19 +547,27 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         snprintf(b, sizeof(b), "ok on-ground %s %.1f,%.1f,%.1f", st.templateSid.c_str(), p.x, p.y, p.z);
         return b;
     }
-    if (cmd == "uidrop") {   // uidrop <squadIndex> <weapon|armour|item|sid|name_part>: drop it as the inventory window does (Inventory::dropItem)
-        size_t idx = 0;
-        std::string kind;
-        in >> idx >> kind;
+    if (cmd == "uidrop") {   // uidrop <squadIndex|bag:squadIndex> <weapon|armour|item|sid|name_part>: drop it as the inventory window does (Inventory::dropItem)
+        std::string who, kind;
+        in >> who >> kind;
+        const bool fromBag = who.rfind("bag:", 0) == 0;
+        if (fromBag) who = who.substr(4);
+        if (who.rfind("squad", 0) == 0) who = who.substr(5);
+        const size_t idx = std::strtoul(who.c_str(), nullptr, 10);
         auto squad = SortedSquad(w);
-        if (idx >= squad.size() || kind.empty()) return "err usage: uidrop <squadIndex> <weapon|armour|item|sid>";
+        if (idx >= squad.size() || kind.empty()) return "err usage: uidrop <squadIndex|bag:squadIndex> <weapon|armour|item|sid>";
         kenshi::Character* c = w.FindSquad(squad[idx]);
-        void* item = kenshi::FindItemOfKind(c, kind);
+        void* holder = fromBag ? kenshi::WornBackpack(c) : c;   // a backpack: its own window's inventory
+        if (!holder) return "err no worn backpack";
+        void* item = kenshi::FindItemOfKind(holder, kind);
         if (!item) return "err no " + kind + " carried";
         kc::ItemState st;
         kenshi::DescribeInventoryItem(item, st);
-        // no HostCallScope: the hooks see it as the player's own drop (a client asks the host)
-        if (!kenshi::InventoryDrop(kenshi::InventoryOfHolder(c), item)) return "err drop failed";
+        // no HostCallScope: the hooks see it as the player's own drop (a client asks the host). Out of a
+        // backpack on the host, the item first leaves it as when the mouse takes it: Inventory::dropItem on
+        // an item still in the backpack's section is the very path that left it listed (11 October).
+        if (fromBag && s.isHost()) kenshi::InventoryRemove(kenshi::InventoryOfHolder(holder), item);
+        if (!kenshi::InventoryDrop(kenshi::InventoryOfHolder(holder), item)) return "err drop failed";
         if (!s.isHost()) return "ok asked " + st.templateSid + " x" + std::to_string(st.quantity);
         kc::Handle ih;
         kc::Vec3 p;
@@ -1649,6 +1657,34 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         kenshi::WithSelection(me, [&] { ok = kenshi::CallNewPlayerTaskOn(task, best, op, dest); });
         return (ok ? "ok " : "err ") + bestName + " at " + std::to_string(int(std::sqrt(bestD)));
+    }
+    if (cmd == "objjob") {   // objjob <selectIndex> <task> <name part>: that member alone gets a PERMANENT job on the nearest object with that name (addJobSelectedCharacters, the JOBS button's path)
+        size_t sel = 0;
+        int task = 0;
+        std::string part;
+        in >> sel >> task >> part;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kc::Vec3 p, op;
+        if (!kenshi::GetPosition(me, p)) return "err";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(p, 1500, objs);
+        void* best = nullptr;
+        float bestD = 1e30f;
+        std::string bestName;
+        for (void* o : objs) {
+            std::string sid, name;
+            if (!kenshi::ObjectTemplate(o, sid) || !kenshi::TemplateDisplayName(sid, name) || name.find(part) == std::string::npos || !kenshi::ObjectPosition(o, op)) continue;
+            const float d = (op.x - p.x) * (op.x - p.x) + (op.z - p.z) * (op.z - p.z);
+            if (d < bestD) { bestD = d; best = o; bestName = name; }
+        }
+        if (!best || !kenshi::ObjectPosition(best, op)) return "err nothing called " + part;
+        const float loc[3] = {op.x, op.y, op.z};
+        using FnAddJob = void (*)(void*, int, void*, bool, bool, const float*);
+        kenshi::WithSelection(me, [&] { reinterpret_cast<FnAddJob>(kenshi::FnAddr(kenshi::FnAddJobSelected))(kenshi::Player(), task, best, true, true, loc); });
+        return "ok " + bestName + " at " + std::to_string(int(std::sqrt(bestD)));
     }
     if (cmd == "furnparent") {   // furnparent <name part>: what the nearest object with that name is furniture of (tests)
         std::string part;
@@ -2787,6 +2823,81 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         kenshi::ReadInventory(pack, items);
         std::string out = "ok " + sid + " " + std::to_string(items.size());
         for (const auto& it : items) out += " " + it.templateSid + ":" + std::to_string(it.quantity);
+        return out;
+    }
+    if (cmd == "baginv") {   // baginv <who>: the backpack it wears, every stack with its place: "ok <n> sid:qty@section:x,y ..." (spawned|squadN|key)
+        std::string who;
+        in >> who;
+        auto squad = SortedSquad(w);
+        kc::Handle h;
+        if (who == "spawned") h = lastSpawned_;
+        else if (who.rfind("squad", 0) == 0) { size_t i = std::stoul(who.substr(5)); if (i < squad.size()) h = squad[i]; }
+        else sscanf(who.c_str(), "%u:%u:%u:%u:%u", &h.type, &h.container, &h.containerSerial, &h.index, &h.serial);
+        void* pack = kenshi::WornBackpack(w.Find(h));
+        if (!pack) return "err no worn backpack";
+        std::vector<kc::ItemState> items;
+        kenshi::ReadInventory(pack, items);
+        std::string out = "ok " + std::to_string(items.size());
+        for (const auto& it : items)
+            out += " " + it.templateSid + ":" + std::to_string(it.quantity) + "@" + it.section + ":" + std::to_string(it.x) + "," + std::to_string(it.y);
+        return out;
+    }
+    if (cmd == "invitems") {   // invitems <who>: that character's stacks in invmove's index order: "ok <n> sid:qty@section:x,y ..." (spawned|squadN|key)
+        std::string who;
+        in >> who;
+        auto squad = SortedSquad(w);
+        kc::Handle h;
+        if (who == "spawned") h = lastSpawned_;
+        else if (who.rfind("squad", 0) == 0) { size_t i = std::stoul(who.substr(5)); if (i < squad.size()) h = squad[i]; }
+        else sscanf(who.c_str(), "%u:%u:%u:%u:%u", &h.type, &h.container, &h.containerSerial, &h.index, &h.serial);
+        std::vector<kc::ItemState> items;
+        if (!kenshi::ReadInventory(w.Find(h), items)) return "err bad character";
+        std::string out = "ok " + std::to_string(items.size());
+        for (const auto& it : items)
+            out += " " + it.templateSid + ":" + std::to_string(it.quantity) + "@" + it.section + ":" + std::to_string(it.x) + "," + std::to_string(it.y);
+        return out;
+    }
+    if (cmd == "wearbag") {   // wearbag <squadIndex> [name part]: (host) a new backpack put on that member (its backpack slot), unless it wears one
+        size_t idx = 0;
+        std::string part;
+        in >> idx >> part;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        if (!s.isHost()) return "err host only";
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        std::string why;
+        HostCallScope scope;
+        const std::string sid = kenshi::WearNewBackpack(w.FindSquad(squad[idx]), part, &why);
+        return sid.empty() ? "err " + why : "ok " + sid;
+    }
+    if (cmd == "invcheck") {
+        // invcheck [all] [repair]: the inventories of the player's characters (all: every active character)
+        //   and of their backpacks, each list against its sections (kenshi::CheckInventories): "ok clean
+        //   inventories=N items=M", or "err problems=K inventories=N items=M | <problem>; <problem>..."
+        // invcheck each <0|1>: also check both inventories after every item move the host replays
+        //   (lines "INVCHECK after ..." in the log)
+        std::string a;
+        bool all = false, repair = false;
+        while (in >> a) {
+            if (a == "each") {
+                int on = 1;
+                in >> on;
+                w.SetInvCheckEachOp(on != 0);
+                return std::string("ok each=") + (on ? "1" : "0");
+            }
+            if (a == "all") all = true;
+            if (a == "repair") repair = true;
+        }
+        std::vector<std::string> lines;
+        int inventories = 0, items = 0;
+        HostCallScope scope;
+        const int n = w.CheckInventories(all, repair, lines, inventories, items);
+        for (const std::string& l : lines) Log("invcheck: %s", l.c_str());
+        const std::string counts = "inventories=" + std::to_string(inventories) + " items=" + std::to_string(items) +
+                                   " repairs=" + std::to_string(w.invRepairs()) + " each=" + (w.invCheckEachOp() ? "1" : "0");
+        if (n == 0) return "ok clean " + counts;
+        std::string out = "err problems=" + std::to_string(n) + " " + counts + " |";
+        for (size_t i = 0; i < lines.size() && out.size() < 1500; ++i) out += (i ? "; " : " ") + lines[i];
         return out;
     }
     if (cmd == "invsecs") {   // invsecs <who>: that character's items as "index:section" (spawned|squadN|key)

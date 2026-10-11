@@ -245,6 +245,12 @@ public:
     bool ExecuteInvOp(const kc::Handle& from, const kc::Handle& to, const kc::InvOp& op) override;
     bool ExecuteInvSwap(const kc::Handle& from, const kc::Handle& to, const kc::InvOp& a, const kc::InvOp& b) override;
     bool ApplyInventory(const kc::Handle& h, const std::vector<kc::ItemState>& items) override;
+    // Inventory safety (v0.3.2, the backpack crashes of 11 October): kenshi::CheckInventories on the
+    // player's characters (all: every active character) and their backpacks. invcheck command.
+    int CheckInventories(bool all, bool repair, std::vector<std::string>& lines, int& inventories, int& items);
+    void SetInvCheckEachOp(bool on) { invCheckEachOp_ = on; }   // check both inventories after every replayed move
+    bool invCheckEachOp() const { return invCheckEachOp_; }
+    int invRepairs() const { return invRepairs_; }
     void ReadWeather(std::vector<kc::RegionWeather>& out) override;
     void ApplyWeather(const std::vector<kc::RegionWeather>& regions) override;
     void ReadEffects(kc::EffectsMsg& out, bool full) override;
@@ -471,6 +477,14 @@ private:
     std::unordered_set<kc::Handle, HandleHash> hostCaptive_;         // client: shackled, caged, slave or prisoner on the host
     std::unordered_map<kc::Handle, double, HandleHash> destCheckAt_; // client: last check that our copy walks to the host's destination
     double frameAt_ = 0, frameDt_ = 1.0 / 60.0;                     // real time between two frames (position pull)
+    // inventory safety: the per-operation check (tests), the periodic sweep and what it repaired
+    bool invCheckEachOp_ = false;
+    double invSweepAt_ = 0;
+    std::vector<std::string> invSweepLast_;   // the previous sweep's problems: only what stays broken is repaired
+    std::unordered_set<std::string> invSweepLogged_;   // problems it could not repair, logged once
+    int invRepairs_ = 0;
+    void InventorySweep(double now);
+    void CheckAfterOp(const char* what, void* a, void* b);
     bool PostureHeld(const kc::Handle& h, kenshi::Character* c);
     std::unordered_map<kc::Handle, kc::Vec3, HandleHash> fallFrom_;  // client: where our copy stood when we made it fall
     std::unordered_map<kc::Handle, kc::Vec3, HandleHash> fallShift_; // client: where its body then lay, relative to that (x, z)

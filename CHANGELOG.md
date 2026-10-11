@@ -4,6 +4,32 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
+## v0.3.2 (en cours)
+
+- **Plantages de l'hôte avec les sacs à dos (11/10, 23:04 et 23:48) : corrigé dans le code, à tester en
+  jeu.** Un client qui lâchait au sol un objet de son sac : l'hôte le faisait lâcher par l'inventaire du
+  sac, dont le jeu fait retirer l'objet par l'inventaire **du perso**, qui n'a pas la section du sac.
+  L'objet arrivait au sol mais restait dans la liste et la section du sac (lâché deux fois, « cannot place
+  … at » chez les clients, l'objet qui revient). Une fois cet objet détruit (ramassé et fusionné), l'IA de
+  transport de ressources (`getResourceItems`, via `hasABackpackOn`) ou le calcul du poids de la section
+  lisait un objet libéré : plantage. Désormais chaque opération de l'hôte (déplacement, échange, dépôt,
+  achat et vente, reconstruction chez les clients, plan lu) passe par l'inventaire qui **possède**
+  l'objet (celui de la section qui le tient), vérifie que cet inventaire retrouve la section avant tout
+  retrait, sort l'objet du sac avant de le faire lâcher par le porteur, et ne détruit un objet qu'une fois
+  absent de toute liste (`plugin/kenshi.cpp` : `HomeOf`, `TakeFromHome`, `DropOut`, `DisposeTaken`).
+- **Contrôle et réparation des inventaires** : commande de debug `invcheck [all] [repair]` et
+  `invcheck each 1` (contrôle après chaque opération) ; en partie, un contrôle toutes les 3 s des persos
+  des joueurs et de leurs sacs répare ce qui reste abîmé deux fois de suite (objet libéré encore listé,
+  objet parti mais encore dans la liste ou la section), ce qui protège aussi les sauvegardes déjà
+  abîmées. Ligne `INVCHECK sweep` dans le journal.
+- **Piles dans les sacs (3c)** : une unité posée sur une unité du même objet s'empile aussi chez l'hôte
+  (avant : seulement à partir de 2, l'unité prenait une autre case et le sac se remplissait chez l'hôte
+  seul, puis « no room »). La règle est celle du jeu (`Item::isStackable`, avec le bonus de pile de la
+  section) ; ce qui ne s'empile pas (armes, armures, sacs) échange toujours sa place. Même règle pour
+  les achats. Test unitaire `TestStackMerge`.
+- Tests : expérience `backpack` (`coop_test.py`), commandes `baginv`, `invitems`, `wearbag`, `objjob`,
+  `uidrop bag:N`.
+
 ## v0.3.1 (11 octobre 2026)
 
 - **Antivirus** : l'installeur du zip n'utilise plus PowerShell (`Installer.bat` lançait
