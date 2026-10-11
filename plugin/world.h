@@ -80,8 +80,9 @@ public:
     bool ReadProgress(const kc::Handle& h, std::vector<float>& stats, uint16_t& modes, uint8_t& style) override;
     bool ReadCarry(const kc::Handle& h, kc::Handle& carried) override;
     void ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& carried) override;
-    // Host: put every character of a player next to that point (unsticks them). Returns how many.
-    int TeleportCharacters(const std::vector<kc::Handle>& who, const kc::Vec3& to);
+    // Host: put every character of a player next to that point (unsticks them; spread: side by side,
+    // else exactly there). A body lying on the ground too (stood up, moved, laid down again). Returns how many.
+    int TeleportCharacters(const std::vector<kc::Handle>& who, const kc::Vec3& to, bool spread = true);
     void ApplyProgress(const kc::Handle& h, const std::vector<float>& stats, uint16_t modes, uint8_t style) override;
     bool ReadMoney(int32_t& money) override { return kenshi::ReadPlayerMoney(money); }
     bool ReadJobs(const kc::Handle& h, std::vector<int32_t>& jobs) override;      // fix G5
@@ -331,7 +332,7 @@ public:
     // host: a body being teleported (admin TP): the game must not lay it down again before it got there
     bool HoldsUpright(const void* chr) const {
         for (const auto& r : reRagdoll_)
-            if (r.body && r.chr == chr) return true;
+            if (r.body && r.chr == chr && r.stage != ReRagdoll::Settle) return true;
         return false;
     }
     void UpdatePendingPickups();   // host: characters walking to an item a client asked them to take
@@ -618,7 +619,20 @@ private:
     std::unordered_map<kc::Handle, Stuck, kc::HandleHash> stuck_;          // client: no progress toward the host's position since
     std::unordered_map<kc::Handle, double, kc::HandleHash> farSnapAt_;     // client: last time a far walker was put back
     float NearestSquadDistance(const kc::Vec3& p);                         // client: how far from our squad (far: the game moves it rarely)
-    struct ReRagdoll { kc::Handle h; double at; kc::Vec3 to; kc::Quat rot; bool body; int tries; const void* chr; };   // fix G7: checked, retried
+    // fix G7: a teleported character, checked and retried; a body lying on the ground is stood up,
+    // teleported on a later frame, laid down there and checked once lying
+    struct ReRagdoll {
+        enum Stage { Stand, Check, Settle };
+        kc::Handle h;
+        double at;
+        kc::Vec3 to;
+        kc::Quat rot;
+        bool body;
+        int tries;
+        const void* chr;
+        Stage stage = Check;
+        bool noRelay = false;   // it took its old place back once when laid down: left for the game to lay down
+    };
     std::vector<ReRagdoll> reRagdoll_;                                     // host: teleported bodies to lay down again
     void UpdateReRagdolls();
     void UpdateFloorFocus();      // client: the floor view follows one of our characters

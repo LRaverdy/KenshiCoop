@@ -59,6 +59,12 @@ void Session::UpdateStreams() {
     std::vector<uint8_t> remote;
     for (const auto& [pid, p] : players_) if (p.inGame) remote.push_back(pid);
     const float r = cfg_.streamRadius;
+    // A player's centres: their own characters, and every squad member (any player's) within the
+    // radius of one of them: the group they play with. A client standing next to the host's squad saw
+    // nothing around the host's characters a few hundred units away (the suite's "personne ne manque
+    // chez le client": a spider 2994 units from the host's character, 2881 from the client's, never
+    // made on the client). A player alone far away still gets only what surrounds their own.
+    for (auto& [pid, centres] : own) centres = GroupCentres(centres, squad, r);
     std::unordered_map<uint32_t, uint32_t> before;
     std::vector<Handle> nearRemote;   // near a client player's own characters (damage numbers)
     for (auto& [id, e] : entities_) {
@@ -182,10 +188,17 @@ size_t Session::ZoneResync(uint8_t playerId, const std::string& why) {
 
 // ---------------------------------------------------------------- client
 
+// Our own characters, and the squad members (any player's) near them: what the host streams to us
+// is around that group (Session::UpdateStreams), so stand-ins are made around it too.
 void Session::UpdateMyCentres() {
     myCentres_.clear();
-    for (const auto& [id, e] : entities_)
-        if (e.squad && e.owner == localId_ && !e.buf.empty()) myCentres_.push_back(e.buf.back().s.pos);
+    std::vector<Vec3> squad;
+    for (const auto& [id, e] : entities_) {
+        if (!e.squad || e.buf.empty()) continue;
+        squad.push_back(e.buf.back().s.pos);
+        if (e.owner == localId_) myCentres_.push_back(e.buf.back().s.pos);
+    }
+    if (cfg_.standInRadius > 0) myCentres_ = GroupCentres(myCentres_, squad, cfg_.standInRadius);
 }
 
 bool Session::Dormant(const Entity& e, double now) const { return now - e.streamAt > kDormantAfter; }

@@ -3136,9 +3136,10 @@ void Session::ClientTick(double now, bool live) {
                 if (now < e.dormantApplyAt) continue;
                 e.dormantApplyAt = now + 0.5;
             }
-            // each one rendered late enough for its own cadence (sparse updates: later, see kc::motion)
+            // each one rendered late enough for its own cadence (sparse updates: later, see kc::motion);
+            // the host paused: exactly where it stopped (no delay, no extrapolation)
             const double renderTime = now + offset_ - motion::StepDelay(e.cadence, cfg_.interpDelay, now);
-            world_.Apply(e.handle, Interpolate(e, renderTime), e.buf.back().s);
+            world_.Apply(e.handle, HostPaused() ? motion::PausedState(e.buf) : Interpolate(e, renderTime), e.buf.back().s);
             // Melee: fight the same target as on the host (the swings are animated locally, the
             // outcome comes from the host's vitals). Re-imposed now and then in case it lapsed.
             const uint32_t want = e.buf.back().s.combatTarget;
@@ -4040,7 +4041,8 @@ bool Session::TargetOf(const Handle& h, EntityState& latest, EntityState& render
     auto e = entities_.find(it->second);
     if (e == entities_.end() || e->second.buf.empty()) return false;
     latest = e->second.buf.back().s;
-    rendered = Interpolate(e->second, clock_() + offset_ - motion::CurrentDelay(e->second.cadence, cfg_.interpDelay));
+    rendered = HostPaused() ? motion::PausedState(e->second.buf)
+                            : Interpolate(e->second, clock_() + offset_ - motion::CurrentDelay(e->second.cadence, cfg_.interpDelay));
     return true;
 }
 

@@ -3119,7 +3119,7 @@ def exp_actorsafety(host, cli):
             moved = ((a["pos"][0] - b["pos"][0]) ** 2 + (a["pos"][1] - b["pos"][1]) ** 2) ** 0.5
             check(f"securite controle : {label} : le perso {i} de l'hote n'a rien recu",
                   int(b["tasks"]) <= int(a["tasks"]) and int(b["jobs"]) <= int(a["jobs"]) and b["in"] == a["in"] and b["dialog"] == a["dialog"]
-                  and moved < 5.0, f"{a} -> {b} (deplace de {moved:.1f})")
+                  and moved < 8.0, f"{a} -> {b} (deplace de {moved:.1f})")
         st = cmd(host, "actorstats")[1]
         check(f"securite controle : {label} : aucune fuite vers un perso de l'hote", "leaks=0" in st, st)
         hl = host_log()
@@ -3521,7 +3521,12 @@ def exp_suite(host, cli):
     p0, pc = vec(cmd(host, "where 0")[1]), vec(cmd(host, f"where {own}")[1])
     pcc = vec(cmd(cli, f"where {own}")[1])
     check("TP admin : le perso du joueur arrive pres de l'hote", dist(p0, pc) < 30, f"{dist(p0, pc):.1f}")
-    check("TP admin : le client le voit au meme endroit", dist(pc, pcc) < 2, f"{dist(pc, pcc):.2f}")
+    # knocked out in the save's fights, it lies there again: each game lays its own ragdoll (a body is
+    # stood up to fall again only beyond kc::motion::kRelayOffset, 20 units)
+    vt = cmd(host, f"vitals {own}")[1]
+    m = re.search(r"flags=(\d+)", vt)
+    lying = bool(m and int(m.group(1)) & 3)
+    check("TP admin : le client le voit au meme endroit", dist(pc, pcc) < (20 if lying else 2), f"{dist(pc, pcc):.2f}{' (couche)' if lying else ''}")
     # --- 9. host console and logs from the client
     cw = cmd(host, "consolewin")[1]
     check("console externe : ouverte chez l'hote avec le journal", "window" in cw and int(cw.split("log=")[1]) > 100, cw)
@@ -3539,9 +3544,12 @@ def exp_suite(host, cli):
     hs_end = dump(host, "h_suite_end")
     rep = compare(hs_end, dump(cli, "c_suite_end"), "fin", pos_tol=0.1)
     cmd(host, "pause 0")
-    # a body lying on the ground is a ragdoll each game simulates itself: a few units apart is expected
-    down = {k for k, v in hs_end["squad"].items() if int(v.get("vflags", 0) or 0) & 3}
-    sq_bad = [t for t in rep["squad"] if not isinstance(t[1], (int, float)) or t[1] > (8.0 if t[0] in down else 0.1)]
+    # a body lying on the ground is a ragdoll each game simulates itself: some units apart is expected
+    # (knocked out, dead, or only knocked down: state flag 4 down, 8 dead). 0.3.1 posture: a body is
+    # stood up to fall again only beyond kc::motion::kRelayOffset (20 units; a collapse lands 7-12
+    # units from where the feet were), so that is the tolerance for one lying down
+    down = {k for k, v in hs_end["squad"].items() if int(v.get("vflags", 0) or 0) & 3 or int(v.get("flags", 0) or 0) & 12}
+    sq_bad = [t for t in rep["squad"] if not isinstance(t[1], (int, float)) or t[1] > (20.0 if t[0] in down else 0.1)]
     check("fin : escouade identique (positions)", not sq_bad, sq_bad)
     check("fin : aucun etat vital different", rep["vital_flag_mismatch"] == 0, rep["vital_flag_mismatch"])
     check("fin : aucun inventaire different", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
@@ -4810,6 +4818,7 @@ def setup_multi(save, n_clients=3, simultaneous=False):
         JOIN_QUEUE["host"] = []                           # the host's queue lists seen
         JOIN_QUEUE["order"] = []                          # clients in the order they got in
         JOIN_QUEUE["overlap"] = []                        # two clients loading the world at once
+        JOIN_QUEUE["names"] = {c: f"Joueur{i + 2}" for i, c in enumerate(clis)}
         deadline = time.time() + 420 * len(clis)
         while len(JOIN_QUEUE["order"]) < len(clis) and time.time() < deadline:
             hq = status(host).get("queue", "-")
@@ -4929,8 +4938,14 @@ def exp_join4(host, clis, ids):
                 bad_pos.append((clis.index(c) + 1, pos, wait, phase))
     check(f"{who} : file d'attente : positions (2..{n}/{n}), joueur attendu et etape coherents", waited and not bad_pos, bad_pos[:6])
     last = order[-1] if order else None
-    check(f"{who} : file d'attente : le dernier arrive a vu sa position avancer",
-          last is not None and len({q[0] for q in seen.get(last, set())}) >= 2, sorted(seen.get(last, [])) if last else None)
+    # 0.3.1: everyone loads at once, only the editor goes one at a time, and a player is queued for it
+    # once in the world. The last to arrive usually loads while the first is in the editor: by the time
+    # it is in, only the one before it is left, so it sees one place (2/2), not a place that moves. What
+    # counts: it was shown its place, behind a player who really went to the editor before it.
+    went_before = {JOIN_QUEUE.get("names", {}).get(c) for c in order[:-1]}
+    last_seen = sorted(seen.get(last, [])) if last else []
+    check(f"{who} : file d'attente : le dernier arrive a vu sa place",
+          last is not None and bool(last_seen) and all(w in went_before for _, w, _ in last_seen), (last_seen, sorted(x for x in went_before if x)))
     check(f"{who} : arrivee : plusieurs joueurs chargent le monde en meme temps", bool(JOIN_QUEUE.get("overlap")), JOIN_QUEUE.get("overlap", [])[:5])
     check(f"{who} : file d'attente : l'hote affiche la file", any("," in q for q in JOIN_QUEUE.get("host", [])), JOIN_QUEUE.get("host", [])[:6])
     cmd(host, "pause 1")

@@ -24,7 +24,7 @@ struct Config {
     float interestRadius = 0.0f;    // host: NPCs this close to the squad are replicated (0 = every active one)
     // 0.3.1, per-player streaming ([sync]): see kc::SessionConfig
     float streamRadius = 3000.0f;   // stream_radius: host, NPCs this close to a player's own characters go to that player (0: all to all)
-    float standInRadius = 2500.0f;  // standin_radius: client, host NPCs recreated only this close to our characters (0: anywhere)
+    float standInRadius = 3000.0f;  // standin_radius: client, host NPCs recreated only this close to our characters or squad members near them (0: anywhere)
     int spawnsPerFrame = 2;         // spawns_per_frame: client, characters created per frame at most
     bool autoZoneResync = true;     // auto_zone_resync: host, a client that keeps missing NPCs gets its zone again
     bool overlay = true;

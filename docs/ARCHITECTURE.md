@@ -269,10 +269,13 @@ Ordre dans `Tick()` (`main.cpp`) :
   un perso est à moins de `[sync] stream_radius` (3000, hystérésis ×1,25) ; `UpdateStreams` le
   recalcule toutes les 0,5 s autour des persos **de chaque joueur** (jamais autour de la caméra ou
   de la zone chargée de l'hôte). Persos des joueurs et conteneurs : à tous. Un perso qui entre dans
-  la diffusion d'un joueur lui est renvoyé en entier.
+  la diffusion d'un joueur lui est renvoyé en entier. Les centres d'un joueur sont ses persos **et
+  les membres de l'escouade à moins du rayon d'un d'eux** (`kc::GroupCentres`, le groupe avec
+  lequel il joue) : un client à côté de l'escouade de l'hôte reçoit aussi ce qui entoure les persos
+  de l'hôte (correctif post-0.3.1 : une araignée à 2994 du perso de l'hôte manquait chez le client).
   - Client : un perso sans état depuis 4 s est « en sommeil » (piloté 2 fois/s, jamais recréé, jamais
-    compté manquant) ; doublures créées seulement à moins de `[sync] standin_radius` (2500) de nos
-    persos, `spawns_per_frame` (2) par image au plus, les plus proches d'abord ; une doublure perdue
+    compté manquant) ; doublures créées seulement à moins de `[sync] standin_radius` (3000) de nos
+    persos ou des membres de l'escouade près d'eux (mêmes centres que l'hôte), `spawns_per_frame` (2) par image au plus, les plus proches d'abord ; une doublure perdue
     revient après 2 s, 10 s, 30 s, 1 min, 2 min ; un modèle refusé par la fabrique attend 30 s à 10 min.
   - Resync automatique de zone (`kc::ZoneHealth`, `Session::ZoneResync`) : trois rapports de suite
     (15 s) avec 5 PNJ manquants ou 3 persos décalés : l'hôte relie et renvoie tout ce qu'il envoie à ce
@@ -507,7 +510,9 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
      moins de 300 unités de l'escouade) que la copie marche bien vers elle, sinon la redonne ;
   5. impose la direction (`motion::WantFacing`) : celle de l'hôte à l'arrêt et en combat ; en
      marchant, celle de l'hôte tant qu'elle s'accorde à 45° près avec le sens où il va vraiment
-     (`motion::TravelDir` : de l'état rendu vers le plus récent), sinon ce sens ;
+     (`motion::TravelDir` : de l'état rendu vers le plus récent, sauf si ce sens s'éloigne de la
+     destination — état rendu extrapolé au-delà du dernier échantillon, qui est alors *derrière* :
+     la direction de la destination ; correctif post-0.3.1, 167° à vitesse 3), sinon ce sens ;
   6. tire la position vers celle de l'hôte (`motion::Pull`), indépendamment des images par
      seconde (50 % de l'écart par image à 60 images/s au-delà de 2 unités, 25 % en deçà) ; en
      marchant hors combat, une copie un peu en avance (5 unités × vitesse du jeu au plus) n'est
@@ -521,6 +526,9 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
   refusés et les cadavres finissaient debout).
 - Quand l'hôte se met en pause, le client tourne 0,3 s à vitesse 0,01 (`EndFrame`), pose chaque
   personnage exactement, puis se met en pause et réessaie toutes les 0,5 s si le jeu refuse.
+  L'état posé est le plus récent reçu, tel quel (`motion::PausedState`) : ni délai de rendu, ni
+  extrapolation (l'hôte en pause n'envoie plus rien ; un coureur extrapolé restait 0,25 s de course
+  en avant, 5,8 unités dans la suite, correctif post-0.3.1).
 
 ### Santé (`SendVitals`, `KenshiWorld::ApplyVitals`)
 - Les valeurs sont écrites directement (`WriteVitals`). Mort et K.-O. sont rejoués une fois, à
@@ -917,8 +925,8 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | `[sync] snap_distance` | 15 | au-delà, un personnage est téléporté au lieu d'être interpolé |
 | `[sync] destination_epsilon` | 2 | une destination n'est redonnée que si elle bouge de plus que ça |
 | `[sync] interest_radius` | 0 | 0 : tous les personnages actifs sont répliqués |
-| `[sync] stream_radius` | 3000 | hôte : un PNJ est envoyé à un joueur à moins de ça d'un de ses persos (0 : tout à tous) |
-| `[sync] standin_radius` | 2500 | client : PNJ de l'hôte recréés seulement à moins de ça de nos persos (0 : partout) |
+| `[sync] stream_radius` | 3000 | hôte : un PNJ est envoyé à un joueur à moins de ça d'un de ses persos ou d'un membre de l'escouade près d'eux (0 : tout à tous) |
+| `[sync] standin_radius` | 3000 | client : PNJ de l'hôte recréés seulement à moins de ça de nos persos et des membres de l'escouade près d'eux (0 : partout) |
 | `[sync] spawns_per_frame` | 2 | client : persos créés par image au plus |
 | `[sync] auto_zone_resync` | 1 | hôte : resync automatique de la zone d'un client à qui il manque des PNJ |
 | `[coop] own_character` | 1 | un personnage par joueur qui rejoint |

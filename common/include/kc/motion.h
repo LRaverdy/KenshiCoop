@@ -161,11 +161,23 @@ inline EntityState StateAt(const std::deque<Sample>& b, double rt, float snapDis
 // Where the host's character is really going: from the state we render toward the newest one we
 // know (rendered a little late, it lies behind on the way), else toward its destination. Zero when
 // it is not going anywhere.
+// Rendered past the newest sample (extrapolated, see StateAt), the newest position lies *behind* the
+// rendered one: the way to it points backwards. The 0.3.1 merge faced walkers that way (the suite's
+// "vitesse 3 : orientation en marchant" measured 167 degrees: at speed 3 a sample is late more often,
+// so the copy was extrapolated more often). A direction to the newest position that turns away from
+// the destination is not the way it goes: the destination's direction is.
 inline Vec3 TravelDir(const EntityState& rendered, const EntityState& latest) {
     Vec3 d = Dir2(rendered.pos, latest.pos, 0.05f);
-    if (IsZero2(d)) d = Dir2(rendered.pos, latest.dest, 0.5f);
+    const Vec3 toDest = Dir2(rendered.pos, latest.dest, 0.5f);
+    if (IsZero2(d)) return toDest;
+    if (!IsZero2(toDest) && Dot2(d, toDest) < 0.0f) return toDest;
     return d;
 }
+
+// The host is paused: its characters stand exactly where they stopped. No render delay, no
+// extrapolation: the newest state as it is (the suite's "pause en pleine course" measured 5.8 units,
+// a quarter of a second of running extrapolated past the spot where the host's runner stopped).
+inline EntityState PausedState(const std::deque<Sample>& b) { return b.empty() ? EntityState{} : b.back().s; }
 
 // Where our copy must face. Standing, or fighting (side steps and back steps are real there): the
 // host's facing. Walking: the host's facing while it agrees with the way it goes (within 45

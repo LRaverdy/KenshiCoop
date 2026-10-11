@@ -4232,6 +4232,15 @@ size_t GodModeCount() {
     return g_god.size();
 }
 
+bool HoldBlood(Character* c, float& peak) {
+    void* m = Medical(c);
+    float blood = 0;
+    if (!m || !Rd(m, off::MS_blood, blood) || !std::isfinite(blood)) return false;
+    if (peak < 0 || blood > peak) { peak = blood; return false; }
+    if (blood >= peak - 0.001f) return false;
+    return Wr(m, off::MS_blood, peak);
+}
+
 // ---- tools in hands (mining...)
 namespace {
 constexpr uintptr_t CH_body = 0x648;          // CharBody*

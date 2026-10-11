@@ -476,11 +476,12 @@ struct SessionConfig {
     float snapDistance = 50.0f;        // samples further apart than this are not interpolated
     float interestRadius = 0.0f;       // NPCs within this distance of the squad are replicated (0 = all active)
     // 0.3.1, per-player streaming: the host sends a player the NPCs within streamRadius of that
-    // player's own characters (0: every NPC to everyone, as before); a client recreates a host NPC
-    // only within standInRadius of its own characters (0: anywhere it is sent), at most spawnsPerTick
+    // player's own characters and of the squad members near them (kc::GroupCentres; 0: every NPC to
+    // everyone, as before); a client recreates a host NPC only within standInRadius of those same
+    // centres (0: anywhere it is sent), at most spawnsPerTick
     // per frame; autoZoneResync: the host sends a client's zone again when it keeps missing NPCs.
     float streamRadius = 3000.0f;
-    float standInRadius = 2500.0f;
+    float standInRadius = 3000.0f;
     int spawnsPerTick = 2;
     bool autoZoneResync = true;
     bool characterPerPlayer = true;    // host: every joining player gets a character of their own
@@ -846,6 +847,9 @@ private:
     double nextResultNote_ = 0;
     std::map<uint32_t, std::pair<Handle, Command>> sentOrders_;      // client: seq -> order, until answered (64 kept)
     EntityState Interpolate(const Entity& e, double renderTime) const;
+    // client: the host's game is paused (its last TimeState): characters are shown exactly where they
+    // stopped, without the render delay or the extrapolation (kc::motion::PausedState)
+    bool HostPaused() const { return haveTime_ && hostTime_.paused; }
 
     IWorld& world_;
     SessionConfig cfg_;

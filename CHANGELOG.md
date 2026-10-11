@@ -6,6 +6,61 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+- **Régressions de la fusion 0.3.1 (master a2890df) corrigées.** Pas encore relancé en jeu.
+  Mesures de la série du 11/10 à 02 h : suite 24/32 (32/32 en 0.3.0), dialogue 5/10, sécurité
+  71/72, recherche 31/35, admin 27/28, join4 15/16.
+  - *Pause en pleine course* (5,8 unités d'écart) : l'hôte en pause n'envoie plus rien, et le client
+    rendait encore son coureur avec le délai adaptatif puis l'extrapolation de 0,25 s au-delà du
+    dernier état : un quart de seconde de course en avant. Hôte en pause : le client montre l'état
+    le plus récent tel quel, sans délai ni extrapolation (`kc::motion::PausedState`,
+    `Session::HostPaused`, aussi pour `TargetOf`). Même cause pour une bonne part des écarts de
+    « fin : escouade identique », mesurée en pause.
+  - *Orientation en marchant à vitesse 3* (167°) : rendu au-delà du dernier échantillon
+    (extrapolé), le perso a sa dernière position connue *derrière* lui ; `TravelDir` en tirait le
+    sens de la marche, et « le regard suit le sens réel de la marche » le tournait vers l'arrière.
+    Un sens vers la dernière position qui s'éloigne de la destination n'est plus le sens de la
+    marche : la direction de la destination l'est.
+  - *Personne ne manque chez le client* : la diffusion par joueur ne prenait que les persos du
+    joueur pour centres, et le client ne recréait un PNJ qu'à 2500 de ses persos. Une araignée à
+    2994 du perso de l'hôte et 2881 de celui du client (fin de suite), une esclave à 2528 (après la
+    resynchro) n'existaient pas chez le client. Les centres d'un joueur sont maintenant ses persos
+    **et les membres de l'escouade à moins du rayon d'un d'eux** (le groupe avec lequel il joue,
+    `kc::GroupCentres`), côté hôte (`UpdateStreams`) comme côté client (`UpdateMyCentres`), et
+    `[sync] standin_radius` passe de 2500 à 3000 (le rayon de diffusion). Un joueur seul au loin
+    ne reçoit toujours que ce qui entoure ses persos.
+  - *TP admin d'un perso à terre* (392,8 de l'hôte) : le perso du client était K.-O. (les combats de
+    la sauvegarde de test) ; la téléportation « prenait » (position lue juste à 0,3 s), puis le corps
+    recouché reprenait la place de son ragdoll, là où il gisait. Un corps est maintenant relevé,
+    téléporté à une image suivante, recouché sur place, puis revérifié une fois couché ; s'il est
+    reparti, il est renvoyé et laissé debout (le jeu le recouche lui-même là où il est). La
+    commande de test `teleport` passe par là pour un corps (`TeleportCharacters(..., spread)`).
+  - *Recherche* (« ordre du client exécuté », « générateur coupé ») : les chemins des requêtes de
+    machine et de fabrication sont bien autorisés ; l'hôte les refusait « trop loin de cette
+    machine » parce que le perso du client, K.-O. dans un combat du village, n'avait pas suivi le
+    déplacement du bac à sable (`teleport` ne bougeait pas un ragdoll) : corrigé avec le point
+    précédent.
+  - *Dialogue* (aucune conversation, 5/10) : rien n'est filtré par joueur pour les conversations (ni
+    les paroles, ni les fenêtres, ni « occupé ») ; dans cette série, le PNJ de test copié par
+    `spawnnpc` était un garru (« Garrou »), qui n'a rien à dire, et les PNJ les plus proches pour
+    `talkto` / `npcevent` comptaient les animaux. `spawnnpc` copie une personne (un animal
+    seulement s'il n'y a personne), `talkto` et `npcevent` ignorent les animaux. À revérifier en jeu.
+  - *Sécurité, « parler »* : le perso 2 de l'hôte bougé de 5,4 sans tâche, ni travail, ni dialogue :
+    poussé par le perso du client qui passe à côté, pas un ordre. Le correctif de « parler » ne
+    touche que le PNJ (fin d'une conversation périmée) ; seuil de déplacement du test 5 → 8.
+  - *Mode dieu sous les coups* (sang 75,8 → 75,2) : les coups sont refusés (`hk_medDamage`), mais un
+    combat faisait encore baisser le sang un peu. Le sang d'un perso en mode dieu ne descend plus
+    sous son maximum depuis l'activation (`kenshi::HoldBlood`, à chaque passage de 0,2 s).
+  - *join4* : avec la file 0.3.1 (tout le monde charge ensemble, seul l'éditeur va un par un), le
+    dernier arrivé n'attend souvent que derrière celui d'avant : il voit sa place (2/2), qui
+    n'avance pas. Le test vérifie qu'il a vu sa place, derrière un joueur passé avant lui.
+  - *Tests (coop_test)* : « fin : escouade identique » compte aussi un corps simplement à terre
+    (drapeau d'état 4/8), avec la tolérance de `kRelayOffset` (20) ; « TP admin, même endroit chez
+    le client » tolère 20 pour un perso couché.
+  - *Tests unitaires* : `TestMotion` (sens de la marche extrapolé, état en pause),
+    `TestGroupCentres` (dont l'araignée de la suite). Pas de changement de protocole.
+  - *Non résolu* : « fin : aucun inventaire différent » (une captive dont la copie change d'escouade
+    chez le client sans arrêt) n'a pas de cause trouvée dans les journaux ; à revoir au prochain
+    passage.
 - **Minicarte déplaçable et redimensionnable.** Pas encore lancé en jeu.
   - *Déplacer* : clic gauche maintenu sur la minicarte et glisser (le clic gauche n'y faisait rien ;
     clic molette et Alt+clic restent aux pings, la molette au zoom). Un clic sans bouger ne change
