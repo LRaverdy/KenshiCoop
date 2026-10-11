@@ -381,6 +381,9 @@ bool KenshiWorld::ExecutePlacement(const kc::BuildPlace& p, kc::Handle& created,
             if (void* fn = Slot(b, BV_setupMiningResourceLevel)) VoidSeh(fn, b);
             VoidSeh(kenshi::FnAddr(kenshi::FnClearUsageNodes), b);
             RefreshNavmesh(b);   // and what its queue does later (RefreshNavmesh)
+            // every floor shown: build mode sets the new building's floors to the view's; created
+            // here, a cabin's roof (its floor 1) stayed hidden for good, on the host too (11 October)
+            for (int f = 0; f < 6; ++f) kenshi::SetBuildingFloorVisible(b, f, true);
         }
     }
     if (snapCb) FreeSeh(snapCb);

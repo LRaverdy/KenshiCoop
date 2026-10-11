@@ -199,6 +199,7 @@ void KenshiWorld::ResetWorldBound() {
     taskDropAt_.clear();
     stuck_.clear();
     farSnapAt_.clear();
+    roofBuilding_ = nullptr;
     navRefreshed_.clear();
     reRagdoll_.clear();
     floorTry_.clear();
@@ -279,6 +280,7 @@ void KenshiWorld::EndFrame() {
     if (active_ && !client_ && live_ && !reRagdoll_.empty()) UpdateReRagdolls();
     if (active_ && client_ && live_) GroundReconcile();
     if (active_ && client_ && live_) UpdateFloorFocus();
+    if (active_ && !client_ && live_) UpdateHostRoof();
     auto v = std::make_shared<HookView>();
     v->active = active_;
     v->client = client_;
@@ -1505,7 +1507,7 @@ void KenshiWorld::UpdateFloorFocus() {
     kc::Handle focus;
     const bool hasFocus = kenshi::FloorFocus(focus);
     for (const auto& [l, c] : mine)
-        if (hasFocus && l == focus) return;
+        if (hasFocus && l == focus) { UpdateRoof(c); return; }
     std::vector<kc::Handle> selected;
     kenshi::SelectedHandles(selected);
     kenshi::Character* pick = mine.front().second;
@@ -1515,6 +1517,55 @@ void KenshiWorld::UpdateFloorFocus() {
         std::string name;
         kenshi::CharacterName(pick, name);
         Log("floor view: follows our '%s' (it followed %s)", name.c_str(), hasFocus ? KeyOf(focus).c_str() : "nobody");
+    }
+    UpdateRoof(pick);
+}
+
+// Host: the same for the host's selected (or else followed) character. The host's game hides the
+// floors above it only in the buildings its own build mode made: one a client placed (made here by
+// the mod) kept its roof over the host's character inside (11 October).
+void KenshiWorld::UpdateHostRoof() {
+    const double now = NowSeconds();
+    if (now < nextHostRoofCheck_) return;
+    nextHostRoofCheck_ = now + 0.5;
+    kenshi::Character* pick = nullptr;
+    std::vector<kc::Handle> selected;   // the selected character first (the one the player plays now)
+    kenshi::SelectedHandles(selected);
+    for (const kc::Handle& h : selected)
+        if ((pick = kenshi::Resolve(h)) != nullptr) break;
+    kc::Handle focus;
+    if (!pick && kenshi::FloorFocus(focus)) pick = kenshi::Resolve(focus);
+    UpdateRoof(pick);
+}
+
+// The floors above the one our followed character is on, in the building it is inside, hidden as the
+// host's game hides them for its own (a cabin's roof is its floor 1: 4092 / 4093-TwoStorey.mod). The
+// client's game did not: the player stood inside under a roof that never went (11 October; the floor
+// view's numbers were the host's, the building and floor of the character right). Shown again when
+// it goes out or into another building.
+void KenshiWorld::UpdateRoof(kenshi::Character* c) {
+    constexpr int kMaxFloors = 6;
+    kc::Handle in;
+    int32_t group = 0;
+    void* building = nullptr;
+    int floor = 0;
+    if (c && kenshi::IndoorsOf(c, in) && in.type != 0xB && in.valid() && kenshi::ReadFloorGroup(c, group) && group >= 9) {
+        building = kenshi::ResolveObject(in);
+        floor = group - 9;
+    }
+    if (roofBuilding_ && (roofBuilding_ != building || roofFloor_ != floor)) {
+        if (kenshi::ResolveObject(roofHandle_) == roofBuilding_)
+            for (int f = roofFloor_ + 1; f < kMaxFloors; ++f) kenshi::SetBuildingFloorVisible(roofBuilding_, f, true);
+        roofBuilding_ = nullptr;
+    }
+    if (building && building != roofBuilding_) {
+        for (int f = floor + 1; f < kMaxFloors; ++f) kenshi::SetBuildingFloorVisible(building, f, false);
+        roofBuilding_ = building;
+        roofHandle_ = in;
+        roofFloor_ = floor;
+        std::string sid;
+        kenshi::ObjectTemplate(building, sid);
+        Log("floor view: inside %s on floor %d, the floors above hidden", sid.c_str(), floor);
     }
 }
 

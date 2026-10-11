@@ -655,6 +655,21 @@ bool GetHandle(const Character* c, kc::Handle& out) {
     return IsCharacter(c) && ReadHandle(reinterpret_cast<const uint8_t*>(c) + off::RO_handle, out);
 }
 
+namespace {
+bool FloorVisSeh(uintptr_t fn, void* b, int floor, bool vis) {
+    __try { reinterpret_cast<void (*)(void*, int, bool)>(fn)(b, floor, vis); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+bool SetBuildingFloorVisible(void* building, int floor, bool visible) {   // Building::setFloorVisibility (KenshiLib 0x547B60, +0x780 here)
+    return building && FloorVisSeh(Addr(0x5482E0), building, floor, visible);
+}
+
+bool IndoorsOf(const Character* c, kc::Handle& building) {   // RootObject::isInsideBuilding (+0x80, a hand)
+    constexpr uintptr_t RO_isInsideBuilding = 0x80;
+    return IsCharacter(c) && ReadHandle(reinterpret_cast<const uint8_t*>(c) + RO_isInsideBuilding, building);
+}
+
 bool InView(const Character* c) {
     uint8_t v = 0;
     return IsCharacter(c) && Rd(c, CH_inView, v) && v != 0;

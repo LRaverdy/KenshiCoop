@@ -6,6 +6,18 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+- **Toits : on restait sous le toit à l'intérieur d'une cabane.** (1) Un bâtiment à étages (la Petite
+  Cabane 4092, son toit est son étage 1, 4093) : `createBuilding` crée lui-même chaque étage dans son
+  propre appel, et le mod captait aussi ces appels imbriqués : le toit partait chez les clients comme un
+  bâtiment à part, posé sur celui de la cabane, et jamais masqué. Seul l'appel le plus extérieur est
+  maintenant une pose (`hk_createBuilding`). (2) Le jeu ne masque les étages au-dessus d'un perso que
+  dans les bâtiments que son propre mode construction a faits : le mod le fait pour les autres
+  (`KenshiWorld::UpdateRoof`, `Building::setFloorVisibility` 0x5482E0) pour le perso suivi du client
+  et le perso sélectionné de l'hôte, et les réaffiche quand il sort. (3) Un bâtiment créé par le mod a
+  tous ses étages affichés au départ. Vérifié en jeu (cabane de l'hôte et du client, des deux côtés).
+- Test `buildfull` sur la Petite Cabane : 22/25 (pose, construction, entrée et étage des deux côtés,
+  établi, démontage croisé ; le coffre reste à faire, test à corriger).
+
 - **Bâtiments posés par le mod : on les traversait, chez l'hôte aussi.** Le mode construction du jeu
   met chaque bâtiment qu'il crée dans une file que le gestionnaire `0x4E4120` passe ensuite à
   `NavMesh::generate(Aabb)` et, pour un intérieur, `NavMesh::generate(hand)` (KenshiLib `NavMesh.h`,

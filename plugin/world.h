@@ -651,6 +651,12 @@ private:
     void UpdateReRagdolls();
     void UpdateFloorFocus();      // client: the floor view follows one of our characters
     double nextFocusCheck_ = 0;
+    void UpdateRoof(kenshi::Character* c);
+    void UpdateHostRoof();   // host: the same for its own followed / selected character
+    double nextHostRoofCheck_ = 0;   // client: floors above our followed character hidden (world.cpp)
+    void* roofBuilding_ = nullptr;
+    kc::Handle roofHandle_;
+    int roofFloor_ = 0;
     std::unordered_map<kc::Handle, float, kc::HandleHash> syncErr_;   // client: last error per standing character
     double nextPauseTry_ = 0;
     bool pauseRefusedLogged_ = false;

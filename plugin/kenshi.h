@@ -783,6 +783,8 @@ inline constexpr uintptr_t CH_inView = 0x1A9;
 // 0x2AF1E0 from where the camera is.
 inline constexpr uintptr_t CH_everyFrame = 0xE4;
 bool InView(const Character* c);   // CH_inView as the game (and hk_charUpdateView) left it this frame
+bool IndoorsOf(const Character* c, kc::Handle& building);   // the building it is inside (RootObject +0x80), type 0xB: none
+bool SetBuildingFloorVisible(void* building, int floor, bool visible);   // Building::setFloorVisibility(int, bool)
 // Dialogue::startPlayerConversation (0x684320) refuses a conversation when the player's character is
 // more than 9216 units from the camera (0x6843CA: Vector3::distance to the camera node, > 0x1700514,
 // ja 0x6843D1 -> return false). On the host a client player far from the host's camera could never

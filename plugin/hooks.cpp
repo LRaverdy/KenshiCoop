@@ -1377,11 +1377,21 @@ void hk_createFromPreviews(void* group) {
 using CreateBuildingFn = void* (*)(void* factory, void* data, const float* pos, void* town, void* faction, const float* rot, void* cb, void* layout,
                                    void* doorOf, void* save, void* indoors, bool invisible, bool completed, bool foliage, int floor, bool outside);
 CreateBuildingFn o_createBuilding = nullptr;
+// createBuilding nests a createBuilding for each upper floor of a building (a cabin's roof, a two-storey
+// house's floor: 4092 / 4093-TwoStorey.mod). Only the outermost call is a placement: the floors come
+// with it on every machine. Captured too, the roof went to the clients as a building of its own, built
+// on top of the cabin's own (which the floor view hides): the client stayed under a roof it never hid
+// (11 October).
+thread_local int g_createDepth = 0;
 void* hk_createBuilding(void* factory, void* data, const float* pos, void* town, void* faction, const float* rot, void* cb, void* layout,
                         void* doorOf, void* save, void* indoors, bool invisible, bool completed, bool foliage, int floor, bool outside) {
     KenshiWorld* w = TheWorld();
-    if (g_buildCapture <= 0 || g_hostCall || !w || !data || !pos || !rot)
-        return o_createBuilding(factory, data, pos, town, faction, rot, cb, layout, doorOf, save, indoors, invisible, completed, foliage, floor, outside);
+    if (g_buildCapture <= 0 || g_hostCall || g_createDepth > 0 || !w || !data || !pos || !rot) {
+        ++g_createDepth;
+        void* b = o_createBuilding(factory, data, pos, town, faction, rot, cb, layout, doorOf, save, indoors, invisible, completed, foliage, floor, outside);
+        --g_createDepth;
+        return b;
+    }
     KenshiWorld::BuildArgs a;
     a.data = data;
     a.pos = {pos[0], pos[1], pos[2]};
@@ -1396,7 +1406,9 @@ void* hk_createBuilding(void* factory, void* data, const float* pos, void* town,
         w->NoteBuildCapture(a, nullptr);
         return nullptr;
     }
+    ++g_createDepth;   // its floors, created inside this call, are not placements of their own
     void* b = o_createBuilding(factory, data, pos, town, faction, rot, cb, layout, doorOf, save, indoors, invisible, completed, foliage, floor, outside);
+    --g_createDepth;
     if (b) w->NoteBuildCapture(a, b);
     return b;
 }

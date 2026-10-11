@@ -1559,6 +1559,26 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         snprintf(b, sizeof b, "ok speed=%.3f", double(kenshi::GetFrameSpeed()));
         return b;
     }
+    if (cmd == "floorseen") {   // floorseen <n>: write PlayerInterface's "floor last seen" (+0x290; -1: none, so the next update shows the focus' floor)
+        int v = -1;
+        in >> v;
+        void* pi = kenshi::Player();
+        if (!pi) return "err";
+        *reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(pi) + kenshi::off::PI_focusFloor) = v;
+        return "ok";
+    }
+    if (cmd == "indoors") {   // indoors <squadIndex>: the building that character is inside (its handle), as this game has it
+        size_t i = 0;
+        in >> i;
+        auto squad = SortedSquad(w);
+        kenshi::Character* c = i < squad.size() ? w.FindSquad(squad[i]) : nullptr;
+        kc::Handle b;
+        if (!c || !kenshi::IndoorsOf(c, b)) return "err";
+        std::string sid;
+        void* o = kenshi::ResolveObject(b);
+        if (o) kenshi::ObjectTemplate(o, sid);
+        return "ok " + Key(b) + " " + (sid.empty() ? "-" : sid);
+    }
     if (cmd == "floorview") {   // floorview: the character the floor view follows, its floor as last seen, the floor shown
         void* pi = kenshi::Player();
         if (!pi) return "err";
@@ -1663,8 +1683,8 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         // contake <selectIndex> <name part>: in the open window, take its first item into that member's bag
         // conput <selectIndex> <name part>: in the open window, put that member's first loose item into the container
         size_t sel = 0;
-        std::string part;
-        in >> sel >> part;
+        std::string part, wantSid;   // conput: [item template] to put that item
+        in >> sel >> part >> wantSid;
         std::replace(part.begin(), part.end(), '_', ' ');
         auto squad = SortedSquad(w);
         if (sel >= squad.size()) return "err";
@@ -1697,7 +1717,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             std::vector<kc::ItemState> mine;
             kenshi::ReadInventory(me, mine);
             const kc::ItemState* loose = nullptr;
-            for (const auto& it : mine) if (!it.equipped) { loose = &it; break; }
+            for (const auto& it : mine) if (!it.equipped && (wantSid.empty() || it.templateSid == wantSid)) { loose = &it; break; }
             if (!loose) return "err nothing loose to put";
             kc::InvOp mv;
             mv.kind = kc::InvOpKind::Move;

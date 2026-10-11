@@ -2421,7 +2421,8 @@ def go_to_open_desert(host, check_sid=HOUSE):
     return False
 
 
-OUTPOST = "727-gamedata.base"    # Avant-poste s-III: a player building (walls, a door, an upper floor)
+OUTPOST = "727-gamedata.base"    # Avant-poste s-III: a player building (big, no door: not to walk in)
+CABIN = "4092-TwoStorey.mod"      # Petite Cabane: a small player house with a door; its roof is its floor 1 (4093)
 STORAGE = "1459-gamedata.base"    # Coffre Stock Général: a player's storage chest
 
 
@@ -2493,23 +2494,23 @@ def exp_buildfull(host, cli):
     mat = find_material(host)
     shots = os.path.join(OUT_DIR, "buildfull")
     os.makedirs(shots, exist_ok=True)
-    check("batiments+ : desert degage, tout le monde en mode dieu", go_to_open_desert(host, OUTPOST))
+    check("batiments+ : desert degage, tout le monde en mode dieu", go_to_open_desert(host, CABIN))
     log("money", cmd(host, "givemoney 50000"))
     log("materials carried:", give_materials(host, mat, list(range(n))))
     cmd(cli, f"camto {own_c}")
     # 1. the client's outpost, built by everyone
-    before = {x[0] for x in site_list(host, OUTPOST, 0, 2500)}
-    log("client places the outpost:", place_valid(cli, OUTPOST, own_c, 0, 160))
-    site = new_site(host, OUTPOST, before)
-    check("batiments+ : avant-poste du client pose chez l'hote", site is not None)
+    before = {x[0] for x in site_list(host, CABIN, 0, 2500)}
+    log("client places the cabin:", place_valid(cli, CABIN, own_c, 0, 90))
+    site = new_site(host, CABIN, before)
+    check("batiments+ : cabane du client pose chez l'hote", site is not None)
     if not site:
         summary()
         return
     time.sleep(2)
-    check("batiments+ : et chez le client", site_at(cli, OUTPOST, site, 0) is not None)
-    h, c = build_by_everyone(host, cli, OUTPOST, site, own_c, host_idxs, mat, "avant-poste")
-    check("batiments+ : avant-poste termine chez l'hote", bool(h and h[2] & 1), h)
-    check("batiments+ : avant-poste termine pareil chez le client", bool(h and c and h[2] == c[2]), f"{h} / {c}")
+    check("batiments+ : et chez le client", site_at(cli, CABIN, site, 0) is not None)
+    h, c = build_by_everyone(host, cli, CABIN, site, own_c, host_idxs, mat, "cabane")
+    check("batiments+ : cabane termine chez l'hote", bool(h and h[2] & 1), h)
+    check("batiments+ : cabane termine pareil chez le client", bool(h and c and h[2] == c[2]), f"{h} / {c}")
     m = (cmd(host, f"invcount all {mat}")[1], cmd(cli, f"invcount all {mat}")[1])
     check("batiments+ : memes materiaux des deux cotes", m[0] == m[1], m)
     cmd(cli, f"camto {own_c}")
@@ -2527,8 +2528,11 @@ def exp_buildfull(host, cli):
         check("batiments+ : coffre de l'hote pose", False)
     # 3. the client's character walks into the outpost
     if h and h[2] & 1:
-        log("client walks in:", cmd(cli, f"move {own_c} {site[0] + 2:.0f} {site[2] + 2:.0f}"))
-        time.sleep(14)
+        for _ in range(4):   # through the door: a few tries until the game has it inside
+            log("client walks in:", cmd(cli, f"move {own_c} {site[0]:.0f} {site[2]:.0f}"))
+            time.sleep(10)
+            if "TwoStorey" in cmd(cli, f"indoors {own_c}")[1]:
+                break
         ph, pc = where_vec(host, own), where_vec(cli, own_c)
         fh, fc = cmd(host, f"floor {own}")[1], cmd(cli, f"floor {own_c}")[1]
         view = cmd(cli, "floorview")[1]
@@ -2540,13 +2544,15 @@ def exp_buildfull(host, cli):
             return int(t.split()[1]) if t.startswith("ok") else -1
         check("batiments+ : le jeu le sait dedans (etage de batiment) chez l'hote", grp(fh) >= 9, fh)
         check("batiments+ : et chez le client", grp(fc) >= 9, fc)
+        ih, ic = cmd(host, f"indoors {own}")[1], cmd(cli, f"indoors {own_c}")[1]
+        check("batiments+ : dans la cabane des deux cotes (indoors)", "TwoStorey" in ih and "TwoStorey" in ic, f"{ih} / {ic}")
         check("batiments+ : la vue des etages du client suit son perso", "focus=none" not in view and "seen=-1" not in view, view)
         grab_window(cli, os.path.join(shots, "client_inside.png"))
         # 4. a research bench inside, placed by the client, worked by its character
         rb = None
-        for dx, dz in ((12, 0), (0, 12), (-12, 0), (0, -12)):
+        for dx, dz in ((0, 0), (8, 0), (0, 8), (-8, 0)):
             before = {x[0] for x in site_list(host, RESEARCH_BENCH, 0, 2500)}
-            r = cmd(cli, f"furnplace {RESEARCH_BENCH} poste {dx} {dz}")
+            r = cmd(cli, f"furnplace {RESEARCH_BENCH} Cabane {dx} {dz}")
             log(f"client places a research bench inside ({dx},{dz}):", r)
             rb = new_site(host, RESEARCH_BENCH, before) if r[0] else None
             if rb:
@@ -2576,7 +2582,7 @@ def exp_buildfull(host, cli):
         c0 = (cmd(host, "contcount Coffre")[1], cmd(cli, "contcount Coffre")[1])
         log("client opens the chest:", cmd(cli, f"containerreq {own_c} Coffre"))
         time.sleep(8)
-        log("client puts something in:", cmd(cli, f"conput {own_c} Coffre"))
+        log("client puts building materials in:", cmd(cli, f"conput {own_c} Coffre {mat}"))
         time.sleep(4)
         c1 = (cmd(host, "contcount Coffre")[1], cmd(cli, "contcount Coffre")[1])
         log(f"chest {c0} -> {c1}")
@@ -2591,7 +2597,7 @@ def exp_buildfull(host, cli):
         check("batiments+ : l'hote le reprend, vu chez le client", c2[0] == c0[0] and c2[0] == c2[1], f"{c1} -> {c2}")
         cmd(host, "closewindows")
     # 6. each one dismantles the other's building
-    for pid, idx, sid, pos, label in ((host, hidx, OUTPOST, site, "l'hote demonte l'avant-poste du client"),
+    for pid, idx, sid, pos, label in ((host, hidx, CABIN, site, "l'hote demonte la cabane du client"),
                                       (cli, own_c, STORAGE, chest, "le client demonte le coffre de l'hote")):
         if not pos:
             continue
