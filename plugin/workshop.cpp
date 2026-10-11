@@ -19,7 +19,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <map>
 #include <sstream>
 #include <unordered_set>
 
@@ -69,10 +71,23 @@ constexpr uintptr_t IT_material = 0xC8;         // Item: material GameData*
 constexpr uintptr_t CQ_bench = 0x60;            // hand of the bench it shows
 // Town power panel
 constexpr uintptr_t TW_onBattery = 0x470, TW_values = 0x474;   // bool; 8 floats
+// UseableStuff vt 0x4E8: bool dontNeedWorkRightNow() const (tryOperate refuses every operator while true;
+// a farm: crops growing, a research bench: nothing queued)
+constexpr uintptr_t USV_dontNeedWork = 0x4E8;
+// FarmBuilding (vtable 0x1689948, a ProductionBuilding; 1.0.68, docs/MOTEUR.md "Fermes")
+constexpr uintptr_t FB_state = 0x468;           // int ProductionBuilding::productionState
+constexpr uintptr_t FB_plantCount = 0x4F0;      // lektor<Plant> plants (+0x4E8): count
+constexpr uintptr_t FB_plantData = 0x4F8;       //   ... and data, 0x28 bytes a plant, its age (float) at +0
+constexpr uintptr_t FB_plantSize = 0x28;
+constexpr uintptr_t FB_grown = 0x518;           // float: 0..1 the youngest growing plant's age, then 1..2 the harvest window
+constexpr uintptr_t FB_died = 0x51C;            // float
+constexpr uintptr_t FB_cleared = 0x520;         // float
+constexpr uintptr_t FB_harvested = 0x528;       // int
 // vtables
 constexpr uintptr_t kVtCraftingBuilding = 0x16B5A58;
 constexpr uintptr_t kVtResearchBuilding = 0x16B28C8;
 constexpr uintptr_t kVtTown = 0x1735BA8;
+constexpr uintptr_t kVtFarmBuilding = 0x1689948;
 constexpr int kCritMaybe = 2;                   // YesNoMaybe: let the game roll the critical success
 
 bool SafeCopy(void* dst, const void* src, size_t n) {
@@ -146,6 +161,17 @@ bool CallSetInsert(void* set, const void* hand) {
 }
 bool CallButton(kenshi::Fn f, void* us) {
     __try { reinterpret_cast<FnButton>(kenshi::FnAddr(f))(us, nullptr); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool CallDontNeedWork(void* us, bool& out) {
+    void* fn = Slot(us, USV_dontNeedWork);
+    if (!fn) return false;
+    __try { out = reinterpret_cast<bool (*)(void*)>(fn)(us); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool CallFarmDestroyAPlant(void* farm) {
+    __try { return reinterpret_cast<bool (*)(void*)>(kenshi::FnAddr(kenshi::FnFarmDestroyAPlant))(farm); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool CallFarmReset(void* farm) {
+    __try { reinterpret_cast<void (*)(void*)>(kenshi::FnAddr(kenshi::FnFarmReset))(farm); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 bool CallRefreshResearchList(void* screen) {
     __try { reinterpret_cast<FnVoid0>(kenshi::FnAddr(kenshi::FnRefreshResearchList))(screen); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -247,6 +273,25 @@ bool IsBuilding(void* obj) {
 }
 bool IsUseable(void* b) { return IsBuilding(b) && CallPtr(b, BV_getUseable) == b; }
 bool IsCraftingBench(void* b) { return VtOf(b) == kenshi::Addr(kVtCraftingBuilding); }
+bool IsFarm(void* b) { return VtOf(b) == kenshi::Addr(kVtFarmBuilding); }
+// growth and rot to 1/200: a farm's numbers move every frame, the change that matters is slower
+float Quantize(float v) { return std::isfinite(v) ? std::round(v * 200.0f) / 200.0f : 0.0f; }
+bool ReadCrop(void* b, kc::CropState& c) {
+    c = kc::CropState{};
+    int32_t state = 0, harvested = 0;
+    uint32_t plants = 0;
+    float grown = 0, died = 0, cleared = 0;
+    if (!Rd(b, FB_state, state) || !Rd(b, FB_plantCount, plants) || !Rd(b, FB_harvested, harvested) || !Rd(b, FB_grown, grown) ||
+        !Rd(b, FB_died, died) || !Rd(b, FB_cleared, cleared))
+        return false;
+    c.stage = uint8_t(std::clamp(state, 0, 255));
+    c.plants = uint16_t(std::min<uint32_t>(plants, kc::kMaxFarmPlants));
+    c.harvested = uint16_t(std::clamp<int32_t>(harvested, 0, c.plants));
+    c.grown = Quantize(grown);
+    c.died = Quantize(died);
+    c.cleared = Quantize(cleared);
+    return true;
+}
 void* TownOf(void* b) {
     kc::Handle h;
     if (!ReadHand(static_cast<uint8_t*>(b) + B_town, h) || !h.valid()) return nullptr;
@@ -450,6 +495,7 @@ bool KenshiWorld::ReadMachineState(void* b, kc::MachineState& s, std::vector<kc:
         float amount = 0;
         if (Rd(b, SB_productionItem, item) && item && Rd(item, 0, amount)) s.production = Finite(amount);
     }
+    if (IsFarm(b) && ReadCrop(b, s.crop)) s.flags |= kc::kMachFarm;
     if (IsCraftingBench(b)) {
         s.flags |= kc::kMachCrafting;
         uint8_t rep = 0;
@@ -529,13 +575,62 @@ void KenshiWorld::ReadMachines(const std::vector<kc::Vec3>& centers, float radiu
     }
 }
 
-bool KenshiWorld::ApplyMachine(const kc::MachineState& s, const std::vector<kc::Handle>& operators) {
-    void* b = BuildingAt(s.sid, s.pos);
-    if (!b || !IsUseable(b)) {
-        static std::unordered_set<std::string> said;
-        if (said.insert(s.sid).second) Log("machine: %s of the host not found here", TemplateName(s.sid).c_str());
-        return false;
+namespace {
+// A client's farm follows the host's crops. Its plants grow here by themselves (FarmBuilding::update),
+// but only the host's farmers harvest (FarmBuilding::operate -> destroyAPlant) and only the host's game
+// replants after a harvest or once dead crops are cleared (resetFarm): without this the client's field
+// stayed ripe, then rotted and replanted on its own while the host's was harvested.
+void ApplyCrop(void* b, const kc::CropState& host, const std::string& name) {
+    uint32_t plants = 0;
+    int32_t harvested = 0;
+    float grown = 0;
+    if (!Rd(b, FB_plantCount, plants) || !Rd(b, FB_harvested, harvested) || !Rd(b, FB_grown, grown)) return;
+    if (plants > 0 && plants <= kc::kMaxFarmPlants) {
+        // the host replanted: its harvest went back to 0, or its young plants against our ripe ones
+        const bool replanted = harvested > int32_t(host.harvested) || (host.grown < 0.2f && grown > host.grown + 0.5f);
+        if (replanted && CallFarmReset(b)) {
+            Log("machine: %s replanted as on the host (harvested here %d, there %d; grown here %.2f, there %.2f)", name.c_str(), int(harvested),
+                int(host.harvested), grown, host.grown);
+            Rd(b, FB_harvested, harvested);
+            Rd(b, FB_grown, grown);
+        }
+        // plants the host's farmers harvested: harvested here too (the same plants, in order)
+        int32_t want = int32_t(host.harvested);
+        if (host.plants && host.plants != plants) want = int32_t((uint64_t(host.harvested) * plants + host.plants / 2) / host.plants);
+        want = std::clamp<int32_t>(want, 0, int32_t(plants));
+        for (int guard = 0; harvested < want && guard < int(kc::kMaxFarmPlants); ++guard) {
+            if (!CallFarmDestroyAPlant(b)) break;
+            if (!Rd(b, FB_harvested, harvested)) break;
+        }
+        // growth: below 1 it is the youngest growing plant's age (the game takes it again every
+        // frame), so every growing plant is moved by the difference; from 1 on it is a time of its own
+        void* data = nullptr;
+        const bool hostRipe = host.grown >= 1.0f;
+        const float shift = hostRipe ? (grown < 1.0f ? 1.0f - grown : 0.0f) : host.grown - grown;
+        if (std::fabs(shift) > 0.02f && Rd(b, FB_plantData, data) && data) {
+            for (uint32_t i = 0; i < plants; ++i) {
+                float age = 0;
+                auto* p = static_cast<uint8_t*>(data) + i * FB_plantSize;
+                if (!Rd(p, 0, age) || age < -1.0f || age >= 1.0f) continue;   // harvested (-10) or ripe
+                Wr(p, 0, std::min(age + shift, hostRipe ? 1.0f : 0.999f));
+            }
+        }
+        if (hostRipe) Wr(b, FB_grown, host.grown);
     }
+    Wr(b, FB_died, host.died);
+    Wr(b, FB_cleared, host.cleared);
+    Wr(b, FB_state, int32_t(host.stage));
+}
+} // namespace
+
+bool KenshiWorld::ApplyMachine(const kc::MachineState& s, const std::vector<kc::Handle>& operators, const kc::Handle& here) {
+    // the host's placement built here (the session knows it by netId): it may stand a little off the
+    // host's place (ground, snapping), so it comes before kind and place
+    void* b = here.valid() ? kenshi::ResolveObject(here) : nullptr;
+    std::string sid;
+    if (b && (!IsUseable(b) || !kenshi::ObjectTemplate(b, sid) || sid != s.sid)) b = nullptr;
+    if (!b) b = BuildingAt(s.sid, s.pos);
+    if (!b || !IsUseable(b)) return false;   // the session says why (not loaded here, or not built)
     CallScopeGuard scopeRepair("workshop");
     HostCallScope scope;
     // whose it is: the game gives a mine or a natural node to the faction of whoever works it
@@ -583,6 +678,8 @@ bool KenshiWorld::ApplyMachine(const kc::MachineState& s, const std::vector<kc::
             kenshi::MakeHand(h, hand);
             CallSetInsert(static_cast<uint8_t*>(b) + US_operators, hand);
         }
+    // a farm: the host's crops
+    if ((s.flags & kc::kMachFarm) && IsFarm(b)) ApplyCrop(b, s.crop, TemplateName(s.sid));
     // a crafting bench: the host's orders, in its order, with its progress
     if ((s.flags & kc::kMachCrafting) && IsCraftingBench(b)) {
         setByte(CB_repeat, (s.flags & kc::kMachRepeat) != 0);
@@ -629,6 +726,32 @@ bool KenshiWorld::ApplyMachine(const kc::MachineState& s, const std::vector<kc::
         }
     }
     return true;
+}
+
+std::string KenshiWorld::MachineIdleNote(void* b, kenshi::Character* actor) {
+    std::string sid;
+    if (!IsUseable(b) || !kenshi::ObjectTemplate(b, sid)) return {};
+    const std::string name = TemplateName(sid);
+    std::vector<kc::Handle> ops;
+    ReadOperators(b, ops);
+    kc::Handle me;
+    if (actor && kenshi::GetHandle(actor, me) && std::find(ops.begin(), ops.end(), me) != ops.end()) return {};   // already at work there
+    int32_t maxOps = 0;
+    Rd(b, US_maxOperators, maxOps);
+    bool idle = false;
+    if (CallDontNeedWork(b, idle) && idle) {
+        Log("order: %s needs no worker right now (dontNeedWorkRightNow): the one-time task ends at once", name.c_str());
+        if (IsFarm(b))
+            return name + " : les cultures poussent, il n'y a rien à récolter pour l'instant. Donne-lui plutôt ce travail en permanent "
+                          "(bouton JOBS, puis clic droit) : ton personnage y retournera pour la récolte.";
+        return name + " n'a pas de travail pour l'instant (rien à produire, à fabriquer ou à rechercher). En travail permanent "
+                      "(bouton JOBS, puis clic droit), ton personnage y retournera dès qu'il y en aura.";
+    }
+    if (maxOps > 0 && ops.size() >= size_t(maxOps)) {
+        Log("order: %s has no free place (%zu/%d operators)", name.c_str(), ops.size(), int(maxOps));
+        return name + " : toutes les places sont prises (" + std::to_string(ops.size()) + "/" + std::to_string(maxOps) + ").";
+    }
+    return {};
 }
 
 bool KenshiWorld::ApplyTownPower(const kc::TownPower& t) {
@@ -775,8 +898,15 @@ void KenshiWorld::NoteCraftAdded(void* ci, void* base, void* mat) {
 // research | researchknown <sid> | researchpick [n] | researchreq <queue|cancel> <sid> |
 // researchprogress <amount> (host) | blueprintreq <squadIndex> <item part> | craftlist [n] |
 // machine <part> | machinereq <part> <addcraft base [material]|removecraft i|repeat 0/1|power 0/1|battery 0/1> |
-// machineinv <part>. handled: true when the command is one of these.
+// machineinv <part> | machines | crops [part] | storage <part> | workjob <squadIndex> <sid|none> [task].
+// handled: true when the command is one of these.
 namespace {
+// "stage,harvested/plants,grown,died" of a farm, read here (tests)
+std::string CropText(const kc::CropState& c) {
+    char b[96];
+    std::snprintf(b, sizeof(b), "%d,%d/%d,%.2f,%.2f", int(c.stage), int(c.harvested), int(c.plants), c.grown, c.died);
+    return b;
+}
 uint32_t Fnv(const std::string& s, uint32_t h = 2166136261u) {
     for (unsigned char c : s) h = (h ^ c) * 16777619u;
     return h;
@@ -835,6 +965,142 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
         kenshi::Character* c = w.Find(sq[idx]);
         return c && kenshi::ObjectPosition(c, pos) ? c : nullptr;
     };
+    if (cmd == "machines") {
+        // machines: every machine this session knows (host: what it sends; client: the host's), each
+        // read in this game: "ok <n> key|found|ops=a/b|on=0/1|farm=stage,h/p,grown,died|prod=x ..." (sorted)
+        std::vector<std::string> rows;
+        s.ForEachKnownMachine([&](const std::string& key, const kc::MachineState& known, bool foundHere) {
+            void* b = w.BuildingAt(known.sid, known.pos);
+            if (!b) {   // ours may stand a little off the host's place
+                void* close = w.NearestMachine(known.pos, known.sid, 40.0f);
+                std::string sid;
+                if (close && kenshi::ObjectTemplate(close, sid) && sid == known.sid) b = close;
+            }
+            kc::MachineState here;
+            std::ostringstream o;
+            o.setf(std::ios::fixed);
+            o.precision(2);
+            o << key << "|" << (foundHere ? "found" : "MISSING");
+            if (b && w.ReadMachineState(b, here, nullptr)) {
+                o << "|ops=" << int(here.operatorCount) << "/" << int(here.maxOperators) << "|on=" << ((here.flags & kc::kMachPowerOn) ? 1 : 0)
+                  << "|prod=" << here.production;
+                if (here.flags & kc::kMachFarm) o << "|farm=" << CropText(here.crop);
+                if (here.flags & kc::kMachCrafting) o << "|crafts=" << here.crafts.size();
+            } else {
+                o << "|not here";
+            }
+            rows.push_back(o.str());
+        });
+        std::sort(rows.begin(), rows.end());
+        std::string out = "ok " + std::to_string(rows.size());
+        for (const auto& r2 : rows) out += " " + r2;
+        return out;
+    }
+    if (cmd == "crops") {   // crops [part]: the farm nearest to squad member 0 (name or sid part, "any"), read here
+        std::string part = "any";
+        in >> part;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        kc::Vec3 me;
+        if (!squadAt(0, me)) return "err no squad";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(me, 3000.0f, objs);
+        void* best = nullptr;
+        float bestD = 1e30f;
+        for (void* o : objs) {
+            std::string sid;
+            kc::Vec3 p;
+            if (!IsFarm(o) || !kenshi::ObjectTemplate(o, sid) || !kenshi::ObjectPosition(o, p)) continue;
+            if (part != "any" && Lower(w.TemplateName(sid)).find(Lower(part)) == std::string::npos && sid.find(part) == std::string::npos) continue;
+            if (Dist(p, me) < bestD) { bestD = Dist(p, me); best = o; }
+        }
+        kc::MachineState st;
+        std::vector<kc::Handle> ops;
+        if (!best || !w.ReadMachineState(best, st, &ops)) return "err no farm " + part;
+        bool idle = false;
+        CallDontNeedWork(best, idle);
+        uint8_t hydro = 0;
+        Rd(best, 0x558, hydro);   // FarmBuilding::isHydroponic
+        const std::string key = kc::Session::MachineKey(st.sid, st.pos);
+        std::ostringstream o;
+        o.setf(std::ios::fixed);
+        o.precision(2);
+        o << "ok " << key << " stage=" << int(st.crop.stage) << " plants=" << st.crop.plants << " harvested=" << st.crop.harvested << " grown=" << st.crop.grown
+          << " died=" << st.crop.died << " cleared=" << st.crop.cleared << " hydro=" << int(hydro != 0) << " idle=" << int(idle) << " ops=" << int(st.operatorCount)
+          << "/" << int(st.maxOperators) << " prod=" << st.production;
+        if (const kc::MachineState* known = s.knownMachine(key); known && !s.isHost()) o << " host=" << CropText(known->crop);
+        return o.str();
+    }
+    if (cmd == "storage") {
+        // storage <part>: the object with an inventory (storage, chest, machine) nearest to squad member
+        // 0 whose name or sid holds part: "ok key stacks=n total=q ih=hash items=sid:qty,..." (sorted)
+        std::string part;
+        in >> part;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        kc::Vec3 me;
+        if (!squadAt(0, me)) return "err no squad";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(me, 3000.0f, objs);
+        void* best = nullptr;
+        float bestD = 1e30f;
+        std::vector<kc::ItemState> items;
+        for (void* o : objs) {
+            std::string sid;
+            kc::Vec3 p;
+            if (kenshi::IsCharacter(o) || !kenshi::ObjectTemplate(o, sid) || !kenshi::ObjectPosition(o, p) || !kenshi::ReadInventory(o, items)) continue;
+            if (part != "any" && Lower(w.TemplateName(sid)).find(Lower(part)) == std::string::npos && sid.find(part) == std::string::npos) continue;
+            if (Dist(p, me) < bestD) { bestD = Dist(p, me); best = o; }
+        }
+        std::string sid;
+        kc::Vec3 p;
+        if (!best || !kenshi::ObjectTemplate(best, sid) || !kenshi::ObjectPosition(best, p) || !kenshi::ReadInventory(best, items)) return "err no storage " + part;
+        std::map<std::string, int> bySid;
+        int total = 0;
+        uint32_t hh = 2166136261u;
+        for (const auto& it : items) {
+            bySid[it.templateSid] += it.quantity;
+            total += it.quantity;
+        }
+        std::string list;
+        for (const auto& [k, q] : bySid) {
+            hh = Fnv(k + ":" + std::to_string(q) + ";", hh);
+            list += (list.empty() ? "" : ",") + k + ":" + std::to_string(q);
+        }
+        std::ostringstream o;
+        o << "ok " << kc::Session::MachineKey(sid, p) << " stacks=" << items.size() << " total=" << total << " ih=" << std::hex << hh << std::dec << " items=" << list;
+        return o.str();
+    }
+    if (cmd == "workjob") {
+        // workjob <squadIndex> <sid|none> [task]: that member alone gets a PERMANENT job (the Tâches
+        // panel, addJobSelectedCharacters with shift, as a right click in jobs mode does) on the
+        // instance of that template nearest to squad member 0, or with no subject ("none": haul 88,
+        // keep everything running 89...); default task 87. On a client the order goes to the host.
+        size_t idx = 0;
+        std::string sid;
+        int task = 87;
+        in >> idx >> sid >> task;
+        kc::Vec3 anchor, p;
+        if (!squadAt(0, anchor)) return "err no squad";
+        kenshi::Character* c = squadAt(idx, p);
+        if (!c) return "err no such squad member";
+        void* best = nullptr;
+        kc::Vec3 bp = p;
+        if (sid != "none") {
+            std::vector<void*> objs;
+            kenshi::ObjectsNear(anchor, 4000.0f, objs);
+            float bestD = 1e30f;
+            for (void* o : objs) {
+                std::string s2;
+                kc::Vec3 op;
+                if (!IsBuilding(o) || !kenshi::ObjectTemplate(o, s2) || s2 != sid || !kenshi::ObjectPosition(o, op)) continue;
+                if (Dist(op, anchor) < bestD) { bestD = Dist(op, anchor); best = o; bp = op; }
+            }
+            if (!best) return "err no " + sid + " within 4000";
+        }
+        const float loc[3] = {bp.x, bp.y, bp.z};
+        using FnAddJob = void (*)(void*, int, void*, bool, bool, const float*);
+        kenshi::WithSelection(c, [&] { reinterpret_cast<FnAddJob>(kenshi::FnAddr(kenshi::FnAddJobSelected))(kenshi::Player(), task, best, true, true, loc); });
+        return "ok " + std::to_string(kenshi::PermajobCount(c)) + " job(s)";
+    }
     if (cmd == "research") {
         kc::ResearchState st;
         if (!w.ReadResearch(st)) return "err no research";

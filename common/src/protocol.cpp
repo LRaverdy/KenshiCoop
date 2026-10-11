@@ -827,6 +827,19 @@ bool TaskTargetAllowed(TaskVia via, int task, uint32_t t, std::string* why) {
     }
 }
 
+bool IsBaseWorkTask(int task) {
+    switch (task) {
+    case 2: case 71: case 95: case 115: case 125:                                  // build, materials, repair, builder
+    case 87: case 152: case 221:                                                   // operate a machine (farm, bench, mine, research...)
+    case 88: case 89: case 90: case 91: case 92: case 93: case 94: case 113: case 151: case 247:   // haul, keep running, unjam, collect, fill, empty
+    case 114: case 184: case 241: case 242:                                        // put resources and loot in storage
+    case 146: case 149: case 222: case 234:                                        // man a turret
+    case 58: case 105: case 142: case 148: case 250:                               // medic, rescue, splint (jobs)
+        return true;
+    default: return false;
+    }
+}
+
 bool TaskTargetWrongKind(TaskVia via, int task, uint32_t t, std::string* why) {
     std::string w;
     if (TaskTargetAllowed(via, task, t, &w)) return false;

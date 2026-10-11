@@ -142,7 +142,10 @@ public:
     size_t ApplyResearch(const kc::ResearchState& s) override;
     void ReadMachines(const std::vector<kc::Vec3>& centers, float radius, std::vector<WorldMachine>& out, std::vector<kc::TownPower>& towns) override;
     bool ExecuteMachineRequest(const kc::MachineRequest& r, const kc::Handle& actor, std::string& refusedFr) override;
-    bool ApplyMachine(const kc::MachineState& s, const std::vector<kc::Handle>& operators) override;
+    bool ApplyMachine(const kc::MachineState& s, const std::vector<kc::Handle>& operators, const kc::Handle& local) override;
+    // host: a machine a client's character was just sent to work that has no work for it now (crops
+    // growing, nothing queued) or no free place: what to tell the player (French), else empty
+    std::string MachineIdleNote(void* building, kenshi::Character* actor);
     bool ApplyTownPower(const kc::TownPower& t) override;
     void TakeWorkshopAsks(std::vector<LocalResearchAsk>& research, std::vector<LocalMachineAsk>& machines) override;
     // hooks (client): a research window button, a blueprint read, a crafting window / building panel
@@ -243,6 +246,7 @@ public:
         reason = orderRefusal_.empty() ? kc::ResultReason::None : orderRefusalReason_;
         return std::exchange(orderRefusal_, std::string{});
     }
+    std::string TakeOrderNote() override { return std::exchange(orderNote_, std::string{}); }
     void OrderRejected(const kc::Handle& h, const kc::Command& c) override;
     // host: what a client order's subject is (kc::TargetFlags); orders refused for their target
     uint32_t TargetFlagsOf(kenshi::Character* actor, void* subject, bool named);
@@ -526,6 +530,7 @@ private:
     kc::EntityState FallSpot(const kc::Handle& h, const kc::EntityState& host) const;
     std::mutex ordersMutex_;
     std::string orderRefusal_;
+    std::string orderNote_;                                         // host: what the player is told with the order's result
     kc::ResultReason orderRefusalReason_ = kc::ResultReason::None;
     int targetRefusals_ = 0;   // host: why the last client order was refused for safety (French)
     std::vector<std::pair<kc::Handle, kc::Command>> orders_;

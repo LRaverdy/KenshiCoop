@@ -57,9 +57,24 @@ l'hôte et à x2/x3.
   4. on vérifie les inventaires des sacs après chaque transport.
 - Un soak de 20 min à x3 avec ces postes, 3 clients loin de l'hôte.
 
-**Ce qui manque sûrement** (constats du 11/10) :
-- fermier de rob sur sa ferme : pas de ligne `workers`, donc peut-être jamais compté ;
-- bâtiments des clients absents chez nass4 (« machine … of the host not found here ») ;
+**Fait (v0.3.2) — corrigé dans le code, à tester en jeu** (`coop_test.py workstations`) :
+- audit des postes et règles d'ordres : `TestWorkstationOrders` (chaque tâche, chaque façon, chaque
+  cible) ; travaux de base permis à tous sur une recrue « à personne », refusés sur le perso d'un
+  autre joueur ;
+- fermier de rob sans ligne `workers` : l'ordre arrivait et tournait ; la ferme poussait encore,
+  `dontNeedWorkRightNow` vrai, `tryOperate` refuse tout ouvrier et la tâche ponctuelle s'arrête
+  (comportement du jeu de base, même chose sur le banc de recherche sans file). Le joueur reçoit
+  maintenant la raison et le conseil du travail permanent ;
+- cultures : état de la ferme envoyé (protocole 36), récolte et replantation de l'hôte rejouées chez
+  le client ;
+- « machine … of the host not found here » chez nass4 : machines envoyées à tous mais loin de ses
+  persos (zone pas chargée chez lui). Liaison par le netId de pose en plus du type et de l'endroit, et
+  journal qui dit pourquoi ;
+- commandes `machines`, `crops`, `storage`, `workjob`.
+
+**Reste** :
+- lancer `workstations` en jeu, puis le soak de 20 min à x3 avec 3 clients loin de l'hôte ;
+- inventaires des sacs après chaque transport (dépend du lot des sacs, point 0) ;
 - fenêtre Prospecter (3p) et boutique d'animaux (3i) qui ne s'ouvrent pas chez le client ;
 - hauteur fausse des poses de client (3o) : **pas un bug** (hauteur relative au sol, voir 3o).
 

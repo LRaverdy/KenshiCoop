@@ -283,6 +283,9 @@ enum Fn : int {
     FnBuildModeDeactivate,      // void PlayerBuildMode::deactivate()   (our name, 0x4D1870: deletes the window +0x28, then togglePause(false))
     FnBuildModeIsActive,        // bool PlayerBuildMode::isActive() const   (our name, 0x4D1860: +0x28 != null)
     FnStopTrackCharacter,       // void PlayerInterface::stopTrackCharacter()   (0x7F2780: +0x270 = none, +0x290 = -1, Camera::stopFollowing; called by CameraClass::move and teleport)
+    // ---- farms (plugin/workshop.cpp, 0.3.2)
+    FnFarmDestroyAPlant,        // bool FarmBuilding::destroyAPlant()   (the plant at +0x528 harvested: age -10, hidden, +0x528 one more; what the farmer's harvest calls)
+    FnFarmReset,                // void FarmBuilding::resetFarm()   (replants: new young ages, +0x528 harvested, +0x51C died, +0x520 cleared back to 0)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];

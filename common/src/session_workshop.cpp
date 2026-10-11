@@ -271,6 +271,14 @@ void Session::HostMachines(double now) {
                 log_("machine: " + world_.TemplateName(s.sid) + " crafting orders " + std::to_string(prev->second.crafts.size()) + " -> " +
                      std::to_string(s.crafts.size()));
             }
+            if ((s.flags & kMachFarm) && (prev->second.crop.stage != s.crop.stage || prev->second.crop.harvested != s.crop.harvested ||
+                                          (prev->second.crop.grown < 1.0f) != (s.crop.grown < 1.0f))) {
+                ++logged;
+                char b[160];
+                std::snprintf(b, sizeof(b), " crops: stage %d -> %d, harvested %d -> %d/%d, grown %.2f, died %.2f", int(prev->second.crop.stage),
+                              int(s.crop.stage), int(prev->second.crop.harvested), int(s.crop.harvested), int(s.crop.plants), s.crop.grown, s.crop.died);
+                log_("machine: " + world_.TemplateName(s.sid) + b);
+            }
             if ((prev->second.flags ^ s.flags) & kMachPowerOn) {
                 ++logged;
                 log_("machine: " + world_.TemplateName(s.sid) + ((s.flags & kMachPowerOn) ? " switched on" : " switched off"));
@@ -437,10 +445,51 @@ void Session::ClientWorkshop(double now) {
         ops.clear();
         for (uint32_t id : c.state.operators)
             if (auto it = entities_.find(id); it != entities_.end() && !it->second.container && it->second.present) ops.push_back(it->second.handle);
-        c.found = world_.ApplyMachine(c.state, ops);
-        if (c.found) ++workshop_.machinesApplied;
+        c.found = world_.ApplyMachine(c.state, ops, LocalBuildingOf(c.state.sid, c.state.pos));
+        c.tried = true;
+        if (c.found) {
+            ++workshop_.machinesApplied;
+            c.missLogged = false;
+        } else if (!c.missLogged) {
+            // why: the host sends every player the machines near any player; one far from all of ours
+            // stands in a part of the world this game has not loaded (applied when we get there)
+            c.missLogged = true;
+            float nearest = 1e30f;
+            for (auto& [id, e] : entities_) {
+                EntityState st;
+                if (e.squad && !e.container && e.owner == localId_ && world_.Read(e.handle, st)) nearest = std::min(nearest, Dist(st.pos, c.state.pos));
+            }
+            char b[96];
+            if (nearest > kMachineRadius) std::snprintf(b, sizeof(b), " (our nearest character %.0f units away: not loaded here yet)", nearest < 1e29f ? nearest : -1.0f);
+            else std::snprintf(b, sizeof(b), " (our character %.0f units away: NOT built here?)", nearest);
+            log_("machine: " + world_.TemplateName(c.state.sid) + " of the host not found here" + b);
+        }
         c.dirty = false;
     }
+    size_t missing = 0;
+    for (auto& [key, c] : clientMachines_) missing += c.tried && !c.found ? 1 : 0;
+    workshop_.machinesMissing = missing;
+}
+
+Handle Session::LocalBuildingOf(const std::string& sid, const Vec3& pos) const {
+    // the host's placements we built: the host's machine stands where the host placed it, ours may
+    // stand a little off (ground, snapping), the netId says which one it is
+    const BuildingRec* best = nullptr;
+    float bestD = 40.0f;
+    for (const auto& [id, b] : buildings_) {
+        if (!b.resolved || b.sid != sid) continue;
+        const float d = Dist(b.pos, pos);
+        if (d < bestD) { bestD = d; best = &b; }
+    }
+    return best ? best->handle : Handle{};
+}
+
+void Session::ForEachKnownMachine(const std::function<void(const std::string&, const MachineState&, bool)>& fn) const {
+    if (isHost()) {
+        for (const auto& [key, s] : machinesSent_) fn(key, s, true);
+        return;
+    }
+    for (const auto& [key, c] : clientMachines_) fn(key, c.state, c.found);
 }
 
 } // namespace kc

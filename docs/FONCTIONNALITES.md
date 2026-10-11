@@ -1213,6 +1213,37 @@ la fenêtre du client.
 - Expérience `research` (« recherche : … », « fabrication : … », « mine : … », « energie : … »),
   test unitaire `TestWorkshop`. Pas encore lancé en jeu.
 
+### Travaux de base aux persos de chaque joueur (postes) 🟡 (v0.3.2, protocole 36 ; corrigé dans le code, à tester en jeu)
+- **Comment l'ordre arrive** : clic droit sur le poste (tâche 87 « utiliser », ou 152 sans place
+  d'opérateur ; `AddOrder` / `NewTask` / `TaskNearest`), mode travail permanent ou panneau Tâches
+  (`AddJob` avec `shift` : un travail permanent), croix et glisser du panneau (`RemovePermajob`,
+  `MovePermajob`, `RemoveJob`), bouton JOBS (ordre permanent 15). Tout part à l'hôte (`Command`), qui
+  vérifie le propriétaire (`Authorize` / `AdmitActor`) puis la cible (`TaskTargetAllowed`) et donne
+  l'ordre à ce perso seul. Postes couverts par la table : ferme (champ, hydroponie, ferme de mod :
+  `FarmBuilding`), puits / collecteur / réservoir, cuisinière, four, moulin, brasserie, distillerie,
+  raffinerie, mine et filon, établis, banc de recherche, générateur, éolienne, batteries, tourelles
+  (une machine : fonction de bâtiment non nulle, hors lit, cage, boutique, décor) ; transport et
+  rangement 88-94, 113, 114, 151, 184, 241, 247 (sans cible, une machine, un stockage, un objet) ;
+  bâtisseur 125, construire 2, matériaux 71, réparer 95 ; médecin 58, secours 105 / 142 / 148.
+- **Qui** : son propre perso ; une recrue « à personne » : n'importe quel joueur, pour ces travaux
+  de base (`kc::IsBaseWorkTask`) comme pour ses réglages d'IA ; le perso d'un autre joueur : refusé,
+  « Action refusée : ce personnage n'est pas le tien ».
+- **Une machine sans travail** : comme en solo, une ferme dont les cultures poussent, un banc de
+  recherche sans rien en file, un poste plein, refusent l'ouvrier (`dontNeedWorkRightNow`,
+  `tryOperate`) et la tâche ponctuelle du clic droit s'arrête aussitôt. Le joueur reçoit la raison
+  (« … les cultures poussent, il n'y a rien à récolter pour l'instant. Donne-lui plutôt ce travail
+  en permanent… »). En permanent, le perso y retourne dès qu'il y a du travail.
+- **Ce que tout le monde voit** (la machine tourne chez l'hôte) : nombre et noms des ouvriers,
+  marche, énergie, barre de progression, quantité produite, ordres de fabrication, inventaire
+  d'entrée et de sortie (synchronisé, ouvert ou non), listes de tâches (`JobState`), et pour une
+  ferme ses cultures : étape, plants récoltés, pousse, pourriture, nettoyage. Le client récolte les
+  mêmes plants que les fermiers de l'hôte, replante quand l'hôte replante et cale la pousse de ses
+  plants sur celle de l'hôte.
+- **Bâtiment d'un joueur chez un autre** : retrouvé par son netId de pose, puis par type et endroit.
+  Une machine loin de tous nos persos n'est pas chargée chez nous : appliquée en arrivant (journal :
+  « not loaded here yet »).
+- Tests : `TestWorkstationOrders`, `TestWorkshop`, `TestSquadWindow` ; expérience `workstations`.
+
 ### Non vérifiés
 - Recrutement par dialogue.
 - Ces actions tournent chez l'hôte, mais rien ne garantit encore que leur résultat apparaît

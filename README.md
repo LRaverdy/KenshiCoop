@@ -204,7 +204,11 @@ Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui
   - relations de factions, primes et diplomatie (guerres entre factions, chefs, villes) :
     implémentés, à vérifier en jeu ; leur état chez l'hôte est dans la fenêtre Diplomatie (Ctrl+Shift+F) ;
   - recherche, établis de fabrication, mines et machines, énergie des avant-postes : implémentés
-    (l'hôte décide, les boutons d'un client deviennent des demandes), à vérifier en jeu.
+    (l'hôte décide, les boutons d'un client deviennent des demandes), à vérifier en jeu ;
+  - fermes (v0.3.2) : les cultures poussent, sont récoltées et replantées pareil chez tout le monde.
+    Un fermier envoyé par un simple clic droit sur une ferme qui pousse encore n'y reste pas (comme
+    en solo) : le jeu te le dit ; donne-lui le travail en **permanent** (bouton JOBS) pour qu'il
+    revienne récolter.
 - Côté client, ne pas poser de bâtiment pour l'instant : il n'existerait probablement que chez
   toi. (Une pose qu'un client fait quand même est vérifiée par l'hôte comme le mode construction
   vérifie un endroit : dans l'eau ou l'acide, trop près d'une ville… elle est refusée et le

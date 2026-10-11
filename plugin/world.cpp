@@ -2050,6 +2050,7 @@ uint32_t KenshiWorld::TargetFlagsOf(kenshi::Character* actor, void* subject, boo
 
 bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
     orderRefusal_.clear();
+    orderNote_.clear();
     kenshi::Character* c = FindSquad(h);
     if (!c) {
         // never a fallback (the host's selection, its main character, the nearest one): nothing
@@ -2219,6 +2220,10 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
             if (kenshi::GetHandle(static_cast<kenshi::Character*>(subject), nh)) pendingTalks_[h] = {nh, NowSeconds() + 60.0, 0};
         }
         Log("client task %d (via %d) run for a character: %s", cmd.task, int(cmd.via), ok ? "ok" : "failed");
+        // a one-time "operate" on a machine that has no work for now (crops growing, nothing queued) or
+        // no free place: the game drops the task at once (UseableStuff::tryOperate), the player is told
+        // why and that a permanent job (JOBS) brings the character back when there is work
+        if (ok && subject && (cmd.task == 87 || cmd.task == 152 || cmd.task == 221) && cmd.via != kc::TaskVia::AddJob) orderNote_ = MachineIdleNote(subject, c);
         return ok;
     }
     }
