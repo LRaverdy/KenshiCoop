@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <map>
 #include <set>
 #include <memory>
@@ -18,6 +19,7 @@
 #include <process.h>
 
 #include "kc/admin.h"
+#include "kc/loot.h"
 #include "kc/motion.h"
 #include "kc/call_scopes.h"
 #include "kc/protocol.h"
@@ -536,6 +538,13 @@ struct FakeWorld : IWorld {
         return !wearers.empty();
     }
     bool IsAnimal(const Handle& h) override { auto it = chars.find(h.serial); return h.type != kBagType && it != chars.end() && it->second.animal; }
+    std::map<uint32_t, loot::BodySize> bodies;   // by serial: a body's size (none: unknown, the session assumes a human)
+    bool ReadBodySize(const Handle& h, loot::BodySize& out) override {
+        auto it = bodies.find(h.serial);
+        if (it == bodies.end()) return false;
+        out = it->second;
+        return true;
+    }
     bool JoinSquadOf(const Handle& who, const Handle& leader) override { joins.emplace_back(who.serial, leader.serial); return true; }
     int TheftCheck(const Handle& thief, const Handle& from, const ItemState& item) override {
         (void)thief; (void)from; (void)item;
@@ -2311,6 +2320,157 @@ static void TestSpawnReplication() {
         CHECK((cw.chars[70].vit.flags & kVitDead) != 0);
         CHECK(Dist(cw.chars[70].pos, corpse.pos) < 1e-3f);
     }
+}
+
+// Session of 10/11 Oct.: clients could not loot some creatures (leviathans...) that the host loots in
+// solo. Kenshi loots every character the same way (task 26, the loot window; an animal's meat, skins,
+// teeth and pearls are its "death items", in its inventory once dead: no butchering task), but the
+// client opened the window only once the looter was within a flat 12 units (3D) of the body's
+// position: the root of a big ragdoll is far beyond that from anywhere a looter can stand, and the
+// order silently expired. Now the reach grows with the race's size (game data) and the body's scale.
+static void TestLootCreatures() {
+    std::printf("loot: every creature kind (humans, goats to leviathans) is lootable; the reach follows the body's size\n");
+    using namespace loot;
+    // handle types and template types: humanoids are CharacterHuman (1), animals CharacterAnimal (0x5B)
+    CHECK(IsCharacterHandle(kHandleHuman) && IsCharacterHandle(kHandleAnimal) && !IsCharacterHandle(kHandleBuilding) && !IsCharacterHandle(2));
+    CHECK(HandleTypeOfTemplate(kTemplateCharacter) == kHandleHuman && HandleTypeOfTemplate(kTemplateAnimalCharacter) == kHandleAnimal);
+    CHECK(HandleTypeOfTemplate(kTemplateRace) == 0 && HandleTypeOfTemplate(0) == 0);
+    size_t n = 0;
+    const CreatureRace* races = CreatureRaces(n);
+    CHECK(n >= 38);
+    std::set<std::string> sids;
+    size_t animals = 0, humans = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const CreatureRace& r = races[i];
+        CHECK(sids.insert(r.raceSid).second);   // one row per race
+        CHECK(FindCreatureRace(r.raceSid) == &r);
+        CHECK(r.footprint > 0 && r.hullX > 0 && r.hullY > 0 && r.hullZ > 0 && r.scaleMin > 0 && r.scaleMin <= r.scaleMax);
+        if (r.animal) ++animals;
+        else { ++humans; CHECK(r.scaleMin == 1 && r.scaleMax == 1); }
+        // at every size the race comes in (young, adult, the biggest of its kind)
+        for (float scale : {r.scaleMin, (r.scaleMin + r.scaleMax) / 2, r.scaleMax}) {
+            const BodySize b = SizeOf(r, scale);
+            const float radius = BodyRadius(b), reach = Reach(b);
+            CHECK(radius >= r.footprint * scale - 1e-3f && reach >= kLootReach + 2 * radius - 1e-3f);
+            const Vec3 body = {1000, 50 + BodyHeight(b) / 2, -300};   // a ragdoll's root, half its height up
+            for (int dir = 0; dir < 8; ++dir) {
+                const float a = float(dir) * 0.785398f;
+                // a looter standing against the body (its edge plus a step), on the ground
+                const Vec3 by = {body.x + std::cos(a) * (radius + 3), 50, body.z + std::sin(a) * (radius + 3)};
+                if (!InReach(by, body, b)) std::printf("    %s x%.2f: a looter at its edge (%.0f) is out of reach %.0f\n", r.name, scale, radius + 3, reach);
+                CHECK(InReach(by, body, b));
+                // too far: not yet
+                const Vec3 far = {body.x + std::cos(a) * (reach + 5), 50, body.z + std::sin(a) * (reach + 5)};
+                CHECK(!InReach(far, body, b));
+                // sent from afar to the body's edge on its side: once there, in reach
+                const Vec3 from = {body.x + std::cos(a) * 900, 50, body.z + std::sin(a) * 900};
+                const Vec3 to = ApproachPoint(from, body, b);
+                CHECK(std::fabs(GroundDist(to, body) - radius) < 0.05f && InReach(to, body, b));
+                CHECK(GroundDist(to, from) < GroundDist(body, from));   // on the looter's side
+            }
+            // the rule before the fix: 12 units in 3D from the body's position. A looter at its edge
+            // was refused for every body wider than that (all the animals but the smallest).
+            const Vec3 edge = {body.x + radius + 3, 50, body.z};
+            const bool oldRule = motion::Dist3(edge, body) <= 12.0f;
+            if (r.animal && radius > 12) CHECK(!oldRule);
+            CHECK(DropReach(b) >= kDropReach && DropReach(b) >= radius + 3);   // the host lets it drop from there
+        }
+    }
+    CHECK(animals >= 23 && humans >= 15);
+    // the creatures of the bug report, by race
+    struct Want { const char* sid; const char* name; bool animal; };
+    const Want wants[] = {
+        {"3966-gamedata.base", "Leviathan", true}, {"2860-gamedata.base", "Beak Thing", true}, {"43898-rebirth.mod", "Gorillo", true},
+        {"3976-gamedata.base", "Bonedog", true}, {"3998-gamedata.base", "Garru", true}, {"3985-gamedata.base", "Bull", true},
+        {"3992-gamedata.base", "Goat", true}, {"97570-Newwworld.mod", "Land Bat", true}, {"43870-rebirth.mod", "Spider", true},
+        {"50641-rebirth.mod", "Small Spider", true}, {"3987-gamedata.base", "Swamp Turtle", true}, {"56089-Newwworld.mod", "Crab", true},
+        {"42070-small_changes_otto.mod", "Robot Spider Worker", true}, {"48689-rebirth.mod", "Robot Guard Spider", true},
+        {"56088-rebirth.mod", "Skimmer", true}, {"44910-rebirth.mod", "River Raptor", true}, {"55396-gamedata.base", "Fishman", false},
+        {"2603-gamedata.base", "Cannibal", false}, {"17-gamedata.quack", "Greenlander", false}, {"5276-chareditor.mod", "Shek", false},
+        {"17946-stick_people.mod", "Skeleton", false}, {"18960-gamedata.base", "Hive Worker Drone", false},
+    };
+    for (const Want& w : wants) {
+        const CreatureRace* r = FindCreatureRace(w.sid);
+        CHECK(r && std::string(r->name) == w.name && r->animal == w.animal);
+    }
+    // a human corpse keeps a tight reach (it was 12; a step more now), an adult leviathan a wide one
+    const BodySize human = SizeOf(*FindCreatureRace("17-gamedata.quack"), 1);
+    CHECK(Reach(human) <= 25 && Reach(human) >= kLootReach);
+    CHECK(Reach(DefaultBody(1)) == Reach(human));
+    const BodySize lev = SizeOf(*FindCreatureRace("3966-gamedata.base"), 1.5f);
+    CHECK(Reach(lev) > 200 && VerticalReach(lev) > Reach(lev));
+    CHECK(InReach({0, 0, 0}, {150, 60, 0}, lev) && !InReach({0, 0, 0}, {150, 60, 0}, human));
+    // a looter that stopped walking (blocked by the ragdoll) may stand a bit farther
+    CHECK(!InReach({0, 0, 0}, {Reach(lev) * 1.3f, 0, 0}, lev) && InReach({0, 0, 0}, {Reach(lev) * 1.3f, 0, 0}, lev, kStoppedSlack));
+    // values read from the game are bounded (a garbage read never makes the whole map "in reach")
+    BodySize junk;
+    junk.footprint = std::nanf("");
+    junk.hullX = 1e9f;
+    junk.hullY = -4;
+    junk.scale = std::numeric_limits<float>::infinity();
+    CHECK(BodyRadius(junk) <= kMaxBody && BodyHeight(junk) == 0 && std::isfinite(Reach(junk)) && Reach(junk) <= kLootReach + 2 * kMaxBody);
+    CHECK(SaneScale(0) == 1 && SaneScale(-2) == 1 && SaneScale(9) == 5);
+    // an order waits long enough for a long walk (14 units/s), never forever
+    CHECK(OrderTimeout(12) >= 30 && OrderTimeout(2000) > 2000 / 14.0 && OrderTimeout(1e9f) <= 400);
+    // the animal's scale and age: vt 0x390 is lerp(scale min, scale max, age), vt 0x398 the age the
+    // factory was given. Sent as the age, the scale made a client's adult leviathan 2.05 times its
+    // race's size instead of 1.5 (bigger, its ragdoll elsewhere), a gorillo smaller...
+    CHECK(std::fabs(AnimalScale(0.4f, 1.5f, 1.0f) - 1.5f) < 1e-5f);
+    CHECK(std::fabs(AnimalScale(0.4f, 1.5f, AnimalScale(0.4f, 1.5f, 1.0f)) - 2.05f) < 1e-4f);   // the bug
+    CHECK(std::fabs(AnimalScale(0.25f, 0.85f, 1.0f) - 0.85f) < 1e-5f && std::fabs(AnimalScale(0.25f, 0.85f, 0.85f) - 0.76f) < 1e-4f);
+    CHECK(AnimalScale(1, 1, 0.3f) == 1);   // humans and fixed-size robots: the age changes nothing
+}
+
+static void TestBigBodyDrop() {
+    std::printf("session: a client loots a dead leviathan on the host and drops from it, standing at its side\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    auto item = [](const char* sid, int q, const char* sec, int x, int y) {
+        ItemState i; i.templateSid = sid; i.quantity = q; i.section = sec; i.x = int16_t(x); i.y = int16_t(y); return i;
+    };
+    FakeChar lev;
+    lev.squad = false;
+    lev.animal = true;
+    lev.pos = lev.dest = {200, 60, 210};   // its root, 210 units from our character's feet (char 2 at 200,0,0)
+    lev.vit.flags = kVitDead;
+    lev.items = {item("leviathan-pearl", 3, "main", 0, 0)};
+    hw.chars[30] = lev;
+    hw.bodies[30] = loot::SizeOf(*loot::FindCreatureRace("3966-gamedata.base"), 1.5f);
+    AtMenu(cw);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 4));
+    host.Assign(FakeWorld::H(2), 2);
+    Run({{&host, &hw}, {&cli, &cw}}, 1.5);
+    std::map<uint32_t, uint32_t> net;
+    host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { net[h.serial] = id; });
+    CHECK(net.count(30) && net.count(2));
+    const uint8_t me = cli.localId();
+    // looting: a pearl out of the leviathan into our character
+    {
+        InvOp op; op.kind = InvOpKind::Move; op.fromNetId = net[30]; op.toNetId = net[2]; op.item = item("leviathan-pearl", 1, "main", 0, 0);
+        op.toSection = "main";
+        Writer w; Encode(w, op); CHECK(host.InjectForTest(me, w));
+    }
+    Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return !hw.chars[2].items.empty(); });
+    CHECK(hw.chars[2].items.size() == 1 && hw.chars[2].items[0].templateSid == "leviathan-pearl");
+    CHECK(hw.chars[30].items.size() == 1 && hw.chars[30].items[0].quantity == 2);
+    // a drop to the ground from the leviathan, by our character at its side (210 units from its root)
+    auto drop = [&] {
+        InvOp op; op.kind = InvOpKind::Drop; op.fromNetId = net[30]; op.toNetId = net[2]; op.item = item("leviathan-pearl", 2, "main", 0, 0);
+        Writer w; Encode(w, op); CHECK(host.InjectForTest(me, w));
+        Run({{&host, &hw}, {&cli, &cw}}, 0.5);
+    };
+    const auto drops0 = hw.drops;
+    hw.bodies[30] = loot::DefaultBody(1);   // as if it were a human's body: 210 units is too far
+    drop();
+    CHECK(hw.drops == drops0);
+    hw.bodies[30] = loot::SizeOf(*loot::FindCreatureRace("3966-gamedata.base"), 1.5f);
+    drop();
+    CHECK(hw.drops == drops0 + 1 && hw.lastDropper == FakeWorld::H(30));
 }
 
 static void TestInventories() {
@@ -5637,6 +5797,8 @@ int main() {
     TestWorkshop();   // research, crafting benches, machines, power
     TestMessageRules();   // the authority table covers every message
     TestMotion();   // smooth motion, facing and posture on clients
+    TestLootCreatures();   // every creature kind lootable from a client (leviathans...)
+    TestBigBodyDrop();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

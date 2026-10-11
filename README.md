@@ -170,7 +170,9 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
 - **Inventaires et équipement** de tous les personnages proches.
 - **Fouille** : clic droit « Fouiller » sur un personnage K.-O. ou mort, ou sur un **coffre, une
   étagère ou un coffre-fort**. Ton personnage y va, puis la fenêtre du jeu s'ouvre ; chaque objet
-  déplacé est rejoué par l'hôte.
+  déplacé est rejoué par l'hôte. Toutes les créatures se fouillent, des humains aux animaux, même
+  les plus grands (léviathans, bêtes à bec, tortues) : leur viande, leurs peaux et leurs perles
+  sont dans la fenêtre.
 - **Vol** : prendre dans un contenant qui n'est pas à toi est un vol, décidé par le jeu de l'hôte.
   Si on te voit, la fenêtre se ferme et l'objet reste.
 - **Objets au sol** : posés et ramassés, au même endroit pour tout le monde. Un objet que l'hôte ne

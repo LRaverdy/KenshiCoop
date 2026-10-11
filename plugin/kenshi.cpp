@@ -1044,6 +1044,12 @@ bool GameDataIntField(const void* gd, const std::string& key, int& out) {
     return found;
 }
 
+bool GameDataFloatField(const void* gd, const std::string& key, float& out) {
+    bool found = false;
+    if (gd) ForEachNode(gd, GDM_float, [&](const std::string& k, const uint8_t* v) { if (!found && k == key) found = Rd(v, 0, out); });
+    return found && std::isfinite(out);
+}
+
 bool ReadAppearance(Character* c, kc::AppearanceMsg& out) {
     out = kc::AppearanceMsg{};
     void* gd = AppearanceData(c);
@@ -1756,7 +1762,7 @@ bool ReadSpawnSource(Character* c, kc::SpawnInfo& out) {
     if (!Rd(c, off::RO_owner, faction) || !faction || !Rd(faction, off::FAC_data, fgd) || !GameDataSid(fgd, out.factionSid)) return false;
     if (!ReadGameString(reinterpret_cast<uint8_t*>(c) + off::RO_name, out.name)) out.name.clear();
     out.age = 0;
-    if (void* fn = VSlot(c, slot::CH_getAge)) CallFloatRet(fn, c, out.age);
+    if (void* fn = VSlot(c, slot::CH_getAge)) CallFloatRet(fn, c, out.age);   // the age (vt 0x398), not the scale (0x390)
     if (!std::isfinite(out.age)) out.age = 0;
     return out.templateSid.size() <= kc::kMaxSidLen && out.factionSid.size() <= kc::kMaxSidLen;
 }
@@ -2781,6 +2787,43 @@ bool TravellingWearers(Character* trader, std::vector<Character*>& out) {
 }
 
 bool IsAnimal(const void* obj) { return obj && Vtable(obj) == Addr(rva::VtCharacterAnimal); }
+
+float CharacterScale(Character* c) {
+    float s = 1.0f;
+    void* fn = IsCharacter(c) ? VSlot(c, slot::CH_getScale) : nullptr;
+    if (!fn || !CallFloatRet(fn, c, s)) return 1.0f;
+    return kc::loot::SaneScale(s);
+}
+
+// The race is Character+0x2E0 (RaceData*), its game data at +0x40: what CharMovement reads its
+// pathfinding radius from ("pathfind footprint radius", 0x661F90), for humans and animals alike.
+bool ReadBodySize(Character* c, kc::loot::BodySize& out, std::string* race) {
+    if (!IsCharacter(c)) return false;
+    const float scale = CharacterScale(c);
+    void* rd = nullptr;
+    void* gd = nullptr;
+    int type = -1;
+    std::string sid;
+    if (Rd(c, off::CH_race, rd) && rd && Rd(rd, off::RACE_data, gd) && gd && Rd(gd, off::GD_type, type) && type == kc::loot::kTemplateRace) {
+        GameDataSid(gd, sid);
+        if (race) ReadGameString(reinterpret_cast<const uint8_t*>(gd) + off::GD_name, *race);
+        kc::loot::BodySize b;
+        b.scale = scale;
+        const bool fp = GameDataFloatField(gd, "pathfind footprint radius", b.footprint);
+        GameDataFloatField(gd, "hull size X", b.hullX);
+        GameDataFloatField(gd, "hull size Y", b.hullY);
+        GameDataFloatField(gd, "hull size Z", b.hullZ);
+        if (fp || b.hullX > 0 || b.hullZ > 0) { out = b; return true; }
+    }
+    if (const kc::loot::CreatureRace* r = sid.empty() ? nullptr : kc::loot::FindCreatureRace(sid)) {
+        out = kc::loot::SizeOf(*r, scale);
+        if (race && race->empty()) *race = r->name;
+        return true;
+    }
+    out = kc::loot::DefaultBody(scale);
+    if (race && race->empty()) *race = "?";
+    return true;
+}
 
 bool MoneyOf(Character* c, int32_t& out) {
     void* own = IsCharacter(c) ? OwnershipsSeh(c) : nullptr;

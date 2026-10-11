@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "kc/loot.h"
 #include "kc/protocol.h"
 
 namespace kenshi {
@@ -339,6 +340,8 @@ inline constexpr uintptr_t CH_movement = 0x640;   // CharMovement*
 inline constexpr uintptr_t CH_ai = 0x650;         // AI*
 inline constexpr uintptr_t CH_medical = 0x458;    // MedicalSystem (inline)
 inline constexpr uintptr_t CH_body = 0x648;       // CharBody*: +0x8 CombatClass*
+inline constexpr uintptr_t CH_race = 0x2E0;       // RaceData* (Character vt 0xD0 returns it; same for humans and animals)
+inline constexpr uintptr_t RACE_data = 0x40;      // RaceData: GameData* of the race (item type 7)
 inline constexpr uintptr_t BODY_combat = 0x8;
 // CombatClass
 inline constexpr uintptr_t CC_active = 0x130;       // bool combatModeActive
@@ -376,7 +379,10 @@ namespace slot {
 inline constexpr uintptr_t RO_getPosition = 0x40;                 // Vector3 getPosition()  (ret via hidden ptr)
 inline constexpr uintptr_t RO_isUnconcious = 0x30;                // bool isUnconcious() const
 inline constexpr uintptr_t RO_setName = 0x10;                     // void setName(const std::string&)
-inline constexpr uintptr_t CH_getAge = 0x390;                     // float getAge() const
+// 0x390 is the size scale and 0x398 the age (1.0 both on a CharacterHuman; a CharacterAnimal:
+// lerp(+0x6F0, +0x6F4, age) and its +0x700). Until 0.3.1 the scale was read as the age.
+inline constexpr uintptr_t CH_getScale = 0x390;                   // float getScale() const
+inline constexpr uintptr_t CH_getAge = 0x398;                     // float getAge() const (the factory's `age` argument)
 inline constexpr uintptr_t CM_setDestination = 0x90;              // void setDestination(const Vector3&, UpdatePriority, bool)
 inline constexpr uintptr_t CM_halt = 0x98;                        // void halt()
 inline constexpr uintptr_t CM_setPositionDirectionAndTeleport = 0xC0;  // (const Vector3&, const Quaternion&) - halts first
@@ -438,7 +444,12 @@ int GiveShopHome(Character* trader, const std::vector<void*>& counters);
 // without moving the camera (a client keeps the save's focus: the host's character).
 bool FloorFocus(kc::Handle& out);
 bool SetFloorFocus(Character* c);
-bool IsAnimal(const void* obj);   // a CharacterAnimal (pack beast, dog, goat...)
+bool IsAnimal(const void* obj);   // a CharacterAnimal (pack beast, dog, goat... leviathan)
+// A character's body size: its race's footprint and hull (game data) and its scale. Falls back on
+// the known races (kc::loot::CreatureRaces) by race sid, then on a human's size. race: the race's
+// game data name ("Leviathan"), for the logs.
+bool ReadBodySize(Character* c, kc::loot::BodySize& out, std::string* race = nullptr);
+float CharacterScale(Character* c);   // vt 0x390 (1 when unknown)
 void* WornBackpack(Character* c);   // the backpack it wears (an Item with an inventory), or null
 bool HasInventory(const void* obj);
 std::string FirstSectionName(void* holder);   // its inventory's first section (a backpack has one)   // a character, container or item with an inventory (RootObject::getInventory)
@@ -888,6 +899,7 @@ bool GameDataSidOf(const void* gd, std::string& out);
 // A GameData's own value (read only: a missing key stays missing). False when it has none.
 bool GameDataBoolField(const void* gd, const std::string& key, bool& out);
 bool GameDataIntField(const void* gd, const std::string& key, int& out);
+bool GameDataFloatField(const void* gd, const std::string& key, float& out);
 // building templates (itemType BUILDING) whose players' name contains `part` ("sid name" each)
 void BuildingTemplates(const std::string& part, std::vector<std::pair<std::string, std::string>>& out, size_t max);
 void GameDataOfType(int type, std::vector<void*>& out, size_t max);   // every game data record of that itemType (21: research), by sid

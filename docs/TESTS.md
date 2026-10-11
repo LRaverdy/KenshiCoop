@@ -33,6 +33,8 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `TestPerPlayerStreaming` | (0.3.1) deux clients loin l'un de l'autre : chacun ne reçoit que les persos autour des siens ; foule créée 2 par image ; doublure perdue sans cesse ; resync automatique de la zone d'un client (`KC_ONLY_STREAMING=1` : ces tests seuls) |
 | `TestStandInArea` | (0.3.1) hôte qui envoie tout : le client ne recrée ni ne compte manquant ce qui est loin de ses persos |
 | `TestInventories` | inventaires identiques, fouille rejouée par l'hôte |
+| `TestLootCreatures` | (0.3.1) toutes les créatures se fouillent : types de handle (1 humain, 0x5B animal) et de modèle (1, 76) ; pour chacune des 38 races du jeu, à son échelle mini, moyenne et maxi, un pilleur au bord du corps est à portée dans 8 directions (la racine du ragdoll à mi-hauteur), un pilleur trop loin ne l'est pas, le point d'approche est au bord, l'ancienne règle (12 unités en 3D) échouait pour chaque animal plus large ; les créatures du rapport par race (léviathan, bête à bec, gorillo, chien d'os, garru, taureau, chèvre, chauve-souris, araignées, tortue, crabe, araignées de fer et de sécurité, skimmer, raptor, hommes-brume, cannibales…) ; valeurs aberrantes bornées ; délai d'un ordre ; échelle contre âge d'un animal |
+| `TestBigBodyDrop` | (0.3.1) un client prend une perle dans un léviathan mort chez l'hôte ; un dépôt au sol depuis le léviathan par son perso à 210 unités de la racine est accepté, refusé si le corps avait une taille humaine |
 | `TestClientDropGate` | dépôts au sol d'un client (partie du 10/10, objets disparus) : la session dit au monde depuis quels inventaires un dépôt peut partir (son perso par le handle de l'hôte, le sac qu'il porte par le handle local, un coffre ouvert avec son perso à côté, un corps avec son perso à côté ; pas le perso de l'hôte, pas un PNJ, pas un coffre fermé ou loin) ; dépôt depuis son sac fait par l'hôte ; dépôt nommé par un handle que l'hôte ne connaît pas (celui d'une doublure avant le correctif) : rien envoyé, note « Objet non posé », rien de perdu ; dépôt refusé tard (corps sans perso à côté) : l'état de l'hôte revient tout de suite, pas 10 s après |
 | `TestGroundDrops` | objets lâchés au sol par un client : depuis son perso (l'hôte le lâche), depuis un coffre ouvert (lâché par son perso près du coffre, nommé dans `InvOp::toNetId`), depuis le perso de l'hôte (refusé) ; dépôts forgés (perso de l'hôte, aucun perso, son perso loin du coffre) refusés par le contrôle d'autorité |
 | `TestFactions` | relations de la faction du joueur et primes de l'hôte identiques chez le client, changements suivis, dérive du client corrigée |
@@ -145,6 +147,7 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `fx` / `fxlive` | effets météo (orage forcé puis comparaison en pause ; en direct) |
 | `bodies` / `dead` / `items` | où reposent les corps ; morts ; objets |
 | `lootorder` / `lootclick` / `lootui` | fouille par clic droit (`lootclick` prépare une scène à tester à la main) |
+| `lootcreature [--only <nom>]` | (0.3.1) chèvre, chien d'os, taureau sauvage, gorillo, araignée à peau, bête à bec, tortue des marais, léviathan : l'hôte fait apparaître chaque créature près du perso du client (`spawncreature`) et la tue ; le client l'ordonne de fouiller (`loot`) ; la fenêtre doit s'ouvrir (`lootstats`), l'inventaire de l'hôte doit contenir ses « death items », un objet pris doit quitter le corps chez l'hôte et les deux côtés concorder. Pas encore lancée |
 | `walk` / `trace` | trace image par image des corrections de position d'un PNJ qui marche |
 | `menu` | un hôte qui héberge et un second jeu laissé **au menu principal**, pour rejoindre à la main |
 | `up` | un hôte et un client connectés, laissés ouverts pour un test manuel |
@@ -353,6 +356,9 @@ l'escouade triée par handle.
 | `groundstats` | compteurs des objets au sol (crochets, relevé, répétitions ; côté client : créés, adoptés, fusionnés, retirés) |
 | `invmove <de> <vers> <rang\|main\|worn> [qté] [x] [y] [section]` | ce que fait un glisser-déposer d'inventaire ; `bag:<qui>` désigne le sac porté par ce personnage |
 | `loot <cible> [index]` / `lootorder <cible>` | fouille d'un corps telle qu'un client la fait ; le chemin du clic droit |
+| `spawncreature <sid> <dx> <dz> [index] [âge]` | (hôte) crée un perso de ce modèle (un animal : `3967-gamedata.base` léviathan, `3993-gamedata.base` chèvre…) près de ce membre, dans la faction d'un PNJ voisin ; il devient la cible de `ko` / `kill` / `wake` / `npcstate` |
+| `bodysize <cible\|spawned>` | race, échelle, âge, rayon, coque, portée de fouille (`kc::loot`), mort / K.-O. / ragdoll de ce perso |
+| `lootstats` | (client) ordres de fouille en attente, fenêtres ouvertes, ordres abandonnés |
 | `containerreq <sélection> <nom>` | clic droit sur le contenant le plus proche de ce nom |
 | `contake <sélection> <nom>` | dans la fenêtre ouverte, prend le premier objet |
 | `contcount <nom\|any>` | piles dans le contenant le plus proche de ce nom |

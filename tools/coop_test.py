@@ -4251,6 +4251,78 @@ def exp_lootui(host, cli):
     shot(cli, os.path.abspath(os.path.join(OUT_DIR, "lootui_client_after.png")))
 
 
+LOOT_CREATURES = [
+    # (template sid, name, distance from the looter: a big body is spawned farther so it does not land on it)
+    ("3993-gamedata.base", "Goat", 30),
+    ("3979-gamedata.base", "Bonedog", 35),
+    ("3986-gamedata.base", "Wild Bull", 45),
+    ("43895-rebirth.mod", "Gorillo", 50),
+    ("43877-rebirth.mod", "Skin Spider", 55),
+    ("2859-gamedata.base", "Beak Thing", 70),
+    ("3988-gamedata.base", "Swamp Turtle", 110),
+    ("3967-gamedata.base", "Leviathan", 220),
+]
+
+
+def exp_lootcreature(host, cli, only=""):
+    """Every kind of creature is lootable from a client, like on the host in solo (session of 10/11 Oct.:
+    leviathans could not be looted). The host spawns each creature (spawncreature, debug commands)
+    next to the client's character and kills it; the client sends its loot order (what the right
+    click's "loot" does); the loot window must open on the client once the looter stands by the body
+    (lootstats: opened, not dropped), whatever its size; then one item of the body (its "death items":
+    meat, skins, pearls) is taken and must land the same on the host and the client."""
+    time.sleep(6)
+    log("give", cmd(host, "give 2 0"))
+    wanted = [c for c in LOOT_CREATURES if not only or only.lower() in c[1].lower()]
+    for sid, name, d in wanted:
+        ok, text = cmd(host, f"spawncreature {sid} {d} {d // 2} 0")
+        log(f"[{name}] spawn:", text)
+        if not ok or not text.startswith("ok"):
+            check(f"{name}: spawned on the host", False, text)
+            continue
+        key = text.split()[1]
+        time.sleep(4)
+        log(f"[{name}] host body:", cmd(host, f"bodysize {key}")[1])
+        h = dump(host, f"h_lc_{name}_alive", 600)
+        at = h["char"].get(key, {}).get("pos")
+        log(f"[{name}] kill:", cmd(host, "kill"))
+        time.sleep(6)
+        # its key may change with its death (the hand's container): the dead one where it stood
+        h = dump(host, f"h_lc_{name}", 600)
+        dead = [k for k, c in h["char"].items() if int(c.get("vflags", "0") or 0) & 2 and "pos" in c]
+        if at and dead and (key not in h["char"] or not int(h["char"][key].get("vflags", "0") or 0) & 2):
+            key = min(dead, key=lambda k: dist(h["char"][k]["pos"], at))
+        log(f"[{name}] dead on the host:", key in dead, key)
+        log(f"[{name}] client body:", cmd(cli, f"bodysize {key}")[1])
+        before = cmd(cli, "lootstats")[1]
+        log(f"[{name}] loot order:", cmd(cli, f"loot {key} 0"), before)
+        opened = False
+        stats = before
+        for i in range(60):
+            time.sleep(1)
+            stats = cmd(cli, "lootstats")[1]
+            if stats.split("opened=")[-1].split()[0] != before.split("opened=")[-1].split()[0]:
+                opened = True
+                break
+            if stats.split("dropped=")[-1] != before.split("dropped=")[-1]:
+                break
+        check(f"{name}: the client's loot window opens by the body", opened, stats)
+        shot(cli, os.path.abspath(os.path.join(OUT_DIR, f"lootcreature_{name.replace(' ', '_')}.png")))
+        h, c = dump(host, f"h_lc_{name}_inv", 600), dump(cli, f"c_lootc_{name}_inv", 600)
+        inv = h["char"].get(key, {}).get("inv")
+        log(f"[{name}] body inventory host:", inv, "| client:", c["char"].get(key, {}).get("inv"))
+        check(f"{name}: its death items are in its inventory on the host", bool(inv), inv)
+        if not inv:
+            continue
+        log(f"[{name}] take one item:", cmd(cli, f"invmove {key} squad0 0"))
+        time.sleep(4)
+        h, c = dump(host, f"h_lc_{name}_after", 600), dump(cli, f"c_lc_{name}_after", 600)
+        after = h["char"].get(key, {}).get("inv")
+        r = compare(h, c, f"{name} looted")
+        check(f"{name}: the item left the body on the host", after != inv, after)
+        check(f"{name}: host and client agree after the loot", not r["inventory_mismatch"], r["inventory_mismatch_sample"])
+
+
 def exp_items(host, cli):
     time.sleep(4)
     for args in ("917-gamedata.base 475-gamedata.base 918-gamedata.base 0", "917-gamedata.base 475-gamedata.base 918-gamedata.base 3",
@@ -5675,6 +5747,10 @@ def main():
     dd.add_argument("--save", default="kctest_base")
     it = sub.add_parser("items")
     it.add_argument("--save", default="kctest_base")
+    lcr = sub.add_parser("lootcreature", help="every creature kind (goat to leviathan) spawned, killed and looted by a client")
+    lcr.add_argument("--save", default="kctest_base")
+    lcr.add_argument("--keep", action="store_true")
+    lcr.add_argument("--only", default="", help="part of one creature's name (Leviathan, Goat...)")
     lu = sub.add_parser("lootui")
     lu.add_argument("--save", default="kctest_base")
     lu.add_argument("--keep", action="store_true")
@@ -6027,6 +6103,9 @@ def main():
             exp_carry(host, cli)
         elif a.what == "dead":
             exp_dead(host, cli)
+        elif a.what == "lootcreature":
+            exp_lootcreature(host, cli, a.only)
+            summary()
         else:
             scenario(host, cli, a.quick)
     finally:

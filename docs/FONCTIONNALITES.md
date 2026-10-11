@@ -545,6 +545,13 @@ la fenêtre du client.
     dans une section d'équipement que son jeu tient désactivée (bottes, chemise d'une doublure de
     PNJ, qui finissaient dans le sac : stress à 4 joueurs du 10/10). Un objet qui reste ailleurs
     est nommé au journal (`inventory of … not as on the host`). Non revérifié en jeu.
+- **Toutes les créatures** (0.3.1, pas encore vérifié en jeu) : humanoïdes et animaux, d'une chèvre
+  à un léviathan, se fouillent pareil. Le dépeçage n'est pas une action à part dans Kenshi : la
+  viande, les peaux, les dents, les perles de léviathan sont dans l'inventaire de l'animal mort et se
+  prennent dans la fenêtre de fouille. La fenêtre s'ouvre quand le pilleur est au bord du corps,
+  selon sa taille (`kc::loot` : rayon et coque de sa race, fois son échelle) ; un pilleur arrêté
+  contre un grand corps l'ouvre aussi. Un animal recréé chez un client a l'âge de celui de l'hôte,
+  donc sa taille. Tests `TestLootCreatures`, `TestBigBodyDrop`, expérience `lootcreature`.
 - **Limite** : un objet tenu à la souris pendant un glisser-déposer laisse 10 s avant le retour à
   l'état de l'hôte.
 

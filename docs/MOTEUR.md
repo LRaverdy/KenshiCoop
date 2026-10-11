@@ -377,6 +377,7 @@ Vtables (pour reconnaître un objet) :
 | +0xF0 | `BountyManager` du personnage (premier argument de `setCrime`) |
 | +0x148 / +0x150 / +0x160 / +0x180 | crime actif : type, faction, `hand` de la victime, expiration (au moins 3 s), d'après la recherche |
 | +0x280 | `Dialogue*` |
+| +0x2E0 | `RaceData*` (vt 0xD0 le rend, `0x5E1F00`) ; son `GameData*` de race (type 7) à +0x40 : « pathfind footprint radius », « hull size X/Y/Z », lus par `CharMovement` (`0x661F90`, rayon de pathfinding à `CharMovement+0x364`, multiplié par vt 0x390) [D, 0.3.1] |
 | +0x2E8 | `Inventory*` |
 | +0x2F8 | `inSomething` : 0 rien, 1 au lit, 2 en prison / cage ; `inWhat` (`hand`) à +0x300 |
 | +0x348 / +0x380 | porte quelqu'un (bool) / `hand` du corps porté |
@@ -408,7 +409,8 @@ Emplacements de vtable :
 | 0x298 | `ImStealingDoYouNotice` |
 | 0x370 | `setProneState` |
 | 0x378 | mise en place du perso depuis son `GameData` (`0x62B210` : écrit `ActivePlatoon` +0x658 en premier, initialise les stats plus loin) |
-| 0x390 | `getAge` |
+| 0x390 | **échelle** : 1,0 pour `Character` / `CharacterHuman` (`0x5E5980`) ; `CharacterAnimal` (`0x5E1FA0`) : +0x6F0 + (+0x6F4 − +0x6F0) × +0x700, soit lerp(échelle min, échelle max, âge). Appelée « getAge » à tort jusqu'en 0.3.1 [D] |
+| 0x398 | **âge** : 1,0 pour un humain (`0x5E5990`) ; `CharacterAnimal` +0x700 (`0x5E2010`), écrit avec +0x6FC par son constructeur (`0x5C8150`) depuis l'argument `age` de la fabrique [D] |
 
 ### CharStats (ordres permanents et compétences)
 - +0x8 `MedicalSystem*` (celui du perso, `Character+0x458`), +0x10 `me`. Le constructeur
@@ -810,6 +812,10 @@ Tâches par défaut d'un clic droit sur un meuble, selon la recherche :
 
 ### Types d'objets (`itemType`, valeurs utilisées)
 0 bâtiment ; 1 personnage ; 2 arme ; 3 armure ; 7 race ; 0x5B personnage animal.
+
+Ce sont aussi les types de `hand` d'un perso : 1 un `CharacterHuman`, 0x5B un `CharacterAnimal`. Le
+**modèle** d'un animal a le type 76 (`ANIMAL_CHARACTER` : « scale min », « scale max », références
+« race » et « death items ») ; celui d'un humanoïde, le type 1.
 
 ### Factions, relations et primes (lot B, vérifié par désassemblage)
 - `Faction` : +0x78 `FactionRelations*`, +0x240 `GameData*` (identifiant de chaîne de la faction),
@@ -1248,6 +1254,21 @@ Recherche faite le 9 octobre 2026 pour le commerce. Fiabilité de chaque fait :
 - 124 → `Task_FillMachine` ; 284 → `Task_EmptyMachine` : métiers de PNJ, **sans fenêtre**.
 - Ouvrir un coffre, c'est **26 avec le meuble pour sujet** : la tâche passe par
   `addTaskNearestSelectedCharacter(maison du coffre, 26, coffre, …)`.
+- **Animaux et dépeçage** (0.3.1) [D] : un animal mort se fouille par la même tâche 26. Il n'y a pas
+  de tâche de dépeçage (RTTI : seulement `Task_Loot_Order`, `Task_Loot_AI`,
+  `Task_Loot_ResourcesWeHaveStorageFor`, `Task_StripWeapons`, `Task_FeedCorpseIntoMachine`). La
+  viande, les peaux, les dents, les perles sont les « death items » du modèle `ANIMAL_CHARACTER`
+  (léviathan : « Leviathan Pearl » ; taureau : peau, viande, corne…), dans son inventaire une fois
+  mort. « {1} is butchering {2} for meat!! » (`0x16C1780`) n'est qu'une notification de la fonction
+  `0x355AD0` de la fouille, quand le corps est de la faction du joueur. Le début de l'action
+  (`0x354DC0`) ne vérifie aucune distance : l'approche est celle du système de tâches.
+- **Taille des corps** (données du 1.0.68, race : rayon de pathfinding / coque X×Y×Z ; modèle :
+  échelle min-max) : humanoïdes 2,6 à 4 / 5×17×5, échelle 1 ; chèvre 4 / 8×12×8, 0,35-1 ; raptors
+  6 / 10×16×10 (mégaraptor jusqu'à 3,5) ; taureau, garru 7 / 15×20×15 ; chien d'os, loup 10 /
+  10×15×10 ; chauve-souris 10 / 12×17×12 ; crabe 10 / 25×22×25 (mégacrabe 2,25) ; araignées de fer
+  et de sécurité 10 / 25×22×25 ; gorillos 12 / 21×26×21 (roi 2,5) ; araignées 14 / 25×22×25 ; bête à
+  bec 16 / 18×50×18 ; skimmer 22 / 36×38×36 ; bête en cage 24 / 35×40×35 ; tortue des marais 25 /
+  50×40×50 (1,5) ; léviathan 40 / 75×90×75, 0,4-1,5. Table complète : `kc::loot::CreatureRaces`.
 
 ### Bâtiments et meubles [D]
 - `RootObjectFactory::createBuilding` (`0x57CC70`) choisit la classe d'après la fonction :
