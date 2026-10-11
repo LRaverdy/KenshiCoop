@@ -189,6 +189,10 @@ Config LoadConfig(const std::wstring& ini) {
     c.minimapRotate = num(L"ui", L"minimap_rotate", 0) != 0;
     c.minimapCorner = std::clamp(int(num(L"ui", L"minimap_corner", 1)), 0, 3);
     c.minimapZoom = std::clamp(float(num(L"ui", L"minimap_zoom", 1500)), 300.0f, 30000.0f);
+    c.minimapX = float(num(L"ui", L"minimap_x", -1));
+    c.minimapY = float(num(L"ui", L"minimap_y", -1));
+    if (c.minimapX < 0 || c.minimapY < 0 || c.minimapX > 1 || c.minimapY > 1) c.minimapX = c.minimapY = -1;
+    c.minimapSize = std::clamp(float(num(L"ui", L"minimap_size", 1)), 0.5f, 2.5f);
     c.pings = num(L"ui", L"pings", 1) != 0;
     return c;
 }
@@ -209,12 +213,33 @@ bool SetUiOption(Config& c, const std::wstring& ini, const std::string& key, flo
     else if (key == "pings") c.pings = on;
     else if (key == "minimap_corner") c.minimapCorner = std::clamp(int(v), 0, 3);
     else if (key == "minimap_zoom") c.minimapZoom = std::clamp(v, 300.0f, 30000.0f);
-    else return false;
-    std::string text;
-    if (key == "minimap_zoom") text = std::to_string(int(c.minimapZoom));
-    else if (key == "minimap_corner") text = std::to_string(c.minimapCorner);
-    else text = on ? "1" : "0";
-    WritePrivateProfileStringW(L"ui", Widen(key).c_str(), Widen(text).c_str(), ini.c_str());
+    else if (key == "minimap_x") c.minimapX = (v < 0 || v > 1) ? -1.0f : v;
+    else if (key == "minimap_y") c.minimapY = (v < 0 || v > 1) ? -1.0f : v;
+    else if (key == "minimap_size") c.minimapSize = std::clamp(v, 0.5f, 2.5f);
+    else if (key != "minimap_reset") return false;
+    auto put = [&](const char* k, const std::string& text) { WritePrivateProfileStringW(L"ui", Widen(k).c_str(), Widen(text).c_str(), ini.c_str()); };
+    auto fraction = [](float f) {
+        char b[32];
+        snprintf(b, sizeof(b), "%.4f", double(f));
+        return std::string(f < 0 ? "-1" : b);
+    };
+    // the corner (or a reset) drops the free position
+    if (key == "minimap_corner" || key == "minimap_reset") {
+        c.minimapX = c.minimapY = -1;
+        put("minimap_x", "-1");
+        put("minimap_y", "-1");
+    }
+    if (key == "minimap_reset") {
+        c.minimapSize = 1.0f;
+        put("minimap_size", "1");
+        return true;
+    }
+    if (key == "minimap_zoom") put("minimap_zoom", std::to_string(int(c.minimapZoom)));
+    else if (key == "minimap_corner") put("minimap_corner", std::to_string(c.minimapCorner));
+    else if (key == "minimap_x") put("minimap_x", fraction(c.minimapX));
+    else if (key == "minimap_y") put("minimap_y", fraction(c.minimapY));
+    else if (key == "minimap_size") put("minimap_size", fraction(c.minimapSize));
+    else put(key.c_str(), on ? "1" : "0");
     return true;
 }
 

@@ -65,6 +65,8 @@ struct OverlayModel {
     // "Affichage" settings (map markers, minimap, pings...), shown in the Multijoueur window
     bool optMap = true, optHeads = true, optPortraits = true, optMinimap = true, optMinimapRotate = false, optPings = true;
     int optMinimapCorner = 1;
+    bool optMinimapFree = false;        // moved by hand (minimap_x / minimap_y set)
+    float optMinimapSize = 1.0f;
 };
 
 // What the player did in our windows; carried out on the game thread.

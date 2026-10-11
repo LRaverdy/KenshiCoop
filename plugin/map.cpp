@@ -633,6 +633,9 @@ void UpdateMapScene(kc::Session& session, KenshiWorld& world, const Config& cfg,
     s.showMinimap = cfg.minimap;
     s.minimapRotate = cfg.minimapRotate;
     s.minimapCorner = cfg.minimapCorner;
+    s.minimapX = cfg.minimapX;
+    s.minimapY = cfg.minimapY;
+    s.minimapSize = cfg.minimapSize;
     s.minimapZoom = cfg.minimapZoom;
     s.showPings = cfg.pings;
     const bool inSession = session.isHost() || session.state() == kc::SessionState::Connected;
@@ -829,7 +832,17 @@ std::string DescribeMapScene(const std::string& what) {
         for (const auto& t : s.threats) o << " threat:kind=" << t.kind << ":n=" << t.count << ":x=" << t.pos.x << ":z=" << t.pos.z << ":" << clean(t.label);
     } else if (what == "minicarte") {
         o << " enabled=" << s.showMinimap << " covered=" << s.covered << " centre=" << s.centreOk << ":" << s.centre.x << "," << s.centre.z
-          << " zoom=" << s.minimapZoom << " rotate=" << s.minimapRotate << " corner=" << s.minimapCorner << " ;";
+          << " zoom=" << s.minimapZoom << " rotate=" << s.minimapRotate << " corner=" << s.minimapCorner;
+        {
+            // where it sits on screen: the settings (fractions of the display, -1 = its corner) and
+            // what the overlay last drew (display pixels: centre and radius)
+            const MapDrawn d = MapOverlayLastDrawn();
+            const std::streamsize prec = o.precision(3);
+            o << " fx=" << s.minimapX << " fy=" << s.minimapY << " size=" << s.minimapSize;
+            o.precision(prec);
+            o << " drawn=" << d.minimap << " pos=" << d.mmX << "," << d.mmY << " r=" << d.mmR << " free=" << d.mmFree << " drag=" << d.mmDrag
+              << " screen=" << w << "x" << h << " ;";
+        }
         // dots inside the circle: same rule as the overlay (distance <= zoom)
         for (const auto& c : s.chars)
             if (s.centreOk && Dist2D(c.pos, s.centre) <= s.minimapZoom) o << ' ' << clean(c.name) << ":owner=" << int(c.owner) << ":col=" << colour(c.owner);

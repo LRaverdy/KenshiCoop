@@ -3225,6 +3225,37 @@ static void TestGuiToDisplay() {
     CHECK(kcp::WorldToMapScreen(s, {500, 0, 500}, sx, sy) && std::fabs(sx - 400) < 1e-3f && std::fabs(sy - 250) < 1e-3f);
 }
 
+// Where the minimap goes (plugin/map_view.h): its corner, or a free position kept as fractions of the
+// display, always on screen, at any size.
+static void TestMinimapPlace() {
+    std::printf("overlay: the minimap in its corner or moved by hand, kept on screen across resizes\n");
+    auto near = [](float a, float b) { return std::fabs(a - b) < 0.01f; };
+    // corners as before: 11 % of the height, 18 px from the edges (top right below the status panel)
+    kcp::MinimapPlace p = kcp::PlaceMinimap(1, -1, -1, 1.0f, 1920, 1080);
+    CHECK(!p.free && near(p.r, 118.8f) && near(p.cx, 1920 - 18 - 118.8f) && near(p.cy, 18 + 118.8f + 150));
+    p = kcp::PlaceMinimap(2, -1, -1, 1.0f, 1920, 1080);
+    CHECK(near(p.cx, 18 + 118.8f) && near(p.cy, 1080 - 18 - 118.8f - 30));
+    // a free position: the same fractions after a resize of the window
+    p = kcp::PlaceMinimap(1, 0.5f, 0.4f, 1.0f, 1920, 1080);
+    CHECK(p.free && near(p.cx, 960) && near(p.cy, 432));
+    p = kcp::PlaceMinimap(1, 0.5f, 0.4f, 1.0f, 1280, 720);
+    CHECK(p.free && near(p.cx, 640) && near(p.cy, 288) && near(p.r, 79.2f));
+    // dragged past an edge: clamped so the circle, its north marker, scale and buttons stay visible
+    p = kcp::PlaceMinimap(1, 0.0f, 1.0f, 1.0f, 1920, 1080);
+    CHECK(near(p.cx, p.r + kcp::kMinimapPadSide) && near(p.cy, 1080 - p.r - kcp::kMinimapPadBottom));
+    p = kcp::PlaceMinimap(1, 1.0f, 0.0f, 1.0f, 1920, 1080);
+    CHECK(near(p.cx, 1920 - p.r - kcp::kMinimapPadSide) && near(p.cy, p.r + kcp::kMinimapPadSide));
+    // size: a factor of the default radius, 0.5 to 2.5, never bigger than the display
+    CHECK(near(kcp::PlaceMinimap(0, -1, -1, 2.0f, 1920, 1080).r, 237.6f));
+    CHECK(near(kcp::PlaceMinimap(0, -1, -1, 9.0f, 1920, 1080).r, 297.0f));
+    CHECK(near(kcp::PlaceMinimap(0, -1, -1, 0.1f, 1920, 1080).r, 59.4f));
+    p = kcp::PlaceMinimap(0, 0.5f, 0.5f, 2.5f, 400, 300);
+    CHECK(p.r * 2 + 2 * kcp::kMinimapPadSide <= 400.01f && p.cy - p.r >= kcp::kMinimapPadSide - 0.01f && p.cy + p.r + kcp::kMinimapPadBottom <= 300.01f);
+    // a corner index out of range is clamped
+    p = kcp::PlaceMinimap(7, -1, -1, 1.0f, 1920, 1080);
+    CHECK(near(p.cx, 1920 - 18 - 118.8f) && near(p.cy, 1080 - 18 - 118.8f - 30));
+}
+
 static void TestMap() {
     std::printf("session: map markers (players' characters, hostile squads) and pings reach every player\n");
     FakeWorld hw;
@@ -5595,6 +5626,7 @@ int main() {
     TestCallScopeRepair();   // crash at kenshi_x64+0x883B78
     TestActorSafety();
     TestGuiToDisplay();
+    TestMinimapPlace();
     TestDialogue();
     TestTalkAndRecruit();   // 10 oct. session: talk busy with oneself, recruits
     TestMap();

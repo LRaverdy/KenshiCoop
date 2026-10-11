@@ -711,8 +711,11 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
    du jeu (`MapRefreshGui` : pas de retard derrière une fenêtre qu'on déplace), puis les convertit en
    pixels du tampon d'affichage de cette image (`SceneToDisplay`, `io.DisplaySize`) ; il garde ce qu'il
    a dessiné pour les tests (`MapOverlayLastDrawn`, commande `mapconv`). Il dessine carte, minicarte, têtes, cadres et pings ;
-   la procédure de fenêtre (`MapOverlayMessage`) prend la molette et les boutons de la minicarte
-   et les clics de ping ; le filtre DirectInput cache ces clics au jeu.
+   la procédure de fenêtre (`MapOverlayMessage`) prend la molette et les boutons de la minicarte,
+   son glissé (clic gauche : déplacer ; poignée ou Ctrl+molette : redimensionner, `SetCapture`
+   pendant le glissé, réglages envoyés au relâchement) et les clics de ping ; le filtre DirectInput
+   cache ces clics au jeu (`MapOverlayHoldsMouse`). Où va la minicarte : `PlaceMinimap`
+   (`map_view.h`, testé par `TestMinimapPlace`).
 4. Ping : `Session::PlaceMapPing` (hôte : ajouté et diffusé ; client : `MapPing` à l'hôte, qui
    vérifie 0,5 s par joueur, garde 5 pings par joueur et le renvoie à tous) ; 10 s de vie.
 
@@ -925,7 +928,9 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | `[ui] portrait_colours` | 1 | cadre coloré des portraits des joueurs |
 | `[ui] minimap` | 1 | minicarte (Ctrl+Shift+N) |
 | `[ui] minimap_rotate` | 0 | minicarte tournante (sinon nord en haut) |
-| `[ui] minimap_corner` | 1 | coin : 0 haut gauche, 1 haut droite, 2 bas gauche, 3 bas droite |
+| `[ui] minimap_corner` | 1 | coin : 0 haut gauche, 1 haut droite, 2 bas gauche, 3 bas droite (le choisir efface `minimap_x` / `minimap_y`) |
+| `[ui] minimap_x`, `minimap_y` | -1 | position libre de la minicarte (glissée à la souris) : son centre en fraction de la largeur / hauteur de l'écran (0 à 1) ; -1 : dans son coin |
+| `[ui] minimap_size` | 1 | taille de la minicarte (poignée ou Ctrl+molette) : facteur du rayon normal, 0,5 à 2,5 |
 | `[ui] minimap_zoom` | 1500 | unités du centre au bord de la minicarte (300 à 30000) |
 | `[ui] pings` | 1 | placer et voir les pings |
 | `[ui] host_console` | 1 | la console hors du jeu s'ouvre seule quand on héberge |

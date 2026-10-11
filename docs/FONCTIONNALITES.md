@@ -1044,13 +1044,29 @@ la fenêtre du client.
   **infobulle** : nom, joueur (ou « recrue »), état, **distance** depuis le perso sélectionné. Les
   points suivent la carte quand on la fait glisser ou qu'on zoome (projection du jeu, relue à
   chaque image).
-- **Minicarte** ronde dans un coin (au choix), centrée sur le perso sélectionné (sinon le sien),
+- **Minicarte** ronde dans un coin (au choix) ou **où l'on veut**, centrée sur le perso sélectionné (sinon le sien),
   nord en haut ou tournant avec la caméra ; fond : la carte du jeu (`GUI_Map.dds`) découpée dans le
   cercle, sinon une grille. Persos des joueurs, ennemis, pings (flèche sur le bord quand ils sont
   hors du cercle), repère « N », échelle en mètres, boutons + / − et molette au survol, infobulles.
   Cachée au menu, pendant les chargements, dans l'éditeur de personnage et quand l'écran de
   gestion (carte, escouades…) est ouvert. Ctrl+Shift+N l'affiche ou la cache ; zoom, coin,
   rotation retenus dans `KenshiCoop.ini` (`[ui]`).
+- **Minicarte déplaçable et redimensionnable** : clic gauche maintenu sur le disque et glisser la
+  déplace (le clic gauche sur la minicarte n'avait aucun usage ; le clic molette et l'Alt+clic
+  restent aux pings, la molette au zoom, les boutons + / − au zoom). Un clic sans bouger de plus de
+  3 px ne change rien. La **poignée** sur le bord en bas à droite, ou **Ctrl+molette** au survol, la
+  redimensionne (50 % à 250 % de la taille normale, jamais plus grande que l'écran). Pendant le
+  glissé, le bord s'allume, la souris est capturée (`SetCapture`) et le jeu ne reçoit aucun clic
+  (procédure de fenêtre et filtre DirectInput, comme au survol) ; le curseur du jeu continue de
+  bouger. La capture se coupe d'elle-même si l'overlay ne dessine plus (0,5 s), si la minicarte
+  disparaît ou si le relâchement a été manqué. La position est gardée en **fractions de l'écran**
+  (`minimap_x`, `minimap_y` : le centre du cercle) et la taille en facteur (`minimap_size`) : elle
+  survit à un redimensionnement de la fenêtre ; la minicarte reste toujours entière à l'écran
+  (repère N, échelle et boutons compris, `PlaceMinimap` dans `plugin/map_view.h`). Dans
+  « Affichage », choisir un **coin** l'y remet (le menu affiche « position libre » après un
+  glissé) ; **« Réinitialiser la position »** la remet dans son coin à sa taille normale.
+  Infobulles en français. `mapscene minicarte` donne en plus `fx=`, `fy=`, `size=` (réglages) et
+  `drawn=`, `pos=x,y`, `r=`, `free=`, `drag=`, `screen=` (ce que l'overlay a dessiné, en pixels).
 - **Repère au-dessus de la tête** de chaque perso de joueur (pas des recrues) : un petit curseur à
   la couleur du joueur, avec son nom, projeté avec la caméra du jeu ; rien quand le perso est hors
   de l'écran ou derrière la caméra.
@@ -1070,7 +1086,7 @@ la fenêtre du client.
   temps par joueur (le plus ancien part). Un ping ne change rien au monde. Pas de son (aucun son
   d'interface simple trouvé dans le jeu).
 - **Réglages** : fenêtre Multijoueur, section « Affichage » (carte, repères, barre d'escouade,
-  minicarte, rotation, coin, pings) ; tout est retenu dans `KenshiCoop.ini`.
+  minicarte, rotation, coin, « Réinitialiser la position », pings) ; tout est retenu dans `KenshiCoop.ini`.
 - **Fonctionnement** : l'hôte envoie trois fois par seconde à tout le monde (`MapMarkers`) la
   liste des joueurs, la position de chaque perso de l'escouade avec son joueur et s'il est « son »
   perso (celui créé pour lui ou qui porte son nom ; sinon son premier perso), et les escouades
