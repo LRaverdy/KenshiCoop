@@ -78,6 +78,45 @@ inline Vec3 ApproachPoint(const Vec3& looter, const Vec3& body, const BodySize& 
 }
 // How long a loot order waits for the looter to get there (it walks ~14 units a second).
 inline double OrderTimeout(float dist) { return 30.0 + double(std::min(std::max(dist, 0.0f), 3000.0f)) / 10.0; }
+// The clock of a client's loot order. Paused time does not count (the looter cannot walk: the host
+// paused, or a joining player's character editor holds the game; in the in-game test of 11/10 every
+// order that needed a walk expired that way, the editor never closed). "Stopped by the body" needs the
+// looter to have walked first: one that never left its place is waiting, not blocked.
+struct OrderClock {
+    double since = 0;        // given at
+    double until = 0;        // expires at (pushed back by paused time)
+    double last = 0;         // last tick
+    double stillSince = 0;   // the looter stopped walking at (0: walking, or not yet seen walking)
+    double pausedFor = 0;    // seconds of pause seen
+    bool walked = false;     // seen walking at least once
+};
+inline OrderClock StartOrder(double now, float dist) {
+    OrderClock o;
+    o.since = o.last = now;
+    o.until = now + OrderTimeout(dist);
+    return o;
+}
+// One tick. moving: the looter walks (unknown: pass true, it never counts as stopped).
+inline void Tick(OrderClock& o, double now, bool paused, bool moving) {
+    const double dt = now > o.last ? now - o.last : 0.0;
+    o.last = now;
+    if (paused) {
+        o.until += dt;
+        o.since += dt;
+        o.pausedFor += dt;
+        o.stillSince = 0;
+        return;
+    }
+    if (moving) {
+        o.walked = true;
+        o.stillSince = 0;
+    } else if (o.stillSince == 0) {
+        o.stillSince = now;
+    }
+}
+// The looter walked, then stood still for a second: it cannot come closer.
+inline bool Stopped(const OrderClock& o, double now) { return o.walked && o.stillSince != 0 && now - o.stillSince >= 1.0 && now - o.since >= 1.5; }
+inline bool Expired(const OrderClock& o, double now) { return now >= o.until; }
 // Host: a drop from a body, by a character standing at most this far from the body's position.
 inline float DropReach(const BodySize& b) { return kDropReach + 2.0f * BodyRadius(b) + BodyHeight(b); }
 

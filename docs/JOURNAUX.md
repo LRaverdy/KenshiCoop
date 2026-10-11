@@ -162,7 +162,8 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 | `refused an inventory move from player N` | demande refusée (pas son personnage, PNJ conscient…) : l'état réel est renvoyé |
 | `[X] loot order: N units to go (animal dead, race Leviathan, scale 1.50, body radius 112, reach 237)` | ordre de fouille d'un client : distance au sol, sorte de corps, race (données du jeu), échelle, rayon et portée qui en découlent |
 | `[X] loot window opened at N units (…[, stopped by the body])` | la fenêtre de fouille s'ouvre chez ce client ; « stopped by the body » : le pilleur s'est arrêté contre un grand corps |
-| `[X] loot order dropped: the looter is still N units from the body (…)` / `… the body is gone here` / `… it got up` | ordre de fouille abandonné, avec la raison (avant 0.3.1 : rien au journal) |
+| `[X] loot order dropped: the looter is still N units from the body (…, it walked \| it never walked, paused N s)` / `… the body is gone here` / `… it got up` | ordre de fouille abandonné, avec la raison (avant 0.3.1 : rien au journal) ; « it never walked » à la distance de départ : l'ordre de marche n'a pas avancé |
+| `[X] loot order waits: the game is paused` | pause (de l'hôte, ou éditeur d'un joueur qui arrive) pendant un ordre de fouille : son délai est suspendu |
 
 ### Lignes venues des clients (préfixe `[nom]`)
 | Ligne | Sens |

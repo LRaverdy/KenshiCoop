@@ -2412,6 +2412,32 @@ static void TestLootCreatures() {
     CHECK(SaneScale(0) == 1 && SaneScale(-2) == 1 && SaneScale(9) == 5);
     // an order waits long enough for a long walk (14 units/s), never forever
     CHECK(OrderTimeout(12) >= 30 && OrderTimeout(2000) > 2000 / 14.0 && OrderTimeout(1e9f) <= 400);
+    {
+        // in-game test of 11/10 (26/32): the joiner's character editor held the game paused, no looter
+        // walked, and every order that needed a walk (goat to beak thing) expired after ~33 s, while
+        // the turtle and the leviathan, already in reach, opened. Paused time no longer counts...
+        OrderClock o = StartOrder(100.0, 33);
+        const double timeout = o.until - 100.0;
+        for (double t = 100.1; t < 100.0 + timeout + 120; t += 0.1) Tick(o, t, true, true);   // 2 min paused
+        CHECK(!Expired(o, 100.0 + timeout + 119) && o.pausedFor > 110 && !o.walked);
+        // ... and a looter that never walked (the pause, motion flags at rest) is not "stopped by the body"
+        double t = 100.0 + timeout + 120;
+        for (int i = 0; i < 30; ++i) Tick(o, t += 0.1, false, false);
+        CHECK(!Stopped(o, t));
+        // once it walked and stood still a second, it is
+        for (int i = 0; i < 20; ++i) Tick(o, t += 0.1, false, true);
+        for (int i = 0; i < 12; ++i) Tick(o, t += 0.1, false, false);
+        CHECK(o.walked && Stopped(o, t));
+        // unpaused, the order still expires in the end (the walk's time, not forever)
+        for (int i = 0; i < 5000 && !Expired(o, t); ++i) Tick(o, t += 0.1, false, true);
+        CHECK(Expired(o, t) && t - 100.0 - o.pausedFor < timeout + 1);
+        // stopped right after the order: not yet (the host has not started the walk)
+        OrderClock q = StartOrder(0, 50);
+        Tick(q, 0.1, false, true);
+        Tick(q, 0.2, false, false);
+        Tick(q, 1.3, false, false);
+        CHECK(!Stopped(q, 1.3) && Stopped(q, 1.6));
+    }
     // the animal's scale and age: vt 0x390 is lerp(scale min, scale max, age), vt 0x398 the age the
     // factory was given. Sent as the age, the scale made a client's adult leviathan 2.05 times its
     // race's size instead of 1.5 (bigger, its ragdoll elsewhere), a gorillo smaller...

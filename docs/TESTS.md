@@ -148,7 +148,7 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `fx` / `fxlive` | effets météo (orage forcé puis comparaison en pause ; en direct) |
 | `bodies` / `dead` / `items` | où reposent les corps ; morts ; objets |
 | `lootorder` / `lootclick` / `lootui` | fouille par clic droit (`lootclick` prépare une scène à tester à la main) |
-| `lootcreature [--only <nom>]` | (0.3.1) chèvre, chien d'os, taureau sauvage, gorillo, araignée à peau, bête à bec, tortue des marais, léviathan : l'hôte fait apparaître chaque créature près du perso du client (`spawncreature`) et la tue ; le client l'ordonne de fouiller (`loot`) ; la fenêtre doit s'ouvrir (`lootstats`), l'inventaire de l'hôte doit contenir ses « death items », un objet pris doit quitter le corps chez l'hôte et les deux côtés concorder. Pas encore lancée |
+| `lootcreature [--only <nom>]` | (0.3.1) chèvre, chien d'os, taureau sauvage, gorillo, araignée à peau, bête à bec, tortue des marais, léviathan : l'hôte fait apparaître chaque créature près du perso du client (`spawncreature`) et la tue ; le client l'ordonne de fouiller (`loot`) ; la fenêtre doit s'ouvrir (`lootstats`), l'inventaire de l'hôte doit contenir ses « death items », un objet pris doit quitter le corps chez l'hôte et les deux côtés concorder. Ferme d'abord l'éditeur du client (`editdone`) et attend la fin de la pause. Premier essai (11/10) : 26/32, l'éditeur restait ouvert (jeu en pause) ; corrigé, à relancer |
 | `walk` / `trace` | trace image par image des corrections de position d'un PNJ qui marche |
 | `menu` | un hôte qui héberge et un second jeu laissé **au menu principal**, pour rejoindre à la main |
 | `up` | un hôte et un client connectés, laissés ouverts pour un test manuel |
