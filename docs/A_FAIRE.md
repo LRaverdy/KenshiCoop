@@ -4,6 +4,13 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
 
 ## 10 octobre 2026, partie réelle en v0.3.0 (soir, 4 joueurs par Steam)
 
+- **Son de menu en boucle par moments** chez les joueurs. Piste principale : les fenêtres que le
+  mod ouvre et ferme en boucle font jouer le son d'interface du jeu à chaque fois. Dans le
+  journal de la session : 74 « trade window open », 50 « closed for a moment » (la réouverture
+  automatique de la fenêtre de commerce vide, retirée en 0.3.1 par le lot s031-ui2), 276 lignes de
+  conversation. À vérifier en 0.3.1 ; chercher aussi toute fenêtre (conversation, inventaire,
+  conteneur) rouverte ou remplie en boucle par la synchro.
+
 Journal de l'hôte gardé dans `kc_crashdumps/session_2215/host_live.log` (à compléter par les
 journaux des clients `KenshiCoop-<pid>.log` de chacun).
 
