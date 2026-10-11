@@ -42,7 +42,13 @@ bool KenshiWorld::ReadCaptive(const kc::Handle& h, kc::CaptiveState& out) {
     kenshi::Captivity k;
     if (!c || !kenshi::ReadCaptivity(c, k)) return false;
     out = kc::CaptiveState{};
-    if (k.inSomething == 2 && k.cage && kenshi::ObjectTemplate(k.cage, out.cageSid) && kenshi::ObjectPosition(k.cage, out.cagePos))
+    // In a bed too (inSomething 1), through the same "furniture it is in" (kind and place): a sleeper
+    // the host's game keeps in its bed was a free standing body here, pushed out of the bed onto the
+    // roof or through the floor (faraway test, 11/10: every offset of 33 to 79 units in height was an
+    // NPC with the host's action "sleepinbed"). The client tells a bed from a cage by the furniture's
+    // function (BF_BED). (A flag of its own in CaptiveState needs a protocol change: see A_FAIRE.)
+    if ((k.inSomething == 2 || k.inSomething == 1) && k.cage && kenshi::ObjectTemplate(k.cage, out.cageSid) &&
+        kenshi::ObjectPosition(k.cage, out.cagePos))
         out.caged = true;
     else
         out.cageSid.clear();
@@ -67,26 +73,32 @@ void KenshiWorld::ApplyCaptive(const kc::Handle& h, const kc::CaptiveState& s) {
     kenshi::Captivity local;
     if (!c || !kenshi::ReadCaptivity(c, local)) return;
     HostCallScope scope;
+    auto leave = [&](const char* why) {   // out of the bed or cage it is in here
+        bool ok = true;
+        if (local.inSomething == 2) ok = kenshi::SetPrisonMode(c, false, nullptr);
+        else if (local.inSomething == 1) ok = kenshi::SetInBed(c, false, nullptr);
+        else return;
+        Log("captivity: %s out of its %s %s (%s)", Key(h).c_str(), local.inSomething == 1 ? "bed" : "cage", why, ok ? "ok" : "call failed");
+    };
     if (s.caged) {
         void* cage = FindByKindAndPlace(s.cageSid, s.cagePos);
+        const bool bed = cage && kenshi::BuildingFunctionOf(cage) == kenshi::kBuildingFunctionBed;
+        const int want = bed ? 1 : 2;
         if (!cage) {
-            if (captiveMissing_.insert(h).second) Log("captivity: cage %s not found here for %s", s.cageSid.c_str(), Key(h).c_str());
-        } else if (local.inSomething != 2 || local.cage != cage) {
-            if (local.inSomething == 2) kenshi::SetPrisonMode(c, false, nullptr);
-            const bool ok = kenshi::SetPrisonMode(c, true, cage);
+            if (captiveMissing_.insert(h).second) Log("captivity: furniture %s not found here for %s", s.cageSid.c_str(), Key(h).c_str());
+        } else if (local.inSomething != want || local.cage != cage) {
+            leave("first");
+            const bool ok = bed ? kenshi::SetInBed(c, true, cage) : kenshi::SetPrisonMode(c, true, cage);
             int now = 0;
             kenshi::ReadInSomething(c, now);
-            Log("captivity: %s put in its cage as on the host (%s, inSomething now %d)", Key(h).c_str(), ok ? "ok" : "call failed", now);
+            Log("captivity: %s put in its %s as on the host (%s, inSomething now %d)", Key(h).c_str(), bed ? "bed" : "cage", ok ? "ok" : "call failed", now);
             captiveMissing_.erase(h);
         }
         captiveHold_.insert(h);
     } else {
         captiveHold_.erase(h);
         captiveMissing_.erase(h);
-        if (local.inSomething == 2) {
-            const bool ok = kenshi::SetPrisonMode(c, false, nullptr);
-            Log("captivity: %s out of its cage as on the host (%s)", Key(h).c_str(), ok ? "ok" : "call failed");
-        }
+        leave("as on the host");
     }
     kenshi::Captivity want = local;
     want.chained = s.chained;
@@ -104,11 +116,12 @@ void KenshiWorld::ApplyCaptive(const kc::Handle& h, const kc::CaptiveState& s) {
     if (!same) kenshi::WriteCaptivity(c, want);
 }
 
-// A character the host keeps in a cage stays where the cage holds it: no position corrections.
+// A character the host keeps in a cage or a bed stays where the cage or bed holds it: no position
+// corrections.
 bool KenshiWorld::CaptiveHold(const kc::Handle& h, kenshi::Character* c) {
     if (!captiveHold_.count(h)) return false;
     int in = 0;
-    return kenshi::ReadInSomething(c, in) && in == 2;
+    return kenshi::ReadInSomething(c, in) && (in == 2 || in == 1);
 }
 
 } // namespace kcp

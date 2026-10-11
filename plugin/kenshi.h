@@ -271,6 +271,7 @@ enum Fn : int {
     // ---- per-player streaming (0.3.1)
     FnMedAddWound,              // ? MedicalSystem::addWound(this, bool, int, ptr, 4 stack args)   (makes the damage number, only if the character is in the camera's view: CH_inView)
     FnCharUpdateView,           // uint8 Character::updateView()   (our name, 0x5C9F60: sets CH_inView +0x1A9 every frame from the camera; player-faction characters always in view)
+    FnSetInBed,                 // void Character::setInBed(bool on, UseableStuff* bed)   (our name, 0x32E2F0: inSomething 1, inWhat = the bed's hand, the bed's vt 0x4F8 takes it in; setBedMode-like)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -851,7 +852,7 @@ bool ForceKnockout(Character* c, float seconds);
 // BountyManager (+0xF0): +0x98 prison sentence began (TimeOfDay, 8 bytes), +0xA0 hours to serve.
 struct Captivity {
     int inSomething = 0;        // 0 nothing, 1 bed, 2 cage / prison
-    void* cage = nullptr;       // the furniture it is in, when any
+    void* cage = nullptr;       // the furniture it is in (cage, prison or bed), when any
     bool chained = false;
     kc::Handle slaveOwner;      // invalid: none
     int slaveState = 0;         // SlaveStateEnum
@@ -864,6 +865,8 @@ bool ReadCaptivity(Character* c, Captivity& out);
 // Clients: the flags, owner, faction and sentence (never the cage itself: SetPrisonMode does that).
 bool WriteCaptivity(Character* c, const Captivity& s);
 bool SetPrisonMode(Character* c, bool on, void* cage);   // Character::setPrisonMode (puts it in the cage / takes it out)
+bool SetInBed(Character* c, bool on, void* bed);         // Character::setInBed (0x32E2F0: in / out of a bed, the game's own way)
+inline constexpr int kBuildingFunctionBed = 6;            // BF_BED
 bool CallSetChainedMode(Character* c, bool on);          // the game's own shackling (tests, host)
 bool CallSetSlaveState(Character* c, int state);         // StateBroadcastData::setSlaveState (tests, host)
 std::string FactionSidOf(void* faction);                 // a faction's game data id ("" none)

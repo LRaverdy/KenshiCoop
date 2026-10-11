@@ -2829,7 +2829,7 @@ def far_go(p, cands, label, need_merchant, taken, taken_lock, away=15000):
         if need_merchant:
             m = cmd(p.host, f"merchants {p.own_h}")[1]
             p.log("   merchants there (host):", m[:300])
-            if not re.findall(r"\((\d+)\)", m):
+            if not any(int(n) > 0 for n in re.findall(r"\(\d+\)\[(\d+)\]", m)):   # a shop with goods, not only guards' racks
                 continue
         hz = dump(p.host, f"h_far_{p.tag}_{label}_probe", FAR_ZONE)
         people = [k for k, v in hz["char"].items() if "pos" in v and k not in hz["squad"] and xz(v["pos"], me) < 1500]
@@ -2874,7 +2874,8 @@ def far_zone_sync(players, round_label, rounds, gap):
                 errs.append(e)
                 if e > (FAR_DOWN_TOL if down else FAR_POS_TOL):
                     dy = cv["pos"][1] - near[k]["pos"][1]
-                    off.append((k, round(e, 1), "a terre" if down else "debout", f"dy {dy:+.1f}", f"vue {near[k].get('inview', '?')}/{cv.get('inview', '?')}"))
+                    off.append((k, round(e, 1), "a terre" if down else "debout", f"dy {dy:+.1f}", f"vue {near[k].get('inview', '?')}/{cv.get('inview', '?')}",
+                                f"action {near[k].get('action', '?')}/{cv.get('action', '?')}", f"lit {near[k].get('in', '?')}/{cv.get('in', '?')}"))
                 vd = far_vitals_diff(near[k], cv)
                 if vd:
                     vit.append((k, vd))
@@ -2896,6 +2897,19 @@ def far_zone_sync(players, round_label, rounds, gap):
         p.check(f"synchro {name} : memes vitaux (sang, etat, membres)", not a["vit"], a["vit"][:5])
 
 
+def far_merchant(p):
+    """The real shopkeeper around the player's character, from the host's "merchants": the one whose
+    counters hold the most stacks (guards living in a barracks list empty racks as counters: the
+    first run picked "Cent Gardien", 16 counters, 0 stacks, and the window stayed empty). '_' for spaces."""
+    m = cmd(p.host, f"merchants {p.own_h}")[1]
+    found = re.findall(r" ([^()\[\]]+?)\((\d+)\)(?:\[(\d+)\])?", m)
+    p.log("merchants there (host):", m[:300])
+    if not found:
+        return None
+    best = max(found, key=lambda f: (int(f[2] or 0), int(f[1])))
+    return best[0].strip().replace(" ", "_")
+
+
 def far_wait_dialog(p, want=True, seconds=15):
     t = cmd(p.cli, "dialog")[1]
     for _ in range(int(seconds * 2)):
@@ -2912,9 +2926,14 @@ def far_talk(p):
     take 20-30 s (a town NPC a few hundred units away): each try waits 45 s."""
     name = p.town["name"] if p.town else "?"
     d, who = cmd(p.cli, "dialog")[1], None
-    for k in range(4):
+    # the shopkeeper first: a trader always has something to say ("let's trade"); the nearest guards,
+    # thieves and sentinels of the first run had no line for "talk to me" (the host's own start, when
+    # the game's never came, said "the NPC has nothing to say" for every one of them)
+    shop = far_merchant(p)
+    targets = ([f"name:{shop}"] if shop else []) + [str(k) for k in range(3)]
+    for k in targets:
         r = cmd(p.cli, f"talkto {p.own_c} {k}")
-        p.log(f"[dialogue {name}] client talks to the NPC nearest #{k}:", r)
+        p.log(f"[dialogue {name}] client talks to {k}:", r)
         if not r[0]:
             continue
         d = far_wait_dialog(p, True, 45)
@@ -3001,10 +3020,8 @@ def far_same_money(p, seconds=8):
 
 
 def far_trade(p):
-    m = cmd(p.host, f"merchants {p.own_h}")[1]
-    names = re.findall(r" ([^()]+?)\((\d+)\)", m)
-    merchant = names[0][0].strip().replace(" ", "_") if names else "any"
-    p.log("merchant:", merchant, "| list:", m[:300])
+    merchant = far_merchant(p) or "any"
+    p.log("merchant:", merchant)
     p.log("client right-clicks the merchant (trade):", cmd(p.cli, f"npcreq {p.own_c} 26 {merchant}"))
     state = ""
     for _ in range(90):
@@ -3105,21 +3122,24 @@ def far_fight_and_loot(p):
     host, cli = p.host, p.cli
     f0_h, f0_c = far_floaters(host), far_floaters(cli)
     npc = None
-    for dx, dz in ((10, 6), (-10, 6), (10, -6), (-10, -6), (16, 0)):
-        sp = cmd(host, f"spawnnpc {dx} {dz} {p.own_h}")
-        p.log(f"host spawns an NPC by the client's character ({dx},{dz}):", sp)
-        if not sp[0]:
-            continue
+    sp = cmd(host, f"spawnnpc 10 6 {p.own_h}")
+    p.log("host spawns an NPC by the client's character:", sp)
+    if sp[0]:
         npc = sp[1].split()[1]
         time.sleep(3)
         pn, pm = where_vec(host, npc), p.me()
-        if pn and pm and abs(pn[1] - pm[1]) < 15:
-            break
-        p.log(f"   on another level ({pn} / {pm}): killed, another spot")
-        cmd(host, f"kill {npc}")
-        npc = None
+        if pn and pm and abs(pn[1] - pm[1]) >= 15:
+            # the client's character stands on a roof or a wall (where the teleport put it) and the
+            # NPC fell to the ground (first run: 73 units below, five spots in a row): the character
+            # goes down next to it, the NPC stays where it fell
+            p.log(f"   on another level ({pn} / {pm}): the client's character goes next to it",
+                  cmd(host, f"teleport {p.own_h} {pn[0] + 8:.0f} {pn[1] + 5:.0f} {pn[2] + 8:.0f}"))
+            time.sleep(3)
+            pm = p.me()
+        p.check("combat : PNJ cree pres du perso du client, au meme niveau", bool(pn and pm and abs(pn[1] - pm[1]) < 15), f"{pn} / {pm}")
+    else:
+        p.check("combat : PNJ cree pres du perso du client", False, sp)
     if not npc:
-        p.check("combat : PNJ cree pres du perso du client, au meme niveau", False)
         return
     v0 = dump(host, f"h_far_{p.tag}_npc0", FAR_ZONE)["char"].get(npc, {})
     p.log("fight:", cmd(host, f"fight {p.own_h} {npc}"))

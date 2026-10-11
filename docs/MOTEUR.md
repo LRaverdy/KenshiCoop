@@ -167,6 +167,7 @@ Les signatures sont celles du commentaire du code.
 | 120 | `FnDoorOpenButton` | `DoorStuff::openButton` | `0x546FB0` | oui (lot A) | void openButton(DataPanelLine*) : chez un client, le clic part à l'hôte |
 | 121 | `FnDoorLockButton` | `DoorStuff::lockButton` | `0x547060` | oui (lot A) | void lockButton(DataPanelLine*) : idem |
 | 116 | `FnSetPrisonMode` | `Character::setPrisonMode` | `0x330600` | oui | lot D : met dans une cage / en sort (voir section 10) |
+| — | `FnSetInBed` | `Character::setInBed(bool, UseableStuff* lit)` (notre nom) | `0x32E2F0` | — | [D, faraway] inSomething (+0x2F8) = 1, inWhat (+0x300) = le `hand` du lit (+0x58), le lit le prend (vt 0x4F8) ; déjà dans ce lit : rien. Le client met la copie d'un dormeur dans le même lit (`ApplyCaptive`) |
 | 117 | `FnSetChainedMode` | `Character::setChainedMode` | `0x32E590` | oui | lot D : menottes (crée l'objet si besoin) |
 | 118 | `FnSetSlaveState` | `StateBroadcastData::setSlaveState` | `0x5A4940` | oui | lot D : état d'esclave |
 | 116 | `FnGunShoot` | `GunClass::shoot` | `0x43A730` | oui | (lot C) void shoot(Character* me, RootObject* cible, StatsEnumerated stat, const Vector3& visée) : tire un projectile ; hôte : noté pour les clients ; client : seuls les tirs rejoués par le mod passent |

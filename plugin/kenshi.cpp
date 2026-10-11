@@ -229,6 +229,7 @@ const FunctionSig kFunctions[FnCount] = {
     // ---- per-player streaming (0.3.1)
     {"MedicalSystem::addWound", 0x6508D0, {0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56}},
     {"Character::updateView", 0x5C9F60, {0x40, 0x53, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x68, 0x44, 0x0F, 0xB6, 0xB1}},
+    {"Character::setInBed", 0x32E2F0, {0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48}},
 };
 
 namespace {
@@ -3989,11 +3990,14 @@ namespace {
 constexpr uintptr_t CH_inSomething = 0x2F8, CH_inWhat = 0x300, CH_isChained = 0x320, CH_slaveOwner = 0x328, CH_stateBroadcast = 0x1A0;
 constexpr uintptr_t CH_sentenceBegan = 0xF0 + 0x98, CH_sentence = 0xF0 + 0xA0;   // BountyManager crimes (+0xF0)
 constexpr uintptr_t SBD_slaveState = 0x0, SBD_isSlaveOf = 0xE0, SBD_escaped = 0xE8, SBD_kidnapped = 0xE9;
-constexpr int kUseInPrison = 2;
+constexpr int kUseInPrison = 2, kUseInBed = 1;
 constexpr int kBuildingFunctionCage = 8;   // BF_CAGE
 using FnPrisonSig = void (*)(void* c, bool on, void* cage);
 using FnChainedSig = void (*)(void* c, bool on, const void* ownerHand);
 using FnSlaveStateSig = void (*)(void* sbd, int state);
+bool InBedSeh(void* c, bool on, void* bed) {
+    __try { reinterpret_cast<FnPrisonSig>(FnAddr(FnSetInBed))(c, on, bed); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
 bool PrisonSeh(void* c, bool on, void* cage) {
     __try { reinterpret_cast<FnPrisonSig>(FnAddr(FnSetPrisonMode))(c, on, cage); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
@@ -4012,7 +4016,7 @@ void* StateBroadcastOf(Character* c) {
 bool ReadCaptivity(Character* c, Captivity& out) {
     out = Captivity{};
     if (!IsCharacter(c) || !Rd(c, CH_inSomething, out.inSomething)) return false;
-    if (out.inSomething == kUseInPrison) {
+    if (out.inSomething == kUseInPrison || out.inSomething == kUseInBed) {
         kc::Handle cage;
         if (ReadHandle(reinterpret_cast<uint8_t*>(c) + CH_inWhat, cage) && cage.valid()) out.cage = ResolveObject(cage);
     }
@@ -4062,6 +4066,11 @@ bool WriteCaptivity(Character* c, const Captivity& s) {
 bool SetPrisonMode(Character* c, bool on, void* cage) {
     if (!IsCharacter(c) || (on && !cage)) return false;
     return PrisonSeh(c, on, cage);
+}
+
+bool SetInBed(Character* c, bool on, void* bed) {
+    if (!IsCharacter(c) || (on && !bed)) return false;
+    return InBedSeh(c, on, bed);
 }
 
 bool CallSetChainedMode(Character* c, bool on) {

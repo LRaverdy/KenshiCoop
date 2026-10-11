@@ -4,6 +4,14 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
 
 ## 11 octobre 2026, essai `faraway` (client dans une autre ville, caméra de l'hôte à la maison)
 
+**Deuxième essai (12:48, a100038) : 24/33.** Écarts de position inchangés : ce sont des PNJ qui dorment
+dans un lit chez l'hôte, pas chez le client (corrigé : lits synchronisés comme les cages). Dialogue :
+PNJ sans réplique (le test parle d'abord au marchand). Commerce : un garde pris pour marchand (test).
+Combat : perso du client sur un toit (test). Détail dans CHANGELOG. **À revérifier** :
+`coop_test.py faraway --clients 3`.
+- **Protocole, plus tard** : un drapeau « dans un lit » à part dans `CaptiveState` (le lit passe pour
+  l'instant par le drapeau « en cage », le client distingue par la fonction du meuble).
+
 30/42. Tout ce qui suit est corrigé dans le mod ou le test, **à revérifier en jeu** avec
 `coop_test.py faraway --clients 3` (4 joueurs, chacun dans sa ville) :
 - **Positions** : 33 à 51 unités d'écart à Admag, 8 à 68 au Bouclier d'Okran (tolérance 3), en hauteur

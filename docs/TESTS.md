@@ -348,7 +348,7 @@ l'escouade triée par handle.
 | `dialog` / `answer <n\|leave>` | (client) fenêtre de conversation affichée (`actor=`, `turn=`) ; choisir une réponse, ou partir |
 | `dialogs` | (hôte) conversations affichées chez les clients (`n=`, `open=`), refus « occupé » du jeu (`busy=`) et des ordres (`orderbusy=`), fermetures forcées (`swept=`), pauses levées (`unpaused=`) |
 | `npcevent <index> <événement> [k\|npc\|dlg]` | (hôte) le k-ième PNJ le plus proche (ou le dernier créé, ou `dlg` : le PNJ de la dernière conversation d'un client, vivant et debout) envoie cet événement de dialogue à ce membre (1 parler, 3 contrôle de garde) ; la réponse finit par `talking=1` quand le dialogue du PNJ a maintenant ce membre pour interlocuteur (`talking=0` : une ligne qui ne fait que parler, ou rien) |
-| `talkto <sélection> <k\|npc\|dlg>` | ce membre seul reçoit l'ordre de parler au k-ième PNJ le plus proche (ou au dernier créé, hôte ; `dlg` : le PNJ de la dernière conversation d'un client, hôte) |
+| `talkto <sélection> <k\|npc\|dlg\|name:texte>` | ce membre seul reçoit l'ordre de parler au k-ième PNJ le plus proche (`name:` le plus proche dont le nom contient ce texte, `_` pour les espaces) (ou au dernier créé, hôte ; `dlg` : le PNJ de la dernière conversation d'un client, hôte) |
 
 **Objets, fouille, contenants**
 
@@ -379,7 +379,7 @@ l'escouade triée par handle.
 | `caravanopen [i]` | le membre `i` va près du marchand ambulant et ouvre le commerce (appel du jeu) |
 | `squadanimals` | membres de l'escouade qui sont des animaux : `index:clé:piles` |
 | `tradegui` | type de fenêtre de commerce en attente dans l'interface (0 = aucune) |
-| `merchants [index]` / `tradeopen <index> <nom\|any> [near]` | marchands (avec comptoirs) à 1500 unités du membre 0 ou de ce membre : `nom(comptoirs)` ; le jeu demande une fenêtre de commerce entre ce membre et le plus proche (`near` : il est d'abord mis à côté, hôte) |
+| `merchants [index]` / `tradeopen <index> <nom\|any> [near]` | marchands (avec comptoirs : `nom(comptoirs)[piles]`, un garde logé dans une caserne a des râteliers vides, `faraway` prend le plus garni) à 1500 unités du membre 0 ou de ce membre : `nom(comptoirs)` ; le jeu demande une fenêtre de commerce entre ce membre et le plus proche (`near` : il est d'abord mis à côté, hôte) |
 | `cage <i> [off]` | (hôte, lot D) met le membre `i` dans la cage la plus proche (300 m), ou l'en sort |
 | `chain <i> [off]` | (hôte, lot D) l'enchaîne à la manière du jeu (menottes créées) / le libère |
 | `enslave <i> <0-3>` | (hôte, lot D) état d'esclave : 0 non, 1 esclave, 2 en fuite, 3 ancien |

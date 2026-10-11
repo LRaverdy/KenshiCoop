@@ -5378,6 +5378,9 @@ static void TestClockSync() {
 // from the host jerky and sliding backwards (sparse positions, a fixed 0.05 s render delay, a pull
 // straight back against the walk), walking characters facing away from where they go.
 static void TestMotion() {
+    // the walking flag at speed 0 is not a walk (a sleeper going to bed, stuck far from the host's camera)
+    CHECK(!motion::HostMoving(true, 0.0f) && !motion::HostMoving(true, 0.3f) && !motion::HostMoving(false, 15.0f));
+    CHECK(motion::HostMoving(true, 15.0f) && motion::HostMoving(true, 1.0f) && !motion::HostMoving(true, std::nanf("")));
     std::printf("motion and posture\n");
     using namespace kc::motion;
     auto walker = [](float x, float destX) {

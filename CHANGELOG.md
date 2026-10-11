@@ -6,6 +6,35 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## En cours (pas encore commité)
 
+- **Loin de l'hôte, deuxième passe (essai `faraway` 24/33 avec a100038).**
+  - *Le crochet `hk_charUpdateView` marche* (contrairement à ce que montrait « vue 0/0 ») : compteurs
+    `forced` 1,3 M chez l'hôte et 1,46 M chez le client ; hors pause, 78 à 79 persos sur 107-117 sont
+    « dans la vue » chez l'hôte et 101 sur 107 chez le client. Les relevés de synchro sont faits en
+    pause, où le drapeau retombe à 0 : le « vue 0/0 » venait de là.
+  - *Positions : la vraie cause*. Hors pause, avec les deux jeux en mise à jour complète, les écarts
+    restent (+78,8, +33,1, −56,7, −38,9 en hauteur, x et z exacts, au millième près d'un essai à
+    l'autre). **Chaque gros écart est un PNJ qui dort** : action `sleepinbed` chez l'hôte, drapeau de
+    marche levé, vitesse 0. Chez l'hôte il est dans son lit (le lit tient sa position) ; chez le client
+    la copie n'y était pas : un corps debout aux coordonnées du lit, que le jeu poussait sur le toit ou
+    à travers le plancher. Corrigé : le lit passe par l'état de captivité déjà envoyé pour les cages
+    (même meuble retrouvé par type et place ; le client reconnaît un lit à sa fonction `BF_BED` et y met
+    la copie avec `Character::setInBed`, `0x32E2F0`, `FnSetInBed`), puis aucune correction de position
+    tant qu'il y est. Pas de changement de protocole (le drapeau « en cage » sert pour les deux : un
+    drapeau à part attend le prochain changement de protocole). Et l'hôte ne dit plus « en marche » un
+    perso au drapeau de marche levé mais à l'arrêt (`kc::motion::HostMoving`, vitesse > 0,5, testé) :
+    sa copie n'allait plus jusqu'au lit (12,8 unités à plat, paladins d'Okran).
+  - *Dialogue* : la relance de l'hôte (`UpdatePendingTalks`) a bien tourné à chaque essai (« started by
+    the mod (the NPC has nothing to say) ») : les PNJ choisis (garde de magasin, voleur, sentinelle
+    sacrée) n'ont pas de réplique pour « parle-moi ». Le test parle d'abord au marchand de la ville
+    (`talkto … name:<nom>`), puis aux plus proches.
+  - *Commerce* : `GiveShopHome` a marché (« given the shop's building ») ; le test avait pris un garde
+    (« Cent Gardien », 16 comptoirs, 0 pile) pour marchand. `merchants` donne maintenant les piles
+    (`nom(comptoirs)[piles]`) ; le test prend le plus garni et ne choisit qu'une ville dont une boutique
+    a des marchandises.
+  - *Combat* : le perso du client était sur un toit (posé là par la téléportation), le PNJ créé tombait
+    73 unités plus bas, cinq fois. Le test descend le perso à côté du PNJ.
+  - Vidages : `in=` (0 rien, 1 lit, 2 cage) ; les écarts de la synchro donnent l'action et le lit des
+    deux côtés.
 - **Loin de l'hôte : positions exactes, dialogue, commerce, combat (`faraway`, 30/42 au premier
   essai).** Causes trouvées dans les journaux et le désassemblage ; pas encore relancé en jeu.
   - *Positions* (Admag 33 à 51 unités d'écart, Bouclier d'Okran 8 à 68, tolérance 3) : presque

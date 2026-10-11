@@ -772,7 +772,7 @@ bool KenshiWorld::Read(const kc::Handle& h, kc::EntityState& out) {
     float speed = 0;
     if (!kenshi::GetMovement(c, out.dest, moving, speed)) { out.dest = out.pos; moving = false; }
     out.flags = 0;
-    if (moving) out.flags |= kc::kFlagMoving;
+    if (kc::motion::HostMoving(moving, speed)) out.flags |= kc::kFlagMoving;
     if (kenshi::IsDown(c) || kenshi::IsRagdoll(c)) out.flags |= kc::kFlagDown;
     if (kenshi::IsDead(c)) out.flags |= kc::kFlagDead;
     if (!kenshi::ReadPace(c, out.gait, out.pace)) { out.gait = 0; out.pace = 0; }

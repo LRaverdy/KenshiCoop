@@ -96,6 +96,7 @@ void DumpCharacter(std::ostream& o, const char* tag, KenshiWorld& w, const kc::H
     o << tag << ' ' << Key(hostHandle) << " read=" << ok << " standin=" << (hostHandle != h);
     if (kenshi::Character* ch = w.Find(h)) o << " class=" << std::hex << kenshi::ClassRvas(ch) << std::dec;
     if (kenshi::Character* ch = w.Find(h)) o << " inview=" << int(kenshi::InView(ch));
+    if (int in = 0; kenshi::Character* ch = w.Find(h)) o << " in=" << (kenshi::ReadInSomething(ch, in) ? in : -1);   // 0 nothing, 1 bed, 2 cage
     if (std::string nm; kenshi::Character* ch = w.Find(h)) {   // the character's name ('_' for spaces): who is who with 3+ players
         if (kenshi::CharacterName(ch, nm) && !nm.empty()) {
             for (char& ch2 : nm) if (ch2 == 32 || ch2 == 61 || (unsigned char)ch2 < 32) ch2 = 95;   // spaces, =, control chars -> _
@@ -1857,7 +1858,12 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         if (which == "npc") npc = w.Find(lastSpawned_);
         else if (which == "dlg") npc = DialogNpc(w);
         else {
-            const size_t k = which.empty() ? 0 : std::strtoul(which.c_str(), nullptr, 10);
+            std::string part;
+            if (which.rfind("name:", 0) == 0) {
+                part = which.substr(5);
+                std::replace(part.begin(), part.end(), '_', ' ');
+            }
+            const size_t k = which.empty() || !part.empty() ? 0 : std::strtoul(which.c_str(), nullptr, 10);
             kc::Vec3 mp, p;
             if (!kenshi::GetPosition(me, mp)) return "err";
             std::vector<kenshi::Character*> all;
@@ -1867,6 +1873,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
                 kc::Handle h;
                 if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsDown(c) || kenshi::IsAnimal(c) || !kenshi::GetPosition(c, p))
                     continue;   // (an animal has nothing to say)
+                if (std::string nm; !part.empty() && (!kenshi::CharacterName(c, nm) || nm.find(part) == std::string::npos)) continue;
                 nearby.emplace_back((p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z), c);
             }
             std::sort(nearby.begin(), nearby.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -1886,7 +1893,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         const bool talking = d && !kenshi::DialogueEnded(d) && kenshi::DialogueTarget(d) == me;
         return (ok ? "ok " : "err ") + name + " talking=" + (talking ? "1" : "0");
     }
-    if (cmd == "talkto") {   // talkto <selectIndex> <k|npc|dlg>: select that squad member alone, order it to talk to the k-th nearest NPC (npc: the last spawned; dlg: the NPC of the last client conversation, host)
+    if (cmd == "talkto") {   // talkto <selectIndex> <k|npc|dlg|name:part>: select that squad member alone, order it to talk to the k-th nearest NPC (npc: the last spawned; dlg: the NPC of the last client conversation, host; name:part the nearest whose name has that part, '_' for spaces)
         size_t sel = 0;
         std::string which;
         in >> sel >> which;
@@ -1965,7 +1972,8 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         return kenshi::CallAddTaskNearest(26, t) ? "ok" : "err call failed";
     }
     if (cmd == "merchants" || cmd == "tradeopen") {
-        // merchants [squadIndex]: NPCs around squad member 0 (or that one) who sell from shop counters ("name(counters)" each)
+        // merchants [squadIndex]: NPCs around squad member 0 (or that one) who sell from shop counters ("name(counters)[stacks]" each:
+        //   a guard living in a barracks has "counters" too, empty racks: the stacks tell the shop)
         // tradeopen <squadIndex> <name part|any> [near]: the game asks for a trade window between that
         //   squad member and the nearest such merchant (what "let's trade" in a conversation does); on
         //   the host, for another player's character, it opens on that player's screen. near: the
@@ -1994,7 +2002,10 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             const float d = (p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z);
             if (d > 1500.0f * 1500.0f || !kenshi::CharacterName(c, name) || !kenshi::ShopCounters(c, counters)) continue;
             if (part != "any" && name.find(part) == std::string::npos) continue;
-            list += " " + name + "(" + std::to_string(counters.size()) + ")";
+            size_t stacks = 0;
+            for (void* f : counters)
+                if (std::vector<kc::ItemState> items; kenshi::ReadInventory(f, items)) stacks += items.size();
+            list += " " + name + "(" + std::to_string(counters.size()) + ")[" + std::to_string(stacks) + "]";
             if (d < bestD) { bestD = d; best = c; bestCounters = counters.size(); }
         }
         if (cmd == "merchants") return "ok" + list;

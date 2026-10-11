@@ -158,6 +158,13 @@ inline EntityState StateAt(const std::deque<Sample>& b, double rt, float snapDis
 }
 
 // ---------------------------------------------------------------- facing and position pull
+// What the host reports as "moving": its game's walking flag and a speed. A character whose walking
+// flag stays set at speed 0 is standing (paladins going to bed far from the host's camera, flag set
+// and speed 0 for minutes): reported moving, its copy on a client walked the whole way to the
+// destination (12.8 units off, faraway test) while the host's never moved.
+inline constexpr float kMovingSpeed = 0.5f;
+inline bool HostMoving(bool walkingFlag, float speed) { return walkingFlag && std::isfinite(speed) && speed > kMovingSpeed; }
+
 // Where the host's character is really going: from the state we render toward the newest one we
 // know (rendered a little late, it lies behind on the way), else toward its destination. Zero when
 // it is not going anywhere.
