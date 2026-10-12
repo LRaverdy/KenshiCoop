@@ -660,7 +660,8 @@ bool KenshiWorld::Exists(const kc::Handle& h) {
         if (real && kenshi::IsCharacter(real)) {
             if (kenshi::Character* standIn = kenshi::Resolve(a->second); standIn && standIn != real) {
                 HostCallScope scope;
-                kenshi::DestroyObject(standIn);
+                Log("stand-in %s replaced by the host's real character", KeyOf(a->second).c_str());
+                kenshi::DestroyObject(standIn);   // a window showing it is closed first (hk_worldDestroy)
             }
             spawned_.erase(a->second);
             alias_.erase(a);

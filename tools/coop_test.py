@@ -1707,7 +1707,7 @@ def exp_trade(host, cli, merchant="Marchand"):
     opens on the client with the shop's stock. A purchase and a sale, the game's own way (right click),
     are replayed by the host with their price; stock and cats end the same everywhere; the host's own
     window on that merchant shows what the client bought gone."""
-    time.sleep(6)
+    time.sleep(45)   # the town's stand-ins replaced by the real NPCs first (a window on a replaced one closes)
     cmd(cli, "editdone")
     time.sleep(3)
     own = own_index(host)

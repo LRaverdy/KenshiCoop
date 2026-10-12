@@ -1515,6 +1515,14 @@ bool hk_addDismantle(void* building, float amount) {
 using WorldDestroyFn = bool (*)(void* world, void* obj, bool justUnloaded, const char* info);
 WorldDestroyFn o_worldDestroy = nullptr;
 bool hk_worldDestroy(void* world, void* obj, bool justUnloaded, const char* info) {
+    // A trade or loot window showing this character keeps its address (ShopTrader+0xC0): its next
+    // refresh called getMoney on the freed merchant (12 October, client crash at kenshi_x64+0x95484b
+    // selling worn trousers to a stand-in merchant replaced while the window was open). Closed first,
+    // whoever destroys it (the mod, the game, a zone unloading).
+    if (obj && kenshi::IsCharacter(obj) && kenshi::InventoryWindowShows(obj)) {
+        kenshi::CloseInventoryWindows();
+        Log("closed the inventory windows: the character they show is being destroyed%s", justUnloaded ? " (zone unloaded)" : "");
+    }
     if (!justUnloaded && obj)
         if (KenshiWorld* w = TheWorld()) w->NoteObjectDestroyed(obj);
     // why a character left our game (a client's stand-in found gone says it: its zone unloaded here?),
