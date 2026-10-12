@@ -859,6 +859,23 @@ bool WritePlayerMoney(int32_t money) {
     return true;
 }
 
+// GlobalConstants lives in the exe's .data: always mapped, plain loads and stores (game thread).
+// Readers: HealthPartStatus update 0x64F815/0x64F971/0x64FAA8 (heal), 0x64FA13/0x652676 (resting);
+// CharStats experience 0x8C5E80..0x8C69B7 (amount * exp gain, then increaseStat).
+void ReadGameRates(GameRates& out) {
+    const uintptr_t gc = Addr(rva::GlobalConstants);
+    out.heal = *reinterpret_cast<const volatile float*>(gc + rva::GC_healRate);
+    out.healResting = *reinterpret_cast<const volatile float*>(gc + rva::GC_healRateResting);
+    out.xp = *reinterpret_cast<const volatile double*>(gc + rva::GC_expGain);
+}
+
+void WriteGameRates(const GameRates& r) {
+    const uintptr_t gc = Addr(rva::GlobalConstants);
+    *reinterpret_cast<volatile float*>(gc + rva::GC_healRate) = r.heal;
+    *reinterpret_cast<volatile float*>(gc + rva::GC_healRateResting) = r.healResting;
+    *reinterpret_cast<volatile double*>(gc + rva::GC_expGain) = r.xp;
+}
+
 bool ReadStat(Character* c, size_t statIndex, float& out) {
     void* s = StatsOf(c);
     return s && statIndex < kc::kStatCount && Rd(s, kStatOffsets[statIndex], out) && std::isfinite(out);

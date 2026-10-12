@@ -43,9 +43,13 @@ struct Config {
     float minimapSize = 1.0f;       // minimap_size: radius factor, 0.5 to 2.5
     float minimapZoom = 1500.0f;    // minimap_zoom: world units from the centre to the rim
     bool pings = true;              // pings: place and show pings
+    // [host] multipliers (Administration section): applied while this game hosts a session
+    float healRate = 1.0f;          // heal_rate: healing speed, 1 to 10
+    float xpRate = 1.0f;            // xp_rate: experience gains, 1 to 10
 };
 Config LoadConfig(const std::wstring& iniPath);   // creates the file with defaults if missing
 bool SaveConnection(const std::wstring& iniPath, const std::string& name, const std::string& address, uint16_t port);
+bool SaveIniValue(const std::wstring& iniPath, const char* section, const char* key, const std::string& value);
 // One [ui] map layer setting (key as in KenshiCoop.ini): applied to `cfg` and written to the file.
 // False: no such key. "minimap_corner" also drops the free position; "minimap_reset" (any value)
 // puts the minimap back in its corner at its default size.

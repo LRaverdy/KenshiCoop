@@ -124,6 +124,27 @@ bool RaiseTo(float target, const ReadFn& read, const IncreaseFn& inc, int maxCal
     return reached;
 }
 
+float ClampRate(float v) {
+    if (!std::isfinite(v)) return v > 0 ? kMaxRate : kMinRate;   // NaN: 1
+    return std::clamp(v, kMinRate, kMaxRate);
+}
+
+bool ParseRate(const std::string& s, float& out) {
+    std::string t = Lower(s);
+    if (!t.empty() && (t[0] == 'x' || t[0] == '*')) t.erase(0, 1);
+    for (auto& c : t) if (c == ',') c = '.';
+    double v = 0;
+    if (!ParseDouble(t, v)) return false;
+    out = ClampRate(float(v));
+    return true;
+}
+
+std::string FormatRate(float v) {
+    // tenths, written by hand: never the locale's decimal comma
+    const long tenths = std::lround(double(ClampRate(v)) * 10.0);
+    return std::to_string(tenths / 10) + "." + std::to_string(tenths % 10);
+}
+
 bool ParseTarget(const std::string& s, Target& out) {
     out = Target{};
     const std::string k = Lower(s);
@@ -143,7 +164,8 @@ std::string Usage() {
            "admin heal <id|all|host>  -  soigne et réveille\n"
            "admin money <n>  -  cats ajoutés à l'argent commun\n"
            "admin spawn <sid|nom> <n> [here|<id>] [fabricant] [modèle]  -  n objets au sol près de toi (here) ou d'un joueur ; _ pour les espaces\n"
-           "admin list  -  joueurs, persos et mode dieu";
+           "admin list  -  joueurs, persos et mode dieu\n"
+           "admin rate heal|xp <x>  -  multiplicateur de soin ou d'expérience (1 à 10, enregistré) ; admin rates  -  les valeurs";
 }
 
 bool Parse(const std::string& line, Command& out, std::string& err) {
@@ -159,6 +181,22 @@ bool Parse(const std::string& line, Command& out, std::string& err) {
     };
     if (verb == "list" || verb == "players" || verb == "liste") { out.verb = Verb::List; return true; }
     if (verb == "state") { out.verb = Verb::State; return true; }
+    if (verb == "rates" || verb == "multipliers") {
+        out.verb = Verb::Rates;
+        if (t.size() != 1) { err = "usage : admin rates"; return false; }
+        return true;
+    }
+    if (verb == "rate" || verb == "multiplier" || verb == "mult") {
+        out.verb = Verb::Rate;
+        const char* usage = "usage : admin rate heal|xp <x>  (x de 1 à 10, ex. admin rate heal 3)";
+        if (t.size() != 3) { err = usage; return false; }
+        const std::string k = Lower(t[1]);
+        if (k == "heal" || k == "soin" || k == "healing") out.rateKind = RateKind::Heal;
+        else if (k == "xp" || k == "exp" || k == "experience" || k == "expérience") out.rateKind = RateKind::Xp;
+        else { err = usage; return false; }
+        if (!ParseRate(t[2], out.rate)) { err = usage; return false; }
+        return true;
+    }
     if (verb == "god" || verb == "dieu") {
         out.verb = Verb::God;
         if (!who(1)) return false;

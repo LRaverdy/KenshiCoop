@@ -13,6 +13,7 @@
 #include <mutex>
 #include <vector>
 
+#include "kc/admin.h"
 #include "kc/protocol.h"
 
 namespace kcp {
@@ -194,7 +195,15 @@ Config LoadConfig(const std::wstring& ini) {
     if (c.minimapX < 0 || c.minimapY < 0 || c.minimapX > 1 || c.minimapY > 1) c.minimapX = c.minimapY = -1;
     c.minimapSize = std::clamp(float(num(L"ui", L"minimap_size", 1)), 0.5f, 2.5f);
     c.pings = num(L"ui", L"pings", 1) != 0;
+    // strtod would follow the C locale: read with the admin parser (decimal point or comma)
+    float rate = 1.0f;
+    c.healRate = kc::admin::ParseRate(str(L"host", L"heal_rate", "1"), rate) ? rate : 1.0f;
+    c.xpRate = kc::admin::ParseRate(str(L"host", L"xp_rate", "1"), rate) ? rate : 1.0f;
     return c;
+}
+
+bool SaveIniValue(const std::wstring& ini, const char* section, const char* key, const std::string& value) {
+    return WritePrivateProfileStringW(Widen(section).c_str(), Widen(key).c_str(), Widen(value).c_str(), ini.c_str()) != 0;
 }
 
 bool SaveConnection(const std::wstring& ini, const std::string& name, const std::string& address, uint16_t port) {
