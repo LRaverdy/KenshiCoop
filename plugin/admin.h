@@ -34,6 +34,10 @@ void AdminUpkeep(kc::Session& s, KenshiWorld& w);
 // Host: everyone in the session (the host first), for the window.
 std::vector<AdminPlayer> AdminPlayers(kc::Session& s, KenshiWorld& w, const std::string& hostName);
 bool AdminGodAll();
+// Host multipliers (healing, experience): read from KenshiCoop.ini [host] at start, changed by
+// "admin rate", written back to the ini; applied to the game's global constants while hosting.
+void AdminInitRates(const std::wstring& iniPath, float heal, float xp);
+void AdminRates(float& heal, float& xp);
 
 // The item spawner's list, for the window (host only; built once per loaded world).
 struct AdminItem {

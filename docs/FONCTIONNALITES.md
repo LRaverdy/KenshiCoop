@@ -652,6 +652,21 @@ la fenêtre du client.
   - **Soigner** : `Character::healCompletely` (blessures, sang, K.-O.), puis relève un perso resté
     inconscient.
   - **Argent** : cats ajoutés (ou retirés) à l'argent commun de l'escouade.
+  - **Multiplicateurs « Soin » et « Expérience »** (0.3.2, 🟡 à vérifier en jeu) : deux curseurs de
+    x1 à x10 (défaut x1), envoyés au relâchement, enregistrés dans `KenshiCoop.ini` (`[host]
+    heal_rate`, `xp_rate`) et repris à la partie suivante. Commandes : `admin rate heal <x>`,
+    `admin rate xp <x>`, `admin rates` (valeurs et constantes du jeu). L'hôte multiplie les
+    **constantes globales du jeu** (`GlobalConstants`, lues des données du jeu au chargement) :
+    « heal rate mult » et « resting heal rate mult » (guérison des membres, au repos dans un lit /
+    sac de couchage ou non), « exp gain multiplier » (tous les gains d'XP en jouant). Pas de
+    détour ni de nouveau message : la santé et les compétences arrivent chez les clients par la
+    synchro habituelle. Effet sur **tous les personnages du monde de l'hôte** : ceux de l'hôte, ceux
+    des clients (tous dans l'escouade de l'hôte) **et aussi les PNJ** (la constante est globale).
+    Seulement pendant que la partie est hébergée : en solo ou en quittant, les valeurs du jeu sont
+    remises ; si le jeu relit ses constantes (chargement), sa nouvelle valeur devient la base.
+    Les gains « admin xp » passent par `increaseStat` directement : non multipliés. Limite connue :
+    le jeu refuse un gain de plus de 20 points en un appel ; à x10, un gros gain rare pourrait être
+    refusé (à surveiller).
   - **Faire apparaître des objets** (repli sous la liste) : n'importe quel objet du jeu, posé au
     sol près du perso sélectionné de l'hôte (« près de moi ») ou près du premier perso debout d'un
     joueur choisi dans la liste.

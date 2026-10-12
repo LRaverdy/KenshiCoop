@@ -345,6 +345,7 @@ classe ; seule celle des animaux est détournée pour l'instant. Décalages par 
 | `0x2247DA0` | pointeur vers `Quaternion::IDENTITY` |
 | `0x212EB00` | pointeur vers `UniqueNPCManager` (créé par son accesseur `0x354560`) |
 | `0x2134100` | pointeur vers `TownList` (créé en `0x15D5B77`) |
+| `0x2133DD0` | `GlobalConstants con` (objet, pas un pointeur ; KenshiLib `0x2130CE0` + `0x30F0`, comme `ou`), rempli depuis les données du jeu par `GlobalConstants::setup` (`0x86B2B0`, appelé en `0x871E6C` avec `lea rcx, con`). Champs vérifiés par désassemblage : +0x6C « heal rate mult » (float, lu par la guérison des membres `0x64F815`, `0x64F971`, `0x64FAA8`), +0x70 « resting heal rate mult » (float, `0x64FA13`, `0x652676`), +0x138 « exp gain multiplier » (double = valeur des données × constante ; multiplie les gains d'XP de `CharStats` `0x8C5E80`…`0x8C69B7` avant `increaseStat` `0x8C5DF0`, qui ne le lit pas). Multiplicateurs de l'hôte (0.3.2) |
 
 Vtables (pour reconnaître un objet) :
 

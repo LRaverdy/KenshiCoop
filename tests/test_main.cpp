@@ -4125,6 +4125,43 @@ static void TestAdmin() {
     CHECK(!adm::Parse("spawn bread", c, err) && !adm::Parse("spawn bread 5 all", c, err) && !adm::Parse("spawn bread 5 bob", c, err));
     CHECK(!adm::Parse("spawn a 1 here b c d", c, err));
     CHECK(adm::Usage().find("admin spawn") != std::string::npos);
+    // host multipliers: clamping, parsing (decimal comma too), the ini text read back
+    CHECK(adm::ClampRate(0.5f) == 1.0f && adm::ClampRate(50.0f) == 10.0f && adm::ClampRate(2.5f) == 2.5f);
+    CHECK(adm::ClampRate(std::numeric_limits<float>::quiet_NaN()) == 1.0f && adm::ClampRate(std::numeric_limits<float>::infinity()) == 10.0f);
+    {
+        float r = 0;
+        CHECK(adm::ParseRate("2.5", r) && r == 2.5f);
+        CHECK(adm::ParseRate("x3", r) && r == 3.0f);
+        CHECK(adm::ParseRate("2,5", r) && r == 2.5f);
+        CHECK(adm::ParseRate("0", r) && r == 1.0f);
+        CHECK(adm::ParseRate("99", r) && r == 10.0f);
+        CHECK(!adm::ParseRate("", r) && !adm::ParseRate("abc", r) && !adm::ParseRate("2.5x", r));
+        CHECK(adm::FormatRate(2.5f) == "2.5" && adm::FormatRate(1.0f) == "1.0" && adm::FormatRate(10.0f) == "10.0" && adm::FormatRate(0.2f) == "1.0");
+        for (float v : {1.0f, 1.3f, 4.7f, 10.0f}) CHECK(adm::ParseRate(adm::FormatRate(v), r) && std::fabs(r - v) < 1e-5f);
+    }
+    CHECK(adm::Parse("rate heal 3", c, err) && c.verb == adm::Verb::Rate && c.rateKind == adm::RateKind::Heal && c.rate == 3.0f);
+    CHECK(adm::Parse("rate xp 1.5", c, err) && c.rateKind == adm::RateKind::Xp && c.rate == 1.5f);
+    CHECK(adm::Parse("rate soin 40", c, err) && c.rate == 10.0f);
+    CHECK(adm::Parse("rates", c, err) && c.verb == adm::Verb::Rates);
+    CHECK(!adm::Parse("rate heal", c, err) && !adm::Parse("rate mana 2", c, err) && !adm::Parse("rate xp lots", c, err));
+    CHECK(adm::Parse("heal all", c, err) && c.verb == adm::Verb::Heal);   // healing someone is still "heal"
+    {
+        // a game constant scaled while hosting: untouched at x1, the game's rewrite becomes the base
+        adm::ScaledConstant<float> sc;
+        float wv = 0;
+        CHECK(!sc.Apply(0.5f, 1.0f, wv) && !sc.active());       // never touched while unused
+        CHECK(sc.Apply(0.5f, 4.0f, wv) && wv == 2.0f);
+        CHECK(!sc.Apply(2.0f, 4.0f, wv));                        // already written
+        CHECK(sc.Apply(2.0f, 2.0f, wv) && wv == 1.0f);           // from the base, not compounded
+        CHECK(sc.Apply(0.75f, 2.0f, wv) && wv == 1.5f && sc.base() == 0.75f);   // the game reloaded its constants
+        CHECK(sc.Restore(1.5f, wv) && wv == 0.75f && !sc.active());
+        CHECK(!sc.Restore(0.75f, wv));
+        adm::ScaledConstant<double> sx;
+        double dv = 0;
+        CHECK(!sx.Apply(0.0, 5.0f, dv));                          // before the game data is read: 0 stays 0
+        CHECK(sx.Apply(0.02, 5.0f, dv) && std::fabs(dv - 0.1) < 1e-12);
+        CHECK(sx.Restore(0.42, dv) == false);                     // rewritten by the game meanwhile: left alone
+    }
     CHECK(adm::SplitStacks(20, 1).size() == 20 && adm::SplitStacks(0, 5).empty());
     const auto st = adm::SplitStacks(23, 10);
     CHECK(st.size() == 3 && st[0] == 10 && st[1] == 10 && st[2] == 3);

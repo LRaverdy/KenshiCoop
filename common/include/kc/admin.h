@@ -44,7 +44,8 @@ int GiveXp(double amount, const IncreaseFn& inc);
 bool RaiseTo(float target, const ReadFn& read, const IncreaseFn& inc, int maxCalls, int* calls = nullptr);
 
 // ---- commands ("admin <verb> ...", typed in the console or sent by the window's buttons)
-enum class Verb { None, God, Xp, Tp, Heal, Money, List, State, Spawn };
+enum class Verb { None, God, Xp, Tp, Heal, Money, List, State, Spawn, Rate, Rates };
+enum class RateKind { Heal, Xp };
 enum class TpTo { Host, Player, Point, Pos };
 
 struct Target {
@@ -68,6 +69,8 @@ struct Command {
     int count = 0;            // Spawn: how many items in all
     Target spawnAt;           // Spawn: near whose character (host: "here")
     std::string maker, model; // Spawn, weapons: manufacturer sid and weapon model (material) sid; empty: a default
+    RateKind rateKind = RateKind::Heal;   // Rate: which multiplier
+    float rate = 1.0f;                    // Rate: its new value (already clamped)
 };
 
 bool ParseTarget(const std::string& s, Target& out);
@@ -111,6 +114,50 @@ struct Favourite {
 };
 extern const Favourite kFavourites[];
 extern const size_t kFavouriteCount;
+
+// ---- host multipliers ("Soin" and "Expérience" in the Administration section, [host] in
+// KenshiCoop.ini): the host scales the game's own global constants (GlobalConstants, filled from the
+// game data at load): "heal rate mult" and "resting heal rate mult" for healing, "exp gain
+// multiplier" for experience. They apply to every character of the host's world (NPCs too); health
+// and skills reach the clients through the usual sync.
+constexpr float kMinRate = 1.0f, kMaxRate = 10.0f;
+float ClampRate(float v);                                // NaN or out of range: within [kMinRate, kMaxRate] (NaN: 1)
+bool ParseRate(const std::string& s, float& out);        // "2.5", "x2.5", "2,5": clamped value; false: not a number
+std::string FormatRate(float v);                         // "2.5" (decimal point, whatever the locale): ParseRate reads it back
+
+// One game constant scaled by a multiplier, kept in step with the game: whatever value the game
+// writes there (a load re-reads the game data) becomes the new base. Apply returns the value to
+// write, or false when nothing must be written (multiplier 1 and nothing written before: the game's
+// memory is never touched while the feature is unused).
+template <typename T>
+class ScaledConstant {
+public:
+    bool Apply(T current, float mult, T& write) {
+        if (!have_ || current != written_) {   // first sight, or the game rewrote it
+            if (!have_ && mult == 1.0f) return false;
+            base_ = current;
+            have_ = true;
+        }
+        const T next = T(base_ * T(mult));
+        if (next == current) { written_ = current; return false; }
+        written_ = write = next;
+        return true;
+    }
+    // Back to the game's own value (when hosting ends): false when nothing to write.
+    bool Restore(T current, T& write) {
+        if (!have_) return false;
+        have_ = false;
+        if (current != written_ || current == base_) return false;   // the game rewrote it meanwhile: its own value
+        write = base_;
+        return true;
+    }
+    T base() const { return base_; }
+    bool active() const { return have_; }
+
+private:
+    bool have_ = false;
+    T base_{}, written_{};
+};
 
 // ---- god mode by player identity: it stays on across zone changes (characters re-resolved every
 // tick), reconnections and rejoins (same Steam account or name, whatever player id comes back).

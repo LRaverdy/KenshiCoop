@@ -31,7 +31,7 @@ namespace kcp {
 
 namespace {
 
-constexpr const char* kVersion = "0.3.1";
+constexpr const char* kVersion = "0.3.3";
 
 Config g_cfg;
 std::wstring g_iniPath;
@@ -633,6 +633,7 @@ void PublishOverlay() {
             m.players.push_back(p);
         }
         m.godAll = AdminGodAll();
+        AdminRates(m.healRate, m.xpRate);
         kc::Vec3 pt;
         if (g_world->Ready() && LastMoveOrderPoint(pt)) {
             char b[64];
@@ -1082,6 +1083,7 @@ bool Start() {
 
     g_iniPath = dir + L"KenshiCoop.ini";
     g_cfg = LoadConfig(g_iniPath);
+    AdminInitRates(g_iniPath, g_cfg.healRate, g_cfg.xpRate);
     steam::Init(g_cfg.steamLoopback);
     g_startedAt = NowSeconds();
     g_overlayVisible = g_cfg.overlay;

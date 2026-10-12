@@ -4,7 +4,13 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
-## v0.3.2 (en cours)
+## v0.3.3 (12 octobre 2026)
+
+**Protocole 36 : tout le monde doit installer cette version** (elle ne se connecte pas aux 0.3.1 et
+0.3.2). Elle contient tout ce qui est dans la 0.3.2 (ci-dessous), plus les travaux de la nuit du 11 au
+12 octobre : boutique d'animaux et prospection chez les clients, fermes et postes de travail pour les
+persos de chaque joueur, recrues des dialogues, caméra et mode construction sans pause, FPS loin de
+l'hôte. Les points sur les sacs à dos ci-dessous sont déjà dans la 0.3.2.
 
 - **Tests en jeu de la nuit du 12/10 (fusion des 6 lots)** : sacs à dos sans plantage ni inventaire abîmé (2 min de minage à x3), recrues données avec G et rangées sans écart, caméra libre, pas de pause du mode construction, journaux calmes, attaquants vus de loin, prospection chez le client, achat d'animaux chez le client (fenêtre, vente par l'hôte, argent identique). Corrigé pendant ces tests :
   - **déplacement vers un inventaire plein** : l'hôte vérifie maintenant qu'il reste une case avant de sortir l'objet de sa place (`FitsIn`) ; avant, l'objet était sorti puis remis ;
@@ -123,6 +129,48 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
   science, nom ; la fenêtre ne lit que les données du jeu). L'hôte ne peut plus prospecter avec le
   perso d'un autre joueur. Test : `coop_test.py prospect`. À tester en jeu.
 - Commandes de debug : `animalshop`, `animalshopstate`, `animalbuy`, `prospect`, `prospectstate`.
+
+## v0.3.2 (12 octobre 2026)
+
+Compatible avec la 0.3.1 (protocole 35) : un client 0.3.1 rejoint un hôte 0.3.2 et inversement. Les
+corrections des sacs et les multiplicateurs ne dépendent que de l'hôte ; la correction de la vente
+protège les clients qui ont installé la 0.3.2.
+
+- **Plantage d'un client à la vente chez un marchand** (présent en 0.3.1) : la fenêtre de commerce
+  gardait l'adresse du marchand (`ShopTrader`+0xC0) quand sa copie locale était remplacée par le vrai
+  PNJ envoyé par l'hôte (environ 1 s après l'ouverture) ; le rafraîchissement suivant (après une vente)
+  lisait le marchand libéré (`kenshi_x64+0x95484b`). Les fenêtres d'inventaire qui montrent un perso
+  sont maintenant fermées avant qu'il soit détruit, par le mod ou par le jeu (`hk_worldDestroy`) : il
+  suffit de reparler au marchand. À faire ensuite : garder la fenêtre ouverte sur le vrai marchand.
+- **Sacs de marchand (Traders Backpack)** : les objets s'y empilent selon le bonus du sac (minimum 2,
+  ×3 : Matériaux de Construction en piles de 6), chez l'hôte comme chez le client ; un objet rangé sans
+  case précise remplit d'abord les piles qui ont de la place ; l'hôte vérifie qu'il reste une case avant
+  de déplacer un objet (plus de « no room » à tort, plus d'objet sorti puis remis). Test `backpack` 40/40.
+- **Multiplicateurs de soin et d'expérience (hôte)** : deux curseurs « Soin » et « Expérience » (x1 à x10) dans la section Administration, enregistrés dans `KenshiCoop.ini` (`[host] heal_rate`, `xp_rate`), commandes `admin rate heal|xp <x>` et `admin rates`. L'hôte multiplie les constantes globales du jeu (`GlobalConstants` `0x2133DD0` : guérison +0x6C, guérison au repos +0x70, gain d'XP +0x138) tant qu'il héberge ; tous les persos de son monde en profitent (joueurs et PNJ), les clients reçoivent santé et compétences par la synchro habituelle. Aucun détour, aucun changement de protocole. À vérifier en jeu.
+
+- **Plantages de l'hôte avec les sacs à dos (11/10, 23:04 et 23:48) : corrigé, testé en jeu (2 min de minage
+  à x3, inventaires propres).** Un client qui lâchait au sol un objet de son sac : l'hôte le faisait lâcher par l'inventaire du
+  sac, dont le jeu fait retirer l'objet par l'inventaire **du perso**, qui n'a pas la section du sac.
+  L'objet arrivait au sol mais restait dans la liste et la section du sac (lâché deux fois, « cannot place
+  … at » chez les clients, l'objet qui revient). Une fois cet objet détruit (ramassé et fusionné), l'IA de
+  transport de ressources (`getResourceItems`, via `hasABackpackOn`) ou le calcul du poids de la section
+  lisait un objet libéré : plantage. Désormais chaque opération de l'hôte (déplacement, échange, dépôt,
+  achat et vente, reconstruction chez les clients, plan lu) passe par l'inventaire qui **possède**
+  l'objet (celui de la section qui le tient), vérifie que cet inventaire retrouve la section avant tout
+  retrait, sort l'objet du sac avant de le faire lâcher par le porteur, et ne détruit un objet qu'une fois
+  absent de toute liste (`plugin/kenshi.cpp` : `HomeOf`, `TakeFromHome`, `DropOut`, `DisposeTaken`).
+- **Contrôle et réparation des inventaires** : commande de debug `invcheck [all] [repair]` et
+  `invcheck each 1` (contrôle après chaque opération) ; en partie, un contrôle toutes les 3 s des persos
+  des joueurs et de leurs sacs répare ce qui reste abîmé deux fois de suite (objet libéré encore listé,
+  objet parti mais encore dans la liste ou la section), ce qui protège aussi les sauvegardes déjà
+  abîmées. Ligne `INVCHECK sweep` dans le journal.
+- **Piles dans les sacs (3c)** : une unité posée sur une unité du même objet s'empile aussi chez l'hôte
+  (avant : seulement à partir de 2, l'unité prenait une autre case et le sac se remplissait chez l'hôte
+  seul, puis « no room »). La règle est celle du jeu (`Item::isStackable`, avec le bonus de pile de la
+  section) ; ce qui ne s'empile pas (armes, armures, sacs) échange toujours sa place. Même règle pour
+  les achats. Test unitaire `TestStackMerge`.
+- Tests : expérience `backpack` (`coop_test.py`), commandes `baginv`, `invitems`, `wearbag`, `objjob`,
+  `uidrop bag:N`.
 
 ## v0.3.1 (11 octobre 2026)
 
