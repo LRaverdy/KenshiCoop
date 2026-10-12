@@ -848,6 +848,7 @@ Character* BackpackWearer(void* bag);   // the character wearing that backpack (
 // backpack slot, as the inventory window does. Its template id, or empty (and *why). Already wearing
 // one: that one's id.
 std::string WearNewBackpack(Character* c, const std::string& part, std::string* why);
+std::string BackpackStackInfo(Character* c);   // its worn backpack: sid, then each section's stacking bonus and what its first item stacks to (debug)
 // Safety check (debug command `invcheck`, the per-operation check, the periodic sweep): the inventories
 // of these holders, of the backpacks the characters wear and of any section they show, each list
 // against its sections: a freed item still listed (invalid vtable), an item listed but in no section,

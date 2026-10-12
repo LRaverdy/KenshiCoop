@@ -277,6 +277,10 @@ On ne voit pas la cause côté client d'ici : leurs journaux sont sur leurs PC.
    - **Corrigé dans le code, à tester en jeu** (v0.3.2) : fusion selon `Item::isStackable` (maximum d'une
      case, bonus du sac compris), une unité sur une unité comprise, aussi pour les achats ; ce qui ne
      s'empile pas échange sa place. `kc::StackMergeCount`, test `TestStackMerge`, expérience `backpack`.
+   - **Testé en jeu le 12/10 au matin avec un Traders Backpack Medium** (bonus min 2, ×3 : Matériaux en piles
+     de 6) : bonus identique chez l'hôte et le client (`bagbonus`), 1 sur 1 et pile entière fusionnés, objet
+     posé sans case qui rejoint une pile pas pleine (avant : « no room »). Expérience `backpack` 40/40.
+     Reste à confirmer avec rob en vrai (achat chez le marchand directement dans le sac).
    - Quelques achats dans le sac passent (22:29:10-17), puis tout est refusé, même en vendant et en
      rachetant. Le sac de rob se remplit donc chez l'hôte alors qu'il a l'air vide chez lui.
    - Cause probable : `MoveInventoryItem` (`plugin/kenshi.cpp:2531`) ne fusionne avec la pile visée que

@@ -598,6 +598,11 @@ Emplacements de vtable :
 - **Piles** [D] : `Item::isStackable(InventorySection*)` (`0x75E090`) rend le maximum d'une case : 1 pour les
   types 2 (arme), 3 (armure), 0x2E (sac), 0x66, 0x6B, 0x6F ; sinon l'entier « stackable » des données de
   l'objet (`GameData`+0x178), passé par `applyStackingBonuses` de la section (bonus des sacs de marchand).
+- **Bonus de pile d'une section** [D, 12 oct.] : `InventorySection::applyStackingBonuses` (`0x7466B0`) rend
+  `max(stackable, +0x88) * +0x8C` (int « stackable bonus minimum », float « stackable bonus mult » des données
+  du sac) ; si +0x98 est non nul, le « stackable » de l'objet est pris pour 1. Traders Backpack Medium
+  (`1498-gamedata.base`) et Large (`1499`) : 2 et ×3 (Matériaux de Construction en piles de 6) ; les autres
+  sacs (Shopkeepers, Old Traders, Small, Large…) : 1 et ×1. Commande de debug `bagbonus N`.
   `Item::addQuantity` (`0x75E220`) fusionne en tenant compte des charges. `canStackWith` `0x75D470`.
 
 ### Escouades

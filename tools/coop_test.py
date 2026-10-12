@@ -5163,9 +5163,13 @@ def exp_backpack(host, cli, haul_seconds=120):
     time.sleep(3)
     own = own_index(host)
     log("per-operation check on the host:", cmd(host, "invcheck each 1"))
-    r = cmd(host, f"wearbag {own}")
+    # a Traders Backpack Medium (11 October, rob; stacking bonus min 2, x3: Building Materials stack to 6 in it, 1 a cell elsewhere)
+    r = cmd(host, f"wearbag {own} 1498-gamedata.base")
     log("the client's character wears a backpack:", r)
     check("sac : le perso du client porte un sac", r[0] and r[1].startswith("ok"), r[1])
+    time.sleep(4)
+    for pid, who in ((host, "hote"), (cli, "client")):
+        log(f"stacking bonus ({who}):", cmd(pid, f"bagbonus {own}"))
     mats = None
     for part in ("Building_Materials", "Matériaux_Construction", "Materiaux"):
         t = cmd(host, f"itemtypes {part}")[1].split()
@@ -5194,6 +5198,12 @@ def exp_backpack(host, cli, haul_seconds=120):
     def mats_in_bag(pid):
         return [s for s in (bag(pid) or []) if s.startswith(mats + ":")]
 
+    def mats_total(pid):   # every Building Material in the backpack (the bag may already hold full stacks)
+        return sum(int(s.split(":")[1].split("@")[0]) for s in mats_in_bag(pid))
+
+    def mats_at(pid, sec, pos):   # the quantity of the materials stack at that cell, 0 if none
+        return next((int(s.split(":")[1].split("@")[0]) for s in mats_in_bag(pid) if s.endswith(f"@{sec}:{pos}")), 0)
+
     def clean(label):
         for pid, who in ((host, "hote"), (cli, "client")):
             r = cmd(pid, "invcheck all")
@@ -5213,22 +5223,34 @@ def exp_backpack(host, cli, haul_seconds=120):
     i = index_of(cli, mats)
     check("sac : materiaux chez le perso du client", i is not None, stacks(cli))
     if i is not None:
+        # the bag may already hold materials (a run before this one): it joins a stack of its kind with
+        # room left (the game's addItem, 12 October), else takes a cell of its own
+        pre = mats_in_bag(host)
+        pre_total = mats_total(host)
         move("1 unit into the backpack", me, mybag, i, 1)
-        first = mats_in_bag(host)
-        check("sac : 1 materiau dans le sac chez l'hote", len(first) == 1 and first[0].split(":")[1].startswith("1@"), bag(host))
-        if first:
-            sec, pos = first[0].split("@")[1].split(":")
+        for pid, who in ((host, "hote"), (cli, "client")):
+            log(f"stacking bonus with materials ({who}):", cmd(pid, f"bagbonus {own}"))
+        changed = [m for m in mats_in_bag(host) if m not in pre]
+        partial = [m for m in pre if int(m.split(":")[1].split("@")[0]) < 6]
+        check("sac : 1 materiau dans le sac chez l'hote (rejoint une pile pas pleine s'il y en a une)",
+              len(changed) == 1 and mats_total(host) == pre_total + 1 and (not partial or len(mats_in_bag(host)) == len(pre)), bag(host))
+        if changed:
+            sec, pos = changed[0].split("@")[1].split(":")
             x, y = pos.split(",")
+            h0 = mats_at(host, sec, pos)
+            n0 = len(mats_in_bag(host))
             move("1 dropped on 1 in the backpack", me, mybag, index_of(cli, mats), 1, x, y, sec)
-            st = mats_in_bag(host)
-            check("sac : 1 pose sur 1 = une seule pile de 2 chez l'hote (3c)", len(st) == 1 and st[0].split(":")[1].startswith("2@"), bag(host))
+            check("sac : 1 pose sur une pile = cette pile + 1 chez l'hote (3c)",
+                  mats_total(host) == pre_total + 2 and (h0 >= 6 or (mats_at(host, sec, pos) == h0 + 1 and len(mats_in_bag(host)) == n0)), bag(host))
             clean("1 sur 1")
-            # 2. the rest of the stack onto it
+            # 2. the rest of the stack onto it: that stack up to 6 (Traders Backpack), the rest elsewhere
             i = index_of(cli, mats)
             if i is not None:
+                rest = int(stacks(cli)[i].split(":")[1].split("@")[0])
+                h1 = mats_at(host, sec, pos)
                 move("the rest of the stack onto it", me, mybag, i, 0, x, y, sec)
-                st = mats_in_bag(host)
-                check("sac : toute la pile fusionnee dans le sac chez l'hote", len(st) == 1 and st[0].split(":")[1].startswith("10@"), bag(host))
+                check("sac : toute la pile fusionnee dans le sac chez l'hote",
+                      mats_total(host) == pre_total + 2 + rest and mats_at(host, sec, pos) == min(h1 + rest, 6), bag(host))
                 clean("pile entiere dans le sac")
             # 3. part of it back out to the character
             move("3 back out of the backpack", mybag, me, 0, 3)
@@ -5240,13 +5262,15 @@ def exp_backpack(host, cli, haul_seconds=120):
         clean("objet non empilable dans le sac")
     # 5. drop from the backpack to the ground (the 23:29 reproduction), then the host picks it up
     gb = cmd(host, f"groundall 700 {own}")[1].split()[2:]
+    in_bag = mats_total(host)
     r = cmd(cli, f"uidrop bag:{own} {mats}")
     log("client drops materials from its backpack:", r)
     time.sleep(5)
     ga = cmd(host, f"groundall 700 {own}")[1].split()[2:]
     fresh = [g for g in ga if g not in gb and g.split("|")[1] == mats]
     check("sac : lache depuis le sac : une fois au sol chez l'hote", len(fresh) == 1, fresh)
-    check("sac : lache depuis le sac : plus dans le sac chez l'hote", not mats_in_bag(host), bag(host))
+    gone = int(r[1].rsplit("x", 1)[1]) if r[0] and r[1].startswith("ok asked") else -1
+    check("sac : lache depuis le sac : plus dans le sac chez l'hote", mats_total(host) == in_bag - gone, (in_bag, gone, bag(host)))
     drops = [l for l in host_log()[log_start:].splitlines() if "client item drop done" in l and mats in l]
     check("sac : lache depuis le sac : lache une seule fois chez l'hote", len(drops) == 1, drops[-3:])
     clean("lache depuis le sac")
