@@ -6438,7 +6438,7 @@ def exp_animalshop(host, cli):
         log("goat:", cmd(host, f"spawncreature 3993-gamedata.base {dx} {dz} {own}"))
     time.sleep(6)
     animals0_h, animals0_c = cmd(host, "squadanimals")[1], cmd(cli, "squadanimals")[1]
-    opened = cmd(host, f"animalshop {own} 300")
+    opened = cmd(host, f"animalshop {own} 1000")
     log("host makes the animal shop for the client's character:", opened)
     state_c = "?"
     for _ in range(20):
@@ -6475,7 +6475,7 @@ def exp_animalshop(host, cli):
     rep = compare(dump(host, "h_animalshop2"), dump(cli, "c_animalshop2"), "animal shop")
     check("animaux (boutique) : positions identiques apres l'achat", rep["pos_err_over_tol"] == 0, rep.get("pos_err_over_tol"))
     # the host's own purchase: its window on its screen, the game's usual path
-    mine = cmd(host, "animalshop 0 600")
+    mine = cmd(host, "animalshop 0 1500")
     time.sleep(1)
     state_h3 = cmd(host, "animalshopstate")[1]
     log("host's own animal shop:", mine, state_h3)
@@ -7786,7 +7786,7 @@ def exp_workstations(host, cli, minutes=2.0):
     time.sleep(5)
     keep_anchor_home(host)
     # ---- materials: water, food, fabrics, books into the posts (host sandbox)
-    for sid, what in ((COOKING_STOVE, "Eau"), (COOKING_STOVE, "Water"), (COOKING_STOVE, "Ble"), (COOKING_STOVE, "Wheat"),
+    for sid, what in ((COOKING_STOVE, "Ble"), (COOKING_STOVE, "Wheat"),
                       (RESEARCH_BENCH, "Livre"), (RESEARCH_BENCH, "Book"), (CRAFT_BENCHES[0], FABRICS), (CRAFT_BENCHES[0], "Tissus")):
         log("sandbox: into", sid, what, cmd(host, f"machinegive {sid} {what} 20"))
     # ---- set to work: the client by right click and by the Tâches panel; the host the same

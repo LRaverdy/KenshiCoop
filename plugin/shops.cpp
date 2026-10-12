@@ -395,7 +395,8 @@ bool hk_animalConfirm(void* handler) {
     kc::IWorld::AnimalChoice c;
     if (kenshi::AnimalShopEntries(handler, entries))
         for (const auto& e : entries)
-            if (e.ticked) { c.animals.push_back(e.animal); c.price += e.price; }
+            // our copy of a host animal (a stand-in) has its own local handle: the session knows the host's
+            if (e.ticked) { KenshiWorld* w = TheWorld(); c.animals.push_back(w ? w->HostHandleOf(e.animal) : e.animal); c.price += e.price; }
     if (c.animals.empty()) return false;   // nothing ticked: the game does nothing either
     Log("animal shop: %zu animal(s) chosen here for %d cats, asked of the host", c.animals.size(), int(c.price));
     if (g_choices.size() < 8) g_choices.push_back(std::move(c));
@@ -454,6 +455,7 @@ bool KenshiWorld::SellAnimals(uint64_t key, const std::vector<kc::Handle>& anima
     if (!kenshi::AnimalShopEntries(h, entries)) { why = "offre illisible"; return false; }
     int32_t total = 0;
     size_t ticked = 0;
+    std::vector<kenshi::Character*> chosen;
     for (size_t i = 0; i < entries.size(); ++i) {
         const bool want = std::find(animals.begin(), animals.end(), entries[i].animal) != animals.end();
         kenshi::Character* a = want ? kenshi::Resolve(entries[i].animal) : nullptr;
@@ -464,7 +466,7 @@ bool KenshiWorld::SellAnimals(uint64_t key, const std::vector<kc::Handle>& anima
             return false;
         }
         kenshi::TickAnimalEntry(h, i, ok);
-        if (ok) { total += entries[i].price; ++ticked; }
+        if (ok) { total += entries[i].price; ++ticked; chosen.push_back(a); }
     }
     if (ticked != animals.size()) { why = "un des animaux n'était pas proposé"; return false; }
     int32_t before = 0, after = 0;
@@ -484,6 +486,16 @@ bool KenshiWorld::SellAnimals(uint64_t key, const std::vector<kc::Handle>& anima
     Log("animal shop: the game sold %zu animal(s) for %d cats (prices %d)%s", ticked, int(price), int(total), ran ? (sold ? "" : ", confirm said no") : ", confirm faulted");
     if (!ran || !sold) {
         why = ran ? "le jeu a refusé (escouade pleine ?)" : "erreur du jeu";
+        return false;
+    }
+    // the cats taken but no animal recruited (the game's recruit refused them: a test-spawned goat of no
+    // seller did so on 12/10): the player gets the money back
+    const bool joined = std::any_of(chosen.begin(), chosen.end(), [](kenshi::Character* a) { return kenshi::IsCharacter(a) && kenshi::InPlayerSquad(a); });
+    if (!joined) {
+        if (price > 0) kenshi::WritePlayerMoney(before);
+        Log("animal shop: no bought animal joined the player's squads: %d cats given back", int(price));
+        price = 0;
+        why = "le jeu n'a pas fait entrer l'animal dans l'escouade (argent rendu)";
         return false;
     }
     return true;
