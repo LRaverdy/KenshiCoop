@@ -71,6 +71,14 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
     d'avant ; le perso y retourne. C'est aussi l'échec des tests `suite` et `tpdown` (« TP admin : le
     perso du joueur arrive près de l'hôte » : 193 à 597 unités). À faire : après une TP admin, vider la
     destination et les ordres de déplacement (comme un « stop »), sans toucher aux travaux permanents.
+11. **Meow (recrue de nass4) invisible chez nass4 et Geoffrey (23:18-23:36).** Couchée au sac de
+    couchage à 23:18:10 (« put in its bed as on the host », inSomething 1, chez les trois clients), levée
+    chez l'hôte à 23:18:53 (« Meow now free »), mais **aucun client ne l'a sortie du lit** (pas de « out of
+    its bed » pour `1:238:411621088:1`) : restée « au lit », donc cachée, 17 minutes, pendant qu'elle
+    marchait chez l'hôte. Rattrapé au cycle suivant (23:36:10, « out of its bed as on the host (ok) »).
+    Entre-temps « player gone: … halted » (23:17:23 : nass4 parti puis revenu ?). À faire : quand l'hôte
+    dit « free » et que la copie est encore dans un lit/une cage, la sortir à chaque rafraîchissement
+    (pas seulement au changement), et log si elle y reste.
 4. **Commerce** (connu, 0.3.2) : la fenêtre se ferme quand la copie du marchand est remplacée par le
    vrai PNJ ; à faire : faire passer la fenêtre sur le vrai marchand (`ShopTrader`+0xC0) au lieu de la
    fermer.
