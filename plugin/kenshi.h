@@ -705,6 +705,23 @@ bool WithSelection(Character* only, const std::function<void()>& fn);
 // selected or an actor cannot be selected.
 bool SelectExactly(const std::vector<Character*>& actors, std::string* why);
 int SelectionRestoreFailures();   // times the player's selection could not be put back exactly
+// The game's "Shift is held" flag (0x2133449), which newPlayerTaskSelectedCharacters reads to make a
+// right click's order a permanent job (solo: Shift + right click on a machine). ShiftFlagFound: the
+// game's code reads it where 1.0.68 does (else ShiftHeld is false and ScopedShift does nothing).
+bool ShiftFlagFound();
+bool ShiftHeld();
+// The flag set to `on` for the scope (the host runs a client's order with the client's Shift, not
+// with the host player's own key), then put back.
+class ScopedShift {
+public:
+    explicit ScopedShift(bool on);
+    ~ScopedShift();
+    ScopedShift(const ScopedShift&) = delete;
+    ScopedShift& operator=(const ScopedShift&) = delete;
+private:
+    uint8_t saved_ = 0;
+    bool active_ = false;
+};
 // Run `fn`, then put the player's selection, squad bar and details panel back as they were (fn may
 // select characters: a squad created or joined).
 void KeepSelection(const std::function<void()>& fn);

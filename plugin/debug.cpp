@@ -1509,6 +1509,26 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         reinterpret_cast<void (*)(void*, int)>(kenshi::FnAddr(kenshi::FnCharRemovePermajob))(c, slot);
         return "ok";
     }
+    if (cmd == "whoseidx") {   // whoseidx: each squad index as this machine sees it: m mine, s nobody's (shared), o another player's or the host's
+        auto squad = SortedSquad(w);
+        auto v = KenshiWorld::View();
+        std::string o = "ok";
+        for (size_t i = 0; i < squad.size(); ++i)
+            o += " " + std::to_string(i) + ":" + (v->controllable.count(squad[i]) ? "m" : v->shared.count(squad[i]) ? "s" : "o");
+        return o;
+    }
+    if (cmd == "jobmove") {   // jobmove <squadIndex> <from> <to>: a job dragged in the Tâches panel (Character::movePermajob; to -1: the end)
+        size_t idx = 0;
+        int from = 0, to = 0;
+        in >> idx >> from >> to;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err";
+        kenshi::Character* c = w.FindSquad(squad[idx]);
+        const int n = kenshi::PermajobCount(c);
+        if (from < 0 || from >= n || to < -1 || to >= n) return "err no such job";
+        reinterpret_cast<void (*)(void*, int, int)>(kenshi::FnAddr(kenshi::FnCharMovePermajob))(c, from, to);
+        return "ok";
+    }
     if (cmd == "carryreq") {   // carryreq <selectIndex> <targetIndex>: that member alone is ordered to carry the other (as a right click does)
         size_t sel = 0, tgt = 0;
         in >> sel >> tgt;
@@ -2860,6 +2880,11 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         char b[96];
         snprintf(b, sizeof(b), "ok %.1f %.1f %s", double(g), double(ww), g == -99.0f ? "unknown" : (g < 98.0f ? "water" : "land"));
         return b;
+    }
+    if (cmd == "toastlast") {   // toastlast: the last notices shown at the top of the screen here (" | " between them)
+        std::string out = "ok";
+        for (const auto& t : w.RecentToasts()) out += (out.size() > 2 ? " | " : " ") + t;
+        return out;
     }
     if (cmd == "chatlast") {   // chatlast [n]: the last chat lines here, notices from the host included (" | " between lines)
         size_t n = 5;

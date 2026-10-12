@@ -728,30 +728,25 @@ bool KenshiWorld::ApplyMachine(const kc::MachineState& s, const std::vector<kc::
     return true;
 }
 
-std::string KenshiWorld::MachineIdleNote(void* b, kenshi::Character* actor) {
+// What a work order on that machine meets (v0.3.4: the player is told by kc::WorkOrderNote; before,
+// MachineIdleNote said nothing when the character was already at work there, rob's 60 clicks).
+bool KenshiWorld::FillMachineFacts(void* b, kenshi::Character* actor, kc::WorkOrderFacts& f) {
     std::string sid;
-    if (!IsUseable(b) || !kenshi::ObjectTemplate(b, sid)) return {};
-    const std::string name = TemplateName(sid);
+    if (!IsUseable(b) || !kenshi::ObjectTemplate(b, sid)) return false;
+    f.machine = true;
+    f.machineName = TemplateName(sid);
     std::vector<kc::Handle> ops;
     ReadOperators(b, ops);
     kc::Handle me;
-    if (actor && kenshi::GetHandle(actor, me) && std::find(ops.begin(), ops.end(), me) != ops.end()) return {};   // already at work there
+    f.atWorkThere = actor && kenshi::GetHandle(actor, me) && std::find(ops.begin(), ops.end(), me) != ops.end();
     int32_t maxOps = 0;
     Rd(b, US_maxOperators, maxOps);
+    f.operators = int(ops.size());
+    f.maxOperators = int(maxOps);
     bool idle = false;
-    if (CallDontNeedWork(b, idle) && idle) {
-        Log("order: %s needs no worker right now (dontNeedWorkRightNow): the one-time task ends at once", name.c_str());
-        if (IsFarm(b))
-            return name + " : les cultures poussent, il n'y a rien à récolter pour l'instant. Donne-lui plutôt ce travail en permanent "
-                          "(bouton JOBS, puis clic droit) : ton personnage y retournera pour la récolte.";
-        return name + " n'a pas de travail pour l'instant (rien à produire, à fabriquer ou à rechercher). En travail permanent "
-                      "(bouton JOBS, puis clic droit), ton personnage y retournera dès qu'il y en aura.";
-    }
-    if (maxOps > 0 && ops.size() >= size_t(maxOps)) {
-        Log("order: %s has no free place (%zu/%d operators)", name.c_str(), ops.size(), int(maxOps));
-        return name + " : toutes les places sont prises (" + std::to_string(ops.size()) + "/" + std::to_string(maxOps) + ").";
-    }
-    return {};
+    f.noWorkNow = CallDontNeedWork(b, idle) && idle;
+    f.farm = IsFarm(b);
+    return true;
 }
 
 bool KenshiWorld::ApplyTownPower(const kc::TownPower& t) {
@@ -1203,10 +1198,11 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
         }
         return out;
     }
-    if (cmd == "workreq") {   // workreq <squadIndex> <template sid>: that member alone works the instance nearest to squad member 0 (OPERATE_MACHINERY, as a right click)
+    if (cmd == "workreq") {   // workreq <squadIndex> <template sid> [shift]: that member alone works the instance nearest to squad member 0 (OPERATE_MACHINERY, as a right click; "shift": Shift held, a permanent job)
         size_t idx = 0;
-        std::string sid;
-        in >> idx >> sid;
+        std::string sid, opt;
+        in >> idx >> sid >> opt;
+        const bool shift = opt == "shift";
         kc::Vec3 anchor, p;
         if (!squadAt(0, anchor)) return "err no squad";
         kenshi::Character* c = squadAt(idx, p);
@@ -1225,8 +1221,14 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
         }
         if (!best) return "err no " + sid + " within 4000";
         bool ok = false;
-        kenshi::WithSelection(c, [&] { ok = kenshi::CallNewPlayerTaskOn(87, best, bp, kenshi::FurnitureParent(best)); });
-        return (ok ? "ok " : "err ") + w.TemplateName(sid) + " at " + std::to_string(int(Dist(bp, p)));
+        if (shift && !kenshi::ShiftFlagFound()) return "err the game's Shift flag is not where 1.0.68 has it";
+        const int before = kenshi::PermajobCount(c);
+        kenshi::WithSelection(c, [&] {
+            kenshi::ScopedShift held(shift);   // the key as the game's key handler sets it (read by our hook and the game)
+            ok = kenshi::CallNewPlayerTaskOn(87, best, bp, kenshi::FurnitureParent(best));
+        });
+        return (ok ? "ok " : "err ") + w.TemplateName(sid) + " at " + std::to_string(int(Dist(bp, p))) + " jobs " + std::to_string(before) + "->" +
+               std::to_string(kenshi::PermajobCount(c));
     }
     if (cmd == "researchreq") {   // the research window's add / remove (client: becomes a request)
         std::string what, sid;

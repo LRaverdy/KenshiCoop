@@ -155,7 +155,7 @@ public:
     bool ApplyMachine(const kc::MachineState& s, const std::vector<kc::Handle>& operators, const kc::Handle& local) override;
     // host: a machine a client's character was just sent to work that has no work for it now (crops
     // growing, nothing queued) or no free place: what to tell the player (French), else empty
-    std::string MachineIdleNote(void* building, kenshi::Character* actor);
+    bool FillMachineFacts(void* building, kenshi::Character* actor, kc::WorkOrderFacts& f);
     bool ApplyTownPower(const kc::TownPower& t) override;
     void TakeWorkshopAsks(std::vector<LocalResearchAsk>& research, std::vector<LocalMachineAsk>& machines) override;
     // hooks (client): a research window button, a blueprint read, a crafting window / building panel
@@ -380,6 +380,10 @@ public:
     // client: a permanent job our copy took at once (the host's game gives it too): kept by
     // ApplyJobs for a few seconds, until the host's job list has it
     void NoteLocalJob(const kc::Handle& h, int task);
+    // client (0.3.4): a squad bar toggle set on our copy at once: ApplyProgress keeps it a few seconds
+    void PredictMode(const kc::Handle& h, uint16_t bit, bool on);
+    // client (0.3.4): a job removed or moved in our Tâches panel: the host's job lists wait a moment
+    void NoteJobEdit(const kc::Handle& h);
     // host: a body being teleported (admin TP): the game must not lay it down again before it got there
     bool HoldsUpright(const void* chr) const {
         for (const auto& r : reRagdoll_)
@@ -466,6 +470,7 @@ public:
     int lootOpened = 0, lootDropped = 0;   // client loot orders: windows opened, orders that expired or lost their body (debug: lootstats)
     void Toast(const std::string& msg);
     std::vector<std::string> TakeToasts();
+    std::vector<std::string> RecentToasts();   // tests (debug "toastlast"): the last ones asked for, shown or not yet
 
     // ---- lot C: ranged combat (plugin/ranged.cpp)
     void TakeShots(std::vector<WorldShot>& out) override;
@@ -483,6 +488,10 @@ private:
     std::mutex shotsMutex_;
     std::vector<WorldShot> shotsOut_;                                  // host, under shotsMutex_
     std::unordered_map<std::string, std::vector<std::pair<int, unsigned long long>>> localJobs_;   // client: key -> (task, kept until GetTickCount64)
+    kc::ModePredictions modePredict_;                                  // client: toggles set here, not yet the host's (by KeyOf)
+    std::unordered_map<std::string, double> jobEdits_;                 // client: KeyOf -> host job lists not applied before (NowSeconds)
+    bool JobEditPending(const kc::Handle& h);
+    std::string CharKey(const kc::Handle& h);   // the character's address (any of its handles), else KeyOf
     std::unordered_map<std::string, kc::Handle> turretCache_;          // client: "sid@x,z" -> local turret
 public:
     static std::shared_ptr<const HookView> View() { return view_.load(std::memory_order_acquire); }
@@ -824,6 +833,7 @@ private:
     std::unordered_map<kc::Handle, PendingTalk, kc::HandleHash> pendingTalks_;   // host: client's character -> NPC it walks to talk to
     std::mutex toastMutex_;
     std::vector<std::string> toasts_;
+    std::vector<std::string> recentToasts_;   // tests: the last 8 (under toastMutex_)
 
     static inline std::atomic<std::shared_ptr<const HookView>> view_{std::make_shared<const HookView>()};
     static inline std::atomic<bool> clientActive_{false};

@@ -364,7 +364,7 @@ bool KenshiWorld::ReadJobList(const kc::Handle& h, std::vector<kc::JobEntry>& jo
 
 void KenshiWorld::ApplyJobList(const kc::Handle& h, const std::vector<kc::JobEntry>& jobs) {
     kenshi::Character* c = FindSquad(h);
-    if (!c) return;
+    if (!c || JobEditPending(h)) return;   // a job removed or moved here a moment ago: the host's list is not there yet
     auto readLocal = [&] {
         std::vector<LocalJob> v;
         for (int i = 0, n = kenshi::PermajobCount(c); i < n; ++i) {
@@ -389,7 +389,7 @@ void KenshiWorld::ApplyJobList(const kc::Handle& h, const std::vector<kc::JobEnt
     };
     // a job given here a moment ago: the host's list may not have it yet (kept a few seconds)
     std::vector<int> grace;
-    if (auto lj = localJobs_.find(KeyOf(h)); lj != localJobs_.end()) {
+    if (auto lj = localJobs_.find(CharKey(h)); lj != localJobs_.end()) {
         const unsigned long long now = GetTickCount64();
         for (const auto& p : lj->second)
             if (p.second >= now && std::none_of(jobs.begin(), jobs.end(), [&](const kc::JobEntry& e) { return e.task == p.first; })) grace.push_back(p.first);
@@ -443,16 +443,22 @@ void KenshiWorld::ApplyJobList(const kc::Handle& h, const std::vector<kc::JobEnt
         }
         if (kenshi::AddPermajob(c, e.task, subject, e.location)) ++added;
     }
-    // 3. the host's order
+    // 3. the host's order: each of ours ranked by its place in the host's list (a job kept a moment
+    // or whose target is not here yet: after them all, in its order), then moved one at a time as the
+    // game's panel does (movePermajob: taken out, put back at `to`). The old pass compared slot k with
+    // the host's k: with a job missing here every later slot was off by one and some never moved.
     int moved = 0;
-    local = readLocal();
-    for (size_t k = 0; k < jobs.size() && k < local.size(); ++k) {
-        if (same(jobs[k], local[k])) continue;
-        for (size_t j = k + 1; j < local.size(); ++j) {
-            if (!same(jobs[k], local[j])) continue;
-            if (kenshi::MovePermajob(c, int(j), int(k))) { ++moved; local = readLocal(); }
-            break;
-        }
+    for (int guard = 0; guard < 64; ++guard) {   // each move puts one more in place: at most one per job
+        local = readLocal();
+        std::vector<int> rank(local.size(), int(jobs.size()));
+        std::vector<bool> taken(jobs.size(), false);
+        for (size_t i = 0; i < local.size(); ++i)
+            for (size_t k = 0; k < jobs.size(); ++k)
+                if (!taken[k] && same(jobs[k], local[i])) { taken[k] = true; rank[i] = int(k); break; }
+        int from = 0, to = 0;
+        if (!kc::NextJobMove(rank, from, to)) break;
+        if (!kenshi::MovePermajob(c, from, to)) break;
+        ++moved;
     }
     if (!drop.empty() || added || moved || missing || wrong)
         Log("jobs: %s made like the host's: %zu removed, %d added, %d moved%s%s", KeyOf(h).c_str(), drop.size(), added, moved,

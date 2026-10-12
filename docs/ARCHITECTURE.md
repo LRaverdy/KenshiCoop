@@ -602,6 +602,18 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
   `Tasker` +0x10 sujet, +0x58 lieu) ; le client retire ce qu'il a en trop, ajoute ce qui manque
   (`Character::addJob`, sujet retrouvé par handle ou par type et endroit) et remet l'ordre
   (`movePermajob`). Une tâche donnée ici il y a moins de 5 s est gardée en attendant l'hôte.
+  v0.3.4 : remise en ordre par rang (`kc::NextJobMove`) ; une croix ou un glisser du client
+  (`NoteJobEdit`) suspend 3 s les listes de l'hôte pour ce perso ; les clés de ces attentes sont le
+  perso lui-même (`CharKey`), quel que soit le handle qui le nomme.
+- **Travaux permanents par Maj + clic droit (v0.3.4)** : `hk_newTask` lit la touche Maj du client
+  (`kenshi::ShiftHeld`) et l'envoie dans `Command.shift` ; `RunPlayerTask` exécute
+  `newPlayerTaskSelectedCharacters` sous `kenshi::ScopedShift(cmd.shift)` (la touche de l'hôte est
+  remise après). L'hôte compare la liste du perso avant et après et la machine visée
+  (`FillMachineFacts`) et dit au joueur ce qui s'est passé (`kc::WorkOrderNote`, `Result.text`).
+- **Bascules prédites (v0.3.4)** : `RouteOrder` pose aussitôt la bascule sur la copie
+  (`SetStandingOrder`) et la retient 3 s (`kc::ModePredictions`, filtrée dans `ApplyProgress`).
+- **Clics répétés (v0.3.4)** : `Session` (client) n'envoie le même ordre `Task` (voies 1-4) qu'une
+  fois par seconde (`kc::OrderDebounce`).
 
 ### Ordres (`RouteOrder`, `Session::ApplyCommand`, `KenshiWorld::Order`, `RunPlayerTask`)
 1. Le client note par quelle fonction de l'interface l'ordre est passé (`TaskVia`), le numéro de

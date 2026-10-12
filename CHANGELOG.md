@@ -108,6 +108,35 @@ Pas de changement de protocole (36, comme la 0.3.3).
     recréée dès 1,5 s.
   - Tests unitaires : `TestCaptives` (copie au lit alors que l'hôte l'a libre), `TestPerPlayerStreaming`
     (PNJ en sommeil figé, retour d'une doublure dit). 54907 vérifications.
+- **Travaux des persos des clients, comme en solo (A_FAIRE 12/10 point 5, rob : « la gestion des
+  tâches n'est pas au point ») : corrigé dans le code, à tester en jeu (`coop_test.py clientjobs`).
+  Pas de changement de protocole (toujours 36).**
+  - **Cause trouvée** : en solo, un clic droit devient un travail permanent quand **Maj** est tenue ;
+    c'est `newPlayerTaskSelectedCharacters` qui lit la touche lui-même (octet `0x2133449`). Le client
+    n'envoyait jamais sa touche (`shift` toujours faux pour cette voie) et l'hôte exécutait l'ordre
+    avec la touche **de son propre joueur** : le travail d'un client n'était permanent que si l'hôte
+    tenait Maj à cet instant (nass4 22:11, Geoffrey 22:48), jamais pour rob. Maintenant le client lit
+    sa touche, l'envoie (`Command.shift`, déjà dans le message) et l'hôte exécute l'ordre avec elle,
+    puis remet la sienne (`kenshi::ScopedShift`). Le perso du client montre le travail tout de suite
+    dans son panneau Tâches. Maj + clic droit sur un stockage donne le travail « ranger » (124) au lieu
+    d'ouvrir le coffre, comme en solo.
+  - **Bouton JOBS** : il ne crée pas de travail (il dit si le perso fait ceux de sa liste). Son état
+    change maintenant tout de suite chez le client et y reste 3 s malgré la synchro de l'hôte : le
+    second clic de rob (2 s après le premier) repartait de l'ancien état de l'hôte.
+  - **Machine pleine** : le jeu met quand même le travail permanent dans la liste (vérifié au
+    désassemblage, `OrdersReceiver::addJob`) ; l'hôte fait pareil pour un client.
+  - **Le joueur sait pourquoi rien ne se passe** (chat) : travail permanent ajouté mais toutes les
+    places prises, rien à faire pour l'instant, JOBS éteint, déjà dans sa liste ; ordre ponctuel sur
+    une machine où son perso travaille déjà (le cas de rob : son perso minait déjà le filon, 1 place,
+    et ses 60 clics ne disaient rien), pleine ou sans travail. Les messages disaient « bouton JOBS,
+    puis clic droit » : faux, c'est « Maj + clic droit ».
+  - **Clics répétés** : le même ordre part à l'hôte au plus une fois par seconde (rob : 60 en 10 s).
+  - **Panneau Tâches** : une croix ou un glisser du client ne revient plus en arrière le temps que
+    l'hôte le fasse ; remise dans l'ordre de l'hôte juste même si une cible manque chez le client ;
+    glisser « à la fin » (-1) accepté par l'hôte. Les tâches gardées en attendant l'hôte suivent le
+    perso même quand son handle local diffère de celui de l'hôte.
+  - Commandes de test : `workreq <i> <sid> shift`, `jobmove`, `whoseidx`, `toastlast` ; test unitaire
+    `TestClientJobs` ; expérience `clientjobs`.
 
 ## v0.3.3 (12 octobre 2026)
 

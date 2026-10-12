@@ -221,8 +221,13 @@ Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui
     (l'hôte décide, les boutons d'un client deviennent des demandes), à vérifier en jeu ;
   - fermes (v0.3.2) : les cultures poussent, sont récoltées et replantées pareil chez tout le monde.
     Un fermier envoyé par un simple clic droit sur une ferme qui pousse encore n'y reste pas (comme
-    en solo) : le jeu te le dit ; donne-lui le travail en **permanent** (bouton JOBS) pour qu'il
-    revienne récolter.
+    en solo) : le jeu te le dit ; donne-lui le travail en **permanent** (**Maj + clic droit**, comme
+    en solo, avec le bouton JOBS allumé) pour qu'il revienne récolter.
+  - travaux permanents (v0.3.4) : **Maj + clic droit** sur une machine, une ferme, un stockage… crée
+    le travail permanent chez l'hôte comme en solo, même si toutes les places sont prises (le perso
+    attend une place). Le bouton JOBS ne crée pas de travail : il dit seulement si le perso fait ceux
+    de sa liste. Quand un ordre ne donne rien (déjà au travail, machine pleine, déjà dans la liste,
+    JOBS éteint), le joueur reçoit la raison dans le chat.
 - Côté client, ne pas poser de bâtiment pour l'instant : il n'existerait probablement que chez
   toi. (Une pose qu'un client fait quand même est vérifiée par l'hôte comme le mode construction
   vérifie un endroit : dans l'eau ou l'acide, trop près d'une ville… elle est refusée et le

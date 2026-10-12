@@ -6512,6 +6512,176 @@ static void TestTalkRules() {
     CHECK(Dist(d.subjectPos, c.subjectPos) < 0.01f && d.subject == c.subject);
 }
 
+// v0.3.4, A_FAIRE 12/10 point 5: work orders given to a client's characters (rob's 60 clicks on a
+// copper deposit, JOBS turned off by its second click, no permanent job).
+static void TestClientJobs() {
+    std::printf("client jobs: what the player is told, the JOBS toggle predicted, identical orders sent once, job order\n");
+    auto has = [](const std::string& s, const char* part) { return s.find(part) != std::string::npos; };
+    // 1. the notes (kc::WorkOrderNote)
+    {
+        WorkOrderFacts f;
+        f.task = 87; f.machine = true; f.machineName = "Petite Ressource Cuivre"; f.operators = 1; f.maxOperators = 1; f.atWorkThere = true;
+        f.jobsBefore = f.jobsAfter = 0;
+        const std::string atWork = WorkOrderNote(f);   // rob's case: its own character already mines there
+        CHECK(has(atWork, "Petite Ressource Cuivre") && has(atWork, "y travaille déjà") && has(atWork, "Maj + clic droit"));
+        f.atWorkThere = false;   // someone else's: full
+        const std::string full = WorkOrderNote(f);
+        CHECK(has(full, "toutes les places sont prises (1/1)") && has(full, "Maj + clic droit"));
+        f.permanent = true; f.jobsAfter = 1;   // Shift: the job is queued all the same (the game checks no place)
+        const std::string queued = WorkOrderNote(f);
+        CHECK(has(queued, "travail permanent ajouté") && has(queued, "dès qu'une place se libère"));
+        f.jobsModeOn = false;
+        CHECK(has(WorkOrderNote(f), "JOBS de ce personnage est éteint"));
+        f.jobsModeOn = true; f.jobsAfter = 0; f.hadSameKind = true;   // the game's dedupe: already in its list
+        CHECK(has(WorkOrderNote(f), "déjà dans la liste"));
+        f.hadSameKind = false;
+        CHECK(has(WorkOrderNote(f), "Aucun travail permanent"));
+        f.operators = 0; f.jobsAfter = 1;   // a free place: the panel shows it, nothing to say
+        CHECK(WorkOrderNote(f).empty());
+        f.noWorkNow = true; f.farm = true;
+        CHECK(has(WorkOrderNote(f), "pour la récolte") && has(WorkOrderNote(f), "travail permanent ajouté"));
+        f.permanent = false; f.jobsAfter = 0;
+        const std::string crops = WorkOrderNote(f);
+        CHECK(has(crops, "les cultures poussent") && has(crops, "Maj + clic droit") && !has(crops, "bouton JOBS, puis"));
+        WorkOrderFacts haul; haul.task = 88;   // a one-time order on no machine: nothing to say
+        CHECK(WorkOrderNote(haul).empty());
+        WorkOrderFacts noName = f; noName.machineName.clear();
+        CHECK(has(WorkOrderNote(noName), "Cette machine"));
+    }
+    // 2. the squad bar's toggles: set here at once, kept until the host's state has had time to follow
+    {
+        CHECK(ModeBitOfOrder(15) == kModeChase && ModeBitOfOrder(13) == kModePassive && ModeBitOfOrder(17) == kModeRanged &&
+              ModeBitOfOrder(11) == kModeDefensive && ModeBitOfOrder(12) == kModeHold && ModeBitOfOrder(14) == kModeTaunt);
+        CHECK(ModeBitOfOrder(0) == 0 && ModeBitOfOrder(3) == 0 && ModeBitOfOrder(16) == 0);
+        ModePredictions p;
+        uint16_t local = 0;          // our copy: JOBS off
+        const uint16_t host = 0;     // the host's: off until our order is run there
+        // rob's two clicks 1.8 s apart; the host's modes come once a second in between
+        auto click = [&](double now) {
+            const bool want = !(local & kModeChase);   // RouteOrder: !GetStandingOrder(first selected)
+            local = uint16_t(want ? (local | kModeChase) : (local & ~kModeChase));
+            p.Predict("rob", kModeChase, want, now);
+            return want;
+        };
+        CHECK(click(0.0));                                   // on, at once
+        local = p.Filter("rob", host, 1.0);                  // the host's old "off": not applied
+        CHECK((local & kModeChase) && p.Pending("rob", kModeChase, 1.0));
+        CHECK(!click(1.8));                                  // the second click toggles back from what the player sees
+        local = p.Filter("rob", uint16_t(host | kModeChase), 2.0);   // the host ran the first: "on"... still ours: off
+        CHECK(!(local & kModeChase));
+        local = p.Filter("rob", 0, 5.0);                     // later: the host's (it ran the second too)
+        CHECK(!(local & kModeChase) && p.size() == 0);
+        // a refused order: the host's value comes back once the hold is over
+        click(10.0);
+        CHECK((p.Filter("rob", 0, 11.0) & kModeChase) != 0);
+        CHECK((p.Filter("rob", 0, 10.0 + ModePredictions::kHold + 0.1) & kModeChase) == 0);
+        // other toggles and other characters are left alone
+        p.Predict("rob", kModePassive, true, 20.0);
+        CHECK(p.Filter("nass", kModeHold, 20.5) == kModeHold);
+        CHECK(p.Filter("rob", kModeHold, 20.5) == (kModeHold | kModePassive));
+        bool on = false;
+        CHECK(p.Pending("rob", kModePassive, 20.5, &on) && on && !p.Pending("rob", kModeChase, 20.5));
+        p.Forget("rob");
+        CHECK(p.Filter("rob", 0, 20.6) == 0);
+    }
+    // 3. the same order clicked again and again: once a second
+    {
+        OrderDebounce d;
+        CHECK(d.Admit("2|2|87|--|mine", 0.0));
+        for (int i = 1; i < 10; ++i) CHECK(!d.Admit("2|2|87|--|mine", i * 0.09));
+        CHECK(d.Admit("3|2|87|--|mine", 0.5));          // another character
+        CHECK(d.Admit("2|2|87|s-|mine", 0.5));          // Shift: another order
+        CHECK(d.Admit("2|2|87|--|mine", 1.05));          // a second later: sent again
+        CHECK(d.dropped() == 9);
+        for (int i = 0; i < 2000; ++i) d.Admit("k" + std::to_string(i), 2000.0 + i);   // bounded
+    }
+    // 4. a job list put in the host's order with the game's movePermajob (taken out, put back at `to`)
+    {
+        std::vector<int> base = {0, 1, 2, 3, 4};
+        int worst = 0;
+        bool allSorted = true;
+        do {
+            std::vector<int> list = base;
+            int moves = 0, from = 0, to = 0;
+            while (NextJobMove(list, from, to) && moves < 20) { ApplyJobMove(list, from, to); ++moves; }
+            allSorted = allSorted && std::is_sorted(list.begin(), list.end());
+            worst = std::max(worst, moves);
+        } while (std::next_permutation(base.begin(), base.end()));
+        CHECK(allSorted && worst <= 4);
+        // jobs the host does not have (kept a moment: rank n) stay behind, in their order; a host job
+        // missing here (rank 1 absent) does not throw the others off
+        std::vector<int> list = {5, 3, 5, 0, 2};
+        int from = 0, to = 0, moves = 0;
+        while (NextJobMove(list, from, to) && moves < 20) { ApplyJobMove(list, from, to); ++moves; }
+        CHECK((list == std::vector<int>{0, 2, 3, 5, 5}) && moves <= 3);
+        std::vector<int> sorted = {0, 1, 2};
+        CHECK(!NextJobMove(sorted, from, to));
+        std::vector<int> l2 = {1, 2, 3};
+        ApplyJobMove(l2, 0, -1);   // -1: to the end
+        CHECK((l2 == std::vector<int>{2, 3, 1}));
+    }
+    // 5. Shift travels with a right click's order (NewTask): the host makes the permanent job with it
+    {
+        Command c; c.netId = 4; c.kind = CommandKind::Task; c.via = TaskVia::NewTask; c.task = 87; c.shift = true; c.add = false;
+        c.subject = FakeWorld::H(9); c.itemSid = "copper";
+        Writer w; Encode(w, c);
+        Reader r(w.data(), w.size());
+        CHECK(PeekType(r) == Msg::Command);
+        Command d; CHECK(Decode(r, d) && d.via == TaskVia::NewTask && d.shift && !d.add && d.task == 87);
+    }
+    // 6. a session: the client's identical clicks reach the host once a second; toggles always go
+    {
+        FakeWorld hw, cw;
+        SetupHost(hw);
+        AtMenu(cw);
+        SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+        Session host(hw, hc, Now, Quiet("host"));
+        std::vector<std::string> cliLog;
+        Session cli(cw, cc, Now, [&](const std::string& l) { cliLog.push_back(l); });
+        std::string err;
+        host.Host(&err);
+        CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+        host.Assign(FakeWorld::H(2), cli.localId());
+        auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}};
+        Run(all, 1.5);
+        hw.subjectFlags[700] = kTgtBuilding | kTgtMachine | kTgtOurs;
+        Command op; op.kind = CommandKind::Task; op.via = TaskVia::NewTask; op.task = 87; op.subject = FakeWorld::B(700); op.itemSid = "copper";
+        hw.orderedSerials.clear();
+        for (int i = 0; i < 6; ++i) {   // six clicks in ~0.5 s
+            cw.localOrders.push_back({FakeWorld::H(2), op});
+            Run(all, 0.08);
+        }
+        Run(all, 0.8);
+        CHECK(hw.orderedSerials.size() == 1);
+        bool logged = false;
+        for (const auto& l : cliLog) logged = logged || l.find("clicked again within") != std::string::npos;
+        CHECK(logged);
+        Run(all, 0.5);   // over a second since it was sent
+        cw.localOrders.push_back({FakeWorld::H(2), op});
+        Command sh = op; sh.shift = true;   // Shift + right click: not the same order
+        cw.localOrders.push_back({FakeWorld::H(2), sh});
+        Run(all, 1.0, [&] { return hw.orderedSerials.size() >= 3; });
+        CHECK(hw.orderedSerials.size() == 3);
+        // the squad bar's toggles are never held back (each click is a value)
+        Command jobs; jobs.kind = CommandKind::Task; jobs.via = TaskVia::SetOrder; jobs.task = 13; jobs.shift = true; jobs.add = true;
+        cw.localOrders.push_back({FakeWorld::H(2), jobs});
+        Run(all, 0.1);
+        jobs.add = false;
+        cw.localOrders.push_back({FakeWorld::H(2), jobs});
+        Run(all, 0.1);
+        jobs.add = true;
+        cw.localOrders.push_back({FakeWorld::H(2), jobs});
+        Run(all, 1.0, [&] { return hw.orderedSerials.size() >= 6; });
+        CHECK(hw.orderedSerials.size() == 6 && hw.chars[2].passive);
+        // the Tâches panel's removals: two of the same kind in a row both go
+        Command rm; rm.kind = CommandKind::Task; rm.via = TaskVia::RemovePermajob; rm.task = 87;
+        cw.localOrders.push_back({FakeWorld::H(2), rm});
+        cw.localOrders.push_back({FakeWorld::H(2), rm});
+        Run(all, 1.0, [&] { return hw.orderedSerials.size() >= 8; });
+        CHECK(hw.orderedSerials.size() == 8);
+    }
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);   // every line out before a crash
     if (std::getenv("KC_ONLY_STREAMING")) {   // the 0.3.1 streaming tests alone
@@ -6567,6 +6737,7 @@ int main() {
     TestAdmin();
     TestTaskTargets();   // actor safety
     TestWorkstationOrders();
+    TestClientJobs();   // v0.3.4: Shift jobs, JOBS toggle, notes, debounce
     TestCallScopeRepair();   // crash at kenshi_x64+0x883B78
     TestActorSafety();
     TestGuiToDisplay();

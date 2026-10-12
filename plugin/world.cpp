@@ -1858,11 +1858,11 @@ bool KenshiWorld::ReadJobs(const kc::Handle& h, std::vector<int32_t>& jobs) {
 // comes back once the host dropped it). Jobs are never added here: the host's game runs them.
 void KenshiWorld::ApplyJobs(const kc::Handle& h, const std::vector<int32_t>& jobs) {
     kenshi::Character* c = FindSquad(h);
-    if (!c) return;
+    if (!c || JobEditPending(h)) return;
     std::unordered_map<int32_t, int> left;
     for (int32_t j : jobs) ++left[j];
     // a job given here a moment ago: the host's list may not have it yet
-    auto lj = localJobs_.find(KeyOf(h));
+    auto lj = localJobs_.find(CharKey(h));
     if (lj != localJobs_.end()) {
         const unsigned long long now = GetTickCount64();
         auto& v = lj->second;
@@ -1888,12 +1888,43 @@ void KenshiWorld::ApplyJobs(const kc::Handle& h, const std::vector<int32_t>& job
 // Client: the host rejected an order of ours: a job we showed at once (the Tâches panel) is not
 // kept waiting for the host's list any longer (the next list removes it).
 void KenshiWorld::OrderRejected(const kc::Handle& h, const kc::Command& c) {
-    if (c.kind == kc::CommandKind::Task && c.via == kc::TaskVia::AddJob) localJobs_.erase(KeyOf(h));
+    if (c.kind == kc::CommandKind::Task && (c.via == kc::TaskVia::AddJob || (c.via == kc::TaskVia::NewTask && c.shift))) localJobs_.erase(CharKey(h));
+    // a job removal or move the host did not make: its lists apply again at once (our copy goes back)
+    if (c.kind == kc::CommandKind::Task && (c.via == kc::TaskVia::RemovePermajob || c.via == kc::TaskVia::MovePermajob || c.via == kc::TaskVia::RemoveJob))
+        jobEdits_.erase(CharKey(h));
+    // a toggle the host did not set: the host's modes apply again at once
+    if (c.kind == kc::CommandKind::Task && c.via == kc::TaskVia::SetOrder) modePredict_.Forget(CharKey(h));
     Log("the host rejected our order (task %d, via %d)", c.task, int(c.via));
 }
 
 void KenshiWorld::NoteLocalJob(const kc::Handle& h, int task) {
-    localJobs_[KeyOf(h)].push_back({task, GetTickCount64() + 5000});
+    localJobs_[CharKey(h)].push_back({task, GetTickCount64() + 5000});
+}
+
+// The character itself, whatever handle names it: our local one (the hooks', the selection's) or
+// the host's (the session's, which Find resolves through its alias).
+std::string KenshiWorld::CharKey(const kc::Handle& h) {
+    if (kenshi::Character* c = Find(h)) {
+        char b[24];
+        snprintf(b, sizeof(b), "%p", static_cast<void*>(c));
+        return b;
+    }
+    return KeyOf(h);
+}
+
+void KenshiWorld::PredictMode(const kc::Handle& h, uint16_t bit, bool on) { modePredict_.Predict(CharKey(h), bit, on, NowSeconds()); }
+
+void KenshiWorld::NoteJobEdit(const kc::Handle& h) {
+    if (jobEdits_.size() > 256) jobEdits_.clear();
+    jobEdits_[CharKey(h)] = NowSeconds() + 3.0;   // the host's answer and its next lists (once a second) are in by then
+}
+
+bool KenshiWorld::JobEditPending(const kc::Handle& h) {
+    auto it = jobEdits_.find(CharKey(h));
+    if (it == jobEdits_.end()) return false;
+    if (NowSeconds() < it->second) return true;
+    jobEdits_.erase(it);
+    return false;
 }
 
 int KenshiWorld::TeleportCharacters(const std::vector<kc::Handle>& who, const kc::Vec3& to, bool spread) {
@@ -2033,6 +2064,7 @@ void KenshiWorld::ApplyProgress(const kc::Handle& h, const std::vector<float>& s
     kenshi::Character* c = Find(h);
     if (!c) return;
     kenshi::WriteStats(c, stats);
+    modes = modePredict_.Filter(CharKey(h), modes, NowSeconds());   // a toggle just clicked here: kept until the host's has it
     uint8_t localStyle = 0;
     const uint16_t local = kenshi::ReadModes(c, localStyle);
     HostCallScope scope;
@@ -2442,6 +2474,12 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
             orderRefusalReason_ = kc::ResultReason::WrongTarget;
             return false;
         }
+        // what the order makes of the character's job list (Tâches panel): said to the player below
+        const bool askOrder = cmd.via == kc::TaskVia::AddOrder || cmd.via == kc::TaskVia::NewTask || cmd.via == kc::TaskVia::TaskNearest ||
+                              cmd.via == kc::TaskVia::AddJob;
+        const int jobsBefore = kenshi::PermajobCount(c);
+        bool hadSameKind = false;
+        for (int i = 0; i < jobsBefore && !hadSameKind; ++i) hadSameKind = kenshi::PermajobType(c, i) == cmd.task;
         const bool ok = RunPlayerTask(c, cmd, subject, building, &orderRefusal_);
         if (!ok && !orderRefusal_.empty()) orderRefusalReason_ = kc::ResultReason::SelectionBusy;
         if (!client_ && ok && (cmd.task == kc::kTaskTalk || cmd.task == kc::kTaskTalkNearest) && subject && kenshi::IsCharacter(subject)) {
@@ -2449,10 +2487,27 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
             if (kenshi::GetHandle(static_cast<kenshi::Character*>(subject), nh)) pendingTalks_[h] = {nh, NowSeconds() + 60.0, 0};
         }
         Log("client task %d (via %d) run for a character: %s", cmd.task, int(cmd.via), ok ? "ok" : "failed");
-        // a one-time "operate" on a machine that has no work for now (crops growing, nothing queued) or
-        // no free place: the game drops the task at once (UseableStuff::tryOperate), the player is told
-        // why and that a permanent job (JOBS) brings the character back when there is work
-        if (ok && subject && (cmd.task == 87 || cmd.task == 152 || cmd.task == 221) && cmd.via != kc::TaskVia::AddJob) orderNote_ = MachineIdleNote(subject, c);
+        // What the player is told (kc::WorkOrderNote): a permanent job (Shift + right click, the Tâches
+        // panel) added or not, and why it will wait (no free place, nothing to do, JOBS off); a one-time
+        // "operate" on a machine with no work for now, no free place, or that this character already
+        // works (the game drops the task or changes nothing: UseableStuff::tryOperate).
+        const bool permanent = askOrder && cmd.shift;
+        const bool operate = cmd.task == 87 || cmd.task == 152 || cmd.task == 221;
+        if (ok && askOrder && (permanent || (operate && cmd.via != kc::TaskVia::AddJob))) {
+            kc::WorkOrderFacts f;
+            f.task = cmd.task;
+            f.permanent = permanent;
+            f.jobsBefore = jobsBefore;
+            f.jobsAfter = kenshi::PermajobCount(c);
+            f.hadSameKind = hadSameKind;
+            f.jobsModeOn = kenshi::GetStandingOrder(c, 15);
+            if (subject && !kenshi::IsCharacter(subject) && (permanent || operate)) FillMachineFacts(subject, c, f);
+            orderNote_ = kc::WorkOrderNote(f);
+            Log("work order %d%s: jobs %d -> %d%s%s%s, machine %s (%d/%d operators%s%s)", cmd.task, permanent ? " (permanent)" : " (one-time)", f.jobsBefore,
+                f.jobsAfter, f.hadSameKind ? ", one of that kind already" : "", f.jobsModeOn ? "" : ", JOBS off", orderNote_.empty() ? "" : ", player told",
+                f.machine ? f.machineName.c_str() : "none", f.operators, f.maxOperators, f.atWorkThere ? ", already at work there" : "",
+                f.noWorkNow ? ", no work now" : "");
+        }
         return ok;
     }
     }
@@ -4223,6 +4278,13 @@ bool KenshiWorld::RemoveStrayCharacter(const kc::Handle& h) {
 void KenshiWorld::Toast(const std::string& msg) {
     std::lock_guard<std::mutex> lk(toastMutex_);
     if (toasts_.size() < 16) toasts_.push_back(msg);
+    recentToasts_.push_back(msg);
+    if (recentToasts_.size() > 8) recentToasts_.erase(recentToasts_.begin());
+}
+
+std::vector<std::string> KenshiWorld::RecentToasts() {
+    std::lock_guard<std::mutex> lk(toastMutex_);
+    return recentToasts_;
 }
 
 std::vector<std::string> KenshiWorld::TakeToasts() {
