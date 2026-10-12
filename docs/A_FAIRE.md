@@ -55,6 +55,16 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      perso de Geoffrey sans qu'il l'ait prise. À faire : n'envoyer un déplacement d'un conteneur que
      pendant que le joueur l'a ouvert ; empêcher la production locale des machines chez les clients ;
      log de la réponse de l'hôte à chaque InvOp refusé ou sans effet.
+7. **rob1 n'arrive pas à parler à un PNJ, il faut une resync (23:10:36)** : même tableau que Geoffrey
+   (point 1) : avant la resync, aucun ordre « talk » de rob n'arrive à l'hôte. Deux joueurs touchés le
+   même soir : priorité. Ajouter un log client quand un clic « parler » ne produit pas d'ordre, et ce
+   que le client sait du PNJ visé (lié à l'hôte ? stand-in ? captif ?).
+8. **Conversation lancée par un PNJ refermée aussitôt (23:11:10)** : un « Cent Gardien » fait une
+   vérification de contrebande sur rob : « conversation 25 opened for another player's character »,
+   réponses envoyées à rob, puis « conversation 25 closed » 0,15 s plus tard : rob ne peut pas répondre.
+   Voir ce qui ferme la conversation chez l'hôte (le jeu de l'hôte qui choisit seul ? la fenêtre de
+   l'hôte ? un délai ?).
+9. **nass4 à 69 fps** (23:11:07) quand les autres sont à 150-190 : voir son « sync perf ».
 4. **Commerce** (connu, 0.3.2) : la fenêtre se ferme quand la copie du marchand est remplacée par le
    vrai PNJ ; à faire : faire passer la fenêtre sur le vrai marchand (`ShopTrader`+0xC0) au lieu de la
    fermer.
