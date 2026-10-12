@@ -2355,6 +2355,22 @@ bool PlaceItem(void* inv, void* item, const std::string& section, int x, int y, 
     return gameAddFallback && CallAddItem(VSlot(inv, INVV_addItem), inv, item, qty);
 }
 
+// Whether PlaceItem(inv, item, section, x, y, qty, false) would find a cell, without touching anything:
+// a move checks this before taking the item out of its place. Putting it back after a failed move
+// left an item held by nobody, and the host's next frame read it (kenshi_x64+0x6d1c7, +0x1F8 of a
+// null owner): a stove refusing water in the 0.3.2 workstations test, twice.
+bool FitsIn(void* inv, void* item, const std::string& section, int x, int y) {
+    void* sec = FindSection(inv, section);
+    if (!sec) return false;
+    int w = 0, h = 0, iw = 1, ih = 1;
+    Rd(sec, SEC_width, w); Rd(sec, SEC_height, h); Rd(item, IT_width, iw); Rd(item, IT_height, ih);
+    if (CallSectionCanGo(sec, item, x, y)) return true;
+    for (int py = 0; py + ih <= h && py < 64; ++py)
+        for (int px = 0; px + iw <= w && px < 64; ++px)
+            if (CallSectionCanGo(sec, item, px, py)) return true;
+    return false;
+}
+
 constexpr int kItemTypeWeapon = 2;   // itemType::WEAPON
 
 void* CreateItemFromState(const kc::ItemState& s, std::string* why = nullptr) {
@@ -2728,6 +2744,7 @@ bool MoveInventoryItem(void* from, void* to, const kc::InvOp& op, std::string* e
             // that stack is full: the rest goes like any other move (`best` still holds it)
         }
     }
+    if (!FitsIn(dst, best, op.toSection, op.toX, op.toY)) { if (err) *err = "no room"; return false; }
     void* moving = TakeFromHome(home, best, qty, err);
     if (!moving) return false;
     // Only cells we checked are free: the game's addItem could destroy the item when it finds no
@@ -3994,7 +4011,14 @@ bool GiveNewItem(Character* c, const std::string& sid, int32_t qty, std::string*
     st.quantity = qty > 0 ? qty : 1;
     void* item = CreateItemFromState(st, why);
     if (!item) return false;
-    if (!CallGiveItem(c, item)) { if (why) *why = "giveItem refused (inventory full?)"; return false; }
+    // A refused new item is destroyed here: made by the factory and held by nobody, it stayed in the world (the
+    // host crashed in its next frame, kenshi_x64+0x6d1c7 reading +0x1F8, after a refused machinegive)
+    using FnGive = bool (*)(void*, void*, bool, bool);
+    if (!reinterpret_cast<FnGive>(FnAddr(FnGiveItem))(c, item, false, false)) {
+        if (GameWorld* w = World()) CallDestroy(FnAddr(FnWorldDestroy), w, item);   // never left held by nobody
+        if (why) *why = "giveItem refused (inventory full?)";
+        return false;
+    }
     return true;
 }
 

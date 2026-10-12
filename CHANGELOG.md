@@ -6,6 +6,13 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## v0.3.2 (en cours)
 
+- **Tests en jeu de la nuit du 12/10 (fusion des 6 lots)** : sacs à dos sans plantage ni inventaire abîmé (2 min de minage à x3), recrues données avec G et rangées sans écart, caméra libre, pas de pause du mode construction, journaux calmes, attaquants vus de loin, prospection chez le client, achat d'animaux chez le client (fenêtre, vente par l'hôte, argent identique). Corrigé pendant ces tests :
+  - **déplacement vers un inventaire plein** : l'hôte vérifie maintenant qu'il reste une case avant de sortir l'objet de sa place (`FitsIn`) ; avant, l'objet était sorti puis remis ;
+  - **objet neuf refusé** (commandes de test `giveitem`, `machinegive`) : détruit au lieu de rester tenu par personne ;
+  - **achat d'animaux** : les animaux cochés chez le client sont envoyés avec le handle de l'hôte (ses copies locales ont le leur : « chosen animal(s) unknown to the session ») ; si le jeu prend l'argent sans faire entrer l'animal dans l'escouade, l'hôte rend l'argent et le dit ;
+  - test `backpack` : les Matériaux de Construction ne s'empilent pas dans Kenshi (chaque unité a ses cases), les attentes « 1 sur 1 = pile de 2 » du test étaient fausses.
+- **Reste ouvert après la nuit** : plantage de l'hôte (`kenshi_x64+0x6d1c7`, lecture d'un texte de l'objet) juste après qu'un test a créé de l'eau (« Eau »/« Water ») par commande de debug et l'a donnée à un perso : chemin de test seulement, l'eau est retirée du test `workstations` ; un animal acheté à un vendeur créé par commande n'entre pas dans l'escouade (le jeu refuse ces chèvres de test) : à vérifier avec un vrai vendeur d'animaux.
+
 - **Plantages de l'hôte avec les sacs à dos (11/10, 23:04 et 23:48) : corrigé dans le code, à tester en
   jeu.** Un client qui lâchait au sol un objet de son sac : l'hôte le faisait lâcher par l'inventaire du
   sac, dont le jeu fait retirer l'objet par l'inventaire **du perso**, qui n'a pas la section du sac.
