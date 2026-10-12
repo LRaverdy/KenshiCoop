@@ -7877,6 +7877,131 @@ def exp_workstations(host, cli, minutes=2.0):
     summary()
 
 
+def exp_machineout(host, cli, seconds=60):
+    """0.3.4 (12 October, A_FAIRE point 6): a machine's inventory is synced to every player, open or not.
+    While its window is closed on the client, nothing that changes there is taken for the player's move:
+    no InvOp leaves the client, the host never answers "nothing to do", and the output is the same
+    everywhere. Then the client opens it and takes the output: that move goes to the host and lands."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    SANDBOX["home"] = None
+    log("heal everyone:", cmd(host, "console heal all"))
+    log("god mode for everyone:", cmd(host, "console god all"))
+    cmd(host, "console xp all 60")
+    time.sleep(4)
+    out = move_squad_out_of_town(host)
+    check("sortie machine : escouade en plein desert", out, "")
+    if not out:
+        summary()
+        return
+    ok, t, spot = place_valid(host, COOKING_STOVE, own, 0, 80)
+    log("host places a stove by the client's character:", ok, t, spot)
+    check("sortie machine : cuisiniere posee", ok, t)
+    if not ok:
+        summary()
+        return
+    time.sleep(3)
+    for _ in range(2):
+        log("finish:", cmd(host, f"buildprogress {COOKING_STOVE} 100000"))
+        time.sleep(1.5)
+    keep_anchor_home(host)
+    for what in ("Ble", "Wheat"):
+        log("sandbox: into the stove", what, cmd(host, f"machinegive {COOKING_STOVE} {what} 20"))
+    asked0 = cmd(cli, "logcount inventory_move_asked_of_the_host")[1]
+    cmd(cli, "logcount window_closed:_not_the_player's_doing")
+    cmd(host, "logcount not_done_(nothing_to_do)")
+    log("client's character works the stove:", cmd(cli, f"workreq {own} {COOKING_STOVE}"))
+    log("speed x3", cmd(host, "speed 3"))
+    end = time.time() + seconds
+    while time.time() < end:
+        time.sleep(10)
+        keep_anchor_home(host)
+        log("stove host:", cmd(host, f"storage {COOKING_STOVE}")[1][:200], "| client:", cmd(cli, f"storage {COOKING_STOVE}")[1][:200])
+    log("speed x1", cmd(host, "speed 1"))
+    time.sleep(4)
+    sh, sc = cmd(host, f"storage {COOKING_STOVE}")[1], cmd(cli, f"storage {COOKING_STOVE}")[1]
+    if sh != sc:
+        time.sleep(3)
+        sh, sc = cmd(host, f"storage {COOKING_STOVE}")[1], cmd(cli, f"storage {COOKING_STOVE}")[1]
+    check("sortie machine : meme contenu de la cuisiniere partout (fermee)", sh == sc, f"{sh[:160]} / {sc[:160]}")
+    asked1 = cmd(cli, "logcount inventory_move_asked_of_the_host")[1]
+    closed = cmd(cli, "logcount window_closed:_not_the_player's_doing")[1]
+    nothing = cmd(host, "logcount not_done_(nothing_to_do)")[1]
+    log("client moves asked:", asked0, "->", asked1, "| closed-window differences seen:", closed, "| host 'nothing to do':", nothing)
+    check("sortie machine : aucun deplacement demande par le client, fenetre fermee", asked1 == asked0, f"{asked0} -> {asked1}")
+    check("sortie machine : aucune demande sans effet chez l'hote", nothing in ("ok 0", "0"), nothing)
+    # the client opens the stove and takes its output: that one is the player's, sent and done
+    r = cmd(cli, f"containerreq {own} {COOKING_STOVE}")
+    log("client opens the stove:", r)
+    opened = False
+    for _ in range(40):
+        time.sleep(1)
+        if "windows=0" not in cmd(cli, "tradestate")[1]:
+            opened = True
+            break
+    check("sortie machine : le client ouvre la cuisiniere", opened, cmd(cli, "tradestate")[1])
+    if opened:
+        took = cmd(cli, f"contake {own} {COOKING_STOVE}")
+        time.sleep(4)
+        asked2 = cmd(cli, "logcount inventory_move_asked_of_the_host")[1]
+        rep_ = compare(dump(host, "h_machineout"), dump(cli, "c_machineout"), "machineout")
+        check("sortie machine : le client prend la sortie (demande envoyee, memes inventaires)",
+              took[0] and asked2 != asked1 and rep_["inventory_mismatch"] == 0, f"{took[1]} | {asked1} -> {asked2} | {rep_['inventory_mismatch_sample']}")
+        cmd(cli, "closewindows")
+    summary()
+
+
+def exp_tradeswap(host, cli, merchant="Marchand"):
+    """0.3.4 (A_FAIRE point 4): the trade window opened on a stand-in merchant (the client's game has
+    not loaded the town's real NPCs yet) goes on with the host's real merchant when it replaces the
+    stand-in: still open, with the merchant's cats, and a sale works afterwards. Opened right after the
+    join (no wait) so that the merchant is a stand-in as often as possible."""
+    time.sleep(8)
+    cmd(cli, "editdone")
+    time.sleep(2)
+    own = own_index(host)
+    for t in ("trade_window:_now_on", "trade_window:_cannot_move_it", "closed_the_inventory_windows", "DID_NOT_STICK"):
+        cmd(cli, f"logcount {t}")
+    log("merchants around the squad (host):", cmd(host, "merchants")[1])
+    log("host asks for the trade window:", cmd(host, f"tradeopen {own} {merchant} near"))
+    state = "?"
+    for _ in range(30):
+        time.sleep(0.5)
+        state = cmd(cli, "tradestate")[1]
+        if "open=1" in state:
+            break
+    check("commerce (doublure) : la fenetre s'ouvre chez le client", "open=1" in state, state)
+    log("client trade state:", state, "| stand-ins:", cmd(cli, "standins")[1][:200])
+    end = time.time() + 60
+    while time.time() < end:
+        time.sleep(2)
+        state = cmd(cli, "tradestate")[1]
+        moved = cmd(cli, "logcount trade_window:_now_on")[1]
+        if moved not in ("ok 0", "0") or "open=0" in state:
+            break
+    moved = cmd(cli, "logcount trade_window:_now_on")[1]
+    failed = cmd(cli, "logcount trade_window:_cannot_move_it")[1]
+    closed = cmd(cli, "logcount closed_the_inventory_windows")[1]
+    log("window moved to the real merchant:", moved, "| could not:", failed, "| windows closed on a destroy:", closed, "| state:", state)
+    if moved in ("ok 0", "0") and failed in ("ok 0", "0"):
+        log("NOT TESTED: the merchant was not a stand-in replaced during the test (try again right after loading)")
+    else:
+        time.sleep(2)
+        state = cmd(cli, "tradestate")[1]
+        check("commerce (doublure) : la fenetre reste ouverte sur le vrai marchand", moved not in ("ok 0", "0") and "open=1" in state and "windows=0" not in state, state)
+        cats = state.split("merchantcats=")[-1] if "merchantcats=" in state else "0"
+        check("commerce (doublure) : le marchand a l'argent de l'hote", cats.strip() not in ("0", ""), state)
+        check("commerce (doublure) : l'argent du marchand tient", cmd(cli, "logcount DID_NOT_STICK")[1] in ("ok 0", "0"), "")
+        sold = cmd(cli, "tradesell 0")
+        time.sleep(3)
+        h, c = cmd(host, "money")[1], cmd(cli, "money")[1]
+        check("commerce (doublure) : vente apres le remplacement, meme argent partout", sold[0] and h == c, f"{sold[1]} | hote {h} / client {c}")
+    cmd(cli, "closewindows")
+    summary()
+
+
 def exp_research(host, cli):
     """Workshop: the research (tech tree), the crafting benches, the mines and machines and the power of
     the players' outpost are the host's. The client researches, builds what it unlocked and crafts
@@ -8304,6 +8429,14 @@ def main():
     fo = sub.add_parser("four", help="1 host + 3 clients")
     fo.add_argument("--save", default="kctest_base")
     fo.add_argument("--clients", type=int, default=3)
+    mo = sub.add_parser("machineout", help="0.3.4: a closed machine's output asks no moves on the client; opened, the client takes it")
+    mo.add_argument("--save", default="kctest_base")
+    mo.add_argument("--keep", action="store_true")
+    mo.add_argument("--seconds", type=int, default=60)
+    tsw = sub.add_parser("tradeswap", help="0.3.4: a trade window on a stand-in merchant goes on with the host's real merchant")
+    tsw.add_argument("--save", default="kctest_town")
+    tsw.add_argument("--keep", action="store_true")
+    tsw.add_argument("--merchant", default="Marchand", help="part of the merchant's name ('_' for spaces)")
     ws = sub.add_parser("workstations", help="base work: farm, stove, bench, research, well, turbine by host and client, compared at x3")
     ws.add_argument("--save", default="kctest_base")
     ws.add_argument("--keep", action="store_true")
@@ -8525,6 +8658,10 @@ def main():
             exp_mine(host, cli)
         elif a.what == "workstations":
             exp_workstations(host, cli, minutes=a.minutes)
+        elif a.what == "machineout":
+            exp_machineout(host, cli, seconds=a.seconds)
+        elif a.what == "tradeswap":
+            exp_tradeswap(host, cli, a.merchant)
         elif a.what == "research":
             exp_research(host, cli)
         elif a.what == "admin":

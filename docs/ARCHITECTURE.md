@@ -648,11 +648,16 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
    contenant ne part qu'à ceux qui l'ont ouvert.
 2. Le client reconstruit l'inventaire local à l'identique (3 essais).
 3. Toutes les 0,2 s, il compare ce que montre son jeu à la dernière version de l'hôte. Chaque
-   objet disparu ici et apparu là, du même type, devient un `InvOp Move`.
+   objet disparu ici et apparu là, du même type, devient un `InvOp Move`. Un coffre ou une machine
+   ne compte que pendant que sa fenêtre est ouverte chez lui (`Entity::looter` posé par
+   `ContainerOpened` / `TradeOpen`, remis à 0 à la fermeture) : fermé, aucune demande ne le touche
+   (0.3.4 ; l'inventaire d'une machine est synchronisé chez tous, ouvert ou non).
 4. Le client attend la réponse de l'hôte 3 s au plus. Un objet parti sans arriver nulle part
    (tenu à la souris) laisse 10 s avant le retour à l'état de l'hôte.
 5. L'hôte vérifie les droits, fait passer le test de vol si l'objet sort d'un contenant vers un
-   personnage, déplace l'objet (`MoveInventoryItem`), puis renvoie les deux inventaires.
+   personnage, déplace l'objet (`MoveInventoryItem`), puis renvoie les deux inventaires. Chaque
+   demande laisse une ligne : « client item move done », « refused », « not done » (inventaire
+   introuvable chez l'hôte, ou netId qu'il ne suit pas : 0.3.4).
 6. Un objet jeté par le client devient `InvOp Drop`. Toutes les 0,2 s, la session du client
    publie au monde les inventaires depuis lesquels un dépôt peut partir (`IWorld::SetDropSources` :
    ses persos par le handle de l'hôte, les sacs qu'ils portent, un coffre ouvert ou un corps avec un
@@ -812,7 +817,10 @@ les mêmes partout) ; rien ne part vers l'hôte. Chez l'hôte, le bouton refuse 
    produite, ordres de fabrication et « répéter » ; les totaux d'énergie de leur ville. `Machines`
    part pour ce qui change, tout toutes les 5 s. L'inventaire d'une machine suivie devient une entité
    (`Entity::machine`) envoyée à **tous** les joueurs, ouverte ou non ; elle est oubliée quand la
-   machine n'est plus suivie (sauf si un joueur l'a ouverte).
+   machine n'est plus suivie (sauf si un joueur l'a ouverte), et les clients en sont prévenus par
+   `Unbind` (0.3.4). Le client oublie aussi de lui-même une copie que l'hôte ne nomme plus dans ses
+   envois complets depuis 12 s (hôte plus ancien), et la vieille copie d'un contenant que l'hôte suit
+   de nouveau sous un autre netId.
    Une ferme (`FarmBuilding`) envoie aussi ses cultures (`CropState`) ; le journal de l'hôte note
    les changements d'étape et de récolte (« machine: X crops: stage a -> b, harvested … »).
 3. Le client impose tout (`ApplyResearch`, `ApplyMachine`, `ApplyTownPower`), à l'arrivée puis

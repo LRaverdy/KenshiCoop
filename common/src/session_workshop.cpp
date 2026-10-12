@@ -29,6 +29,7 @@ constexpr double kMachinesInterval = 1.0, kMachinesFull = 5.0, kMachinesReapply 
 constexpr float kMachineRadius = 1500.0f;   // an outpost around the players' characters
 constexpr float kMachineReach = 2500.0f;    // a request's character must be at that machine's base
 constexpr size_t kMachineApplyBudget = 48;
+constexpr double kMachineForgotten = 12.0;  // client: full Machines rounds (every 5 s) without it: no longer followed
 constexpr size_t kMaxPending = 32;
 
 float Dist(const Vec3& a, const Vec3& b) {
@@ -293,6 +294,13 @@ void Session::HostMachines(double now) {
         if (auto e = entities_.find(it->second); e != entities_.end() && e->second.machine) {
             e->second.machine = false;
             if (e->second.openBy.empty()) {
+                // 0.3.4: every client keeps a machine's inventory: it is told to forget it. Without
+                // this a campfire no longer worked by a player stayed on every client with its last
+                // items, and each client's inventory check asked the host, every 3 s for 90 minutes
+                // (12 October), to "move" its meat to where the campfire now showed it.
+                Writer w;
+                Encode(w, Unbind{e->first});
+                BroadcastReliable(w, true);
                 byHandle_.erase(e->second.handle);
                 for (auto& [pid, sy] : sync_) sy.sent.erase(e->first);
                 entities_.erase(e);
@@ -347,12 +355,27 @@ void Session::ClientMachinesPacket(Reader& r) {
     MachinesMsg m;
     if (state_ != SessionState::Connected || !Decode(r, m)) return;
     ++workshop_.machinesReceived;
+    const double now = clock_();
+    if (m.full) machinesFullSeenAt_ = now;
     for (auto& s : m.machines) {
         const std::string key = MachineKey(s.sid, s.pos);
         // the machine's inventory: our copy of it, kept in step with the host's
         if (s.netId && !entities_.count(s.netId)) {
             Handle local;
             if (world_.FindContainer(s.sid, s.pos, local)) {
+                // 0.3.4: an older entity on the same container here (the host forgot the machine and
+                // follows it again under a new netId; a host before 0.3.4 never said so) goes: two
+                // host views of one inventory here fought, and the stale one asked moves forever
+                for (auto it = entities_.begin(); it != entities_.end();) {
+                    const Entity& o = it->second;
+                    if (o.container && !o.bag && o.handle == local && o.looter == 0 && !IsTradeCounter(it->first)) {
+                        log_("machine: " + world_.TemplateName(s.sid) + " followed again by the host as " + std::to_string(s.netId) +
+                             ": our old copy of its inventory (" + std::to_string(it->first) + ") forgotten");
+                        it = entities_.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
                 Entity e;
                 e.netId = s.netId;
                 e.handle = local;
@@ -361,10 +384,12 @@ void Session::ClientMachinesPacket(Reader& r) {
                 e.present = true;
                 e.checked = true;
                 e.containerPos = s.pos;
+                e.machineSeenAt = now;
                 entities_[s.netId] = std::move(e);
             }
         } else if (s.netId) {
             entities_[s.netId].machine = true;
+            entities_[s.netId].machineSeenAt = now;
         }
         if (clientMachines_.size() > 4096) clientMachines_.clear();
         ClientMachine& c = clientMachines_[key];
@@ -435,6 +460,24 @@ void Session::ClientWorkshop(double now) {
         machinesReapplyAt_ = now + kMachinesReapply;
         for (auto& [key, c] : clientMachines_) c.dirty = true;
         for (auto& [key, t] : clientTowns_) world_.ApplyTownPower(t);
+    }
+    // 0.3.4: a machine's inventory the host has not named for a while (it sends every machine it
+    // follows every 5 s) is no longer followed there: forgotten here unless its window is open (a host
+    // from 0.3.4 says so itself with Unbind; this covers an older host)
+    // (measured against the host's last full round, not our clock: a paused or frozen host forgets nothing)
+    if (now >= machinesStaleCheckAt_) {
+        machinesStaleCheckAt_ = now + 5.0;
+        for (auto it = entities_.begin(); it != entities_.end();) {
+            const Entity& e = it->second;
+            if (e.machine && e.container && !e.bag && e.looter == 0 && !IsTradeCounter(it->first) && e.machineSeenAt > 0 &&
+                machinesFullSeenAt_ - e.machineSeenAt > kMachineForgotten) {
+                log_("machine: inventory " + std::to_string(it->first) + " no longer named in the host's machine list for " +
+                     std::to_string(int(machinesFullSeenAt_ - e.machineSeenAt)) + " s: forgotten here");
+                it = entities_.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
     size_t budget = kMachineApplyBudget;
     std::vector<Handle> ops;

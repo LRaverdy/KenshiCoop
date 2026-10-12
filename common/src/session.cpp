@@ -1047,6 +1047,13 @@ void Session::UpdateInterest() {
         if (it->second.container) {   // only the players who have it open know it
             const bool walking = std::any_of(walkingToContainers_.begin(), walkingToContainers_.end(), [&](const PendingContainer& p) { return p.netId == it->first; });
             if (!it->second.openBy.empty() || walking || it->second.machine) { ++it; continue; }   // a machine: HostMachines decides
+            // 0.3.4: the clients are told (a machine's inventory, kept by every client, stayed there
+            // with a frozen copy of its items once the host forgot it; a chest's is already gone there)
+            if (!it->second.bag) {
+                Writer w;
+                Encode(w, Unbind{it->first});
+                BroadcastReliable(w, true);
+            }
             byHandle_.erase(it->second.handle);
             for (auto& [pid, s] : sync_) s.sent.erase(it->first);
             it = entities_.erase(it);
@@ -1728,6 +1735,9 @@ void Session::ClientContainers(double now) {
         } else if (here && ready) {
             trade_.pending = false;
             world_.SetMoneyOf(trader->second.handle, trade_.traderMoney);
+            trade_.moneyOn = world_.Identity(trader->second.handle);
+            trade_.moneyAt = now + 1.0;
+            trade_.moneyChecked = false;
             std::vector<Handle> counters;
             for (uint32_t id : trade_.counters)
                 if (auto it = entities_.find(id); it != entities_.end() && it->second.present) counters.push_back(it->second.handle);
@@ -1762,6 +1772,30 @@ void Session::ClientContainers(double now) {
             trade_.checkAt = 0;
         }
     }
+    // 0.3.4: the merchant's cats as the host has them. Checked a second after the window opens (a
+    // stand-in merchant showed 0 cats: sales paid nothing), and set again on the character the window
+    // now sells for when it changed (the host's real merchant replacing the stand-in: its own cats
+    // here are those of the save). Not every second: a sale lowers them here before the host says so.
+    if (trade_.open && now >= trade_.moneyAt) {
+        trade_.moneyAt = now + 1.0;
+        auto trader = entities_.find(trade_.trader);
+        if (trader != entities_.end() && trader->second.present) {
+            const uint64_t who = world_.Identity(trader->second.handle);
+            int32_t have = 0;
+            const bool read = world_.MoneyOf(trader->second.handle, have);
+            const bool switched = who != trade_.moneyOn;
+            if (switched || (!trade_.moneyChecked && (!read || have != trade_.traderMoney))) {
+                world_.SetMoneyOf(trader->second.handle, trade_.traderMoney);
+                int32_t after = 0;
+                const bool stuck = world_.MoneyOf(trader->second.handle, after) && after == trade_.traderMoney;
+                log_(std::string("trade: the merchant's cats here ") + (switched ? "(another character now: the host's real merchant) " : "") +
+                     (read ? std::to_string(have) : std::string("unreadable")) + ", set to the host's " + std::to_string(trade_.traderMoney) +
+                     (stuck ? "" : " (DID NOT STICK: sales may pay nothing)"));
+            }
+            trade_.moneyOn = who;
+            trade_.moneyChecked = true;
+        }
+    }
     // the stock changed under our window (not while an item is on the mouse): the window closes, the
     // counters take the host's stock, and it opens again (the pending path above)
     if (trade_.open && trade_.refresh && !world_.TradeWindowBusy()) {
@@ -1793,7 +1827,11 @@ void Session::ClientContainers(double now) {
             Writer w;
             Encode(w, ContainerClose{it->first, {}});
             SendReliable(net_.serverPeer(), w);
-            if (it->second.machine) { ++it; continue; }   // a machine's inventory stays synced
+            if (it->second.machine) {   // a machine's inventory stays synced (closed: no longer ours to touch)
+                it->second.looter = 0;
+                ++it;
+                continue;
+            }
             it = entities_.erase(it);
         }
     }
@@ -2447,7 +2485,16 @@ void Session::HostInvOps() {
 void Session::HostInvOp(uint8_t from, const InvOp& op, const InvOp* swapWith) {
     if (op.traderNetId) { HostTradeOp(from, op); return; }
     auto src = entities_.find(op.fromNetId);
-    if (src == entities_.end()) return;
+    if (src == entities_.end()) {
+        // 0.3.4: said, not dropped in silence. A client asked this every 3 s for 90 minutes on 12
+        // October (a campfire's inventory the host no longer followed, still known to the clients).
+        uint32_t held = 0;
+        if (invOpLog_.Allow(clock_(), &held))
+            log_("inventory move from player " + std::to_string(from) + " not done (nothing to do): " + op.item.templateSid + " x" +
+                 std::to_string(op.item.quantity) + " from inventory " + std::to_string(op.fromNetId) + ", which the host does not follow (any more)" +
+                 (held ? " [" + std::to_string(held) + " more such lines not written]" : std::string()));
+        return;
+    }
     auto isDown = [&](const Entity& e) {
         EntityState st;
         EntityVitals v;
@@ -2539,6 +2586,8 @@ void Session::HostInvOp(uint8_t from, const InvOp& op, const InvOp* swapWith) {
         dst->second.invHash = 0;
         return;
     }
+    // the world says what it did ("client item move done" / "refused: <why>" / "not done: inventory
+    // not found here")
     world_.ExecuteInvOp(src->second.handle, dst->second.handle, op);
     // Whatever happened, everyone (the requester first) gets the real state of both inventories.
     src->second.invHash = 0;
@@ -2739,17 +2788,46 @@ void Session::ClientInventoryDiff(double now) {
     // characters, an open container, a body on the ground (anything else the host refuses, and the
     // client is told). A standing NPC's gear differing on its own (a character that just streamed
     // in) is not: no move is asked, it simply goes back to the host's state.
-    auto touchable = [&](uint32_t netId) {
+    //
+    // 0.3.4: a chest or a machine counts only while its window is open here (looter set by
+    // ContainerOpened / TradeOpen, cleared when the window closes). A machine's inventory is synced to
+    // every player, open or not: one that changed by itself here (our game running it, the host's
+    // newer state, a copy the host no longer follows) is not the player's doing. No move into or out
+    // of it is asked; it goes back to the host's state. (12 October: three clients asked every 3 s
+    // for 90 minutes to move a closed campfire's meat, some of it into Geoffrey's character.)
+    auto closedContainer = [&](uint32_t netId) {
         auto it = entities_.find(netId);
         if (it == entities_.end()) return false;
+        const Entity& e = it->second;
+        return e.container && !e.bag && e.looter == 0 && !IsTradeCounter(netId);
+    };
+    auto touchable = [&](uint32_t netId) {
+        auto it = entities_.find(netId);
+        if (it == entities_.end() || closedContainer(netId)) return false;
         const Entity& e = it->second;
         const bool down = (!e.buf.empty() && (e.buf.back().s.flags & (kFlagDown | kFlagDead))) ||
                           (e.haveVitals && (e.vitals.flags & (kVitUnconscious | kVitDead)));
         return e.squad || e.container || down;
     };
-    ops.erase(std::remove_if(ops.begin(), ops.end(), [&](const InvOp& op) { return !touchable(op.fromNetId) && !touchable(op.toNetId); }), ops.end());
+    ops.erase(std::remove_if(ops.begin(), ops.end(),
+                             [&](const InvOp& op) {
+                                 return (!touchable(op.fromNetId) && !touchable(op.toNetId)) || closedContainer(op.fromNetId) || closedContainer(op.toNetId);
+                             }),
+              ops.end());
     for (uint32_t id : involved) {
         if (touchable(id)) continue;
+        if (closedContainer(id)) {
+            // no move asked; it goes back to the host's state through the wait below (10 s without
+            // a move: the same path as an item left on the mouse), never rebuilt under a drag
+            if (auto it = entities_.find(id); it != entities_.end() && it->second.invUnmatchedSince == 0) {
+                uint32_t held = 0;
+                if (closedInvLog_.Allow(now, &held))
+                    log_("inventory " + std::to_string(id) + std::string(it->second.machine ? " (a machine)" : " (a container)") +
+                         " differs here from the host's with its window closed: not the player's doing, no move asked" +
+                         (held ? " [" + std::to_string(held) + " more such lines not written]" : std::string()));
+            }
+            continue;
+        }
         const bool moved = std::any_of(ops.begin(), ops.end(), [&](const InvOp& op) { return op.fromNetId == id || op.toNetId == id; });
         if (auto it = entities_.find(id); it != entities_.end() && !moved) { it->second.invDirty = true; it->second.invUnmatchedSince = 0; }
     }
@@ -3719,6 +3797,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
         e.looter = m.looterNetId;
         if (auto old = entities_.find(m.netId); old != entities_.end() && old->second.machine) {   // a machine: its items stay as they are
             e.machine = true;
+            e.machineSeenAt = old->second.machineSeenAt;
             e.inv = old->second.inv;
             e.haveInv = old->second.haveInv;
         }
@@ -3732,6 +3811,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
         if (auto it = entities_.find(m.netId); it != entities_.end()) {
             if (IsTradeCounter(m.netId)) EndClientTrade();   // the whole trade window goes
             if (it->second.container && !it->second.bag && !it->second.machine) entities_.erase(it);   // a backpack, a machine stay synced
+            else if (it->second.machine) it->second.looter = 0;   // closed: no longer ours to touch (ClientInventoryDiff)
             world_.CloseContainerWindows();
             windowOpenedAt_ = -1;
             if (!m.reason.empty()) AddChat("* " + m.reason, "the host closes the window: " + m.reason);

@@ -5035,6 +5035,81 @@ static void TestTalkAndRecruit() {
 
 // Every message has exactly one authority rule; PeekType accepts exactly the messages; host->client
 // messages sent by a client are refused; a client's map pings are rate-limited by their rule.
+// 0.3.4 (12 October, A_FAIRE point 6): a machine's inventory is synced to every client, open or not.
+// Its window closed, a change there is never taken for the player's move; once the host stops
+// following the machine, every client forgets its copy (Unbind) instead of asking moves forever; a
+// move from an inventory the host does not follow is logged by the host.
+static void TestMachineInventoryClosed() {
+    std::printf("session: a closed machine's inventory asks no moves; a machine the host forgets is forgotten by the clients\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);   // squad at x = 100, 200, 300
+    auto item = [](const char* sid, int qty, int x) { ItemState s; s.templateSid = sid; s.quantity = qty; s.section = "out"; s.x = int16_t(x); return s; };
+    hw.boxes[800] = {"campfire", {150, 0, 0}, {item("meat", 2, 2)}};
+    FakeWorld::FakeMachine fire;
+    fire.s.sid = "campfire"; fire.s.pos = {150, 0, 0}; fire.s.maxOperators = 1; fire.s.production = 1;
+    fire.box = 800;
+    fire.ops = {FakeWorld::H(2)};
+    hw.machines["campfire"] = fire;
+    AtMenu(cw);
+    cw.boxes = hw.boxes;
+    cw.machines["campfire"].s.sid = "campfire";
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    std::vector<std::string> hostLog, cliLog;
+    Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
+    Session cli(cw, cc, Now, [&](const std::string& l) { cliLog.push_back(l); });
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    host.Assign(FakeWorld::H(2), cli.localId());
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}};
+    auto copiesOf = [&](Session& s, const Handle& h) {
+        size_t n = 0;
+        s.ForEachEntity([&](uint32_t, const Handle& eh, uint8_t, bool, bool) { n += eh == h; });
+        return n;
+    };
+    Run(all, 3.0, [&] { return copiesOf(cli, FakeWorld::B(800)) == 1 && cw.boxes[800].items == hw.boxes[800].items; });
+    CHECK(copiesOf(cli, FakeWorld::B(800)) == 1 && cw.boxes[800].items == hw.boxes[800].items);
+    auto asked = [&] { return std::count_if(cliLog.begin(), cliLog.end(), [](const std::string& l) { return l.find("inventory move asked of the host") != std::string::npos; }); };
+    // 1. the client's game moves the meat in the closed campfire (its own production, another layout):
+    //    no move asked, and the campfire goes back to the host's state
+    cw.boxes[800].items = {item("meat", 2, 0)};
+    Run(all, 2.0);
+    CHECK(asked() == 0 && hw.boxes[800].items[0].x == 2);
+    Run(all, 12.0, [&] { return cw.boxes[800].items == hw.boxes[800].items; });
+    CHECK(cw.boxes[800].items == hw.boxes[800].items && asked() == 0);
+    // ... nor some of it "taken" into the player's character (the meat that went into Geoffrey's)
+    cw.boxes[800].items = {item("meat", 1, 2)};
+    cw.chars[2].items.push_back(item("meat", 1, 0));
+    cw.chars[2].items.back().section = "main";
+    Run(all, 2.0);
+    CHECK(asked() == 0 && hw.chars[2].items.empty() && hw.boxes[800].items[0].quantity == 2);
+    Run(all, 12.0, [&] { return cw.boxes[800].items == hw.boxes[800].items && cw.chars[2].items.empty(); });
+    CHECK(cw.boxes[800].items == hw.boxes[800].items && cw.chars[2].items.empty());
+    // 2. nobody works the campfire any more: the host forgets it and says so; the client's copy goes
+    hw.machines.erase("campfire");
+    Run(all, 3.0, [&] { return copiesOf(cli, FakeWorld::B(800)) == 0; });
+    CHECK(copiesOf(host, FakeWorld::B(800)) == 0 && copiesOf(cli, FakeWorld::B(800)) == 0);
+    // ... then worked again: one copy on the client, under the host's new netId, in step
+    hw.machines["campfire"] = fire;
+    hw.boxes[800].items = {item("meat", 3, 0)};
+    Run(all, 4.0, [&] { return copiesOf(cli, FakeWorld::B(800)) == 1 && cw.boxes[800].items == hw.boxes[800].items; });
+    CHECK(copiesOf(cli, FakeWorld::B(800)) == 1 && cw.boxes[800].items == hw.boxes[800].items && asked() == 0);
+    // 3. a move from an inventory the host does not follow (an older client's stale copy): said
+    InvOp stale;
+    stale.kind = InvOpKind::Move;
+    stale.fromNetId = 999999;
+    stale.toNetId = 999999;
+    stale.item = item("meat", 1, 2);
+    stale.toSection = "out";
+    Writer w;
+    Encode(w, stale);
+    CHECK(host.InjectForTest(cli.localId(), w));
+    Run(all, 0.5);
+    CHECK(std::any_of(hostLog.begin(), hostLog.end(), [](const std::string& l) {
+        return l.find("inventory move from player") != std::string::npos && l.find("not done (nothing to do)") != std::string::npos;
+    }));
+}
+
 // Workshop: the research, the crafting benches, the machines and the towns' power are the host's;
 // a client's requests run on the host (in order, paid once, last writer wins) and everyone follows.
 static void TestWorkshop() {
@@ -6321,6 +6396,11 @@ int main() {
         std::printf("%d checks, %d failed\n", g_checks, g_failed);
         return g_failed ? 1 : 0;
     }
+    if (std::getenv("KC_ONLY_MACHINEINV")) {   // the 0.3.4 machine inventory test alone
+        TestMachineInventoryClosed();
+        std::printf("%d checks, %d failed\n", g_checks, g_failed);
+        return g_failed ? 1 : 0;
+    }
     TestWire();
     TestClockSync();
     TestFuzz();
@@ -6373,6 +6453,7 @@ int main() {
     TestJoinReturns();
     TestWorldPacking();
     TestWorkshop();   // research, crafting benches, machines, power
+    TestMachineInventoryClosed();   // 0.3.4: a closed machine asks no moves; a forgotten one goes
     TestMessageRules();   // the authority table covers every message
     TestMotion();   // smooth motion, facing and posture on clients
     TestLootCreatures();   // every creature kind lootable from a client (leviathans...)

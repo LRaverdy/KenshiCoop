@@ -1386,6 +1386,33 @@ Recherche faite le 9 octobre 2026 pour le commerce. Fiabilité de chaque fait :
   en +0x50 : le `hand` d'un sac porté se résout comme celui d'un objet au sol.
 - `0x953F90` (appelé par `showTraderInventory`) **détruit le `ShopTrader` précédent et en crée un
   neuf** à chaque ouverture : rouvrir la fenêtre suffit à montrer un stock changé.
+- **Ce que la fenêtre garde du marchand** (lu le 13 octobre 2026 pour faire passer la fenêtre d'une
+  doublure au vrai PNJ, `kenshi::RetargetTradeWindow`) [D] :
+  - `ShopTrader` (vtable `0x1736D48`, RTTI `ShopTrader`, 0xD0 octets) est un `RootObjectBase` à lui
+    (son propre `hand` à +0x58, type 0x5B ; son nom copié en +0x18 ; sa faction, celle du marchand,
+    objet global) ; **+0xC0 le marchand** (`Character*`, écrit une fois par le constructeur
+    `0x953850`) ; +0xC8 son `ShopTraderInventory`, dont le propriétaire est le `ShopTrader` (et non
+    le marchand) et les sections celles des comptoirs (meubles) ou des sacs de l'escouade ;
+  - le `ShopTrader` vit dans l'emplacement `[0x212FA08]` (le gestionnaire que `showTraderInventory`
+    passe à `0x953F90` avec le `hand` du marchand) ;
+  - la fenêtre du marchand (`InventoryTraderGUI`, vtable `0x1707618`) : +0x50 le `ShopTrader` ; vt 0x70
+    `getInventory` (`0x70D520`), vt 0x78 `getCallbackCharacter` (`0x70D540` : `ShopTrader`+0xC0), vt
+    0x80 `getCallbackObject` (`0x70D560` : le `ShopTrader`) ;
+  - `showTraderInventory` range la fenêtre dans la table des fenêtres ouvertes (`gui`+0xA0) et dans
+    `gui`+0x120 sous le `hand` **du `ShopTrader`**, pas celui du marchand ;
+  - `_showTradeWindow` (`0x7918A0`) passe à `addTradePartner` (`0x70F2A0`, arguments : fenêtre,
+    paiement, peut poser, joueur, `hand*`) le `hand` du marchand (`b`+0x58), copié par valeur dans les
+    données (+0x10 : type +0x18, conteneur +0x1C, série du conteneur +0x20, index +0x24, série +0x28
+    dans les données) ;
+  - `getNPCTrader` (`0x70E2D0`) et `isWithinRangeToTrade` (`0x70D290`) relisent à chaque appel vt 0x78
+    / vt 0x80 de chaque fenêtre ; le rafraîchissement du `ShopTrader` (`0x954800`, `r8d == 0xF`) lit
+    +0xC0 puis `getMoney` (vt 0x1B8) : le plantage du 12/10 (`kenshi_x64+0x95484B`) sur un marchand
+    libéré ;
+  - donc, pour changer de marchand sous une fenêtre ouverte : écrire `ShopTrader`+0xC0 et les champs
+    du `hand` du partenaire, rien d'autre ; à condition que les sections ne soient pas des sacs de
+    l'escouade de l'ancien marchand (marchand ambulant : la fenêtre se ferme). Argent d'un PNJ :
+    `Character::getMoney` (`0x791660`) et `getOwnerships` (`0x7956A0`) passent par l'escouade
+    (+0x658 → +0x78 → vt 0x98 → +0x88) ; sans escouade, un `Ownerships` statique commun.
 - `lektor<T*>` du jeu : vtable, `uint32` nombre (+8), `uint32` capacité (+0xC), données (+0x10) ;
   l'agrandissement (`0xD9410`) passe par `operator new` / `delete` du jeu (`0xED6504` / `0xED64FE`) :
   une liste qu'on donne au jeu doit avoir sa mémoire allouée par ces fonctions.

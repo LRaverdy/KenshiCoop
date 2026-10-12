@@ -643,11 +643,13 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
     }
     if (cmd == "groundstats") {   // groundstats: drop / pickup bookkeeping counters (plugin/ground.cpp)
         const auto g = w.GroundCounters();
-        char b[300];
-        snprintf(b, sizeof(b), "ok hookDrops=%llu scanDrops=%llu scanGone=%llu scanChanged=%llu repeatsSkipped=%llu created=%llu matched=%llu repeats=%llu merged=%llu removed=%llu",
+        char b[360];
+        snprintf(b, sizeof(b),
+                 "ok hookDrops=%llu scanDrops=%llu scanGone=%llu scanChanged=%llu repeatsSkipped=%llu created=%llu matched=%llu repeats=%llu merged=%llu removed=%llu "
+                 "scanMoved=%llu scanRolling=%llu",
                  (unsigned long long)g.hookDrops, (unsigned long long)g.scanDrops, (unsigned long long)g.scanGone, (unsigned long long)g.scanChanged,
                  (unsigned long long)g.repeatsSkipped, (unsigned long long)g.created, (unsigned long long)g.matched, (unsigned long long)g.repeats,
-                 (unsigned long long)g.merged, (unsigned long long)g.removed);
+                 (unsigned long long)g.merged, (unsigned long long)g.removed, (unsigned long long)g.scanMoved, (unsigned long long)g.scanRolling);
         return b;
     }
     if (cmd == "stats") {   // stats <squadIndex>: its skill levels, comma separated

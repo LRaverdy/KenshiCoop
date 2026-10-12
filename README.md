@@ -187,7 +187,8 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
   étagère ou un coffre-fort**. Ton personnage y va, puis la fenêtre du jeu s'ouvre ; chaque objet
   déplacé est rejoué par l'hôte. Toutes les créatures se fouillent, des humains aux animaux, même
   les plus grands (léviathans, bêtes à bec, tortues) : leur viande, leurs peaux et leurs perles
-  sont dans la fenêtre.
+  sont dans la fenêtre. La sortie d'une machine (feu de camp, cuisinière) ne bouge plus toute seule
+  dans ton inventaire : seul ce que tu fais fenêtre ouverte part à l'hôte (v0.3.4, à vérifier en jeu).
 - **Vol** : prendre dans un contenant qui n'est pas à toi est un vol, décidé par le jeu de l'hôte.
   Si on te voit, la fenêtre se ferme et l'objet reste.
 - **Objets au sol** : posés et ramassés, au même endroit pour tout le monde. Un objet que l'hôte ne
@@ -206,6 +207,8 @@ Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui
 
 - **Pas encore synchronisés** :
   - commerce : vérifié en ville ; avec les caravanes (marchands ambulants, sacs à dos portés) à vérifier en jeu ;
+    v0.3.4 : la fenêtre ne se ferme plus quand le vrai marchand de l'hôte remplace sa copie chez toi
+    (à vérifier en jeu) ;
   - achat de bâtiments, construction et pose de meubles ;
   - état des portes et crochetage ;
   - prisons et esclavage ;

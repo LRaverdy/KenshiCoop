@@ -27,6 +27,11 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
 3. **Un membre (101-limbs.mod) lâché puis ramassé en boucle par l'hôte** (22:13:46-22:13:49, toutes les
    0,5 s chez nass4 et Geoffrey : « host dropped item 4960:3941772544 … placed here », « host picked up …
    removed here ») : un objet au sol que l'IA de l'hôte ramasse et relâche, ou un aller-retour du mod.
+   - 🔧 **Corrigé dans le code (0.3.4), à vérifier en jeu.** Ni l'IA ni un joueur : le membre, tranché
+     dans un combat, roulait sur une pente (de (-60860,339,15736) à (-60716,332,15700) en 3 s) ; le relevé
+     de l'hôte le réannonçait (« announced again ») à chaque relevé où il avait bougé de plus de 30
+     unités, et chaque client le retirait puis le recréait. Il n'est plus réannoncé qu'une fois immobile.
+     À vérifier : après un combat avec membres tranchés, au plus une ligne « announced again » par objet.
 5. **rob1 n'arrive pas à donner des tâches (travaux permanents) à ses persos ni aux autres (22:53).**
    - Ses ordres arrivent et l'hôte les exécute (« client task 87 (via 2) run for a character: ok », 60
      fois en quelques secondes : il reclique sans voir de résultat), mais aucun travail permanent n'est
@@ -55,6 +60,22 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      perso de Geoffrey sans qu'il l'ait prise. À faire : n'envoyer un déplacement d'un conteneur que
      pendant que le joueur l'a ouvert ; empêcher la production locale des machines chez les clients ;
      log de la réponse de l'hôte à chaque InvOp refusé ou sans effet.
+   - 🔧 **Corrigé dans le code (0.3.4), à vérifier en jeu.** Cause trouvée : le Feu de Camp n'est pas
+     aux joueurs, l'hôte ne le suit que tant qu'un perso de joueur le travaille (nass4, 22:40:16). Quand
+     il l'a oublié, il a effacé l'entité de son inventaire sans prévenir les clients, qui l'ont gardée
+     avec ses derniers objets ; leur comparaison avec le vrai contenu du feu donnait un « déplacement »
+     toutes les 3 s, au nom d'un netId inconnu de l'hôte, ignoré sans un mot (d'où « sans réponse »).
+     Repris à 22:54 sous un nouveau netId : une seconde copie (deux demandes par client ensuite). La
+     production locale n'est pas nécessaire pour l'expliquer. **L'hôte n'a pas mis de viande dans le
+     perso de Geoffrey par ces demandes** : celles de la boucle n'ont rien fait (netId inconnu, ou « may not put there »,
+     22:43:41) ; les sept « out -> main » exécutés (22:54:47-22:55:34) l'ont été pendant que Geoffrey
+     avait le feu ouvert (« opens Feu de Camp » 22:54:44, 22:55:12, 22:55:30), un par geste, et
+     l'hôte refuse un coffre ou une machine que le joueur n'a pas ouvert. Correctifs : `Unbind` de
+     l'hôte quand il oublie une machine ; le client oublie une copie que l'hôte ne nomme plus (12 s)
+     et la vieille copie d'un contenant suivi de nouveau ; un coffre ou une machine fermés chez le
+     client ne produisent plus aucune demande ; l'hôte écrit chaque demande sans effet. La production
+     locale des machines chez les clients n'est pas coupée (elle ne peut plus rien envoyer, et
+     l'inventaire revient à celui de l'hôte) : à revoir si on la voit encore en jeu.
 7. **rob1 n'arrive pas à parler à un PNJ, il faut une resync (23:10:36)** : même tableau que Geoffrey
    (point 1) : avant la resync, aucun ordre « talk » de rob n'arrive à l'hôte. Deux joueurs touchés le
    même soir : priorité. Ajouter un log client quand un clic « parler » ne produit pas d'ordre, et ce
@@ -95,6 +116,14 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
 4. **Commerce** (connu, 0.3.2) : la fenêtre se ferme quand la copie du marchand est remplacée par le
    vrai PNJ ; à faire : faire passer la fenêtre sur le vrai marchand (`ShopTrader`+0xC0) au lieu de la
    fermer.
+   - 🔧 **Fait dans le code (0.3.4), à vérifier en jeu** (expérience `tradeswap`, juste après le
+     chargement d'une ville). Ce que la fenêtre garde du marchand, lu au désassemblage (MOTEUR section
+     7, « Ce que la fenêtre garde du marchand ») : `ShopTrader`+0xC0 et le `hand` du marchand dans la
+     table des partenaires ; tout le reste est relu à chaque fois ou porte le `hand` du `ShopTrader`
+     lui-même. `kenshi::RetargetTradeWindow` réécrit les deux, vérifie avec `getNPCTrader`, sinon la
+     fenêtre se ferme comme avant. Argent du marchand (« merchantcats=0 » d'une doublure) : vérifié 1 s
+     après l'ouverture et remis quand le marchand change ; « DID NOT STICK » au journal si le jeu ne le
+     garde pas (la vraie cause du 0 n'a pas pu être vue sans le jeu : à regarder si la ligne sort).
 
 ## Lot à faire : travaux de base (agriculture, cuisine, artisanat…) donnés aux persos de chaque joueur
 

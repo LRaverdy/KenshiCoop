@@ -281,7 +281,7 @@ public:
     // save lying on the same spot (its zone loaded after the host's drop arrived): ours goes.
     void GroundReconcile();
     struct GroundStats {   // tests (plugin/ground.cpp)
-        uint64_t hookDrops = 0, scanDrops = 0, scanGone = 0, scanChanged = 0, repeatsSkipped = 0;   // host
+        uint64_t hookDrops = 0, scanDrops = 0, scanGone = 0, scanChanged = 0, repeatsSkipped = 0, scanMoved = 0, scanRolling = 0;   // host
         uint64_t created = 0, matched = 0, repeats = 0, merged = 0, removed = 0;                    // client
     };
     GroundStats GroundCounters();
@@ -652,7 +652,9 @@ private:   // first few lifecycle events (tests)
     // that turns up where a character already stood watching (not one carried into view by a walk or
     // a zone loading) was dropped by some path no hook saw: it is announced; one that leaves the
     // ground there was taken; a stack that changes is announced again.
-    struct GroundTrack { kc::ItemState st; kc::Vec3 pos; bool announced = false; double seen = 0; };
+    // pos: where it was announced (announced) or last seen; last: where the previous scan saw it (0.3.4:
+    // a rolling item is announced again only once it lies still)
+    struct GroundTrack { kc::ItemState st; kc::Vec3 pos; kc::Vec3 last; bool announced = false; double seen = 0; };
     std::unordered_map<kc::Handle, GroundTrack, kc::HandleHash> groundTrack_;   // under groundMutex_
     std::vector<kc::Vec3> groundWatch_;                                         // game thread
     std::unordered_map<const void*, std::pair<kc::Vec3, double>> groundCentre_; // character -> position, settled since

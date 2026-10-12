@@ -2977,6 +2977,10 @@ constexpr int kTradeForMoney = 1;            // TradeWindowType::TW_MONEY_TRADIN
 // std::map node of the open trade windows: left, parent, right, key (InventoryGUI*) at +0x18,
 // InventoryTradeData at +0x20 (+0xA isPlayer), isNil at +0x51
 constexpr uintptr_t TP_left = 0x0, TP_right = 0x10, TP_key = 0x18, TP_isPlayer = 0x2A, TP_isNil = 0x51;
+constexpr uintptr_t TP_data = 0x20;           // InventoryTradeData in the node
+constexpr uintptr_t TD_owner = 0x10;          // InventoryTradeData: the owner's hand (addTradePartner 0x70F2A0 copies it)
+constexpr uintptr_t IGUI_shopTrader = 0x50;   // InventoryTraderGUI: its ShopTrader (0x70D520 / 0x70D540 / 0x70D560)
+constexpr uintptr_t ST_merchant = 0xC0;       // ShopTrader: the merchant (constructor 0x953850)
 constexpr uintptr_t GUIV_getInventory = 0x70;   // InventoryGUI vtable: Inventory* getInventory()
 
 struct ShopLektor {   // the game's lektor<Building*>
@@ -3329,6 +3333,84 @@ bool InventoryWindowShows(const void* obj) {
         if (Rd(n, TP_right, r)) todo.push_back(r);
     }
     return false;
+}
+
+// What the open trade window holds of its merchant (read by disassembly, 13 October 2026):
+//  - ForgottenGUI::showTraderInventory (0x6E6AF0) builds a ShopTrader (0x953F90 -> constructor
+//    0x953850, vtable 0x1736D48) whose +0xC0 is the merchant (Character*); ShopTrader is a
+//    RootObjectBase of its own (hand +0x58, type 0x5B), its inventory +0xC8 (ShopTraderInventory,
+//    whose owner is the ShopTrader, sections taken from the shop counters or the squad's backpacks);
+//  - the merchant window (InventoryTraderGUI, vtable 0x1707618) holds the ShopTrader at +0x50:
+//    getInventory (vt 0x70, 0x70D520), getCallbackCharacter (vt 0x78, 0x70D540: ShopTrader+0xC0),
+//    getCallbackObject (vt 0x80, 0x70D560: the ShopTrader); the open-window table (gui+0xA0) and
+//    gui+0x120 are keyed by the ShopTrader's own hand, not the merchant's;
+//  - the trade partner map (addTradePartner 0x70F2A0) keeps, for the merchant window, the merchant's
+//    hand (data +0x10: _showTradeWindow 0x7918A0 passes b+0x58) as a value;
+//  - getNPCTrader (0x70E2D0) and isWithinRangeToTrade (0x70D290) read the window's vt 0x78 / vt 0x80
+//    each time (nothing cached); ShopTrader's refresh (0x954841) reads +0xC0 -> getMoney (vt 0x1B8):
+//    the 12 October crash at kenshi_x64+0x95484B on a freed merchant.
+int RetargetTradeWindow(Character* from, Character* to, std::string* why) {
+    auto fail = [&](const char* w) {
+        if (why) *why = w;
+        return -1;
+    };
+    if (!IsCharacter(from) || !IsCharacter(to) || from == to) return fail("not two characters");
+    void* head = nullptr;
+    uint64_t size = 0;
+    if (!Rd(reinterpret_cast<void*>(Addr(rva::TradePartnersHead)), 0, head) || !head ||
+        !Rd(reinterpret_cast<void*>(Addr(rva::TradePartnersSize)), 0, size) || size == 0 || size > 16)
+        return 0;
+    kc::Handle fromHand, toHand;
+    if (!GetHandle(from, fromHand) || !GetHandle(to, toHand)) return fail("no handle");
+    void* root = nullptr;
+    if (!Rd(head, 0x8, root) || !root) return 0;
+    std::vector<void*> shops;      // ShopTraders selling for `from`
+    std::vector<uint8_t*> hands;   // partner map hands naming `from`
+    bool otherWindow = false;      // a window that shows `from` some other way (its loot window...)
+    std::vector<void*> todo{root};
+    for (int guard = 0; !todo.empty() && guard < 64; ++guard) {
+        void* n = todo.back();
+        todo.pop_back();
+        uint8_t nil = 1;
+        if (!n || !Rd(n, TP_isNil, nil) || nil) continue;
+        void* window = nullptr;
+        if (Rd(n, TP_key, window) && window) {
+            void* shop = nullptr;
+            void* merchant = nullptr;
+            if (Vtable(window) == Addr(rva::VtInventoryTraderGUI) && Rd(window, IGUI_shopTrader, shop) && shop &&
+                Vtable(shop) == Addr(rva::VtShopTrader) && Rd(shop, ST_merchant, merchant) && merchant == from) {
+                if (std::find(shops.begin(), shops.end(), shop) == shops.end()) shops.push_back(shop);
+            } else {
+                for (uintptr_t slot : {uintptr_t(0x78), uintptr_t(0x80)})
+                    if (void* fn = VSlot(window, slot); fn && CallNoArgPtrOn(fn, window) == from) otherWindow = true;
+            }
+            kc::Handle h;
+            auto* hand = reinterpret_cast<uint8_t*>(n) + TP_data + TD_owner;
+            if (ReadHandle(hand, h) && h == fromHand) hands.push_back(hand);
+        }
+        void* l = nullptr;
+        void* r = nullptr;
+        if (Rd(n, TP_left, l)) todo.push_back(l);
+        if (Rd(n, TP_right, r)) todo.push_back(r);
+    }
+    if (shops.empty() && !otherWindow) return 0;
+    if (shops.empty()) return fail("the window showing it is not a merchant's");
+    if (otherWindow) return fail("another window shows it too");
+    // A merchant without a home building sells from its squad's worn backpacks: those sections are
+    // items of the stand-in's squad, which may go with it. Only a shop's counters (furniture) stay.
+    if (!HasHomeBuilding(from)) return fail("it sells from its squad's backpacks");
+    for (void* shop : shops)
+        if (!Wr(shop, ST_merchant, static_cast<void*>(to))) return fail("could not write the merchant");
+    for (uint8_t* hand : hands) {   // the hand's fields only (its vtable stays)
+        Wr(hand, off::H_type, toHand.type);
+        Wr(hand, off::H_container, toHand.container);
+        Wr(hand, off::H_containerSerial, toHand.containerSerial);
+        Wr(hand, off::H_index, toHand.index);
+        Wr(hand, off::H_serial, toHand.serial);
+    }
+    // checked the way the game reads it
+    if (NpcTrader() != to || InventoryWindowShows(from)) return fail("the window still shows the stand-in");
+    return 1;
 }
 
 bool TradeWindowItems(bool merchantSide, std::vector<WindowItem>& out) {
