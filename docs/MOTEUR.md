@@ -310,6 +310,7 @@ Trouvées depuis KenshiLib (décalage +0x40 dans la zone `0xD0000`-`0xF8000` : `
 | prospection | `FnProspectShow` | `ProspectingWindow::showT(const Vector3& pos, float skill, const std::string& name)` | `0x48E9E0` | — | [D] ce qu'appelle la tâche 150 (`0x348610`, son action) une fois son temps écoulé : position du perso (vt 0x38), compétence **science** (`CharStats`+0xE0), nom ; la fenêtre ne lit ensuite que les cartes de ressources du monde (données du jeu). Garde +0x108 position, +0x114 compétence, +0x118 nom |
 | prospection | `FnCameraTarget` | `GameWorld::<cible de la caméra>(Vector3* out)` (notre nom) | `0x785F90` | — | `PlayerInterface`+0x30 (caméra) +0x58 nœud → position |
 | prospection | `FnNearestSelected` | `PlayerInterface::<sélectionné le plus proche>(const Vector3&)` (notre nom) | `0x7F4BA0` | — | parcourt la sélection (+0x208) et rend le perso (type 1 ou 0x5B) le plus proche du point |
+| TP admin (0.3.4) | `FnAiTasksClear` | `AITaskSystem::<vider les ordres>()` (notre nom) | `0x5074A0` | — | [D] vide le conteneur +0x38 (`0xE750`), détruit chaque ordre du tableau +0x80 (nombre +0x78, destructeur virtuel avec 1), remet le nombre à 0, puis `0x7789(this, 1)` si +0x1C0 n'est pas nul. C'est ce que fait le bouton « stop » du jeu (`PlayerInterface::stopCharactersMovement` `0x7F6470`) pour chaque perso sélectionné : `CharMovement::halt` (`Character`+0x640, vt 0x98), puis cette fonction sur `Character`+0x650 (`AI`) → +0x20 (`AITaskSystem`), puis `CharBody` (+0x648) vt 0x60. Les travaux permanents (`getPermajob`) ne sont pas dans ce tableau : ils restent. `kenshi::StopCharacter` = halt + cette fonction, appelé par la TP admin |
 
 Mise en page lue au désassemblage (KenshiLib n'a pas `CharacterTradingHandler`) : gestionnaire +0x08
 vendeur, +0x10 acheteur (pointeurs bruts), +0x18 booléen, +0x20 tableau d'entrées (nombre +0x28,
@@ -1521,6 +1522,15 @@ fermée, 73 « fermer » si ouverte).
 - **Lit** : `Task_UseBed` (vtable `0x16C0998`) ; `Character::setBedMode` `0x32E2F0`
   `(c, bool on, UseableStuff* lit)` met `inSomething` à 1 et l'opérateur du lit.
   - Pour se relever : `Task_GetOutOfBed`.
+  - [D, 0.3.4] `off` (lit nul accepté) : retire le perso des occupants du meuble nommé par `inWhat`,
+    met `inSomething` à 0, `inWhat` à vide (type 0xB), puis rafraîchit le corps (`Character`+0x648 vt
+    0x48 → +0x448 → +0xE8). Sans danger sur un perso qui n'est dans rien, mais il écrase un
+    `inSomething` de 2 : ne l'appeler que sur un perso au lit (1).
+- **Porter un perso couché** [D, 0.3.4] : `pickupObject` (`0x5CFF90`) appelle `setPrisonMode(false)`
+  sur un corps en cage (2) mais pas `setInBed` sur un corps au lit (1) ; c'est son étape d'attache
+  (`0x5CED90`) qui appelle `setInBed(false, null)` puis `setPrisonMode(false, null)` sur le corps et met
+  son `inSomething` à 0. Un dormeur pris dans son lit en sort donc proprement chez le client aussi
+  (Meow, 12/10 23:18:52) : le « free » de l'hôte qui suit ne trouve plus de lit à quitter.
 - **Cage** : `setPrisonMode` `0x330600` met `inSomething` à 2 [P].
   - Avec `inSomething` = 2, `animationSelection` joue l'animation de K.-O. du meuble.
 - **Occupation d'un meuble** : `tryOperate(hand)` (vt 0x4F8, `0xF8030`) et `stopOperating(hand)`

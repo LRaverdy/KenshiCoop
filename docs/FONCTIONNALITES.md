@@ -230,6 +230,14 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
 - **Le joueur** voit le même corps sur la même épaule partout. Un client ne peut pas ramasser un
   corps lui-même : c'est l'hôte qui exécute l'ordre « porter ».
 - Vérifié par la suite (« porter ») et par `coop_test.py carry` (épaule, puis pose sans projection).
+- **Corps posé, puis debout chez l'hôte (0.3.4, à vérifier en jeu)** : chez le client, un corps n'est
+  plus tenu pour « porté » que tant qu'un perso local le porte vraiment (vérifié chaque seconde ;
+  sinon « is on nobody's shoulder here any more: let go ») ; un corps posé qui joue encore l'animation
+  « porté » 2 s plus tard la perd (« still played the "being carried" animation … switched off ») ;
+  une copie que l'hôte a debout et qui reste à terre malgré 3 relevages est signalée avec ce qui la
+  tient (ragdoll, inconscient, lit) ; commande de test `posturecheck` (aucune copie debout chez l'hôte
+  ne doit être couchée, au lit ou « portée » par personne). Pistes du « le nom bouge mais pas le
+  corps » et de Meow invisible (12/10 : rob l'avait portée hors de son sac de couchage puis posée).
 - **Limite** : le mod n'ajoute aucun garde-fou propre, par exemple contre le fait de porter
   quelqu'un qui en porte un autre (signalé par les amis). Ce sont les règles du jeu de l'hôte qui
   s'appliquent. À vérifier en jeu.
@@ -731,6 +739,12 @@ la fenêtre du client.
   puis se recouche 0,5 s plus tard s'il est toujours inconscient (un ragdoll lancé juste après une
   téléportation serait projeté). Un personnage porté par quelqu'un est d'abord posé.
 - Test : expérience `tpdown`.
+- **Fin de la marche et des ordres (0.3.4, à vérifier en jeu)** : chaque perso téléporté reçoit le
+  « stop » du jeu (arrêt de la marche, file d'ordres vidée : `kenshi::StopCharacter`), sans toucher à
+  ses travaux permanents, puis est arrêté une seconde fois s'il marche encore au contrôle qui suit.
+  Avant, il repartait en courant vers sa destination d'avant (« TP moi » de nass4, 12/10 23:11:30 ;
+  échecs « TP admin : le perso du joueur arrive près de l'hôte » de `suite` et `tpdown`, 193 à 597
+  unités). Journal : « tp: … moved (walk and orders ended) ». Expérience `tpstop`.
 - **L'hôte** dispose d'un bouton « TP vers moi » par joueur, ou de la commande
   `tp <id> [vers <id>]`. Les personnages du joueur arrivent à côté du personnage sélectionné de
   l'hôte (ou de ceux d'un autre joueur) : pratique pour débloquer quelqu'un.
@@ -934,6 +948,12 @@ la fenêtre du client.
     changements d'un coup) ; l'état est quand même imposé à chaque fois ;
   - les autres états (menottes, propriétaire, esclavage, faction, évadé, enlevé, peine) sont
     écrits directement : l'objet « menottes » arrive, lui, avec l'inventaire ;
+  - (0.3.4, à vérifier en jeu) toutes les 2 s, chaque copie que l'hôte ne tient dans rien est sortie
+    du lit ou de la cage où elle serait encore chez le client (`IWorld::EnsureFree`), pas seulement
+    quand le « free » arrive ; une copie présente depuis moins de 6,5 s attend d'abord l'envoi complet
+    de l'hôte (un dormeur chargé dans son lit avec la sauvegarde l'est aussi chez l'hôte). Journal :
+    « was still in its bed here while the host has it free: taken out », ou « IT STAYS IN » ; commande
+    de test `localbed`, expérience `bedfree` ;
   - le jeu du client ne peut plus mettre ni sortir de cage, enchaîner ou changer le statut
     d'esclave de lui-même (hooks) ; un personnage que l'hôte tient en cage n'est plus corrigé en
     position (pas de bagarre de position), et un K.-O. en cage ne le fait pas tomber hors de la
@@ -1178,6 +1198,21 @@ la fenêtre du client.
   caméra le combat d'un autre joueur, on voit qui le frappe. Le reste de la foule de cet endroit
   ne vient toujours pas (il faudrait envoyer la caméra du client : changement de protocole).
   Expérience `attackers`.
+- **PNJ que l'hôte n'envoie plus (« en sommeil », 0.3.3 lot 3b, gelés en 0.3.4 : à vérifier en jeu)** :
+  un PNJ resté chez le client mais que l'hôte ne lui envoie plus (loin de ses persos) passe à la mise à
+  jour lointaine du jeu (moins chère : les FPS de nass4). En 0.3.4 il reste **figé là où l'hôte l'avait
+  en dernier** : ni destination, ni combat, arrêté s'il marche, remis à sa place s'il s'en écarte de plus
+  de 8 unités (`IWorld::HoldStill`). Avant, le jeu du client le faisait marcher vers sa dernière
+  destination connue (ou sa cible de combat) : nass4 voyait près de lui des bandits restés loin chez
+  l'hôte (12/10 vers minuit). Commande de test `dormant` (écart maximal, combien à plus de 20 unités) ;
+  point « les copies en sommeil ne bougent pas » de `farfps`.
+- **Copie disparue puis revenue (0.3.4)** : chaque copie qui quitte le jeu du client puis revient
+  (recréée, adoptée, rechargée) est dite dans le journal avec le temps d'absence (« copy of the host's
+  … back here (made) 2.1 s after it left our game ») ; une copie qui n'est pas revenue 20 s après,
+  alors que l'hôte l'envoie près de nos persos, est signalée une fois (« still not back »). Un
+  inconnu du jeu local n'est plus retiré quand il est dans la même escouade locale qu'une de nos
+  copies (le corps posé par nass4 avait disparu chez rob une seconde après le retrait d'un tel
+  bandit).
 - L'expérience `far` du harnais compare un combat à environ 5 km de l'escouade de l'hôte avec le
   même combat à côté.
 - **Limite connue** : le jeu ne déplace les PNJ lointains que quelques fois par seconde. Ceux qui

@@ -302,6 +302,8 @@ enum Fn : int {
     FnProspectShow,             // void ProspectingWindow::showT(const Vector3& pos, float skill, const std::string& name)   (what task 150 calls once done)
     FnCameraTarget,             // Vector3* GameWorld::<camera target>(Vector3* out)   (our name, 0x785F90: PlayerInterface+0x30 camera's node position)
     FnNearestSelected,          // Character* PlayerInterface::<selected character nearest>(const Vector3&)   (our name, 0x7F4BA0)
+    // ---- 0.3.4: admin teleport ends the walk and the orders (A_FAIRE 12/10 point 10)
+    FnAiTasksClear,             // void AITaskSystem::<clear tasks>()   (our name, 0x5074A0: deletes every queued order (+0x80, count +0x78); what PlayerInterface::stopCharactersMovement (0x7F6470) calls on Character+0x650 -> +0x20 after CharMovement::halt; permanent jobs untouched)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -932,6 +934,9 @@ bool WritePace(Character* c, uint8_t gait, float pace);
 bool SetPositionSimple(Character* c, const kc::Vec3& pos);
 bool IsMoving(const Character* c);
 bool Halt(Character* c);
+// The game's "stop" for one character (what PlayerInterface::stopCharactersMovement does to each
+// selected one): halt the walk, then clear its queued orders (AITaskSystem). Permanent jobs stay.
+bool StopCharacter(Character* c);
 bool CallSetFrameSpeed(float speed);
 bool CallSetGameSpeedUi(float speed);   // as the speed buttons and keys do (no sound): the buttons show it too
 bool CallUserPause(bool paused);

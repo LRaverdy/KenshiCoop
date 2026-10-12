@@ -259,6 +259,8 @@ const FunctionSig kFunctions[FnCount] = {
     {"ProspectingWindow::showT", 0x48E9E0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x81, 0xEC, 0x90, 0x00, 0x00}},
     {"GameWorld::<camera target>", 0x785F90, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x89, 0x80, 0x05, 0x00}},
     {"PlayerInterface::<selected nearest>", 0x7F4BA0, {0x40, 0x53, 0x55, 0x41, 0x54, 0x48, 0x83, 0xEC, 0x40, 0x33, 0xED, 0x0F}},
+    // ---- 0.3.4: admin teleport
+    {"AITaskSystem::<clear tasks>", 0x5074A0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x48, 0x83, 0xC1}},
 };
 
 namespace {
@@ -4486,6 +4488,21 @@ bool Halt(Character* c) {
     void* m = Movement(c);
     void* fn = m ? VSlot(m, slot::CM_halt) : nullptr;
     return fn && CallVoid(fn, m);
+}
+
+namespace {
+bool AiTasksClearSeh(void* ts) {
+    __try { reinterpret_cast<void (*)(void*)>(FnAddr(FnAiTasksClear))(ts); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+bool StopCharacter(Character* c) {
+    if (!IsCharacter(c)) return false;
+    const bool halted = Halt(c);
+    void* ai = nullptr;
+    void* ts = nullptr;   // Character -> AI (+0x650) -> AITaskSystem (+0x20), as stopCharactersMovement reads it
+    if (!Rd(c, off::CH_ai, ai) || !ai || !Rd(ai, 0x20, ts) || !ts) return halted;
+    return AiTasksClearSeh(ts) && halted;
 }
 
 bool CallSetFrameSpeed(float speed) {

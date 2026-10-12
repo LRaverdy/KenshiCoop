@@ -116,6 +116,40 @@ void KenshiWorld::ApplyCaptive(const kc::Handle& h, const kc::CaptiveState& s) {
     if (!same) kenshi::WriteCaptivity(c, want);
 }
 
+// Client (0.3.4, A_FAIRE 12/10 point 11): the host holds that character in nothing. Called for every
+// such copy at every refresh (Session::ClientCaptives, 2 s): reads one int when it is in nothing here.
+// In a bed or a cage here: taken out the game's own way (setInBed / setPrisonMode off: position,
+// pose, the furniture's occupant set), as ApplyCaptive does when "free" arrives. Told when it stays in.
+bool KenshiWorld::EnsureFree(const kc::Handle& h) {
+    // the host's captivity marks go: the posture code and Apply follow the host again
+    hostCaptive_.erase(h);
+    captiveHold_.erase(h);
+    captiveMissing_.erase(h);
+    kenshi::Character* c = Find(h);
+    int in = 0;
+    if (!c || !kenshi::ReadInSomething(c, in) || (in != 1 && in != 2)) return false;
+    if (carriedHere_.count(h)) return false;   // on a shoulder: the carry code owns it
+    bool ok = false;
+    {
+        HostCallScope scope;
+        ok = in == 2 ? kenshi::SetPrisonMode(c, false, nullptr) : kenshi::SetInBed(c, false, nullptr);
+    }
+    int now = 0;
+    kenshi::ReadInSomething(c, now);
+    ++captiveFreed;
+    const double t = NowSeconds();
+    uint32_t held = 0;
+    const bool stays = now == 1 || now == 2;
+    double& told = freeToldAt_[h];
+    if ((!stays || t - told > 60.0) && freeLog_.Allow(t, &held)) {
+        if (stays) told = t;
+        Log("captivity: %s was still in its %s here while the host has it free: %s (%s, inSomething now %d)%s", Key(h).c_str(),
+            in == 1 ? "bed" : "cage", stays ? "IT STAYS IN" : "taken out", ok ? "ok" : "call failed", now,
+            held ? (" [" + std::to_string(held) + " more such lines not written]").c_str() : "");
+    }
+    return true;
+}
+
 // A character the host keeps in a cage or a bed stays where the cage or bed holds it: no position
 // corrections.
 bool KenshiWorld::CaptiveHold(const kc::Handle& h, kenshi::Character* c) {

@@ -24,6 +24,17 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
    - À vérifier : disparu chez qui (nass4, l'hôte, rob) ; pourquoi la copie de rob a quitté le jeu (zone
      déchargée ? détruite par le jeu quand le corps est posé loin de la copie ?). Elle doit revenir
      (« can be recreated ») : vérifier qu'elle revient vraiment.
+   - **Traité (branche `fix-char-states`, 0.3.4, à tester en jeu)** : chez rob, la copie avait été
+     suivie à 22:11:11 dans l'escouade locale 428, une escouade de « Bandit affamé » que l'hôte n'a pas
+     (trois retirés par `Reconcile` à 22:11:20-27) ; à 22:16:51.851 `Reconcile` en retire un de plus et à
+     22:16:52.852 la copie a quitté le jeu sans destruction vue (« no longer in the game ») : retirer un
+     membre debout d'une escouade locale emporte vraisemblablement ses membres à terre. Un inconnu dans
+     la même escouade locale qu'une de nos copies n'est plus retiré. Retour de chaque copie perdue dit
+     dans le journal (« back here (made|found|adopted) N s after it left our game »), et « still not
+     back » une fois après 20 s. Le délai croissant ne vaut que pour les doublures que nous avons
+     créées (`spawned`) ; une copie venue de la sauvegarde (ce corps) est recréée dès 1,5 s si l'hôte
+     l'envoie et qu'elle est près de nos persos. Aucun « stand-in made » n'était journalisé : on ne sait
+     pas si elle est revenue le 12/10.
 3. **Un membre (101-limbs.mod) lâché puis ramassé en boucle par l'hôte** (22:13:46-22:13:49, toutes les
    0,5 s chez nass4 et Geoffrey : « host dropped item 4960:3941772544 … placed here », « host picked up …
    removed here ») : un objet au sol que l'IA de l'hôte ramasse et relâche, ou un aller-retour du mod.
@@ -71,6 +82,9 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
     d'avant ; le perso y retourne. C'est aussi l'échec des tests `suite` et `tpdown` (« TP admin : le
     perso du joueur arrive près de l'hôte » : 193 à 597 unités). À faire : après une TP admin, vider la
     destination et les ordres de déplacement (comme un « stop »), sans toucher aux travaux permanents.
+    **Traité (`fix-char-states`, à tester en jeu : `tpstop`, `suite`, `tpdown`)** : `TeleportCharacters`
+    appelle `kenshi::StopCharacter` (halt + `AITaskSystem` `0x5074A0`, ce que fait le bouton stop du
+    jeu) sur chaque perso, et l'arrête encore s'il marche au contrôle 0,3 s après.
 11. **Meow (recrue de nass4) invisible chez nass4 et Geoffrey (23:18-23:36).** Couchée au sac de
     couchage à 23:18:10 (« put in its bed as on the host », inSomething 1, chez les trois clients), levée
     chez l'hôte à 23:18:53 (« Meow now free »), mais **aucun client ne l'a sortie du lit** (pas de « out of
@@ -79,10 +93,25 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
     Entre-temps « player gone: … halted » (23:17:23 : nass4 parti puis revenu ?). À faire : quand l'hôte
     dit « free » et que la copie est encore dans un lit/une cage, la sortir à chaque rafraîchissement
     (pas seulement au changement), et log si elle y reste.
+    **Traité (`fix-char-states`, à tester en jeu : `bedfree`)** : `IWorld::EnsureFree` toutes les 2 s sur
+    chaque copie que l'hôte ne tient dans rien. Ce que montre le journal : à 23:18:52.86 rob porte un
+    corps (l'hôte : « carry someone ») puis le lit de Meow se vide et elle est « free » (23:18:53.03) ;
+    le corps est posé à 23:18:56 (« ragdoll 1 »). L'étape d'attache du portage (`0x5CED90`) appelle
+    `setInBed(false)` : chez les clients Meow était déjà hors du lit quand le « free » est arrivé (rien
+    à quitter, donc pas de ligne) ; à 23:24:07 les trois clients la font tomber comme chez l'hôte, ce
+    qui n'arrive pas à un perso au lit (`PostureHeld`). Le lit n'est donc pas ce qui la cachait ; la
+    piste retenue est le portage (animation « porté » restée, ou marque « portée » restée) : voir
+    point 12. Il faut le journal de nass4 ou de Geoffrey pour trancher.
 12. **« Le nom bouge mais pas le corps » (vers 23:44)** : chez un client, le nom au-dessus d'un perso suit
     sa position, le corps reste sur place. Probablement une copie restée couchée (ragdoll ou « au lit »,
     comme Meow au point 11) dont la position avance quand même. Perso et joueur concernés à préciser ; le
     journal de l'hôte ne montre pas d'écart de position (« 0 off ») à ce moment.
+    **Traité en partie (`fix-char-states`, à tester en jeu)** : un corps n'est « porté » chez le client
+    que tant qu'un perso local le porte (vérifié chaque seconde : une marque restée le laissait à terre
+    pour toujours, sans relevage ni position) ; l'animation « porté » restée sur un corps posé est
+    coupée après 2 s ; une copie debout chez l'hôte encore à terre après 3 relevages est journalisée
+    (« still down here … after N stand-ups », avec ragdoll, inconscient, lit) ; commande `posturecheck`
+    et points dans `bedfree` et `carry`. Cause exacte non prouvée sans le journal du client.
 13. **nass4 voit des bandits près de lui qui sont en fait très loin chez l'hôte (vers 00:00, resync
     00:08:24).** Cause probable : le lot 3b de la 0.3.3 (`Session::UpdateFarCharacters`) rend au jeu du
     client les copies que l'hôte ne lui envoie plus (« dormant », 25 à 42 chez nass4 dans ses « sync
@@ -92,6 +121,13 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
     déplacement ni d'IA, seulement la mise à jour lointaine du jeu sans mouvement), ou retirer la copie
     dès qu'elle s'éloigne de sa dernière position connue ; auto-resync (23:59:25) seulement quand 3 persos
     sont décalés depuis 15 s : ces copies-là n'y comptent pas (pas envoyées).
+    **Traité (`fix-char-states`, à tester en jeu : `farfps`, commande `dormant`)** : l'IA du client est
+    déjà coupée (`hk_aiUpdate4`, `hk_aiPeriodic`) ; ce qui les faisait marcher, c'est leur dernier état
+    envoyé : `Apply` redonnait deux fois par seconde la destination de l'hôte (« moving ») et la session
+    réimposait la cible de combat ; la mise à jour lointaine du jeu les y menait. Désormais une copie en
+    sommeil reçoit un état immobile (pas de destination, pas de combat) et `IWorld::HoldStill` l'arrête
+    si elle marche et la remet à sa dernière position au-delà de 8 unités (ligne « dormant: … put
+    back »). La mise à jour lointaine (gain de FPS) reste.
 4. **Commerce** (connu, 0.3.2) : la fenêtre se ferme quand la copie du marchand est remplacée par le
    vrai PNJ ; à faire : faire passer la fenêtre sur le vrai marchand (`ShopTrader`+0xC0) au lieu de la
    fermer.
