@@ -791,6 +791,7 @@ private:
         bool container = false;              // a container a player has open (no character)
         bool bag = false;                    // a worn backpack (also `container`): its wearer is bagOwner
         bool machine = false;                // a player machine's inventory (also `container`): synced to every player while tracked
+        double machineSeenAt = 0;            // client (0.3.4): when the host last named it in Machines (a forgotten one goes)
         bool adopt = false;                  // client: a recruit announced with its NPC handle: our copy joins the player faction
         uint8_t adoptTries = 0;
         double adoptRetryAt = 0;             // client (0.3.2): not before then (a recruit that could not join)
@@ -998,6 +999,8 @@ private:
     LogLimiter unknownOrderLog_{3, 10.0};     // client (0.3.2): "order for a character the host does not know" (900 a minute on 11/10)
     LogLimiter refusedOrderLog_{3, 10.0};     // client (0.3.2): "refused locally: ... does not own"
     LogLimiter adoptLog_{4, 30.0};            // client (0.3.2): host squad characters still NPCs here
+    LogLimiter invOpLog_{6, 10.0};            // host (0.3.4): what became of a client's inventory move that did nothing
+    LogLimiter closedInvLog_{3, 30.0};        // client (0.3.4): a closed container or machine that changed here on its own
     std::vector<IWorld::WorldDialog> scratchDialogs_;
     std::vector<DialogReply> pendingAnswers_;   // host
     struct PendingContainer { uint8_t player; uint32_t looter; uint32_t netId; double until; };
@@ -1126,6 +1129,9 @@ private:
         bool pending = false, open = false, refresh = false;
         double pendingSince = 0;
         double checkAt = 0;   // when to check that the window shows the counters' stock (0: checked)
+        uint64_t moneyOn = 0;  // 0.3.4: the merchant here (IWorld::Identity) the host's cats were last set on
+        double moneyAt = 0;    // 0.3.4: next check of the merchant's cats here
+        bool moneyChecked = false;
     };
     ClientTrade trade_;
     bool IsTradeCounter(uint32_t netId) const;
@@ -1210,6 +1216,8 @@ private:
     std::unordered_map<std::string, ClientMachine> clientMachines_;
     std::unordered_map<std::string, TownPower> clientTowns_;
     double machinesReapplyAt_ = 0;
+    double machinesStaleCheckAt_ = 0;      // client (0.3.4): next look for machine inventories the host forgot
+    double machinesFullSeenAt_ = 0;        // client (0.3.4): the host's last full Machines round arrived then
     uint32_t workshopSeq_ = 0;
     std::vector<IWorld::LocalResearchAsk> scratchResearchAsks_;
     std::vector<IWorld::LocalMachineAsk> scratchMachineAsks_;

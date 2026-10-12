@@ -31,6 +31,8 @@ inline constexpr uintptr_t TradePartnersSize = 0x2132BF0;   //                  
 inline constexpr uintptr_t MouseInventory = 0x2132B58;      // pointer to the item being dragged (+0x30 Item*)
 inline constexpr uintptr_t GameNew = 0xED6504;              // the game's operator new (its CRT's)
 inline constexpr uintptr_t GameDelete = 0xED64FE;           // the game's operator delete
+inline constexpr uintptr_t VtShopTrader = 0x1736D48;        // ShopTrader (RTTI checked): the merchant side of a trade window
+inline constexpr uintptr_t VtInventoryTraderGUI = 0x1707618; // InventoryTraderGUI (RTTI checked): that side's window
 inline constexpr uintptr_t VtLektor = 0x168BAF0;            // lektor<RootObject*> (the game's small vector)
 // ---- diplomacy
 inline constexpr uintptr_t UniqueNPCManager = 0x212EB00;    // pointer to UniqueNPCManager (made by its getter 0x354560): boost::unordered_map<GameData*, UniqueCharacterState>
@@ -511,6 +513,11 @@ int BuildingFunctionOf(void* building);              // BuildingFunction (9 BF_S
 // An open inventory window (trade, loot) is about `obj` (its character or object): it must close
 // before `obj` goes away (the window keeps a raw pointer to it).
 bool InventoryWindowShows(const void* obj);
+// 0.3.4: the open trade window sells for `from` (a client's stand-in merchant the host's real
+// character is replacing): every pointer the window holds to it now names `to` (ShopTrader+0xC0, the
+// merchant's hand in the trade partner map). Returns 1 done, 0 no trade window shows `from`, -1 not
+// possible (nothing changed: the caller closes the window). See docs/MOTEUR.md, section 7.
+int RetargetTradeWindow(Character* from, Character* to, std::string* why = nullptr);
 bool ReadOperatorCount(void* useable, uint64_t& n);  // characters using a bed, a chair, a machine (UseableStuff operator set size)
 // ---- lot A: doors and locks (plugin/doors.cpp). A door (DoorStuff) or any building with a lock
 // (DoorLock: chests, cages...). Read: false when it is neither. Apply: the host's state, the game's

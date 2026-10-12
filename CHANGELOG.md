@@ -27,6 +27,48 @@ Protocole inchangé (36).
   réponse est décrite dans le journal de l'hôte.
 - Tests : `TestTalkRules` (unitaire), expérience `npctalk`, commande `talkclick`, `held=` dans
   `dialogs`. À vérifier en jeu.
+Pas de changement de protocole (36) : se connecte aux 0.3.3 (un hôte 0.3.3 garde le défaut côté hôte,
+les clients 0.3.4 s'en protègent seuls).
+
+- **Viande d'une machine qui « bouge » toute seule (12/10, A_FAIRE point 6) : corrigé dans le code, à
+  tester en jeu.** De 22:40 à 00:12, les trois clients demandaient à l'hôte toutes les 3 s les mêmes
+  déplacements de viande dans la sortie d'un Feu de Camp (« x1 out -> out 0,0 », « x2 out -> main
+  2,2 »), sans réponse. Cause : l'hôte ne suit une machine qui n'est pas aux joueurs (un feu de camp
+  du monde) que tant qu'un perso de joueur la travaille ; quand il l'oubliait, il effaçait l'entité de
+  son inventaire **sans le dire** aux clients, qui la gardaient (« un inventaire de machine reste
+  synchronisé ») avec ses derniers objets. Chaque client comparait ce vieil état au contenu réel du
+  feu et demandait un « déplacement » au nom d'une entité inconnue de l'hôte, qui l'ignorait en
+  silence ; quand le feu était repris, une seconde entité s'ajoutait (deux demandes par client à
+  partir de 22:54). L'hôte n'a **rien** mis dans le perso de Geoffrey par ces demandes : les seuls
+  déplacements « out -> main » faits l'ont été pendant que Geoffrey avait le feu ouvert, un par geste
+  (22:54:47-22:55:34). Corrigé :
+  - l'hôte envoie `Unbind` quand il oublie l'inventaire d'une machine (ou un contenant) ;
+  - le client oublie une copie d'inventaire de machine que l'hôte ne nomme plus dans sa liste de
+    machines depuis 12 s (pour un hôte 0.3.3), et la vieille copie d'un contenant que l'hôte suit de
+    nouveau sous un autre netId ;
+  - **un coffre ou une machine ne compte comme touché par le joueur que pendant que sa fenêtre est
+    ouverte** chez lui : fermé, rien de ce qui y change (production locale, autre rangement, état plus
+    récent de l'hôte) ne devient une demande ; il revient à l'état de l'hôte ;
+  - l'hôte écrit ce qu'il fait de chaque demande sans effet : « inventory move from player N not done
+    (nothing to do) … which the host does not follow », « client item move not done: … inventory not
+    found here » (en plus de « done » et « refused »).
+  Test unitaire `TestMachineInventoryClosed`, expérience `machineout`.
+- **Membre coupé « lâché puis ramassé » en boucle (12/10 22:13:46-49, point 3) : corrigé dans le code.**
+  Personne ne lâchait ni ne ramassait rien : un membre (`101-limbs.mod`) tranché pendant un combat
+  roulait sur une pente ; le relevé des objets au sol de l'hôte le réannonçait à chaque relevé (0,5 s)
+  parce qu'il avait bougé de plus de 30 unités depuis le précédent, et chaque client le retirait puis le
+  recréait. Un objet annoncé qui roule n'est plus réannoncé qu'une fois immobile (moins de 4 unités
+  entre deux relevés), là où il s'arrête (`plugin/ground.cpp`, compteurs `scanMoved`, `scanRolling`).
+- **Fenêtre de commerce sur un marchand doublure (point 4) : elle reste ouverte.** Quand le vrai PNJ de
+  l'hôte remplace la doublure du marchand chez le client (environ 1 s après l'ouverture), la fenêtre
+  passe sur le vrai marchand au lieu de se fermer : le seul pointeur que la fenêtre garde vers le
+  marchand est `ShopTrader`+0xC0 (lu au désassemblage, voir MOTEUR section 7), plus son `hand` dans la
+  table des partenaires d'échange ; les deux sont réécrits avant que la doublure soit détruite, puis
+  vérifiés comme le jeu les lit (`getNPCTrader`). La fermeture reste le repli (marchand ambulant qui
+  vend depuis les sacs de son escouade, autre fenêtre sur la doublure, vérification ratée). L'argent
+  du marchand : vérifié 1 s après l'ouverture et remis sur le vrai marchand quand il change (« trade:
+  the merchant's cats here … set to the host's … », « DID NOT STICK » s'il ne tient pas). Expérience
+  `tradeswap`.
 
 ## v0.3.3 (12 octobre 2026)
 

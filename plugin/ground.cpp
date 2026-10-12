@@ -36,7 +36,8 @@ constexpr float kScanInside = kScanRadius - 40.0f;  // an item at the very edge 
 constexpr double kScanEvery = 0.5;
 constexpr double kSettle = 2.0;                     // a character that jumped (teleport, zone change) watches again after this
 constexpr float kJump = 60.0f;                      // more than this between two scans: it jumped
-constexpr float kMoved = 30.0f;                     // an announced item that moved this far is placed again
+constexpr float kMoved = 30.0f;                     // an announced item that moved this far is placed again...
+constexpr float kRolling = 4.0f;                    // ...once it moved less than this since the previous scan (lies still)
 constexpr double kForget = 30.0;                    // an item out of everyone's sight is forgotten after this
 
 float Dist(const kc::Vec3& a, const kc::Vec3& b) {
@@ -84,6 +85,7 @@ void KenshiWorld::GroundOutLocked(kc::GroundEvent e) {
         GroundTrack& g = groundTrack_[e.item];
         g.st = e.state;
         g.pos = e.pos;
+        g.last = e.pos;
         g.announced = true;
         g.seen = NowSeconds();
     } else {
@@ -155,6 +157,7 @@ void KenshiWorld::GroundScan(double now) {
                 GroundTrack& g = groundTrack_[s.h];
                 g.st = s.st;
                 g.pos = s.pos;
+                g.last = s.pos;
                 g.announced = false;
                 g.seen = now;
             }
@@ -162,10 +165,23 @@ void KenshiWorld::GroundScan(double now) {
         }
         GroundTrack& g = t->second;
         const bool changed = !SameStack(g.st, s.st);
-        if (changed || (g.announced && Dist(g.pos, s.pos) > kMoved)) {
+        // An announced item that rolled or fell away is placed again once it lies still. 0.3.4: it was
+        // placed again at every scan while it rolled (12 October 22:13:46-49, a severed limb rolling
+        // down a slope: the clients removed and recreated it every 0.5 s, "host dropped" then "host
+        // picked up" in a loop); a rolling one is counted and waits.
+        const bool still = Dist(g.last, s.pos) < kRolling;
+        const bool away = g.announced && Dist(g.pos, s.pos) > kMoved;
+        g.last = s.pos;
+        if (away && !still && !changed) {
+            ++groundStats_.scanRolling;
+            g.seen = now;
+            continue;
+        }
+        if (changed || away) {
             // a stack that grew or shrank where it lies, or an announced item that rolled / fell
-            // away: the clients replace their copy
+            // away and now lies still: the clients replace their copy
             if (changed) ++groundStats_.scanChanged;
+            else ++groundStats_.scanMoved;
             Log("ground: %s x%d -> %s x%d at (%.0f,%.0f,%.0f): announced again", g.st.templateSid.c_str(), g.st.quantity,
                 s.st.templateSid.c_str(), s.st.quantity, s.pos.x, s.pos.y, s.pos.z);
             kc::GroundEvent gone;
@@ -182,14 +198,14 @@ void KenshiWorld::GroundScan(double now) {
             GroundOutLocked(std::move(back));
             continue;
         }
-        g.pos = s.pos;
+        if (!g.announced) g.pos = s.pos;   // an announced one keeps where the clients have it
         g.seen = now;
     }
     for (auto it = groundTrack_.begin(); it != groundTrack_.end();) {
         if (seenSet.count(it->first)) { ++it; continue; }
         // not where a player is looking any more: forgotten after a while (seen again later, it is
         // only noted: whoever comes near has it already)
-        if (!NearAnyXZ(it->second.pos, centres, kScanInside)) {
+        if (!NearAnyXZ(it->second.last, centres, kScanInside)) {
             it = now - it->second.seen > kForget ? groundTrack_.erase(it) : std::next(it);
             continue;
         }

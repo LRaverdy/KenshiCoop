@@ -540,7 +540,9 @@ la fenêtre du client.
   - en plus, deux fois par seconde, l'hôte relève les objets à 30 m autour de chaque perso des
     joueurs. Un objet qui apparaît là où un perso regardait déjà est annoncé (posé par un chemin sans
     crochet) ; un objet qui disparaît de là est annoncé ramassé ; une pile qui change de nombre (ou un
-    objet annoncé qui a roulé à plus de 3 m) est annoncée de nouveau. Un objet qui entre dans le champ
+    objet annoncé qui a roulé à plus de 3 m, **une fois arrêté** : 0.3.4, un membre tranché qui
+    roulait sur une pente était retiré et recréé chez les clients toutes les 0,5 s) est annoncée de
+    nouveau. Un objet qui entre dans le champ
     parce qu'on marche, qu'on est téléporté ou qu'une zone charge est seulement noté : les clients
     l'ont par la sauvegarde ;
   - chaque objet n'est annoncé qu'une fois (les crochets s'emboîtent) ; chez le client, une annonce
@@ -613,6 +615,14 @@ la fenêtre du client.
   selon sa taille (`kc::loot` : rayon et coque de sa race, fois son échelle) ; un pilleur arrêté
   contre un grand corps l'ouvre aussi. Un animal recréé chez un client a l'âge de celui de l'hôte,
   donc sa taille. Tests `TestLootCreatures`, `TestBigBodyDrop`, expérience `lootcreature`.
+- **Coffres et machines fermés** (0.3.4, à vérifier en jeu) : chez le client, un coffre ou une
+  machine ne compte comme touché par le joueur que pendant que sa fenêtre est ouverte. L'inventaire
+  d'une machine est synchronisé chez tous, ouvert ou non : ce qui y change chez le client fenêtre
+  fermée (sa production, un autre rangement) ne part jamais à l'hôte, il revient à l'état de l'hôte.
+  Une machine que l'hôte ne suit plus est oubliée par les clients (`Unbind`). L'hôte écrit au journal
+  ce qu'il a fait de chaque demande : fait, refusé (et pourquoi), ou sans effet. Avant : trois clients
+  demandaient toutes les 3 s pendant 90 min de « déplacer » la viande d'un feu de camp (12/10). Test
+  `TestMachineInventoryClosed`, expérience `machineout`.
 - **Limite** : un objet tenu à la souris pendant un glisser-déposer laisse 10 s avant le retour à
   l'état de l'hôte.
 
@@ -837,6 +847,11 @@ la fenêtre du client.
   bâtiment domicile et la fenêtre restait vide (puis clignotait, rouverte 3 fois). Le client lui
   donne maintenant le bâtiment des comptoirs envoyés par l'hôte avant d'ouvrir la fenêtre ; plus
   de réouverture.
+- **Doublure remplacée par le vrai marchand pendant le commerce** (0.3.4, à vérifier en jeu,
+  expérience `tradeswap`) : la fenêtre reste ouverte et continue avec le vrai PNJ de l'hôte (en 0.3.2
+  et 0.3.3 elle se fermait, environ 1 s après l'ouverture, pour ne pas planter). L'argent du marchand
+  est celui de l'hôte, revérifié après l'ouverture et à ce changement. Un marchand ambulant (qui vend
+  depuis les sacs de son escouade) ferme encore la fenêtre dans ce cas.
 - **Limites** :
   - la détection des objets volés à la revente n'est tirée que par le jeu du client.
 
@@ -1257,7 +1272,10 @@ la fenêtre du client.
   personnage qui travaille l'établi est celui du joueur, par un ordre (travail) qui passe par
   l'hôte.
 - **Inventaires des machines** (établis, banc de recherche, mines, fermes, générateurs…) : celles
-  suivies sont synchronisées chez tous les joueurs, ouvertes ou non (entrées et sorties).
+  suivies sont synchronisées chez tous les joueurs, ouvertes ou non (entrées et sorties). Une machine
+  qui n'est pas aux joueurs (feu de camp, mine du monde) n'est suivie que tant qu'un perso de joueur
+  la travaille ; quand l'hôte l'oublie, les clients l'oublient aussi (0.3.4). Seul le joueur qui a
+  ouvert une machine peut y prendre ou y mettre quelque chose.
 - **Mines et machines** : qui travaille chaque machine (nombre et noms dans sa fenêtre), barre de
   progression et quantité produite : ceux de l'hôte. Plus de joueurs que de places : le jeu de
   l'hôte décide, tout le monde voit le même résultat.

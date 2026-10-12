@@ -663,7 +663,21 @@ bool KenshiWorld::Exists(const kc::Handle& h) {
             if (kenshi::Character* standIn = kenshi::Resolve(a->second); standIn && standIn != real) {
                 HostCallScope scope;
                 Log("stand-in %s replaced by the host's real character", KeyOf(a->second).c_str());
-                kenshi::DestroyObject(standIn);   // a window showing it is closed first (hk_worldDestroy)
+                // 0.3.4: a trade window selling for the stand-in goes on with the real character (it
+                // used to close: every stand-in merchant replaced ~1 s after the window opened)
+                if (kenshi::InventoryWindowShows(standIn)) {
+                    int32_t cats = 0;
+                    const bool haveCats = kenshi::MoneyOf(standIn, cats);
+                    std::string why;
+                    const int r = kenshi::RetargetTradeWindow(standIn, real, &why);
+                    if (r > 0) {
+                        if (haveCats) kenshi::SetMoneyOf(real, cats);   // the host's cats, set on the stand-in (the session sets them again)
+                        Log("trade window: now on the host's real merchant %s (%d cats)", KeyOf(h).c_str(), haveCats ? int(cats) : -1);
+                    } else if (r < 0) {
+                        Log("trade window: cannot move it to the host's real merchant (%s): closed", why.c_str());
+                    }
+                }
+                kenshi::DestroyObject(standIn);   // a window still showing it is closed first (hk_worldDestroy)
             }
             spawned_.erase(a->second);
             alias_.erase(a);
@@ -3685,7 +3699,11 @@ bool KenshiWorld::ReadInventory(const kc::Handle& h, std::vector<kc::ItemState>&
 bool KenshiWorld::ExecuteInvOp(const kc::Handle& from, const kc::Handle& to, const kc::InvOp& op) {
     void* a = InventoryHolder(from);
     void* b = InventoryHolder(to);
-    if (!a || !b) return false;
+    if (!a || !b) {   // 0.3.4: said (a request that did nothing used to leave no trace)
+        Log("client item %s not done: %s x%d, %s inventory not found here", op.kind == kc::InvOpKind::Drop ? "drop" : "move", op.item.templateSid.c_str(),
+            op.item.quantity, !a ? "source" : "destination");
+        return false;
+    }
     std::string err;
     HostCallScope scope;
     const bool ok = kenshi::MoveInventoryItem(a, b, op, &err);
