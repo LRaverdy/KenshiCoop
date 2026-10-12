@@ -83,6 +83,15 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
     sa position, le corps reste sur place. Probablement une copie restée couchée (ragdoll ou « au lit »,
     comme Meow au point 11) dont la position avance quand même. Perso et joueur concernés à préciser ; le
     journal de l'hôte ne montre pas d'écart de position (« 0 off ») à ce moment.
+13. **nass4 voit des bandits près de lui qui sont en fait très loin chez l'hôte (vers 00:00, resync
+    00:08:24).** Cause probable : le lot 3b de la 0.3.3 (`Session::UpdateFarCharacters`) rend au jeu du
+    client les copies que l'hôte ne lui envoie plus (« dormant », 25 à 42 chez nass4 dans ses « sync
+    perf »). Son jeu les fait vivre avec sa propre IA : des bandits peuvent marcher vers lui alors que ceux
+    de l'hôte n'ont pas bougé. Avant, ces copies restaient figées à leur dernière position connue. À
+    faire : garder le gain de FPS sans laisser l'IA du client les déplacer (copie figée : pas de
+    déplacement ni d'IA, seulement la mise à jour lointaine du jeu sans mouvement), ou retirer la copie
+    dès qu'elle s'éloigne de sa dernière position connue ; auto-resync (23:59:25) seulement quand 3 persos
+    sont décalés depuis 15 s : ces copies-là n'y comptent pas (pas envoyées).
 4. **Commerce** (connu, 0.3.2) : la fenêtre se ferme quand la copie du marchand est remplacée par le
    vrai PNJ ; à faire : faire passer la fenêtre sur le vrai marchand (`ShopTrader`+0xC0) au lieu de la
    fermer.
