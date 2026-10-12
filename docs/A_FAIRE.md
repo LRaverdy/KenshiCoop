@@ -42,6 +42,19 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      joueur quand un ordre de travail n'a rien créé (machine pleine, pas de mode Travaux).
    - « aux autres » : vérifier les persos partagés (recrues de personne) et ceux d'un autre joueur
      (refus attendu, avec un message).
+6. **Piles de viande qui « bougent » dans l'inventaire de Geoffrey (affichage), 22:55-22:56+.**
+   - Toutes les 3 s, les **trois** clients demandent à l'hôte les mêmes déplacements de
+     `42334-changes_otto.mod` (viande) depuis la section `out` (sortie d'une machine : cuisinière,
+     boucherie…) : Geoffrey « x2 out -> main 2,2 » et « x1 out -> out 0,0 », rob1 et nass4
+     « x2 out -> out 0,0 ». Boucle sans fin, sans réponse écrite chez l'hôte.
+   - Piste : le jeu du client fait tourner la machine lui-même (production locale dans `out`) ou
+     regroupe les piles de la sortie autrement que l'hôte ; le diff d'inventaire du client
+     (`common/src/session.cpp`, « inventory move asked of the host ») prend ce changement pour un geste
+     du joueur (un conteneur compte comme « touchable » même fermé) et l'envoie.
+   - Risque : si l'hôte rejoue « out -> main », la viande de la machine passe dans l'inventaire du
+     perso de Geoffrey sans qu'il l'ait prise. À faire : n'envoyer un déplacement d'un conteneur que
+     pendant que le joueur l'a ouvert ; empêcher la production locale des machines chez les clients ;
+     log de la réponse de l'hôte à chaque InvOp refusé ou sans effet.
 4. **Commerce** (connu, 0.3.2) : la fenêtre se ferme quand la copie du marchand est remplacée par le
    vrai PNJ ; à faire : faire passer la fenêtre sur le vrai marchand (`ShopTrader`+0xC0) au lieu de la
    fermer.
