@@ -27,6 +27,21 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
 3. **Un membre (101-limbs.mod) lâché puis ramassé en boucle par l'hôte** (22:13:46-22:13:49, toutes les
    0,5 s chez nass4 et Geoffrey : « host dropped item 4960:3941772544 … placed here », « host picked up …
    removed here ») : un objet au sol que l'IA de l'hôte ramasse et relâche, ou un aller-retour du mod.
+5. **rob1 n'arrive pas à donner des tâches (travaux permanents) à ses persos ni aux autres (22:53).**
+   - Ses ordres arrivent et l'hôte les exécute (« client task 87 (via 2) run for a character: ok », 60
+     fois en quelques secondes : il reclique sans voir de résultat), mais aucun travail permanent n'est
+     créé pour ses persos (pas de « jobs: … now has N job(s) »), alors que ceux de nass4 (22:11) et de
+     Geoffrey (22:48) sont créés de la même façon (via 2).
+   - La « Petite Ressource Cuivre » visée n'a qu'**une place**, prise (`workers 1/1`) pendant ses clics ;
+     libérée à 22:54:36, son ordre suivant passe (22:54:40, `workers 0 -> 1/1`). Pourtant aucun message
+     « toutes les places sont prises » ne lui est montré dans ce cas (il l'est pour la Ressource Fer).
+   - Bouton « Travaux » (ordre 15, `mode "jobs (permanence)"`) envoyé deux fois en 2 s (22:53:13.8 et
+     15.6) : la valeur envoyée est l'inverse de l'état **local** du perso, qui ne suit celui de l'hôte
+     qu'à la synchro suivante (modes, 1 fois par seconde) : le second clic l'a sans doute éteint. À
+     faire : changer l'état local tout de suite (prédiction) et/ou le bouton allumé dès l'envoi ; dire au
+     joueur quand un ordre de travail n'a rien créé (machine pleine, pas de mode Travaux).
+   - « aux autres » : vérifier les persos partagés (recrues de personne) et ceux d'un autre joueur
+     (refus attendu, avec un message).
 4. **Commerce** (connu, 0.3.2) : la fenêtre se ferme quand la copie du marchand est remplacée par le
    vrai PNJ ; à faire : faire passer la fenêtre sur le vrai marchand (`ShopTrader`+0xC0) au lieu de la
    fermer.
