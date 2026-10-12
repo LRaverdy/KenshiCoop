@@ -2801,13 +2801,31 @@ bool MoveInventoryItem(void* from, void* to, const kc::InvOp& op, std::string* e
     // what one cell holds (Item::isStackable with that section's bonus; 1 for weapons, armour,
     // backpacks: two single swords trade places instead). A single unit on a single unit stacks too:
     // the host used to put it in another cell (11 October, rob's backpack filling up on the host only).
-    if (void* onto = ItemAt(dst, op.toSection, op.toX, op.toY, best)) {
+    // No cell given (x -1): it first fills the stacks of its kind there, as the game's addItem does (12
+    // October: a Traders Backpack with a stack of 1 of 6 and no free cell answered "no room").
+    auto stackRoom = [&](void* onto, int& have, ItemHome& there) {
         kc::ItemState k;
+        have = 0;
+        there = HomeOf(dst, onto);
+        return onto != best && there.sec && ItemKind(onto, k) && k.sameKind(op.item) && Rd(onto, IT_quantity, have)
+                   ? kc::StackMergeCount(have, qty, StackMax(onto, there.sec))
+                   : 0;
+    };
+    std::vector<void*> targets;
+    if (op.toX >= 0) {
+        if (void* onto = ItemAt(dst, op.toSection, op.toX, op.toY, best)) targets.push_back(onto);
+    } else {
+        for (void* it : InventoryItems(dst)) {
+            std::string at;
+            int ix = 0, iy = 0;
+            ItemPlace(it, at, ix, iy);
+            if (at == op.toSection) targets.push_back(it);
+        }
+    }
+    for (void* onto : targets) {
         int have = 0;
-        const ItemHome there = HomeOf(dst, onto);
-        const int n = there.sec && ItemKind(onto, k) && k.sameKind(op.item) && Rd(onto, IT_quantity, have)
-                          ? kc::StackMergeCount(have, qty, StackMax(onto, there.sec))
-                          : 0;
+        ItemHome there;
+        const int n = stackRoom(onto, have, there);
         if (n > 0) {
             void* taken = TakeFromHome(home, best, n, err);   // the whole stack, or a copy of n (the stack keeps the rest)
             if (!taken) return false;
@@ -3132,6 +3150,9 @@ bool SetFloorFocus(Character* c) {
 namespace {
 constexpr uintptr_t SEC_type = 0xB8;      // InventorySection: its kind (Inventory::getSection(type) 0x745EF0 compares it)
 constexpr int kSectionBackpack = 12;      // the worn backpack's attach section
+constexpr uintptr_t SEC_stackMin = 0x88;  // InventorySection: "stackable bonus minimum" (applyStackingBonuses 0x7466B0)
+constexpr uintptr_t SEC_stackMult = 0x8C; // float: "stackable bonus mult"
+constexpr uintptr_t SEC_stackOne = 0x98;  // set: the item's own stackable is read as 1 before the bonus
 constexpr uintptr_t AP_members = 0x50;    // ActivePlatoon: lektor<Character*> of its members (0x953850 reads +0x58/+0x60)
 constexpr size_t kMaxWornInSection = 16;
 } // namespace
@@ -4668,7 +4689,12 @@ std::string WearNewBackpack(Character* c, const std::string& part, std::string* 
     constexpr int kItemTypeBackpack = 0x2E;   // what Item::isStackable and ContainerItem vt 0x2C8 call a backpack
     void* inv = InventoryOf(c);
     if (!IsCharacter(c) || !inv) { if (why) *why = "no character"; return {}; }
-    if (void* worn = WornBackpack(c)) return ItemTemplate(worn);
+    if (void* worn = WornBackpack(c)) {
+        // another one asked for by name: the worn one is dropped first, as the inventory window does
+        std::string wsid = ItemTemplate(worn), wname;
+        if (part.empty() || wsid == part || (TemplateDisplayName(wsid, wname) && wname.find(part) != std::string::npos)) return wsid;
+        if (!DropOut(c, c, inv, HomeOf(inv, worn), worn, why) || WornBackpack(c)) { if (why && why->empty()) *why = "could not take off " + wsid; return {}; }
+    }
     void* slot = nullptr;   // its backpack slot (section of kind 12)
     for (void* sec : SectionsOf(inv)) {
         int32_t type = -1;
@@ -4700,6 +4726,36 @@ std::string WearNewBackpack(Character* c, const std::string& part, std::string* 
         if (why) *why = "the slot " + slotName + " refused " + sid;
     }
     return {};
+}
+
+std::string BackpackStackInfo(Character* c) {
+    void* pack = WornBackpack(c);
+    void* inv = pack ? InventoryOf(pack) : nullptr;
+    if (!inv) return {};
+    // InventorySection::applyStackingBonuses (0x7466B0): max(stackable, +0x88) * +0x8C, the item's own
+    // stackable read as 1 when +0x98 is set
+    std::string out = ItemTemplate(pack);
+    for (void* sec : SectionsOf(inv)) {
+        std::string name;
+        int32_t mn = 0, one = 0;
+        float mult = 0.f;
+        ReadGameString(reinterpret_cast<uint8_t*>(sec) + 8, name);
+        Rd(sec, SEC_stackMin, mn);
+        Rd(sec, SEC_stackMult, mult);
+        Rd(sec, SEC_stackOne, one);
+        char b[200];
+        std::snprintf(b, sizeof b, " %s:min=%d,mult=%.2f,one=%d", name.c_str(), mn, mult, one);
+        out += b;
+        for (void* it : InventoryItems(inv)) {
+            std::string at;
+            int x = 0, y = 0;
+            ItemPlace(it, at, x, y);
+            if (at != name) continue;
+            out += "," + ItemTemplate(it) + "<=" + std::to_string(StackMax(it, sec));
+            break;
+        }
+    }
+    return out;
 }
 
 namespace {

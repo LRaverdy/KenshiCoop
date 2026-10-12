@@ -3093,6 +3093,14 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             out += " " + it.templateSid + ":" + std::to_string(it.quantity) + "@" + it.section + ":" + std::to_string(it.x) + "," + std::to_string(it.y);
         return out;
     }
+    if (cmd == "bagbonus") {   // bagbonus <squadIndex>: its worn backpack, each section's stacking bonus: "ok <sid> <section>:min=,mult=,one=[,<item sid><=max>] ..."
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        const std::string info = kenshi::BackpackStackInfo(w.FindSquad(squad[idx]));
+        return info.empty() ? "err no worn backpack" : "ok " + info;
+    }
     if (cmd == "invitems") {   // invitems <who>: that character's stacks in invmove's index order: "ok <n> sid:qty@section:x,y ..." (spawned|squadN|key)
         std::string who;
         in >> who;
