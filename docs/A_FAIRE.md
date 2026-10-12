@@ -42,6 +42,21 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      joueur quand un ordre de travail n'a rien créé (machine pleine, pas de mode Travaux).
    - « aux autres » : vérifier les persos partagés (recrues de personne) et ceux d'un autre joueur
      (refus attendu, avec un message).
+   - **Corrigé dans le code (v0.3.4), à tester en jeu (`coop_test.py clientjobs`)** :
+     - cause : en solo un travail permanent vient de **Maj + clic droit** (le bouton JOBS dit seulement
+       si le perso fait ses travaux). `newPlayerTaskSelectedCharacters` lit la touche lui-même : celle
+       du client n'arrivait jamais, l'hôte utilisait celle de son propre joueur. Les travaux de nass4
+       et Geoffrey sont venus d'un Maj tenu chez l'hôte à ce moment ; rob n'en a jamais eu. Le client
+       envoie maintenant sa touche, l'hôte exécute l'ordre avec (sans changement de protocole) ;
+     - « places prises » non dit à rob : c'est **son propre perso** qui minait la Petite Ressource
+       Cuivre (workers 0 -> 1 juste après son ordre de 22:51:12) ; l'ancien message se taisait dans
+       ce cas. Il reçoit maintenant « ton personnage y travaille déjà… Maj + clic droit » ;
+     - bouton JOBS prédit chez le client (3 s), clics identiques une fois par seconde, panneau Tâches
+       sans retour en arrière, messages pour chaque cas (voir CHANGELOG v0.3.4) ;
+     - perso d'un autre joueur : refusé avec « Ce personnage appartient à un autre joueur. » (déjà
+       là) ; recrue à personne : travaux de base permis à tous (déjà là, maintenant aussi en permanent).
+     - Non traité ici : les lignes « inventory change refused: that character belongs to X » (diff
+       d'inventaire du client sur les persos des autres, lot inventaires, voir point 6).
 6. **Piles de viande qui « bougent » dans l'inventaire de Geoffrey (affichage), 22:55-22:56+.**
    - Toutes les 3 s, les **trois** clients demandent à l'hôte les mêmes déplacements de
      `42334-changes_otto.mod` (viande) depuis la section `out` (sortie d'une machine : cuisinière,

@@ -757,7 +757,7 @@ Emplacements de vtable :
 | 12 | tenir la position |
 | 13 | passif |
 | 14 | narguer |
-| 15 | poursuivre : le bouton **JOBS** de la barre (`OrdersChaseButton`), la permanence des tâches (`OrdersReceiver` +0x35) |
+| 15 | poursuivre : le bouton **JOBS** de la barre (`OrdersChaseButton`) : fait ou non les travaux de la liste (`OrdersReceiver` +0x35) ; ne crée pas de travail (c'est Maj + clic droit, voir « Touche Maj ») |
 | 16 | vitesse de groupe |
 | 17 | distance |
 
@@ -1049,6 +1049,31 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
 - `addJobSelectedCharacters(task, subject, shift, add, pos)` → `Character::addJob` →
   `OrdersReceiver::addJob` (`0x5086D0`) : `shift` vrai = tâche permanente (liste +0x88/+0x90, panneau
   Tâches), faux = ordre passager (liste +0x70). `add` faux vide d'abord les tâches.
+- **Touche Maj et travaux permanents** (désassemblage 1.0.68, v0.3.4) : l'octet global `0x2133449`
+  vaut 1 quand Maj est tenue (gestionnaire de touches `0x82B111` : codes 0x2A et 0x36 ; Ctrl `0x2133448`,
+  Alt `0x213344A` ; remis à zéro avec Alt par le mot écrit en `0x8130D2`).
+  `newPlayerTaskSelectedCharacters` (`0x7FA650`) le lit **lui-même** : Maj tenue (et la `TaskData`
+  de la tâche +4 non nulle) → `addJobSelectedCharacters(tâche, cible, shift = 1, add, Vector3 zéro)`,
+  puis la tâche suivante de la `TaskData` (+0x10) s'il y en a une, et le bâtiment visé sans
+  propriétaire devient celui de la faction du joueur (vt +0xA0) ; sinon → `addOrderSelectedCharacters`
+  (ordre ponctuel). Cas particulier : tâche 26 (fouiller) avec Maj sur un bâtiment (`hand` +8 = 0)
+  devient 124 (`OPERATE_STORAGE`, ranger) si le bâtiment a un stockage (vt +0x2F8), sinon rien.
+  `addTaskNearestSelectedCharacter` (`0x7FAE70`) lit aussi l'octet (tâche 26), `Character::addOrder`
+  (`0x5D20D0`) reçoit `shift` en paramètre (vrai : `Character::addJob` permanent, si la faction est
+  celle du joueur et la tâche le permet). Le bouton MEDIC (`0x7FAC20`) passe l'octet en paramètre à
+  `addJobSelectedCharacters`. Texte du jeu : « To add jobs, hold shift key when giving an order ».
+  Le mod vérifie l'instruction qui le lit (`0x7FA6A3` : `cmp byte ptr [rip+disp], 0`) avant d'y
+  toucher (`kenshi::ShiftHeld`, `kenshi::ScopedShift`).
+- **Bouton JOBS** (ordre 15, `OrdersReceiver` +0x35) : ne crée aucun travail ; lu par le choix du
+  travail (`0x50E801`, `0x510FBB`) : éteint, le perso ne fait aucun de ceux de sa liste (« If this is
+  disabled then the character won't do any of the jobs listed »).
+- `OrdersReceiver::addJob` (`0x5086D0`) en permanent : ne regarde **pas** les places libres de la
+  machine (un travail sur une machine pleine est mis dans la liste, le perso attend) ; ne l'ajoute pas
+  si un travail du même type (`Tasker` +0x70 → +0x44) existe déjà sans cible (+8 nul) ou sur la même
+  cible.
+- `OrdersReceiver::movePermajob(from, to)` (`0x5078A0`, via `Character::movePermajob` `0x5C8FC0`) :
+  retire le travail `from` puis l'insère à `to` (indice après retrait) ; `to = -1` : à la fin. Ne
+  vérifie pas `from` (lecture hors du tableau si trop grand : le mod le vérifie).
 - `PlayerInterface::objectSelected` (`0x7F7F20`) écrit aussi un `hand` global (`0x21345D0`) et
   `PlayerInterface`+0xF0 ; `unselectAll` les remet à zéro.
 - **La sélection n'est jamais vide par le jeu** (désassemblage 1.0.68) : `unselectAll` (`0x7F8DA0`)

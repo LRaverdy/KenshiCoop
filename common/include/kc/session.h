@@ -27,6 +27,7 @@
 #include "kc/net.h"
 #include "kc/protocol.h"
 #include "kc/streaming.h"
+#include "kc/work_orders.h"
 
 namespace kc {
 
@@ -997,6 +998,8 @@ private:
     std::map<uint32_t, double> talkToldAt_;   // client: when we last said "goes to talk to" that NPC (by its handle)
     LogLimiter unknownOrderLog_{3, 10.0};     // client (0.3.2): "order for a character the host does not know" (900 a minute on 11/10)
     LogLimiter refusedOrderLog_{3, 10.0};     // client (0.3.2): "refused locally: ... does not own"
+    OrderDebounce orderDebounce_;             // client (0.3.4): the same order clicked again and again goes once a second
+    LogLimiter debounceLog_{2, 10.0};
     LogLimiter adoptLog_{4, 30.0};            // client (0.3.2): host squad characters still NPCs here
     std::vector<IWorld::WorldDialog> scratchDialogs_;
     std::vector<DialogReply> pendingAnswers_;   // host

@@ -7877,6 +7877,165 @@ def exp_workstations(host, cli, minutes=2.0):
     summary()
 
 
+def exp_clientjobs(host, cli):
+    """v0.3.4 (A_FAIRE 12/10 point 5, rob's 60 clicks): giving work to the client's characters exactly as
+    in solo. The JOBS toggle twice in a row (shown at once, the second click turns it back), a permanent
+    job by Shift + right click on a free and on a full iron node (queued all the same, the player told
+    why), a one-time order on a full node (told), identical clicks sent once a second, the Tâches panel
+    (move, remove) with no flicker, a recruit nobody owns, another player's character (refused, told)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    log("client's own character: squad index", own)
+    cmd(host, "console heal all")
+    cmd(host, "console god all")
+    time.sleep(3)
+
+    def jobs(pid, i):
+        t = cmd(pid, f"jobs {i}")[1].split()
+        return t[2:] if len(t) >= 2 and t[0] == "ok" else None
+
+    def chat_has(part, n=8):
+        t = cmd(cli, f"chatlast {n}")[1]
+        return part in t, t
+
+    def ops():
+        return mfields(cmd(host, f"machine {IRON_NODE}")[1]).get("ops", "")
+
+    # 1. JOBS (standing order 15, bit 64): two clicks in a row
+    def chase(pid):
+        t = cmd(pid, f"modes {own}")[1].split()
+        return (int(t[1]) & 64) != 0 if len(t) >= 2 and t[0] == "ok" else None
+    start = chase(cli)
+    log("JOBS at start (client / host):", start, chase(host))
+    cmd(cli, f"orderreq {own} 15")
+    time.sleep(0.3)
+    first = chase(cli)
+    check("jobs : le bouton JOBS change tout de suite chez le client", first is not None and first != start, f"{start} -> {first}")
+    time.sleep(1.2)   # the host's modes come in between (once a second)
+    mid = chase(cli)
+    check("jobs : l'etat predit tient malgre la synchro de l'hote", mid == first, f"{first} -> {mid}")
+    cmd(cli, f"orderreq {own} 15")
+    time.sleep(0.3)
+    second = chase(cli)
+    check("jobs : le second clic revient en arriere", second == start, f"{start} -> {first} -> {second}")
+    time.sleep(5)
+    ch, cc = chase(host), chase(cli)
+    check("jobs : meme etat chez l'hote et le client apres deux clics", ch == cc == start, f"hote {ch} client {cc} depart {start}")
+    if not cc:   # JOBS on for the rest (its jobs are done only then)
+        cmd(cli, f"orderreq {own} 15")
+        time.sleep(4)
+    check("jobs : JOBS allume pour la suite", chase(host) and chase(cli), f"{chase(host)} / {chase(cli)}")
+
+    # 2. a full iron node (3 places): three of the host's characters on it
+    n = squad_size(host)
+    host_idx = [i for i in range(n) if i != own]
+    whose = cmd(cli, "whoseidx")[1]
+    log("squad as the client sees it:", whose)
+    marks = dict(tok.split(":") for tok in whose.split()[1:] if ":" in tok)
+    for i in host_idx[:3]:
+        log("host's character", i, "works the iron node:", cmd(host, f"workreq {i} {IRON_NODE}"))
+    for _ in range(30):
+        time.sleep(3)
+        if ops().startswith("3/"):
+            break
+    full = ops().startswith("3/")
+    log("iron node:", ops())
+    check("jobs : noeud de fer plein (3/3) avec les persos de l'hote", full, ops())
+    j0 = jobs(host, own) or []
+    if full:
+        log("client one-time order on the full node:", cmd(cli, f"workreq {own} {IRON_NODE}"))
+        time.sleep(3)
+        ok, t = chat_has("toutes les places sont prises")
+        check("jobs : ordre ponctuel sur une machine pleine : le joueur est prevenu", ok, t)
+        time.sleep(2.5)   # one host note every 2 s on the client
+        log("client Shift + right click on the full node:", cmd(cli, f"workreq {own} {IRON_NODE} shift"))
+        time.sleep(3)
+        jh, jc = jobs(host, own) or [], jobs(cli, own) or []
+        check("jobs : Maj + clic droit sur une machine pleine : travail permanent cree chez l'hote", jh.count("87") > j0.count("87"), f"{j0} -> {jh}")
+        check("jobs : meme liste de taches chez le client", jh == jc, f"{jh} / {jc}")
+        ok, t = chat_has("place se libère")
+        check("jobs : le joueur sait qu'il attend une place", ok, t)
+        time.sleep(2.5)
+        log("the same Shift + right click again:", cmd(cli, f"workreq {own} {IRON_NODE} shift"))
+        time.sleep(3)
+        ok, t = chat_has("déjà dans la liste")
+        check("jobs : travail deja dans la liste : dit au joueur, rien d'ajoute", ok and (jobs(host, own) or []) == jh, t)
+        # a place frees: the client's character takes it (its permanent job)
+        log("host's worker leaves:", cmd(host, f"moverel {host_idx[0]} 300 0"))
+        got = False
+        for _ in range(20):
+            time.sleep(3)
+            if ops().startswith("3/"):
+                got = True
+                break
+        check("jobs : une place liberee est reprise (travail permanent du client)", got, ops())
+
+    # 3. identical clicks: once a second to the host
+    def runs():
+        return host_log().count("client task 87 (via 2) run")
+    r0 = runs()
+    for _ in range(8):
+        cmd(cli, f"workreq {own} {IRON_NODE}")
+        time.sleep(0.1)
+    time.sleep(3)
+    check("jobs : clics identiques envoyes au plus une fois par seconde", runs() - r0 <= 3, f"{runs() - r0} ordres executes pour 8 clics")
+
+    # 4. the Tâches panel: a second job, moved, then removed, with no flicker on the client
+    log("client Tâches panel: hauling (88):", cmd(cli, f"workjob {own} none 88"))
+    time.sleep(4)
+    jh = jobs(host, own) or []
+    log("jobs before the move (host):", jh)
+    if len(jh) >= 2:
+        last = len(jh) - 1
+        want = [jh[last]] + jh[:last]
+        log("client drags the last job to the top:", cmd(cli, f"jobmove {own} {last} 0"))
+        seen = []
+        for _ in range(8):
+            time.sleep(0.5)
+            seen.append(jobs(cli, own))
+        jh2, jc2 = jobs(host, own), jobs(cli, own)
+        check("jobs : deplacement fait chez l'hote", jh2 == want, f"{jh} -> {jh2} (voulu {want})")
+        check("jobs : deplacement sans retour en arriere chez le client", all(s == want for s in seen) and jc2 == want, f"{seen}")
+        log("client removes the top job:", cmd(cli, f"jobremove {own} 0"))
+        seen = []
+        for _ in range(8):
+            time.sleep(0.5)
+            seen.append(jobs(cli, own))
+        jh3, jc3 = jobs(host, own), jobs(cli, own)
+        check("jobs : retrait fait chez l'hote, meme liste partout", jh3 == want[1:] and jc3 == jh3, f"{jh3} / {jc3}")
+        check("jobs : le travail retire ne revient pas chez le client", all(s == want[1:] for s in seen), f"{seen}")
+    else:
+        check("jobs : deux travaux pour tester le panneau", False, jh)
+
+    # 5. a recruit nobody owns: anyone gives it base work
+    shared = [int(i) for i, m in marks.items() if m == "s"]
+    if shared:
+        s = shared[0]
+        js0 = jobs(host, s) or []
+        log("client Shift + right click for the recruit nobody owns:", s, cmd(cli, f"workreq {s} {IRON_NODE} shift"))
+        time.sleep(4)
+        js1 = jobs(host, s) or []
+        check("jobs : recrue sans joueur : travail permanent donne par le client", js1.count("87") > js0.count("87"), f"{js0} -> {js1}")
+    else:
+        log("no recruit nobody owns in this save: shared work not tested in game")
+    # 6. another player's (here the host's) character: refused, told in French
+    other = next((int(i) for i, m in marks.items() if m == "o"), None)
+    if other is not None:
+        time.sleep(2.5)
+        jo0 = jobs(host, other)
+        log("client Shift + right click for the host's character:", other, cmd(cli, f"workreq {other} {IRON_NODE} shift"))
+        time.sleep(3)
+        check("jobs : perso d'un autre joueur : rien ne change chez l'hote", jobs(host, other) == jo0, f"{jo0} -> {jobs(host, other)}")
+        t = cmd(cli, "toastlast")[1]   # a notice at the top of the screen, not a chat line
+        check("jobs : perso d'un autre joueur : le joueur est prevenu", "appartient à un autre joueur" in t, t)
+    for line in host_log().splitlines()[-3000:]:
+        if "work order" in line or "jobs:" in line or "client mode" in line:
+            log("  ", line.strip())
+    summary()
+
+
 def exp_research(host, cli):
     """Workshop: the research (tech tree), the crafting benches, the mines and machines and the power of
     the players' outpost are the host's. The client researches, builds what it unlocked and crafts
@@ -8308,6 +8467,9 @@ def main():
     ws.add_argument("--save", default="kctest_base")
     ws.add_argument("--keep", action="store_true")
     ws.add_argument("--minutes", type=float, default=2.0)
+    cj = sub.add_parser("clientjobs", help="v0.3.4: JOBS toggle twice, Shift + right click jobs on a free and a full node, notes, debounce, Tâches panel, shared recruit, other player's character")
+    cj.add_argument("--save", default="kctest_base")
+    cj.add_argument("--keep", action="store_true")
     rs = sub.add_parser("research", help="workshop: research, crafting benches, mines, power (sandbox set up by the host)")
     rs.add_argument("--save", default="kctest_base")
     rs.add_argument("--keep", action="store_true")
@@ -8527,6 +8689,8 @@ def main():
             exp_workstations(host, cli, minutes=a.minutes)
         elif a.what == "research":
             exp_research(host, cli)
+        elif a.what == "clientjobs":
+            exp_clientjobs(host, cli)
         elif a.what == "admin":
             exp_admin(host, cli)
         elif a.what == "caravan":

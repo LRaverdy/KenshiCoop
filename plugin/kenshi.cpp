@@ -1483,6 +1483,23 @@ bool SameSelection(const std::vector<kc::Handle>& a, const std::vector<kc::Handl
 }
 uint8_t* MainSelectedHand() { return reinterpret_cast<uint8_t*>(Addr(kRvaMainSelectedHand)); }
 
+// The game's "Shift is held" flag (v0.3.4): the key handler (0x82B111) sets it for LShift / RShift,
+// 0x8130D2 clears it with Alt's; newPlayerTaskSelectedCharacters (0x7FA650) reads it to make the
+// right click's order a permanent job (addJobSelectedCharacters with shift) instead of a one-time
+// order. Checked against the instruction that reads it (0x7FA6A3: cmp byte ptr [rip+disp], 0) before
+// any use: another build of the game leaves the flag alone.
+constexpr uintptr_t kRvaShiftHeld = 0x2133449, kRvaShiftHeldReader = 0x7FA6A3;
+uint8_t* ShiftHeldFlag() {
+    static int ok = -1;
+    if (ok < 0) {
+        const auto* code = reinterpret_cast<const uint8_t*>(Addr(kRvaShiftHeldReader));
+        int32_t disp = 0;
+        std::memcpy(&disp, code + 2, 4);
+        ok = code[0] == 0x80 && code[1] == 0x3D && code[6] == 0 && intptr_t(kRvaShiftHeldReader) + 7 + intptr_t(disp) == intptr_t(kRvaShiftHeld) ? 1 : 0;
+    }
+    return ok ? reinterpret_cast<uint8_t*>(Addr(kRvaShiftHeld)) : nullptr;
+}
+
 struct SavedSelection {
     std::vector<kc::Handle> sel;
     uint8_t details[off::HandSize] = {};
@@ -1591,6 +1608,23 @@ bool WithSelection(Character* only, const std::function<void()>& fn) {
 }
 
 int SelectionRestoreFailures() { return g_selectionRestoreFailures; }
+
+bool ShiftFlagFound() { return ShiftHeldFlag() != nullptr; }
+bool ShiftHeld() {
+    const uint8_t* f = ShiftHeldFlag();
+    return f && *f != 0;
+}
+ScopedShift::ScopedShift(bool on) {
+    if (uint8_t* f = ShiftHeldFlag()) {
+        saved_ = *f;
+        active_ = true;
+        *f = on ? 1 : 0;
+    }
+}
+ScopedShift::~ScopedShift() {
+    if (active_)
+        if (uint8_t* f = ShiftHeldFlag()) *f = saved_;
+}
 
 namespace {
 constexpr uintptr_t CH_dialogue = 0x280;    // Dialogue*

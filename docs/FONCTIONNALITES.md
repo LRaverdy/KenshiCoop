@@ -302,8 +302,16 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   soit plus à tout le monde, l'hôte la donne (console `give`, à lui-même compris).
 - **Valeur, pas bascule** : un clic envoie la valeur voulue ; deux joueurs qui cliquent en même
   temps finissent sur la même valeur partout.
+- **Affiché tout de suite chez le client (v0.3.4)** : un bouton de la barre (JOBS, passif, bloquer,
+  tenir, narguer, distance) change aussitôt sur la copie du client et y reste 3 s quoi que disent les
+  modes de l'hôte (1 fois par seconde) ; ensuite l'état de l'hôte s'applique (un refus revient donc
+  en arrière). Un second clic part de ce que voit le joueur : avant, deux clics rapides sur JOBS
+  envoyaient deux fois la même valeur calculée sur l'ancien état de l'hôte (rob, 12/10).
 - **Tâches** : la liste de l'hôte, avec la cible de chaque tâche, est reconstruite chez chaque
-  client (ajouts compris) dans le même ordre.
+  client (ajouts compris) dans le même ordre (v0.3.4 : remise en ordre par rang dans la liste de
+  l'hôte, juste même quand une cible n'est pas encore chargée chez le client). Une croix ou un
+  glisser fait dans le panneau du client s'y voit aussitôt ; les listes de l'hôte attendent 3 s
+  avant de s'appliquer à ce perso (plus de retour en arrière le temps que l'hôte le fasse).
 - **« Attribuer à »** : donner un personnage à un joueur reste réservé à l'hôte (console `give`,
   raccourci) ; tout le monde voit le nouveau propriétaire (`Bind`).
 - **Pas dans Kenshi 1.0.68** : il n'existe pas de case « fuir / se replier à faible santé » ni
@@ -1230,9 +1238,9 @@ la fenêtre du client.
 
 ### Travaux de base aux persos de chaque joueur (postes) 🟡 (v0.3.2, protocole 36 ; corrigé dans le code, à tester en jeu)
 - **Comment l'ordre arrive** : clic droit sur le poste (tâche 87 « utiliser », ou 152 sans place
-  d'opérateur ; `AddOrder` / `NewTask` / `TaskNearest`), mode travail permanent ou panneau Tâches
-  (`AddJob` avec `shift` : un travail permanent), croix et glisser du panneau (`RemovePermajob`,
-  `MovePermajob`, `RemoveJob`), bouton JOBS (ordre permanent 15). Tout part à l'hôte (`Command`), qui
+  d'opérateur ; `AddOrder` / `NewTask` / `TaskNearest`), Maj + clic droit ou panneau Tâches (`NewTask`
+  ou `AddJob` avec `shift` : un travail permanent), croix et glisser du panneau (`RemovePermajob`,
+  `MovePermajob`, `RemoveJob`), bouton JOBS (ordre permanent 15 : fait ou non les travaux de la liste). Tout part à l'hôte (`Command`), qui
   vérifie le propriétaire (`Authorize` / `AdmitActor`) puis la cible (`TaskTargetAllowed`) et donne
   l'ordre à ce perso seul. Postes couverts par la table : ferme (champ, hydroponie, ferme de mod :
   `FarmBuilding`), puits / collecteur / réservoir, cuisinière, four, moulin, brasserie, distillerie,
@@ -1243,11 +1251,30 @@ la fenêtre du client.
 - **Qui** : son propre perso ; une recrue « à personne » : n'importe quel joueur, pour ces travaux
   de base (`kc::IsBaseWorkTask`) comme pour ses réglages d'IA ; le perso d'un autre joueur : refusé,
   « Action refusée : ce personnage n'est pas le tien ».
-- **Une machine sans travail** : comme en solo, une ferme dont les cultures poussent, un banc de
-  recherche sans rien en file, un poste plein, refusent l'ouvrier (`dontNeedWorkRightNow`,
-  `tryOperate`) et la tâche ponctuelle du clic droit s'arrête aussitôt. Le joueur reçoit la raison
-  (« … les cultures poussent, il n'y a rien à récolter pour l'instant. Donne-lui plutôt ce travail
-  en permanent… »). En permanent, le perso y retourne dès qu'il y a du travail.
+- **Travail permanent = Maj + clic droit, comme en solo (v0.3.4)** : le jeu fait d'un clic droit un
+  travail permanent quand **Maj** est tenue (`newPlayerTaskSelectedCharacters` lit la touche
+  lui-même). Jusqu'à la 0.3.3 la touche du client n'arrivait jamais à l'hôte, dont le jeu lisait la
+  touche **du joueur de l'hôte** : le travail d'un client n'était permanent que si l'hôte tenait Maj
+  à ce moment (les « jobs » de nass4 et Geoffrey le 12/10), jamais pour rob. Maintenant le client lit
+  sa touche et l'envoie (`Command.shift`), l'hôte exécute l'ordre avec elle (puis remet la sienne) :
+  pas de changement de protocole. Le perso du client reçoit aussi le travail tout de suite chez lui
+  (panneau Tâches), gardé 5 s en attendant la liste de l'hôte. Maj + clic droit sur un stockage
+  donne le travail permanent « ranger » (124) au lieu d'ouvrir le coffre, comme en solo.
+- **Le bouton JOBS** (ordre 15) ne crée aucun travail : éteint, le perso ne fait aucun de ceux de sa
+  liste (« If this is disabled then the character won't do any of the jobs listed »).
+- **Machine pleine** : le jeu met le travail permanent dans la liste même sans place libre
+  (`OrdersReceiver::addJob` ne regarde pas les places) ; le perso s'y met dès qu'une place se libère.
+  Le même travail sur la même cible n'est jamais ajouté deux fois.
+- **Ce que le joueur apprend (chat, v0.3.4)** : l'hôte compare la liste du perso avant et après
+  l'ordre et la machine visée (`kc::WorkOrderNote`) : travail permanent ajouté mais toutes les places
+  prises (il attendra), rien à faire pour l'instant, JOBS éteint, déjà dans sa liste, pas de travail
+  permanent possible sur cette cible ; ordre ponctuel sur une machine où ce perso travaille déjà
+  (rob, 12/10 : 60 clics sans réponse), pleine, ou sans travail (ferme qui pousse, banc sans
+  recherche en file : le jeu arrête aussitôt la tâche ponctuelle). Chaque message dit comment faire
+  un travail permanent : « Maj + clic droit (bouton JOBS allumé) ».
+- **Clics répétés** : le même ordre (même perso, même tâche, même cible, même Maj) cliqué plusieurs
+  fois part à l'hôte au plus une fois par seconde (journal client : « clicked again within 1000 ms:
+  not sent again »). Les boutons de la barre et le panneau Tâches ne sont jamais retenus.
 - **Ce que tout le monde voit** (la machine tourne chez l'hôte) : nombre et noms des ouvriers,
   marche, énergie, barre de progression, quantité produite, ordres de fabrication, inventaire
   d'entrée et de sortie (synchronisé, ouvert ou non), listes de tâches (`JobState`), et pour une
@@ -1257,7 +1284,8 @@ la fenêtre du client.
 - **Bâtiment d'un joueur chez un autre** : retrouvé par son netId de pose, puis par type et endroit.
   Une machine loin de tous nos persos n'est pas chargée chez nous : appliquée en arrivant (journal :
   « not loaded here yet »).
-- Tests : `TestWorkstationOrders`, `TestWorkshop`, `TestSquadWindow` ; expérience `workstations`.
+- Tests : `TestWorkstationOrders`, `TestWorkshop`, `TestSquadWindow`, `TestClientJobs` (v0.3.4) ;
+  expériences `workstations` et `clientjobs` (v0.3.4, à lancer).
 
 ### Non vérifiés
 - Recrutement par dialogue.

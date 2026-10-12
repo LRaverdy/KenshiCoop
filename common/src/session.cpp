@@ -3215,6 +3215,27 @@ void Session::ClientTick(double now, bool live) {
             }
             talkSubjects.push_back(cmd.subject);
         }
+        // the same order clicked again and again (0.3.3: rob, 60 "operate" in 10 s on one machine): once
+        // a second; the squad bar's toggles and the Tâches panel's changes always go
+        if (cmd.kind == CommandKind::Task && (cmd.via == TaskVia::AddOrder || cmd.via == TaskVia::NewTask || cmd.via == TaskVia::TaskNearest ||
+                                              cmd.via == TaskVia::AddJob)) {
+            auto hs = [](const Handle& x) {
+                return std::to_string(x.type) + "." + std::to_string(x.container) + "." + std::to_string(x.containerSerial) + "." +
+                       std::to_string(x.index) + "." + std::to_string(x.serial);
+            };
+            std::string key = std::to_string(e->netId) + "|" + std::to_string(int(cmd.via)) + "|" + std::to_string(cmd.task) + "|" +
+                              (cmd.shift ? "s" : "-") + (cmd.add ? "a" : "-") + "|" + hs(cmd.subject) + "|" + hs(cmd.building) + "|" + cmd.itemSid;
+            if (!cmd.subject.valid() && cmd.itemSid.empty())   // a place: the click's spot (to the unit)
+                key += "|" + std::to_string(int(std::lround(cmd.pos.x))) + "," + std::to_string(int(std::lround(cmd.pos.z)));
+            if (!orderDebounce_.Admit(key, clock_())) {
+                uint32_t held = 0;
+                if (debounceLog_.Allow(clock_(), &held))
+                    log_("order \"" + std::string(TaskLabel(cmd.task)) + "\" (" + std::to_string(cmd.task) + ") clicked again within " +
+                         std::to_string(int(OrderDebounce::kWindow * 1000)) + " ms: not sent again (" + std::to_string(orderDebounce_.dropped()) +
+                         " so far)" + (held ? " [" + std::to_string(held) + " more such lines not written]" : std::string()));
+                continue;
+            }
+        }
         Command c = cmd;
         c.seq = ++cmdSeq_;
         c.netId = e->netId;

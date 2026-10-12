@@ -338,22 +338,44 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
         }
         who = {best};
     }
-    Log("client order task %d (via %d) for %zu character(s) asked of the host", task, int(via), who.size());
+    Log("client order task %d (via %d%s) for %zu character(s) asked of the host", task, int(via), shift && via != kc::TaskVia::SetOrder ? ", Shift: a permanent job" : "",
+        who.size());
     for (const auto& h : who) w->QueueLocalOrder(h, c);
-    if (via == kc::TaskVia::AddJob && shift && loc && o_addJob) {
-        // a permanent job (Tâches panel): our copy takes it too, so the panel shows it at once; the
-        // host's job lists (Session::ClientJobs) then keep it or take it away like any other.
+    if (via == kc::TaskVia::SetOrder) {
+        // a squad bar toggle (JOBS, PASSIVE...): set on our copies at once, and kept a few seconds
+        // whatever the host's periodic modes say (they follow the host's game ~once a second): the
+        // button lights up now, and a second click toggles back from what the player sees (0.3.3: two
+        // clicks on JOBS in 2 s sent "on" twice... the second one, computed from the host's old
+        // value, turned it off)
+        if (const uint16_t bit = kc::ModeBitOfOrder(task)) {
+            HostCallScope scope;
+            for (const auto& h : who)
+                if (kenshi::Character* ch = w->FindSquad(h)) {
+                    kenshi::SetStandingOrder(ch, task, c.add);
+                    w->PredictMode(h, bit, c.add);
+                }
+            Log("client mode %d %s on %zu character(s) here at once (until the host's state comes back)", task, c.add ? "on" : "off", who.size());
+        }
+    }
+    // A permanent job: the Tâches panel (AddJob with shift), or Shift + right click on a workstation
+    // (newPlayerTaskSelectedCharacters with the Shift flag: the game's addJobSelectedCharacters with
+    // shift, see hk_newTask). Our copy takes it too, so the panel shows it at once; the host's job
+    // lists (Session::ClientJobs) then keep it or take it away like any other.
+    const bool permanentJob = shift && ((via == kc::TaskVia::AddJob && loc) || (via == kc::TaskVia::NewTask && kc::IsBaseWorkTask(task)));
+    if (permanentJob && o_addJob) {
         // Only with a subject of the kind the task expects (the host's check, kc::TaskTargetAllowed):
         // the game's addJob with a wrong one crashed here (task 27 on a squad mate, 10 oct.), and the
         // exception, caught by the tick, left this HostCallScope counted: from then on this client
         // ran every order itself, until a BUILD on an NPC crashed it (kenshi_x64+0x883B78).
         void* target = subject ? subject : subj;
+        static const float kNoPlace[3] = {0.0f, 0.0f, 0.0f};   // newPlayerTask gives addJob no place (Vector3 zero)
+        const float* jobLoc = via == kc::TaskVia::NewTask ? kNoPlace : loc;
         for (const auto& h : who) {
             kenshi::Character* ch = w->FindSquad(h);
             if (!ch) continue;
             std::string why;
             const uint32_t flags = w->TargetFlagsOf(ch, target, c.subject.valid() || !c.itemSid.empty());
-            if (!kc::TaskTargetAllowed(via, task, flags, &why)) {
+            if (!kc::TaskTargetAllowed(kc::TaskVia::AddJob, task, flags, &why)) {
                 Log("client job %d not shown ahead here: %s (subject flags %#x); the host decides", task, why.c_str(), unsigned(flags));
                 continue;
             }
@@ -361,7 +383,7 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
             bool ran = false;
             kenshi::WithSelection(ch, [&] {
                 HostCallScope scope;
-                ran = AddJobSeh(kenshi::Player(), task, target, shift, add, loc);
+                ran = AddJobSeh(kenshi::Player(), task, target, true, add, jobLoc);
             });
             if (!ran) Log("client job %d: the game's addJob failed here (exception caught); the host decides", task);
             if (kenshi::PermajobCount(ch) > before) w->NoteLocalJob(h, kenshi::PermajobType(ch, kenshi::PermajobCount(ch) - 1));
@@ -399,6 +421,9 @@ bool ClientJobChange(void* chr, kc::TaskVia via, int task, int a, int b) {
     c.task = task;
     c.pos = {float(a), float(b), 0.0f};
     w->QueueLocalOrder(h, c);
+    // our copy does it at once: the host's lists, which do not have it yet, wait a moment (else the
+    // next one put the job back, or in its old place, until the host's change came in)
+    w->NoteJobEdit(h);
     Log("client job change (via %d, task %d, slot %d -> %d) asked of the host", int(via), task, a, b);
     return true;
 }
@@ -479,9 +504,20 @@ void hk_addOrder(void* pi, void* building, int task, void* subject, bool shift, 
 void hk_newTask(void* pi, int task, const void* targetHand, void* building, const float* clickPos, bool addDontClear) {
     kc::Handle th;
     const bool haveTarget = kenshi::HandleFromHand(targetHand, th);
-    if (ClientLoot(task, haveTarget ? kenshi::Resolve(th) : nullptr)) return;
-    if (haveTarget && ClientLootContainer(task, kenshi::ResolveObject(th))) return;
-    if (RouteOrder(kc::TaskVia::NewTask, task, nullptr, haveTarget ? &th : nullptr, building, clickPos, false, addDontClear))
+    // Shift held: the game's newPlayerTaskSelectedCharacters makes the order a permanent job (solo:
+    // Shift + right click on a machine, a farm, a storage...). It reads the flag itself, so a client's
+    // Shift never reached the host (0.3.3: always false), whose game read the HOST player's own key
+    // instead: a client's job was permanent only when the host happened to hold Shift. Read here, sent
+    // in the command (Command.shift), and the host runs the order with it (RunPlayerTask).
+    const bool shift = !g_hostCall && KenshiWorld::ClientActive() && kenshi::ShiftHeld();
+    // Shift + right click on a storage building: no loot window, the game's permanent "operate storage"
+    // job (task 26 made 124 by newPlayerTask)
+    const bool storageJob = shift && task == kTaskLootTarget && haveTarget && th.type == 0;
+    if (!storageJob) {
+        if (ClientLoot(task, haveTarget ? kenshi::Resolve(th) : nullptr)) return;
+        if (haveTarget && ClientLootContainer(task, kenshi::ResolveObject(th))) return;
+    }
+    if (RouteOrder(kc::TaskVia::NewTask, task, nullptr, haveTarget ? &th : nullptr, building, clickPos, shift, addDontClear))
         o_newTask(pi, task, targetHand, building, clickPos, addDontClear);
 }
 // The right-click "loot" on a body goes through this one (the nearest selected character acts).
@@ -1681,7 +1717,10 @@ bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, 
             if (kenshi::PermajobType(c, i) == cmd.task) slot = i;
         if (slot < 0) return false;
         if (cmd.via == kc::TaskVia::RemovePermajob) return kenshi::RemovePermajob(c, slot);
-        return kenshi::MovePermajob(c, slot, std::min(int(cmd.pos.y), kenshi::PermajobCount(c) - 1));
+        const int last = kenshi::PermajobCount(c) - 1;
+        const int to = cmd.pos.y < 0.0f ? last : std::min(int(cmd.pos.y), last);   // -1: the game's "to the end"
+        if (to == slot) return true;   // already there (the client's list was behind the host's)
+        return kenshi::MovePermajob(c, slot, to);
     }
     if (cmd.via == kc::TaskVia::SetOrder) {
         // the squad bar's toggles, set on the character itself: the game's selection function
@@ -1711,7 +1750,15 @@ bool RunPlayerTask(kenshi::Character* c, const kc::Command& cmd, void* subject, 
     std::string why;
     const bool exact = kenshi::WithSelection(std::vector<kenshi::Character*>{c}, [&] {
         HostCallScope scope;
-        ok = CallTaskSeh(pi, cmd, subject, building, loc, hand);
+        // newPlayerTaskSelectedCharacters reads the Shift key itself (a permanent job when held): the
+        // client's Shift, never the host player's own key (0.3.3: a client's order became a permanent
+        // job only when the host happened to hold Shift). Put back right after.
+        if (cmd.via == kc::TaskVia::NewTask) {
+            kenshi::ScopedShift withClientShift(cmd.shift);
+            ok = CallTaskSeh(pi, cmd, subject, building, loc, hand);
+        } else {
+            ok = CallTaskSeh(pi, cmd, subject, building, loc, hand);
+        }
     }, &why);
     if (!exact) {
         Log("refused: client task %d (via %d) not run: the selection could not be made exactly its actor (%s); nothing else got it", cmd.task,
