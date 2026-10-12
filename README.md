@@ -90,6 +90,10 @@ Exceptions pour l'instant : le **commerce** et le
 recrutement au centre d'emploi, refusés avec un message.
 
 **Outils de l'hôte**, dans la fenêtre Multijoueur ou la console :
+- **Multiplicateurs** (Administration, v0.3.2) : curseurs **Soin** (au lit, au sac de couchage et
+  naturel) et **Expérience**, de x1 à x10, pour les persos de tous les joueurs (réglage global du jeu :
+  les PNJ aussi). Enregistrés dans `KenshiCoop.ini`. Au-delà de x5, un gros gain d'XP peut être perdu
+  (le jeu refuse plus de 20 points d'un coup).
 - **Administration** : la liste des joueurs (nom, ping, personnages, persos à terre) avec, pour
   chacun et pour « Tout le monde » (toi compris) :
   - **Dieu** (case à cocher) : plus aucun dégât ni K.-O. ; reste actif aux changements de zone et

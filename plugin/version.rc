@@ -2,8 +2,8 @@
 // heuristics rate a DLL with no publisher, product or description at all as more suspicious.
 #include <winver.h>
 
-#define KC_VER 0,3,1,0
-#define KC_VER_STR "0.3.1"
+#define KC_VER 0,3,2,0
+#define KC_VER_STR "0.3.2"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION KC_VER
