@@ -35,6 +35,9 @@ inline constexpr uintptr_t VtLektor = 0x168BAF0;            // lektor<RootObject
 // ---- diplomacy
 inline constexpr uintptr_t UniqueNPCManager = 0x212EB00;    // pointer to UniqueNPCManager (made by its getter 0x354560): boost::unordered_map<GameData*, UniqueCharacterState>
 inline constexpr uintptr_t TownList = 0x2134100;            // pointer to TownList (+0x50 lektor<TownBase*>)
+// ---- host multipliers
+inline constexpr uintptr_t GlobalConstants = 0x2133DD0;     // static `GlobalConstants con` (KenshiLib 0x2130CE0 + 0x30F0), setup 0x86B2B0
+inline constexpr uintptr_t GC_healRate = 0x6C, GC_healRateResting = 0x70, GC_expGain = 0x138;
 
 inline constexpr uintptr_t VtCharacter = 0x16f9eb8;
 inline constexpr uintptr_t VtCharacterHuman = 0x16f2848;
@@ -514,6 +517,15 @@ bool ReadStats(Character* c, std::vector<float>& out);
 bool WriteStats(Character* c, const std::vector<float>& stats);
 bool ReadPlayerMoney(int32_t& out);
 bool WritePlayerMoney(int32_t money);
+// The game's global constants the host multipliers scale (GlobalConstants, a static object
+// filled from the game data by GlobalConstants::setup at load): game thread only.
+struct GameRates {
+    float heal = 0;          // "heal rate mult" (+0x6C)
+    float healResting = 0;   // "resting heal rate mult" (+0x70), in a bed or bedroll
+    double xp = 0;           // "exp gain multiplier" (+0x138, a double)
+};
+void ReadGameRates(GameRates& out);
+void WriteGameRates(const GameRates& r);
 bool IsStatOfCharacter(const void* statField);
 bool GainExperience(Character* c, size_t statIndex, float amount);
 bool ReadStat(Character* c, size_t statIndex, float& out);    // one skill level

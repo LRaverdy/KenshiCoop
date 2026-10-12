@@ -41,6 +41,7 @@ struct OverlayModel {
     bool fullConsole = false;           // host: every console command; client: read-only ones
     // host: the Administration section (god mode, teleports, experience, healing, money)
     bool godAll = false;                // god mode for everyone is on
+    float healRate = 1.0f, xpRate = 1.0f;   // host multipliers (healing, experience)
     std::string movePoint;              // "x, z" of the host's last move order (empty: none)
     // Steam: our id (the code friends join with) and friends hosting a session right now
     std::string steamId;

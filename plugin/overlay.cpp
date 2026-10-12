@@ -236,6 +236,8 @@ int g_xpSkill = -1;           // -1: every skill
 float g_xpAmount = 100.0f;
 int g_xpLevels = 0;           // 0: experience points, 1: levels
 int g_moneyAmount = 1000;
+float g_healEdit = 1.0f, g_xpEdit = 1.0f;   // host multipliers being dragged
+bool g_healEditing = false, g_xpEditing = false;
 std::string g_armedKey;       // a risky button clicked once: the second click within 4 s confirms
 double g_armedAt = -1e9;
 
@@ -579,6 +581,19 @@ void DrawAdmin(const OverlayModel& m) {
     ImGui::BeginDisabled(g_moneyAmount == 0);
     if (ImGui::SmallButton("cats à l'argent commun")) Admin("money " + std::to_string(g_moneyAmount));
     ImGui::EndDisabled();
+    // host multipliers: sent when the slider is released (saved in KenshiCoop.ini)
+    auto rateSlider = [&](const char* label, const char* kind, float& edit, bool& editing, float value, const char* tip) {
+        if (!editing) edit = value;
+        ImGui::SetNextItemWidth(170.0f);
+        ImGui::SliderFloat(label, &edit, kc::admin::kMinRate, kc::admin::kMaxRate, "x%.1f", ImGuiSliderFlags_AlwaysClamp);
+        editing = ImGui::IsItemActive();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+        if (ImGui::IsItemDeactivatedAfterEdit()) Admin(std::string("rate ") + kind + " " + kc::admin::FormatRate(edit));
+    };
+    rateSlider("Soin", "heal", g_healEdit, g_healEditing, m.healRate,
+               "Vitesse de guérison de tous les persos (lit, sac de couchage, repos, à l'air libre). Hôte seulement, enregistré.");
+    rateSlider("Expérience", "xp", g_xpEdit, g_xpEditing, m.xpRate,
+               "Vitesse de gain d'expérience de tous les persos (combat, travail, entraînement). Hôte seulement, enregistré.");
     if (m.movePoint.empty()) ImGui::TextDisabled("Point marqué : aucun (clic droit au sol pour en marquer un).");
     else ImGui::TextDisabled("Point marqué : %s (dernier clic droit au sol).", m.movePoint.c_str());
     DrawSpawner(m);

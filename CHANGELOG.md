@@ -6,6 +6,8 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## v0.3.2 (en cours)
 
+- **Multiplicateurs de soin et d'expérience (hôte)** : deux curseurs « Soin » et « Expérience » (x1 à x10) dans la section Administration, enregistrés dans `KenshiCoop.ini` (`[host] heal_rate`, `xp_rate`), commandes `admin rate heal|xp <x>` et `admin rates`. L'hôte multiplie les constantes globales du jeu (`GlobalConstants` `0x2133DD0` : guérison +0x6C, guérison au repos +0x70, gain d'XP +0x138) tant qu'il héberge ; tous les persos de son monde en profitent (joueurs et PNJ), les clients reçoivent santé et compétences par la synchro habituelle. Aucun détour, aucun changement de protocole. À vérifier en jeu.
+
 - **Tests en jeu de la nuit du 12/10 (fusion des 6 lots)** : sacs à dos sans plantage ni inventaire abîmé (2 min de minage à x3), recrues données avec G et rangées sans écart, caméra libre, pas de pause du mode construction, journaux calmes, attaquants vus de loin, prospection chez le client, achat d'animaux chez le client (fenêtre, vente par l'hôte, argent identique). Corrigé pendant ces tests :
   - **déplacement vers un inventaire plein** : l'hôte vérifie maintenant qu'il reste une case avant de sortir l'objet de sa place (`FitsIn`) ; avant, l'objet était sorti puis remis ;
   - **objet neuf refusé** (commandes de test `giveitem`, `machinegive`) : détruit au lieu de rester tenu par personne ;

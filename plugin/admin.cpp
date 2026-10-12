@@ -112,6 +112,50 @@ void ApplyGods(kc::Session& s, KenshiWorld& w) {
     kenshi::SetGodModes(on);
 }
 
+// ---- host multipliers: the game's global constants, scaled while this game hosts a session
+float g_healRate = 1.0f, g_xpRate = 1.0f;
+std::wstring g_rateIni;
+adm::ScaledConstant<float> g_scHeal, g_scHealRest;
+adm::ScaledConstant<double> g_scXp;
+
+void ApplyRates(bool hosting) {
+    kenshi::GameRates cur, next;
+    kenshi::ReadGameRates(cur);
+    next = cur;
+    bool w = false;
+    if (hosting) {
+        w |= g_scHeal.Apply(cur.heal, g_healRate, next.heal);
+        w |= g_scHealRest.Apply(cur.healResting, g_healRate, next.healResting);
+        w |= g_scXp.Apply(cur.xp, g_xpRate, next.xp);
+    } else {
+        w |= g_scHeal.Restore(cur.heal, next.heal);
+        w |= g_scHealRest.Restore(cur.healResting, next.healResting);
+        w |= g_scXp.Restore(cur.xp, next.xp);
+    }
+    if (!w) return;
+    kenshi::WriteGameRates(next);
+    Log("admin: game constants: heal rate %g -> %g, resting heal rate %g -> %g, exp gain %g -> %g (multipliers heal x%.1f, xp x%.1f%s)",
+        double(cur.heal), double(next.heal), double(cur.healResting), double(next.healResting), cur.xp, next.xp, double(g_healRate),
+        double(g_xpRate), hosting ? "" : ", restored: not hosting");
+}
+
+std::string RatesText() {
+    return "soin x" + adm::FormatRate(g_healRate) + ", expérience x" + adm::FormatRate(g_xpRate);
+}
+
+std::string RunRate(const adm::Command& c, kc::Session& s, KenshiWorld& w) {
+    const bool heal = c.rateKind == adm::RateKind::Heal;
+    (heal ? g_healRate : g_xpRate) = c.rate;
+    const std::string v = adm::FormatRate(c.rate);
+    if (!g_rateIni.empty())
+        SaveIniValue(g_rateIni, "host", heal ? "heal_rate" : "xp_rate", v);
+    ApplyRates(true);
+    Log("admin: %s multiplier set to x%s", heal ? "healing" : "experience", v.c_str());
+    const std::string fr = std::string("L'hôte a réglé le multiplicateur ") + (heal ? "de soin" : "d'expérience") + " sur x" + v + ".";
+    for (const auto& [id, p] : s.players()) Notify(s, w, id, fr);
+    return RatesText();
+}
+
 bool Down(kenshi::Character* c) { return kenshi::IsDown(c) || kenshi::IsUnconscious(c) || kenshi::IsDead(c) || kenshi::IsRagdoll(c); }
 
 std::string Fmt(const char* fmt, double a, double b) {
@@ -497,6 +541,15 @@ std::string AdminRun(const std::string& line, kc::Session& s, KenshiWorld& w, bo
     case adm::Verb::Spawn: return done(RunSpawn(c, s, w, ok));
     case adm::Verb::List: return done(RunList(s, w));
     case adm::Verb::State: return done(RunState(s, w));
+    case adm::Verb::Rate: return done(RunRate(c, s, w));
+    case adm::Verb::Rates: {
+        kenshi::GameRates g;
+        kenshi::ReadGameRates(g);
+        char b[160];
+        snprintf(b, sizeof(b), " (jeu : heal=%.4f rest=%.4f exp=%.6f, base heal=%.4f exp=%.6f)", double(g.heal), double(g.healResting), g.xp,
+                 double(g_scHeal.active() ? g_scHeal.base() : g.heal), g_scXp.active() ? g_scXp.base() : g.xp);
+        return done(RatesText() + b);
+    }
     case adm::Verb::None: break;
     }
     ok = false;
@@ -511,10 +564,12 @@ void AdminUpkeep(kc::Session& s, KenshiWorld& w) {
             kenshi::SetGodModes({});
             Log("admin: no longer hosting: god modes switched off");
         }
+        ApplyRates(false);   // the game's own constants back (nothing written when never changed)
         return;
     }
     g_wasHosting = true;
     if (!w.Ready()) return;
+    ApplyRates(true);   // cheap: three loads, a store only when the game rewrote them or a multiplier changed
     if (w.WorldGeneration() != g_generation) {   // another world: its move point means nothing here
         g_generation = w.WorldGeneration();
         ForgetMoveOrderPoint();
@@ -570,6 +625,18 @@ bool AdminItemCatalog(kc::Session& s, KenshiWorld& w, std::vector<AdminItem>& it
     }
     for (const auto& m : cat.makers) makers.push_back({m.sid, m.name, m.weapons, m.models});
     return true;
+}
+
+void AdminInitRates(const std::wstring& iniPath, float heal, float xp) {
+    g_rateIni = iniPath;
+    g_healRate = adm::ClampRate(heal);
+    g_xpRate = adm::ClampRate(xp);
+    Log("admin: host multipliers from KenshiCoop.ini: healing x%s, experience x%s", adm::FormatRate(g_healRate).c_str(), adm::FormatRate(g_xpRate).c_str());
+}
+
+void AdminRates(float& heal, float& xp) {
+    heal = g_healRate;
+    xp = g_xpRate;
 }
 
 } // namespace kcp
