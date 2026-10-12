@@ -65,6 +65,12 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
    Voir ce qui ferme la conversation chez l'hôte (le jeu de l'hôte qui choisit seul ? la fenêtre de
    l'hôte ? un délai ?).
 9. **nass4 à 69 fps** (23:11:07) quand les autres sont à 150-190 : voir son « sync perf ».
+10. **Après un « TP moi » de l'hôte, les persos de nass4 repartent en courant tout seuls (23:11:30).**
+    « admin: teleported 2 of 2 character(s) of player 4 (nass4) to the host », puis nass4 voit ses persos
+    courir vers un point. Cause probable : la téléportation garde la destination et l'ordre de marche
+    d'avant ; le perso y retourne. C'est aussi l'échec des tests `suite` et `tpdown` (« TP admin : le
+    perso du joueur arrive près de l'hôte » : 193 à 597 unités). À faire : après une TP admin, vider la
+    destination et les ordres de déplacement (comme un « stop »), sans toucher aux travaux permanents.
 4. **Commerce** (connu, 0.3.2) : la fenêtre se ferme quand la copie du marchand est remplacée par le
    vrai PNJ ; à faire : faire passer la fenêtre sur le vrai marchand (`ShopTrader`+0xC0) au lieu de la
    fermer.
