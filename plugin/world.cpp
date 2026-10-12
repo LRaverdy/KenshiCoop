@@ -243,6 +243,11 @@ void KenshiWorld::ResetWorldBound() {
     postureSince_.clear();
     postureFixed_.clear();
     carriedHere_.clear();
+    carrierOf_.clear();
+    carryCheckAt_.clear();
+    carryAnim_.clear();
+    standTry_.clear();
+    freeToldAt_.clear();
     handTools_.clear();
     applied_.clear();
     replicatedAt_.clear();
@@ -836,8 +841,35 @@ void KenshiWorld::Reconcile(const std::vector<kc::Handle>& known, const std::vec
         return false;
     };
     int removed = 0;
+    // 0.3.4 (A_FAIRE 12/10 point 2): the squads here that hold one of our copies of the host's
+    // characters. On rob's side the copy of a knocked-out bandit the host had (followed into a local
+    // bandit squad by our game, 22:11:11) vanished one second after a stranger of that squad was
+    // removed (22:16:51, "no longer in the game", no destroy seen): removing the last standing member
+    // of a squad can take the knocked-out ones along. Such a stranger stays (asked again in a minute).
+    std::unordered_set<void*> copySquads;
+    bool copySquadsBuilt = false;
+    auto sharesSquadWithCopy = [&](kenshi::Character* c) {
+        if (!copySquadsBuilt) {
+            copySquadsBuilt = true;
+            for (kenshi::Character* o : scratch_) {
+                kc::Handle oh;
+                if (kenshi::GetHandle(o, oh) && taken.count(oh))
+                    if (void* sq = kenshi::SquadOf(o)) copySquads.insert(sq);
+            }
+        }
+        void* sq = kenshi::SquadOf(c);
+        return sq && copySquads.count(sq) != 0;
+    };
     for (Stranger& s : strangers) {
         if (s.used || now - s.since < kLinger || !inHostArea(s.c)) continue;
+        if (sharesSquadWithCopy(s.c)) {
+            std::string name;
+            kenshi::CharacterName(s.c, name);
+            Log("not removed: the local character '%s' the host does not have is in a squad here with our copy of a host character (removing it could take that copy along)",
+                name.c_str());
+            strangerSince_[s.h] = now + 60.0;
+            continue;
+        }
         if (kenshi::InPlayerSquad(s.c)) {   // its portrait is in the squad bar: never deleted (kenshi::DestroyObject refuses it too)
             std::string name;
             kenshi::CharacterName(s.c, name);
@@ -924,12 +956,14 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         }
     }
     applied_.insert(c);
-    // on someone's shoulder here: never pulled, stood up or teleported off it
-    if (carriedHere_.count(h) && kenshi::IsRagdoll(c)) return;
+    // on someone's shoulder here: never pulled, stood up or teleported off it (0.3.4: as long as
+    // someone here really carries it; a stale mark left a body lying for good while the host's walked)
+    if (carriedHere_.count(h) && StillCarried(h, c) && kenshi::IsRagdoll(c)) return;
     kc::EntityState& last = lastTarget_[h];
     last = target;
     last.flags = latest.flags;
     const double now = NowSeconds();
+    if (!carriedHere_.count(h)) CheckStaleCarryAnim(h, c, now);
     if (CaptiveHold(h, c)) { lastDest_.erase(h); return; }   // lot D: the host keeps it in a cage
     // Posture: lying on the ground (knocked out, knocked down) or standing must match the host.
     // Deaths come through vitals; getting up is normally decided by the AI, which clients do not run.
@@ -984,7 +1018,21 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
             if (!hostDown) {
                 if (kc::motion::MayStand(pf)) {
                     HostCallScope scope;
-                    kenshi::StandUp(c);
+                    const bool ok = kenshi::StandUp(c);
+                    // 0.3.4 (A_FAIRE 12/10 point 12, "the name moves but not the body"): a copy the host
+                    // has standing that stays down here is told (once in 30 s per body), with what holds
+                    // it; the stand-up goes on every second (ragdoll off, posture normal).
+                    StandTry& st = standTry_[h];
+                    if (st.tries == 0) st.since = now;
+                    ++st.tries;
+                    if (st.tries >= 3 && now - st.toldAt > 30.0) {
+                        st.toldAt = now;
+                        int in = 0;
+                        kenshi::ReadInSomething(c, in);
+                        Log("posture: %s still down here %.0f s after %d stand-ups while the host's %s (ragdoll %d, unconscious %d, inSomething %d, call %s)",
+                            KeyOf(h).c_str(), now - st.since, st.tries, (latest.flags & kc::kFlagMoving) ? "walks" : "stands",
+                            int(kenshi::IsRagdoll(c)), int(kenshi::IsUnconscious(c)), in, ok ? "ok" : "failed");
+                    }
                 }
                 fixed = now;
             } else if (kc::motion::MayFall(book, pf, now) && ReadyToFall(h, c, FallSpot(h, target), now)) {
@@ -1004,6 +1052,10 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         }
     } else {
         postureSince_.erase(h);
+        if (auto st = standTry_.find(h); st != standTry_.end()) {
+            if (st->second.tries >= 3) Log("posture: %s up again after %d stand-ups (%.1f s)", KeyOf(h).c_str(), st->second.tries, now - st->second.since);
+            standTry_.erase(st);
+        }
     }
     kc::Vec3 local;
     if (!kenshi::GetPosition(c, local)) return;
@@ -1190,6 +1242,102 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
             local.x, local.z, target.pos.x, target.pos.z, latest.pos.x, latest.pos.z, err, after.x, after.z, hostMoving ? 1 : 0,
             kenshi::IsMoving(c) ? 1 : 0, latest.combatTarget ? 1 : 0);
     }
+}
+
+// Client (0.3.4): is that body really on someone's shoulder here? Checked at most once a second.
+bool KenshiWorld::StillCarried(const kc::Handle& h, kenshi::Character* body) {
+    const double now = NowSeconds();
+    double& at = carryCheckAt_[h];
+    if (now - at < 1.0) return true;
+    at = now;
+    auto it = carrierOf_.find(h);
+    kenshi::Character* carrier = it != carrierOf_.end() ? Find(it->second) : nullptr;
+    kc::Handle local;
+    if (carrier && kenshi::ReadCarried(carrier, local) && kenshi::Resolve(local) == body) return true;
+    carriedHere_.erase(h);
+    carrierOf_.erase(h);
+    carryCheckAt_.erase(h);
+    Log("carry: %s is on nobody's shoulder here any more: let go (posture and position follow the host again)", KeyOf(h).c_str());
+    return false;
+}
+
+// Client (0.3.4, A_FAIRE 12/10 points 11-12): a body nobody carries here that still plays the "being
+// carried" animation is drawn hanging on a shoulder nobody has (rob carried Meow out of her bedroll at
+// 23:18:52 and put her down 3 s later; nass4 and Geoffrey did not see her again until she had been
+// put in a bed and taken out, 17 minutes later). The host's own end of the carry comes as an animation
+// event; when it did not take, the mode is switched off here after 2 s.
+void KenshiWorld::CheckStaleCarryAnim(const kc::Handle& h, kenshi::Character* c, double now) {
+    CarryAnimCheck& k = carryAnim_[h];
+    if (now - k.at < 2.0) return;
+    k.at = now;
+    kenshi::AnimModes m;
+    if (!kenshi::ReadAnimModes(c, m) || !m.carried) {
+        k.since = -1;
+        return;
+    }
+    if (k.since < 0) {
+        k.since = now;
+        return;
+    }
+    AnimReplayScope scope;
+    const bool ok = kenshi::CallSetCarryMode(c, false, false, false);
+    kenshi::AnimModes after;
+    const int still = kenshi::ReadAnimModes(c, after) ? int(after.carried) : -1;
+    static kc::LogLimiter lim{4, 10.0};
+    if (lim.Allow(now))
+        Log("carry: %s still played the \"being carried\" animation %.0f s after it was put down here: switched off (%s, carried now %d)", KeyOf(h).c_str(),
+        now - k.since, ok ? "ok" : "call failed", still);
+    k.since = still == 1 ? now : -1;
+}
+
+// Client (0.3.4, A_FAIRE 12/10 point 13): a dormant copy (the host no longer streams it to us) stays
+// where the host last had it. Apply was just given a still state (no destination, no fight); our
+// game's far update (3b) may still have moved it a little since, or its walk may still run: halted,
+// and put back where the host last had it beyond a few units. Never a body (ragdoll physics), a
+// carried or caged one.
+void KenshiWorld::HoldStill(const kc::Handle& h, const kc::EntityState& at) {
+    constexpr float kDrift = 8.0f;
+    kenshi::Character* c = Find(h);
+    if (!c || carriedHere_.count(h) || CaptiveHold(h, c) || kenshi::IsRagdoll(c) || kenshi::IsDead(c)) return;
+    kc::Vec3 p;
+    if (!kenshi::GetPosition(c, p)) return;
+    HostCallScope scope;
+    if (kenshi::IsMoving(c)) {
+        kenshi::Halt(c);
+        lastDest_.erase(h);
+        ++dormantHalts;
+    }
+    const float d = Dist(p, at.pos);
+    if (d <= kDrift) return;
+    kenshi::Teleport(c, at.pos, at.rot);
+    lastDest_.erase(h);
+    ++dormantPutBack;
+    uint32_t held = 0;
+    if (dormantLog_.Allow(NowSeconds(), &held))
+        Log("dormant: %s (no longer sent to us) had moved %.0f units here from where the host last had it: put back%s", KeyOf(h).c_str(), d,
+            held ? (" [" + std::to_string(held) + " more such lines not written]").c_str() : "");
+}
+
+// Tests ("posturecheck"): copies the host last had standing (not down, not dead, not held captive
+// on the host) whose body here lies, is in a bed or a cage, or is marked carried by nobody.
+int KenshiWorld::PostureMismatches(std::string& keys) {
+    int n = 0;
+    for (const auto& [h, t] : lastTarget_) {
+        if (t.flags & (kc::kFlagDown | kc::kFlagDead)) continue;
+        if (hostCaptive_.count(h) || captiveHold_.count(h)) continue;
+        kenshi::Character* c = Find(h);
+        if (!c) continue;
+        int in = 0;
+        kenshi::ReadInSomething(c, in);
+        const bool carried = carriedHere_.count(h) != 0;
+        const bool down = !carried && (kenshi::IsRagdoll(c) || kenshi::IsDead(c));
+        kenshi::AnimModes m;
+        const bool hangs = !carried && kenshi::ReadAnimModes(c, m) && m.carried;   // "being carried" by nobody
+        if (!down && in == 0 && !hangs && !(carried && !StillCarried(h, c))) continue;
+        ++n;
+        if (keys.size() < 600) keys += " " + KeyOf(h) + (down ? "/down" : "") + (in ? "/in" + std::to_string(in) : "") + (hangs ? "/carriedanim" : "");
+    }
+    return n;
 }
 
 void KenshiWorld::NoteEdited(kenshi::Character* c) {
@@ -1513,6 +1661,7 @@ void KenshiWorld::ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& 
         kenshi::DropCarried(c, deadBody);
         if (!deadBody && body && kenshi::IsRagdoll(body)) kenshi::SetRagdoll(body, false);   // the attach step left its flag on
         carriedHere_.erase(dropped);
+        carrierOf_.erase(dropped);
         fellAt_.erase(dropped);
         fallPrep_.erase(dropped);
         lastDest_.erase(dropped);
@@ -1520,18 +1669,20 @@ void KenshiWorld::ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& 
         postureBook_.erase(dropped);   // put down by the host: a new fall, whatever happened before
         fallFrom_.erase(dropped);
         fallShift_.erase(dropped);
-        Log("carry: %sputs a body down as on the host; it falls where the host's lies (ragdoll %d)", carry ? "swaps and " : "", body ? int(kenshi::IsRagdoll(body)) : -1);
+        Log("carry: %s%s puts %s down as on the host; it falls where the host's lies (ragdoll %d)", carry ? "swaps and " : "", KeyOf(h).c_str(),
+            KeyOf(dropped).c_str(), body ? int(kenshi::IsRagdoll(body)) : -1);
     }
     if (carry && who && (!carrying || kenshi::Resolve(local) != who)) {
         // only once it really is on the shoulder is it left alone by posture and position code
         const bool ok = kenshi::CarryCharacter(c, who);
-        if (ok) carriedHere_.insert(carried);
-        else carriedHere_.erase(carried);
+        if (ok) { carriedHere_.insert(carried); carrierOf_[carried] = h; }
+        else { carriedHere_.erase(carried); carrierOf_.erase(carried); }
         fallPrep_.erase(carried);
         lastDest_.erase(carried);
-        Log("carry: a body goes on the shoulder as on the host (%s)", ok ? "ok" : "refused by the game");
+        Log("carry: %s goes on the shoulder of %s as on the host (%s)", KeyOf(carried).c_str(), KeyOf(h).c_str(), ok ? "ok" : "refused by the game");
     } else if (carry && who) {
         carriedHere_.insert(carried);
+        carrierOf_[carried] = h;
     }
 }
 
@@ -1772,6 +1923,11 @@ int KenshiWorld::TeleportCharacters(const std::vector<kc::Handle>& who, const kc
         // a later frame, laid down there, and checked once lying (UpdateReRagdolls).
         const bool body = kenshi::IsRagdoll(c);
         ReRagdoll r{h, 0, p, rot, body, 0, c};
+        // The walk and the orders it had end here, as with the game's "stop" (A_FAIRE 12/10 point 10:
+        // after "TP moi" nass4's characters ran back to where they were going, and the suite's "TP
+        // admin" check found the player's character 193-597 units from the host). Its permanent jobs
+        // stay: it goes back to them by itself, from its new place.
+        const bool stopped = kenshi::StopCharacter(c);
         if (body) {
             kenshi::SetRagdoll(c, false);
             r.stage = ReRagdoll::Stand;
@@ -1782,7 +1938,7 @@ int KenshiWorld::TeleportCharacters(const std::vector<kc::Handle>& who, const kc
             r.stage = ReRagdoll::Check;
             r.at = now + 0.3;   // checked a moment later: a character the game was still moving may stay put
             ++n;
-            Log("tp: %s moved", KeyOf(h).c_str());
+            Log("tp: %s moved (walk and orders %s)", KeyOf(h).c_str(), stopped ? "ended" : "NOT ended: call failed");
         } else {
             continue;
         }
@@ -1818,6 +1974,12 @@ void KenshiWorld::UpdateReRagdolls() {
             it->at = now + 0.3;
             break;
         case ReRagdoll::Check:
+            // still walking off (an order given in the same frame, an AI decision): stopped once more
+            if (!it->body && kenshi::IsMoving(c) && !it->restopped) {
+                it->restopped = true;
+                Log("tp: %s still walking %.0f units from where it was sent: stopped again (%s)", KeyOf(it->h).c_str(), off,
+                    kenshi::StopCharacter(c) ? "ok" : "call failed");
+            }
             if (off >= kThere && ++it->tries < kTries) {
                 if (kenshi::IsRagdoll(c)) {
                     kenshi::SetRagdoll(c, false);

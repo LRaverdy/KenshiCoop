@@ -238,6 +238,13 @@ void Session::UpdateFarCharacters(double now) {
     world_.SetFarCharacters(hs);
 }
 
+void Session::DormantCopies(std::vector<std::pair<Handle, Vec3>>& out) const {
+    out.clear();
+    const double now = clock_();
+    for (const auto& [id, e] : entities_)
+        if (e.present && !e.container && !e.squad && !e.buf.empty() && Dormant(e, now)) out.emplace_back(e.handle, e.buf.back().s.pos);
+}
+
 Session::StandInStats Session::standInStats() const {
     StandInStats s;
     s.radius = cfg_.standInRadius;

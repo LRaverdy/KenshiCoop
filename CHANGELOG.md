@@ -69,6 +69,45 @@ les clients 0.3.4 s'en protègent seuls).
   du marchand : vérifié 1 s après l'ouverture et remis sur le vrai marchand quand il change (« trade:
   the merchant's cats here … set to the host's … », « DID NOT STICK » s'il ne tient pas). Expérience
   `tradeswap`.
+Pas de changement de protocole (36, comme la 0.3.3).
+
+- **États des persos chez les clients (branche `fix-char-states`, bugs du 12/10 au soir ; corrigé dans le
+  code et les tests unitaires, à tester en jeu)** :
+  - **TP admin : plus de course vers l'ancienne destination** (A_FAIRE point 10) : chaque perso
+    téléporté reçoit le « stop » du jeu (`kenshi::StopCharacter` : `CharMovement::halt` puis la file
+    d'ordres vidée par `AITaskSystem` `0x5074A0`, nouvelle fonction `FnAiTasksClear`, ce que fait le
+    bouton stop du jeu), ses travaux permanents restent ; arrêté une seconde fois s'il marche encore au
+    contrôle 0,3 s après. Avant : « TP moi » de nass4 (23:11:30) suivi d'une course vers l'ancienne
+    destination, échecs de `suite` et `tpdown` (193 à 597 unités). Expérience `tpstop`.
+  - **Copies gardées hors des lits et des cages** (point 11, Meow) : toutes les 2 s, chaque copie que
+    l'hôte ne tient dans rien est sortie du lit ou de la cage où elle serait encore chez le client
+    (`IWorld::EnsureFree`), pas seulement quand le « free » arrive, avec une ligne si elle y reste.
+    Cause trouvée pour Meow : rob l'a portée hors de son sac de couchage (23:18:52) ; l'étape
+    d'attache du portage (`0x5CED90`) la sortait déjà du lit chez les clients (`setInBed(false)`), d'où
+    l'absence de « out of its bed » au « free » de 23:18:53 ; elle a été posée 3 s plus tard avec
+    « ragdoll 1 ». Rien dans le journal ne montre ce qui la cachait ensuite : voir le point suivant.
+  - **Corps posé, copie debout chez l'hôte** (point 12, « le nom bouge mais pas le corps ») : un corps
+    n'est plus tenu pour « porté » chez le client que tant qu'un perso local le porte vraiment (avant,
+    une marque restée l'empêchait à jamais d'être relevé ou déplacé) ; un corps posé qui joue encore
+    l'animation « porté » 2 s après la perd ; une copie que l'hôte a debout et qui reste à terre après 3
+    relevages est signalée avec ce qui la tient ; les lignes de portage nomment porteur et corps.
+    Commande `posturecheck` (copies debout chez l'hôte mais couchées, au lit ou « portées » par
+    personne ici), expérience `bedfree`, point ajouté à `carry`.
+  - **Copies en sommeil figées** (point 13, bandits près de nass4) : un PNJ que l'hôte n'envoie plus
+    reste là où l'hôte l'avait en dernier : ni destination ni combat (son dernier état disait « marche
+    vers X » ou « combat Y », que la mise à jour lointaine du lot 3b exécutait), arrêté s'il marche,
+    remis en place au-delà de 8 unités (`IWorld::HoldStill`). Le gain de FPS reste (toujours la mise
+    à jour lointaine). Commande `dormant`, point ajouté à `farfps`.
+  - **Corps disparu chez rob** (point 2) : la copie du bandit à terre, suivie dans une escouade locale
+    de bandits inconnus de l'hôte (22:11:11), a quitté le jeu de rob une seconde après le retrait d'un
+    de ces inconnus (22:16:51-52, sans destruction vue) ; un inconnu dans la même escouade locale
+    qu'une de nos copies n'est plus retiré (« not removed: … in a squad here with our copy »). Chaque
+    copie revenue après une absence est dite avec sa durée (« back here (made) 2.1 s after »), une copie
+    pas revenue 20 s après l'est une fois (« still not back »). Les délais 2 s, 10 s, 30 s, 1 min ne
+    concernent que les doublures que nous avons créées ; une copie venue de la sauvegarde est
+    recréée dès 1,5 s.
+  - Tests unitaires : `TestCaptives` (copie au lit alors que l'hôte l'a libre), `TestPerPlayerStreaming`
+    (PNJ en sommeil figé, retour d'une doublure dit). 54907 vérifications.
 
 ## v0.3.3 (12 octobre 2026)
 

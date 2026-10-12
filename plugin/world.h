@@ -82,6 +82,12 @@ public:
     void SetRemoteInterest(const std::vector<kc::Handle>& handles) override;   // 0.3.1
     void ResyncCharacter(const kc::Handle& h) override;                        // 0.3.1
     void SetFarCharacters(const std::vector<kc::Handle>& handles) override;    // 3b
+    void HoldStill(const kc::Handle& h, const kc::EntityState& at) override;   // 0.3.4: dormant copies frozen
+    // tests ("dormant"): dormant copies frozen here since the start: stopped walking, put back
+    std::atomic<long long> dormantHalts{0}, dormantPutBack{0};
+    // tests ("posturecheck", 0.3.4): copies the host has standing whose body here lies, sits in a bed or
+    // a cage, or hangs on nobody's shoulder (keys in `keys`); none should stay so
+    int PostureMismatches(std::string& keys);
     // Client (GameWorld::destroy hook, any thread): the local game dropped that character with its
     // zone (justUnloaded) or destroyed it; told when a stand-in of ours is found gone.
     void NoteCharacterDestroyed(void* chr, bool justUnloaded, const char* info);
@@ -182,6 +188,8 @@ public:
     // ---- map markers (plugin/map.cpp): hostile squads near the players (host)
     void ReadMapThreats(const std::vector<kc::Vec3>& centers, float radius, std::vector<kc::MapThreat>& out) override;
     void ApplyCaptive(const kc::Handle& h, const kc::CaptiveState& s) override;
+    bool EnsureFree(const kc::Handle& h) override;   // 0.3.4: free on the host: out of any bed or cage here
+    int captiveFreed = 0;                            // tests: copies EnsureFree took out of a bed or cage
     bool CaptiveHold(const kc::Handle& h, kenshi::Character* c);   // client: the host keeps it in a cage here
     // Hooks (host): the game asked for a trade window for another player's character (any thread);
     // the host's own trade window (to show it again when another player changed the stock).
@@ -552,6 +560,23 @@ private:
     std::unordered_multimap<uint32_t, kc::Handle> bySerial_;          // this frame's characters by handle serial (FindMoved)
     bool bySerialBuilt_ = false;
     std::unordered_set<kc::Handle, HandleHash> carriedHere_;
+    // client (0.3.4): who carries each body here (the host's handle of the carrier), to let go of a
+    // body nobody here carries any more (left "carried": never stood up, never moved)
+    std::unordered_map<kc::Handle, kc::Handle, HandleHash> carrierOf_;
+    std::unordered_map<kc::Handle, double, HandleHash> carryCheckAt_;
+    bool StillCarried(const kc::Handle& h, kenshi::Character* body);
+    // client (0.3.4, A_FAIRE 12/10 point 12): copies the host has standing that stay down here after
+    // being stood up: since when, how many stand-ups, last time told
+    struct StandTry { double since = 0; int tries = 0; double toldAt = -1e9; };
+    std::unordered_map<kc::Handle, StandTry, HandleHash> standTry_;
+    std::unordered_map<kc::Handle, double, HandleHash> freeToldAt_;    // client: EnsureFree's "stays in its bed" line, per body
+    // client (0.3.4): a body put down here that still plays the "being carried" animation (drawn on a
+    // shoulder nobody has): checked every 2 s, switched off after 2 s
+    struct CarryAnimCheck { double at = 0, since = -1; };
+    std::unordered_map<kc::Handle, CarryAnimCheck, HandleHash> carryAnim_;
+    void CheckStaleCarryAnim(const kc::Handle& h, kenshi::Character* c, double now);
+    kc::LogLimiter freeLog_{6, 10.0};                                   // client: EnsureFree's lines
+    kc::LogLimiter dormantLog_{4, 10.0};                                // client: HoldStill's lines
     std::unordered_map<kc::Handle, kc::CharBounties, HandleHash> hostBounties_;   // client: the host's, shown, not written
     struct HandTool { std::string sid; void* item = nullptr; kenshi::Character* who = nullptr; };
     std::unordered_map<kc::Handle, HandTool, HandleHash> handTools_;   // client: tools we put in hands   // client: host characters someone carries here
@@ -726,6 +751,7 @@ private:
         const void* chr;
         Stage stage = Check;
         bool noRelay = false;   // it took its old place back once when laid down: left for the game to lay down
+        bool restopped = false; // 0.3.4: found walking at the check after the teleport: stopped once more
     };
     std::vector<ReRagdoll> reRagdoll_;                                     // host: teleported bodies to lay down again
     void UpdateReRagdolls();

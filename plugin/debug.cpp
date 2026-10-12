@@ -1919,6 +1919,32 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         kenshi::WithSelection(me, [&] { ok = kenshi::CallNewPlayerTaskOn(bed ? 258 : 87, best, op, dest); });   // USE_BED_ORDER / OPERATE_MACHINERY
         return (ok ? "ok " : "err ") + bestName + " at " + std::to_string(int(std::sqrt(bestD)));
     }
+    if (cmd == "localbed") {   // localbed <squadIndex>: (client, 0.3.4 test) our copy alone goes into the nearest free bed here (a stale bed: the host has it free)
+        if (!s.isClient()) return "err client only";
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[idx]);
+        kc::Vec3 p, op;
+        if (!kenshi::GetPosition(me, p)) return "err";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(p, 2000, objs);
+        void* best = nullptr;
+        float bestD = 1e30f;
+        for (void* o : objs) {
+            uint64_t operators = 0;
+            if (kenshi::BuildingFunctionOf(o) != 6 || (kenshi::ReadOperatorCount(o, operators) && operators) || !kenshi::ObjectPosition(o, op)) continue;
+            const float d = (op.x - p.x) * (op.x - p.x) + (op.z - p.z) * (op.z - p.z);
+            if (d < bestD) { bestD = d; best = o; }
+        }
+        if (!best) return "err no free bed around";
+        HostCallScope scope;
+        const bool ok = kenshi::SetInBed(me, true, best);
+        int v = -1;
+        kenshi::ReadInSomething(me, v);
+        return (ok ? "ok inSomething=" : "err inSomething=") + std::to_string(v);
+    }
     if (cmd == "insomething") {   // insomething <squadIndex>: 0 nothing, 1 in bed, 2 in a cage
         size_t idx = 0;
         in >> idx;
@@ -1947,6 +1973,33 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
           << " dormant=" << st.dormant << " leftfar=" << st.leftFar << " farset=" << w.FarCharacterCount() << " standins_near=" << st.standInsNear
           << " standins_far=" << st.standInsFar << " radius=" << st.radius;
         return o.str();
+    }
+    if (cmd == "dormant") {   // dormant: client (0.3.4), the copies no longer streamed to us and how far each is from where the host last had it
+        if (!s.isClient()) return "err client only";
+        std::vector<std::pair<kc::Handle, kc::Vec3>> copies;
+        s.DormantCopies(copies);
+        float maxD = 0;
+        int over20 = 0, found = 0;
+        for (const auto& [h, at] : copies) {
+            kc::Vec3 p;
+            kenshi::Character* c = w.Find(h);
+            if (!c || !kenshi::GetPosition(c, p)) continue;
+            ++found;
+            const float d = std::sqrt((p.x - at.x) * (p.x - at.x) + (p.z - at.z) * (p.z - at.z));
+            maxD = std::max(maxD, d);
+            over20 += d > 20.0f ? 1 : 0;
+        }
+        std::ostringstream o;
+        o << "ok n=" << copies.size() << " found=" << found << " maxdrift=" << int(maxD) << " over20=" << over20 << " halts=" << w.dormantHalts.load()
+          << " putback=" << w.dormantPutBack.load();
+        return o.str();
+    }
+    if (cmd == "posturecheck") {   // posturecheck: client (0.3.4), copies the host has standing that lie, sit in a bed or cage, or hang on nobody here
+        if (!s.isClient()) return "err client only";
+        std::string keys;
+        const int n = w.PostureMismatches(keys);
+        return "ok n=" + std::to_string(n) + " freed=" + std::to_string(w.captiveFreed) + " remade=" + std::to_string(s.standInsRemade()) +
+               (keys.empty() ? std::string() : " keys=" + keys.substr(1));
     }
     if (cmd == "movestats")   // movestats: host, movement updates of characters near a client player since the start (3f)
         return "ok full=" + std::to_string(w.moveNearFull.load()) + " outofview=" + std::to_string(w.moveNearOutOfView.load()) +

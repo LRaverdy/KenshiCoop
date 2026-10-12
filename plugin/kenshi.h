@@ -307,6 +307,8 @@ enum Fn : int {
     // ---- 0.3.4: a client's right click on a character, and the game's "can talk" check
     FnCharacterCursor,          // void PlayerInterface::<character under the cursor>(Character*)   (our name, 0x7FB410: the cursor over a character; with +0x2F3, right click this frame, it gives the order: talk, attack, loot...)
     FnCharacterCanTalk,         // bool Character::<can be talked to>()   (our name, 0x67AC00: its Dialogue, +0x280, has a "talk to me" line for the nearest selected character)
+    // ---- 0.3.4: admin teleport ends the walk and the orders (A_FAIRE 12/10 point 10)
+    FnAiTasksClear,             // void AITaskSystem::<clear tasks>()   (our name, 0x5074A0: deletes every queued order (+0x80, count +0x78); what PlayerInterface::stopCharactersMovement (0x7F6470) calls on Character+0x650 -> +0x20 after CharMovement::halt; permanent jobs untouched)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -958,6 +960,9 @@ bool WritePace(Character* c, uint8_t gait, float pace);
 bool SetPositionSimple(Character* c, const kc::Vec3& pos);
 bool IsMoving(const Character* c);
 bool Halt(Character* c);
+// The game's "stop" for one character (what PlayerInterface::stopCharactersMovement does to each
+// selected one): halt the walk, then clear its queued orders (AITaskSystem). Permanent jobs stay.
+bool StopCharacter(Character* c);
 bool CallSetFrameSpeed(float speed);
 bool CallSetGameSpeedUi(float speed);   // as the speed buttons and keys do (no sound): the buttons show it too
 bool CallUserPause(bool paused);

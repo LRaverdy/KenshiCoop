@@ -262,6 +262,8 @@ const FunctionSig kFunctions[FnCount] = {
     // ---- 0.3.4: a client's click on a character
     {"PlayerInterface::<character under the cursor>", 0x7FB410, {0x40, 0x55, 0x53, 0x41, 0x54, 0x48, 0x8D, 0x6C, 0x24, 0xB9, 0x48, 0x81}},
     {"Character::<can be talked to>", 0x67AC00, {0x48, 0x8B, 0x89, 0x80, 0x02, 0x00, 0x00, 0xE9, 0x7A, 0x8B, 0x9A, 0xFF}},
+    // ---- 0.3.4: admin teleport
+    {"AITaskSystem::<clear tasks>", 0x5074A0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x48, 0x83, 0xC1}},
 };
 
 namespace {
@@ -4645,6 +4647,21 @@ bool Halt(Character* c) {
     void* m = Movement(c);
     void* fn = m ? VSlot(m, slot::CM_halt) : nullptr;
     return fn && CallVoid(fn, m);
+}
+
+namespace {
+bool AiTasksClearSeh(void* ts) {
+    __try { reinterpret_cast<void (*)(void*)>(FnAddr(FnAiTasksClear))(ts); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+bool StopCharacter(Character* c) {
+    if (!IsCharacter(c)) return false;
+    const bool halted = Halt(c);
+    void* ai = nullptr;
+    void* ts = nullptr;   // Character -> AI (+0x650) -> AITaskSystem (+0x20), as stopCharactersMovement reads it
+    if (!Rd(c, off::CH_ai, ai) || !ai || !Rd(ai, 0x20, ts) || !ts) return halted;
+    return AiTasksClearSeh(ts) && halted;
 }
 
 bool CallSetFrameSpeed(float speed) {

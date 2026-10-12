@@ -284,6 +284,15 @@ Ordre dans `Tick()` (`main.cpp`) :
     persos ou des membres de l'escouade près d'eux (mêmes centres que l'hôte), `spawns_per_frame` (2) par image au plus, les plus proches d'abord ; une doublure perdue
     revient après 2 s, 10 s, 30 s, 1 min, 2 min ; un modèle refusé par la fabrique attend 30 s à 10 min.
   - Client (3b) : les persos en sommeil (pas squad, présents) sont donnés au monde (`IWorld::SetFarCharacters`, à chaque changement et toutes les 5 s) ; `HookView::farAway` les retire des persos que `hk_charUpdateView` met « dans la vue » : le jeu leur donne sa mise à jour lointaine (déplacement réduit, pas d'animation complète) au lieu de la complète. Un perso que l'hôte renvoie en sort dans la même image. Pas de changement de protocole.
+  - Client (0.3.4) : un perso en sommeil est piloté avec un état immobile (son dernier état sans
+    `kFlagMoving`, destination = position, sans cible de combat ; la session ne lui impose plus de
+    combat), puis `IWorld::HoldStill` l'arrête s'il marche et le remet à sa dernière position connue
+    au-delà de 8 unités : la mise à jour lointaine ne le fait plus marcher vers la destination ou la
+    cible qu'il avait quand l'hôte a cessé de l'envoyer.
+  - Client (0.3.4) : une copie qui quitte notre jeu (`lostAt`) puis revient (trouvée, adoptée,
+    recréée) est journalisée avec la durée d'absence (`NoteBackHere`) ; pas revenue 20 s après alors
+    qu'elle est envoyée près de nos persos : une ligne. `Reconcile` ne retire plus un inconnu qui est
+    dans la même escouade locale qu'une de nos copies.
   - Hôte (3f) : `hk_moveUpdate` coupe en morceaux de 0,4 s au plus (8 au plus) un pas de 0,5 s ou plus d'un perso proche d'un joueur client et dans la vue, pour qu'il reste sur la mise à jour complète (murs du navmesh) ; compteurs `movestats`.
   - Mesure (3b) : `main.cpp` chronomètre chaque tick vivant (session, `EndFrame`, hors canal de test) ; une ligne par minute `sync perf` (client) ou `host perf` (hôte) ; commande `perf`.
   - Resync automatique de zone (`kc::ZoneHealth`, `Session::ZoneResync`) : trois rapports de suite
@@ -513,7 +522,10 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
      2 relevages par minute au plus ; deux chutes de suite qui ne tiennent pas (pas à terre 2 s
      après) : plus rien pendant la minute. Un corps est relevé pour retomber à la place de
      l'hôte seulement à plus de 20 unités, 10 s d'écart au moins. Un K.-O. de l'hôte tombe
-     inconscient (sinon le jeu local le relève). **Mort chez l'hôte** (`motion::DeadBodyStep`) :
+     inconscient (sinon le jeu local le relève). (0.3.4) Un corps n'est « porté » (`carriedHere_`) que
+     tant que son porteur local le porte (`StillCarried`, chaque seconde) ; un corps posé qui joue
+     encore l'animation « porté » 2 s plus tard la perd (`CheckStaleCarryAnim`) ; une copie debout
+     chez l'hôte encore à terre après 3 relevages est journalisée (`standTry_`). **Mort chez l'hôte** (`motion::DeadBodyStep`) :
      vivant ici (doublure recréée) il meurt et tombe ; mort mais debout alors que celui de l'hôte
      est en ragdoll, il est recouché ; jamais relevé ni ranimé ;
   3. impose l'allure de l'hôte ;
@@ -792,7 +804,10 @@ les mêmes partout) ; rien ne part vers l'hôte. Chez l'hôte, le bouton refuse 
    enlevé, peine) et envoie ce qui a changé ; un personnage libéré part une fois « vide », puis
    est oublié. Toutes les 5 s, tous les captifs repartent.
 2. Le client garde l'état de l'hôte par netId, l'impose dès réception puis toutes les 2 s
-   (`ApplyCaptive`) : `setPrisonMode` sur la même cage locale, puis les champs.
+   (`ApplyCaptive`) : `setPrisonMode` sur la même cage locale, puis les champs. (0.3.4) Toutes les 2 s
+   aussi, chaque copie présente depuis plus de 6,5 s que l'hôte ne tient dans rien passe par
+   `IWorld::EnsureFree` : sortie du lit (`setInBed(false)`) ou de la cage où elle serait encore ici,
+   marques de captivité de l'hôte effacées, ligne si elle y reste.
 3. Hooks : `setPrisonMode`, `setChainedMode` (personnages répliqués) et `setSlaveState` sont
    refusés chez un client hors `HostCallScope`.
 4. `KenshiWorld::Apply` saute les corrections de position d'un personnage que l'hôte tient en

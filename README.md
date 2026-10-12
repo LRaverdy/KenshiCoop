@@ -122,7 +122,8 @@ recrutement au centre d'emploi, refusés avec un message.
   `admin spawn 580-gamedata.base 20 here`, `admin spawn Iron_Plates 10 2`), `admin list` (tape
   `admin` pour l'aide). Un client n'a ni ces boutons ni ces
   commandes ;
-- **TP vers moi** (`tp <id>`) : amène les personnages d'un joueur bloqué près de toi ;
+- **TP vers moi** (`tp <id>`) : amène les personnages d'un joueur bloqué près de toi ; ils s'arrêtent
+  en arrivant (leur marche et leurs ordres en cours sont annulés, leurs travaux permanents restent) ;
 - **Resync** (`resync <id>`) et **Resynchroniser tout le monde** : en cas de désynchro, le joueur
   recharge ton monde tel qu'il est, en quelques secondes. Depuis la 0.3.1, quand il manque des PNJ
   à un joueur pendant 15 s, sa zone lui est renvoyée toute seule (sans pause, sans clic) ; chaque

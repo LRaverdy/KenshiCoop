@@ -3906,6 +3906,11 @@ def exp_farfps(host, clis, seconds=60):
         p.check("fps : le correctif ne fait pas baisser les images par seconde (loin, >= 95 % du 0.3.1)",
                 (a[0].get("fps") or 0) >= 0.95 * (b[0].get("fps") or 0), f"{b[0].get('fps')} -> {a[0].get('fps')}")
         p.check("fps : notre travail par image reste sous 4 ms loin des autres", (a[0].get("work") or 99) < 4.0, a[0].get("text", "")[:120])
+        # 0.3.4 (A_FAIRE 12/10 point 13): the copies no longer sent stay where the host last had them
+        d = kv_of(p.cli, "dormant")
+        p.log("dormant copies:", d)
+        p.check("fps : les copies en sommeil ne bougent pas chez le client (aucune a plus de 20 de sa derniere position)",
+                (d.get("n") or 0) == 0 or ((d.get("over20") or 0) == 0 and (d.get("maxdrift") or 0) < 20), d)
     # 3. near each client, NPCs stay smooth and in sync with the fix on
     run_parallel(there, far_motion_step, "mouvement")
     far_zone_sync(there, "synchro_fps", 2, 10)
@@ -4914,6 +4919,92 @@ def exp_tpdown(host, cli):
     pcc = vec(cmd(cli, f"where {own}")[1])
     check("TP admin (perso a terre) : il arrive pres de l'hote", dist(p0, pc) < 30, f"{dist(p0, pc):.1f}")
     check("TP admin (perso a terre) : le client le voit au meme endroit", dist(pc, pcc) < 3, f"{dist(pc, pcc):.2f}")
+    summary()
+
+
+def exp_tpstop(host, cli):
+    """0.3.4 (A_FAIRE 12/10 point 10): the client's character is walking far away (its own order) when the
+    host's admin TP brings it next to the host's character: it stays there (its walk and its orders end,
+    as with the game's "stop"), it does not run back toward where it was going (nass4, 23:11:30; the
+    suite's and tpdown's "TP admin" checks at 193-597 units). Its permanent jobs are not touched."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(2)
+    own = own_index(host)
+    log("client: walk far", cmd(cli, f"moverel {own} 900 0"))
+    time.sleep(4)
+    log("host: the client's character while it walks", cmd(host, f"where {own}")[1])
+    log("tp", cmd(host, "tpplayer 2"))
+    time.sleep(1.5)
+    p0, pc = vec(cmd(host, "where 0")[1]), vec(cmd(host, f"where {own}")[1])
+    check("TP admin en marche : le perso du joueur arrive pres de l'hote", dist(p0, pc) < 30, f"{dist(p0, pc):.1f}")
+    time.sleep(8)
+    p0, pc = vec(cmd(host, "where 0")[1]), vec(cmd(host, f"where {own}")[1])
+    pcc = vec(cmd(cli, f"where {own}")[1])
+    check("TP admin en marche : il reste pres de l'hote 8 s plus tard (ne repart pas vers sa destination)", dist(p0, pc) < 40, f"{dist(p0, pc):.1f}")
+    check("TP admin en marche : le client le voit au meme endroit", dist(pc, pcc) < 3, f"{dist(pc, pcc):.2f}")
+    hl = host_log()
+    check("TP admin en marche : marche et ordres arretes (journal de l'hote)", "walk and orders ended" in hl, "")
+    summary()
+
+
+def exp_bedfree(host, cli):
+    """0.3.4 (A_FAIRE 12/10 points 11 and 12): a copy left in a bed on a client while the host has it free
+    (Meow, hidden in her bedroll on every client for 17 minutes while she walked on the host) is taken out
+    at the next refresh, by itself; a character the host puts to bed and wakes is out of the bed on the
+    client too; afterwards nothing the host has standing lies, sleeps or hangs on nobody on the client
+    ("posturecheck")."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(2)
+    own = own_index(host)
+    other = next((i for i in range(8) if i != own and cmd(host, f"where {i}")[0]), None)
+    check("lit : un perso de l'hote a coucher chez le client", other is not None, "")
+    if other is not None:
+        # 1. a stale bed, on the client only (the host has it standing, free)
+        r = cmd(cli, f"localbed {other}")
+        log("client: our copy alone in a bed", r)
+        check("lit fantome : la copie est couchee chez le client seulement (test)", r[0] and "inSomething=1" in r[1], r[1])
+        ins = "?"
+        for _ in range(15):
+            time.sleep(1)
+            ins = cmd(cli, f"insomething {other}")[1]
+            if ins == "ok 0":
+                break
+        check("lit fantome : le client la sort du lit tout seul (l'hote l'a libre)", ins == "ok 0", ins)
+        time.sleep(1)
+        check("lit fantome : dit dans le journal du client", "while the host has it free: taken out" in host_log(), "")
+    # 2. to bed on the host, then woken by another order: out of the bed on the client within seconds
+    r = cmd(cli, f"bedreq {own}")
+    log("client: sleep in a bed", r)
+    ins = "?"
+    for _ in range(40):
+        time.sleep(1)
+        ins = cmd(host, f"insomething {own}")[1]
+        if ins == "ok 1":
+            break
+    check("lit : le perso du client se couche chez l'hote", ins == "ok 1", f"{r[1]} | {ins}")
+    time.sleep(3)
+    check("lit : couche chez le client aussi", cmd(cli, f"insomething {own}")[1] == "ok 1", cmd(cli, f"insomething {own}")[1])
+    log("client: walk away (wakes up on the host)", cmd(cli, f"moverel {own} 80 0"))
+    up = "?"
+    for _ in range(20):
+        time.sleep(1)
+        up = cmd(host, f"insomething {own}")[1]
+        if up == "ok 0":
+            break
+    check("lit : leve chez l'hote", up == "ok 0", up)
+    cl = "?"
+    for _ in range(6):
+        time.sleep(1)
+        cl = cmd(cli, f"insomething {own}")[1]
+        if cl == "ok 0":
+            break
+    check("lit : leve chez le client aussi (moins de 6 s apres l'hote)", cl == "ok 0", cl)
+    time.sleep(4)
+    pc = kv_of(cli, "posturecheck")
+    log("client posturecheck:", cmd(cli, "posturecheck")[1])
+    check("posture : rien que l'hote a debout n'est couche, au lit ou porte par personne chez le client", pc.get("n") == 0, pc)
     summary()
 
 
@@ -6719,6 +6810,11 @@ def exp_carry(host, cli):
           f"hote {h1} / client {c1} (ecart en hauteur {abs(h1[1] - c1[1]):.1f})" if h1 and c1 else f"hote {h1} / client {c1}")
     check("poser PNJ : pas projete (immobile apres la chute)", dist(c1, c2) < 2, f"{c1} -> {c2}")
     check("poser PNJ : plus porte chez le client", cmd(cli, "carrying 0")[1] == "ok none")
+    # 0.3.4 (A_FAIRE 12/10 point 12): nothing the host has standing stays down, in a bed or "carried" here
+    time.sleep(3)
+    pc = kv_of(cli, "posturecheck")
+    log("client posturecheck:", cmd(cli, "posturecheck")[1])
+    check("posture : apres le portage, rien que l'hote a debout n'est couche ou porte par personne chez le client", pc.get("n") == 0, pc)
 
 
 
@@ -8475,9 +8571,10 @@ def main():
     td.add_argument("--save", default="kctest_town")
     td.add_argument("--keep", action="store_true")
     td.add_argument("--merchant", default="Marchand", help="part of the merchant's name ('_' for spaces)")
-    for name in ("stuck", "farnpc", "beds", "tpdown", "lootswap", "groundpick", "resyncbar", "fartp", "missing", "floor", "floorview", "buildfull"):
+    for name in ("stuck", "farnpc", "beds", "tpdown", "lootswap", "groundpick", "resyncbar", "fartp", "missing", "floor", "floorview", "buildfull",
+                 "tpstop", "bedfree"):
         e2 = sub.add_parser(name)
-        e2.add_argument("--save", default="kctest_town" if name in ("beds", "groundpick", "floorview") else "kctest_base")
+        e2.add_argument("--save", default="kctest_town" if name in ("beds", "groundpick", "floorview", "bedfree") else "kctest_base")
         e2.add_argument("--keep", action="store_true")
     for name_, hlp_, save_ in (("camfocus", "3l: the client's camera focus is set once, then left to the player", "kctest_town"),
                                ("buildpause", "3n: the host's build mode does not pause anyone; a client's changes nothing for the host", "kctest_base"),
@@ -8740,6 +8837,10 @@ def main():
             exp_beds(host, cli)
         elif a.what == "tpdown":
             exp_tpdown(host, cli)
+        elif a.what == "tpstop":   # 0.3.4
+            exp_tpstop(host, cli)
+        elif a.what == "bedfree":   # 0.3.4
+            exp_bedfree(host, cli)
         elif a.what == "lootswap":
             exp_lootswap(host, cli)
         elif a.what == "groundpick":

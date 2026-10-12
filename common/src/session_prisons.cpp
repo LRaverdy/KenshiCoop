@@ -115,8 +115,22 @@ void Session::ClientCaptives(double now) {
         if (!e->second.present || !(reapply || captivesDirty_.count(id))) { ++it; continue; }
         world_.ApplyCaptive(e->second.handle, it->second);
         captivesDirty_.erase(id);
-        // a freed character: imposed once, then there is nothing more to keep
+        // a freed character: imposed once, then there is nothing more to keep (EnsureFree below
+        // keeps it out of any bed or cage from now on)
         it = it->second.free() ? captives_.erase(it) : std::next(it);
+    }
+    // 0.3.4 (A_FAIRE 12/10 point 11): every copy the host holds in nothing is kept out of beds and
+    // cages here, at every refresh, not only when a "free" arrives. Meow was put in her bedroll on
+    // every client at 23:18:10; the host's "free" came 43 s later, and for 17 minutes no client took
+    // her out ("out of its bed" never written) while she walked on the host. A copy just found here
+    // waits for the host's full refresh first (every 5 s): a sleeper loaded in its bed from the save
+    // is in bed on the host too, and is not taken out before the host has said so.
+    if (!reapply) return;
+    for (auto& [id, e] : entities_) {
+        if (e.container || !e.present || e.presentSince < 0 || now - e.presentSince < kCaptivesFull + 1.5) continue;
+        auto c = captives_.find(id);
+        if (c != captives_.end() && !c->second.free()) continue;
+        world_.EnsureFree(e.handle);
     }
 }
 

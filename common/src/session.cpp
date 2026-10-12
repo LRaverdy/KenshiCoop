@@ -55,7 +55,27 @@ bool StatsChanged(const std::vector<float>& a, const std::vector<float>& b) {
     return false;
 }
 
+std::string HandleKey(const Handle& h) {
+    return std::to_string(h.type) + ":" + std::to_string(h.container) + ":" + std::to_string(h.containerSerial) + ":" + std::to_string(h.index) + ":" +
+           std::to_string(h.serial);
+}
+
 } // namespace
+
+// Client (0.3.4): a copy that had left our game is here again (made, adopted or streamed in).
+void Session::NoteBackHere(Entity& e, double now, const char* how) {
+    if (e.lostAt < 0) return;
+    ++standInsRemade_;
+    uint32_t held = 0;
+    if (remadeLog_.Allow(now, &held)) {
+        char b[220];
+        snprintf(b, sizeof(b), "copy of the host's %s back here (%s) %.1f s after it left our game%s", HandleKey(e.handle).c_str(), how,
+                 now - e.lostAt, held ? (" [" + std::to_string(held) + " more such lines not written]").c_str() : "");
+        log_(b);
+    }
+    e.lostAt = -1;
+    e.lostTold = false;
+}
 
 Session::Session(IWorld& world, SessionConfig cfg, ClockFn clock, LogFn log)
     : world_(world), cfg_(std::move(cfg)), clock_(std::move(clock)), log_(std::move(log)) {
@@ -3152,7 +3172,13 @@ void Session::ClientTick(double now, bool live) {
             e.checked = true;
             // streamed in, adopted or recreated: a new local object, whose items are not the host's yet
             if (e.present && !was && e.haveInv) { e.invDirty = true; e.invRetry = 0; }
-            if (e.present && !was) e.presentSince = now;
+            if (e.present && !was) {
+                e.presentSince = now;
+                NoteBackHere(e, now, "found");
+            }
+            // 0.3.4 (A_FAIRE 12/10 point 2): any copy that leaves our game is timed, and told when
+            // it is back (made again or found), so a body that vanished can be seen coming back.
+            if (was && !e.present && !e.squad) e.lostAt = now;
             // Our stand-in vanished (0.3.1). Once is normal (killed, cleaned up); again and again means
             // our game does not keep that place loaded: each time it waits longer before coming back
             // (one host squad was lost and made again every 3 s just before a client crashed).
@@ -3166,6 +3192,15 @@ void Session::ClientTick(double now, bool live) {
         if (e.present) e.missingSince = -1;
         else if (e.missingSince < 0) e.missingSince = now;
         if (e.squad && !e.present) ++missing;
+        // a lost copy the host still sends us near our characters that has not come back in 20 s: said
+        // once (what keeps it away), the body of point 2 was never seen again on rob's side
+        if (fullCheck && !e.present && e.lostAt >= 0 && !e.lostTold && now - e.lostAt > 20.0 && InMyArea(e, now)) {
+            e.lostTold = true;
+            char b[240];
+            snprintf(b, sizeof(b), "copy of the host's %s lost here %.0f s ago is still not back (spawn info %s, next try in %.0f s, %d tries)",
+                     HandleKey(e.handle).c_str(), now - e.lostAt, e.hasSpawn ? "yes" : "no", std::max(0.0, e.nextSpawnTry - now), e.spawnAttempts);
+            log_(b);
+        }
         // a recruit of the host's game: our copy is still the NPC it was here, it joins the player
         // faction too (else it stays an NPC no one can select)
         if (e.adopt && e.squad && e.present && (fullCheck || e.adoptTries == 0)) {
@@ -3218,7 +3253,7 @@ void Session::ClientTick(double now, bool live) {
             if (Entity* e = entityByHandle(h)) {
                 e->spawned = true;
                 e->present = world_.Exists(h);
-                if (e->present) e->missingSince = -1;
+                if (e->present) { e->missingSince = -1; e->presentSince = now; NoteBackHere(*e, now, "adopted"); }
                 if (e->present && e->haveInv) { e->invDirty = true; e->invRetry = 0; }
             }
     }
@@ -3250,7 +3285,7 @@ void Session::ClientTick(double now, bool live) {
             if (world_.Spawn(e.handle, e.spawn, e.buf.back().s)) {
                 e.spawned = true;
                 e.present = world_.Exists(e.handle);
-                if (e.present) { e.missingSince = -1; e.presentSince = now; }
+                if (e.present) { e.missingSince = -1; e.presentSince = now; NoteBackHere(e, now, "made"); }
                 if (e.present && e.haveInv) { e.invDirty = true; e.invRetry = 0; }
             }
         }
@@ -3321,17 +3356,32 @@ void Session::ClientTick(double now, bool live) {
             if (!e.present || e.buf.empty()) continue;
             // the host no longer sends it (far from our characters): it stays where it was last seen,
             // driven only now and then (300 characters driven every frame cost a client its FPS)
-            if (!e.squad && Dormant(e, now)) {
+            const bool dormant = !e.squad && Dormant(e, now);
+            if (dormant) {
                 if (now < e.dormantApplyAt) continue;
                 e.dormantApplyAt = now + 0.5;
             }
-            // each one rendered late enough for its own cadence (sparse updates: later, see kc::motion);
-            // the host paused: exactly where it stopped (no delay, no extrapolation)
-            const double renderTime = now + offset_ - motion::StepDelay(e.cadence, cfg_.interpDelay, now);
-            world_.Apply(e.handle, HostPaused() ? motion::PausedState(e.buf) : Interpolate(e, renderTime), e.buf.back().s);
+            if (dormant) {
+                // 0.3.4 (A_FAIRE 12/10 point 13): frozen where the host last had it. Its last state
+                // may say "walking to X" or "fighting Y" (bandits running at nass4's characters when
+                // the host stopped sending them): given to our game, its far update (3b) walked them
+                // there while those of the host stood far away. Still, no destination, no fight.
+                EntityState still = e.buf.back().s;
+                still.flags = uint8_t(still.flags & ~kFlagMoving);
+                still.dest = still.pos;
+                still.combatTarget = 0;
+                world_.Apply(e.handle, still, still);
+                world_.HoldStill(e.handle, still);
+            } else {
+                // each one rendered late enough for its own cadence (sparse updates: later, see kc::motion);
+                // the host paused: exactly where it stopped (no delay, no extrapolation)
+                const double renderTime = now + offset_ - motion::StepDelay(e.cadence, cfg_.interpDelay, now);
+                world_.Apply(e.handle, HostPaused() ? motion::PausedState(e.buf) : Interpolate(e, renderTime), e.buf.back().s);
+            }
             // Melee: fight the same target as on the host (the swings are animated locally, the
-            // outcome comes from the host's vitals). Re-imposed now and then in case it lapsed.
-            const uint32_t want = e.buf.back().s.combatTarget;
+            // outcome comes from the host's vitals). Re-imposed now and then in case it lapsed. A
+            // dormant one fights nobody here (its fight goes on where the host has it, not here).
+            const uint32_t want = dormant ? 0u : e.buf.back().s.combatTarget;
             if (want != e.combatApplied || (want && now >= e.combatReapply)) {
                 auto t = want ? entities_.find(want) : entities_.end();
                 if (!want) world_.ApplyCombat(e.handle, false, Handle{});

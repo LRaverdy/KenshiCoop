@@ -113,6 +113,14 @@ struct FakeWorld : IWorld {
     void ResyncCharacter(const Handle&) override { ++resyncs; }
     std::vector<Handle> farChars;             // client: SetFarCharacters's last list (3b)
     void SetFarCharacters(const std::vector<Handle>& handles) override { farChars = handles; }
+    int holdStills = 0, heldBack = 0;         // client (0.3.4): HoldStill calls, copies put back
+    void HoldStill(const Handle& h, const EntityState& at) override {
+        ++holdStills;
+        auto it = chars.find(h.serial);
+        if (it == chars.end()) return;
+        it->second.dest = it->second.pos;   // halted
+        if (Dist(it->second.pos, at.pos) > 8.0f) { it->second.pos = at.pos; ++heldBack; }
+    }
 
     static Handle H(uint32_t serial) { Handle h; h.type = 3; h.index = serial; h.serial = serial; return h; }
 
@@ -696,6 +704,16 @@ struct FakeWorld : IWorld {
         it->second.cap = s;
         it->second.cap.netId = 0;
         ++captiveApplies;
+    }
+    int ensureFreed = 0;   // client (0.3.4): copies EnsureFree took out of a cage or bed
+    bool EnsureFree(const Handle& h) override {
+        auto it = chars.find(h.serial);
+        if (it == chars.end() || !it->second.cap.caged) return false;
+        it->second.cap.caged = false;
+        it->second.cap.cageSid.clear();
+        it->second.cap.cagePos = {};
+        ++ensureFreed;
+        return true;
     }
     // ---- fix G5: job lists
     bool ReadJobs(const Handle& h, std::vector<int32_t>& out) override {
@@ -3575,6 +3593,23 @@ static void TestCaptives() {
     const int applies = cw.captiveApplies;
     Run({{&host, &hw}, {&cli, &cw}}, 2.5);
     CHECK(cw.captiveApplies == applies);
+    // 0.3.4 (A_FAIRE 12/10 point 11, Meow): a copy left in its bed here while the host has it free
+    // (the "free" applied when it was already out, then back in, or never applied) is taken out at
+    // the next refresh, whatever the messages; one the host keeps in a bed is not touched
+    std::printf("session: a copy in a bed here while the host has it free is taken out at every refresh\n");
+    const int freedBefore = cw.ensureFreed;
+    cw.chars[20].cap.caged = true; cw.chars[20].cap.cageSid = "bedroll"; cw.chars[20].cap.cagePos = {131, 0, 0};
+    hw.chars[3].cap.caged = true; hw.chars[3].cap.cageSid = "bed-h"; hw.chars[3].cap.cagePos = {3, 0, 3};
+    Run({{&host, &hw}, {&cli, &cw}}, 4.5, [&] { return !cw.chars[20].cap.caged && cw.chars[3].cap.caged; });
+    CHECK(!cw.chars[20].cap.caged);
+    CHECK(cw.ensureFreed > freedBefore);
+    CHECK(cw.chars[3].cap.caged);   // the host's sleeper stays in its bed here
+    const int freedMid = cw.ensureFreed;
+    Run({{&host, &hw}, {&cli, &cw}}, 4.5);
+    CHECK(cw.chars[3].cap.caged && cw.ensureFreed == freedMid);   // never taken out while the host has it there
+    hw.chars[3].cap = CaptiveState{};
+    Run({{&host, &hw}, {&cli, &cw}}, 3.0, [&] { return !cw.chars[3].cap.caged; });
+    CHECK(!cw.chars[3].cap.caged);
     // a whole town going to bed at once: every one imposed, at most a few lines a while in the log
     std::printf("session: many captivity changes at once are all applied, the log stays short\n");
     for (uint32_t i = 0; i < 20; ++i) {
@@ -6305,10 +6340,30 @@ static void TestPerPlayerStreaming() {
         return false;
     };
     CHECK(!inFar(aw, 70));   // sent to us: full update
-    hw.chars[70].pos = hw.chars[70].dest = {-9000, 0, 0};   // away from every player's characters
+    hw.chars[70].pos = {-9000, 0, 0};   // away from every player's characters, walking on (0.3.4: never here)
+    hw.chars[70].dest = {-6000, 0, 0};
     Run(all, 9.0, [&] { return inFar(aw, 70); });
     CHECK(aw.chars.count(70) == 1 && inFar(aw, 70));   // still here, where it was last sent
     CHECK(!host.streamsTo(FakeWorld::H(70), idA));
+    {
+        // 0.3.4 (A_FAIRE 12/10 point 13): a dormant copy stays frozen where the host last had it: no
+        // destination of its own (our game's far update walked bandits toward nass4), put back if moved
+        std::printf("streaming (0.3.4): a dormant copy is frozen where the host last had it, never walking on\n");
+        const Vec3 lastSeen = aw.chars[70].pos;
+        CHECK(Dist(aw.chars[70].dest, aw.chars[70].pos) < 1e-3f);
+        aw.chars[70].pos = {lastSeen.x + 120.0f, lastSeen.y, lastSeen.z};   // our game moved it
+        aw.chars[70].dest = {lastSeen.x + 400.0f, lastSeen.y, lastSeen.z};
+        const int held = aw.holdStills;
+        Run(all, 1.5);
+        CHECK(aw.holdStills > held);
+        CHECK(Dist(aw.chars[70].pos, lastSeen) < 1.0f);
+        CHECK(Dist(aw.chars[70].dest, aw.chars[70].pos) < 1e-3f);
+        std::vector<std::pair<Handle, Vec3>> dormant;
+        cliA.DormantCopies(dormant);
+        bool listed = false;
+        for (const auto& [h, at] : dormant) listed = listed || (h.serial == 70 && Dist(at, lastSeen) < 1.0f);
+        CHECK(listed);
+    }
     for (const Handle& h : aw.farChars) CHECK(!(h.serial == first || h.serial == second || h.serial <= 3));
     {
         const Session::StandInStats st = cliA.standInStats();
@@ -6343,6 +6398,11 @@ static void TestPerPlayerStreaming() {
     bool told = false;
     for (const auto& l : bLog) told = told || l.find("stand-in(s) vanished here lately") != std::string::npos;
     CHECK(told);
+    // 0.3.4 (A_FAIRE 12/10 point 2): each comeback is told, with how long it was away
+    bool back = false;
+    for (const auto& l : bLog) back = back || (l.find("copy of the host's") != std::string::npos && l.find("back here (made)") != std::string::npos);
+    CHECK(back);
+    CHECK(cliB.standInsRemade() >= 1);
 
     std::printf("streaming: a client that keeps missing NPCs gets its zone sent again, by itself\n");
     aw.refuseSpawn = true;   // its game will not make them (as the factory refusing a kind)

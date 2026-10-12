@@ -103,6 +103,11 @@ public:
     // far from our characters, never squad members). Our game may give them its cheap far update
     // instead of the full one Apply's characters get. Called whenever that set changes.
     virtual void SetFarCharacters(const std::vector<Handle>& handles) { (void)handles; }
+    // Client (0.3.4, A_FAIRE 12/10 point 13): a dormant copy (no longer streamed to us) stays exactly
+    // where the host last had it: never walking, never fighting, put back if anything moved it (our
+    // game's far update walked bandits toward nass4 that had not moved on the host). Called after
+    // Apply (with a still state) each time a dormant copy is driven (twice a second).
+    virtual void HoldStill(const Handle& h, const EntityState& at) { (void)h; (void)at; }
     // Client (0.3.1): the host sent that character again (a zone resync): put it exactly where the
     // host has it on the next Apply, whatever the offset.
     virtual void ResyncCharacter(const Handle& h) { (void)h; }
@@ -386,6 +391,11 @@ public:
     // keep a caged character where the cage holds it.
     virtual bool ReadCaptive(const Handle& h, CaptiveState& out) { (void)h; (void)out; return false; }
     virtual void ApplyCaptive(const Handle& h, const CaptiveState& s) { (void)h; (void)s; }
+    // Client (0.3.4, A_FAIRE 12/10 point 11): the host holds that character in nothing (no cage, no
+    // bed, not captive): our copy must not stay in a bed or a cage here (hidden, or drawn in a bed
+    // while the host's walks). Called every refresh (2 s) for every copy the host has free; cheap when
+    // the copy is in nothing. True: it was in something here and was taken out (or tried).
+    virtual bool EnsureFree(const Handle& h) { (void)h; return false; }
     // ---- map: hostile squads for the players' maps (host). Raid parties whose campaign targets the
     // player faction (anywhere they are loaded), squads fighting a player character, and squads the
     // game marks as enemies within `radius` of one of `centers`. At most kMaxMapThreats.
@@ -621,6 +631,10 @@ public:
         float radius = 0;
     };
     StandInStats standInStats() const;
+    // Client (0.3.4, tests): the dormant copies here (not squad members, present, no longer streamed)
+    // and where the host last had each one ("dormant" debug command: none may have moved).
+    void DormantCopies(std::vector<std::pair<Handle, Vec3>>& out) const;
+    size_t standInsRemade() const { return standInsRemade_; }   // client: lost copies made again here
     // Host: everyone on their way in: the player in the character editor first, then those saving /
     // loading (phase), then those in the world waiting for their editor turn (waiting).
     struct QueueEntry { uint8_t id = 0; std::string name; bool waiting = true; JoinPhase phase = JoinPhase::Saving; };
@@ -783,6 +797,8 @@ private:
         double streamAt = -1e9;              // client: when the host last sent its state (dormant after a few s)
         int losses = 0;                      // client: its stand-in vanished this many times in a row
         double presentSince = -1;            // client: here since
+        double lostAt = -1;                  // client (0.3.4): our copy left our game then (-1: not lost); told when made again
+        bool lostTold = false;               // client (0.3.4): "still not back" said once for this loss
         double dormantApplyAt = 0;           // client: a dormant one is driven only now and then
         bool farGiven = false;               // client: in the last IWorld::SetFarCharacters list
         uint32_t streamMask = 0;             // host: players (bit = id) it is streamed to
@@ -867,6 +883,9 @@ private:
     double lastReconcile_ = -1e9;            // client: Reconcile last ran
     uint32_t standInsLost_ = 0;              // client: since the last summary line
     LogLimiter lostLog_{1, 30.0};            // client: that summary, at most every 30 s
+    size_t standInsRemade_ = 0;              // client (0.3.4): lost copies made or found again here
+    void NoteBackHere(Entity& e, double now, const char* how);   // client (0.3.4): a lost copy is back
+    LogLimiter remadeLog_{4, 30.0};          // client (0.3.4): "made again here" lines
     int spawnPeak_ = 0;                      // client (tests)
     size_t resyncedHere_ = 0;                // client (tests)
     ZoneHealth zoneHealth_;                  // host
