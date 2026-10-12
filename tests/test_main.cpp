@@ -26,6 +26,7 @@
 #include "kc/pack.h"
 #include "kc/session.h"
 #include "kc/streaming.h"
+#include "kc/talk.h"
 #include "kc/world_identity.h"
 #include "../plugin/map_view.h"
 
@@ -6311,6 +6312,71 @@ static void TestStandInArea() {
     CHECK(cli.missingNpcs() == 0);     // nor counted as missing
 }
 
+// 0.3.4: talking to NPCs (kc/talk.h). A client's right click on an NPC that gave no order: what is
+// logged and when the talk order goes to the host anyway; the host finding the NPC by kind and place;
+// a line of a conversation shown on a client's screen kept waiting for the player's answer.
+static void TestTalkRules() {
+    using namespace kc::talk;
+    ClickFacts f;
+    f.rightClick = true;
+    f.character = true;
+    f.ownSelected = true;
+    CHECK(DecideClick(f).verdict == ClickVerdict::SendTalk);   // a standing NPC: the host decides
+    ClickFacts g = f;
+    g.rightClick = false;   // the cursor only passing over it
+    CHECK(DecideClick(g).verdict == ClickVerdict::Ignore);
+    g = f; g.character = false;
+    CHECK(DecideClick(g).verdict == ClickVerdict::Ignore);
+    g = f; g.playerSide = true;   // ours or another player's: other orders, nothing to say
+    CHECK(DecideClick(g).verdict == ClickVerdict::Ignore);
+    g = f; g.otherMode = true;
+    CHECK(DecideClick(g).verdict == ClickVerdict::LogOnly);
+    g = f; g.animal = true;
+    CHECK(DecideClick(g).verdict == ClickVerdict::LogOnly);
+    g = f; g.deadOrDown = true;
+    CHECK(DecideClick(g).verdict == ClickVerdict::LogOnly);
+    g = f; g.ownSelected = false;
+    CHECK(DecideClick(g).verdict == ClickVerdict::LogOnly);
+    g = f; g.inSomething = 1;   // in a bed here: the game gives bed orders, never sent blindly
+    CHECK(DecideClick(g).verdict == ClickVerdict::LogOnly);
+    CHECK(std::string(DecideClick(g).why).find("bed") != std::string::npos);
+    g = f; g.inSomething = 2;
+    CHECK(DecideClick(g).verdict == ClickVerdict::LogOnly);
+    CHECK(std::string(DecideClick(g).why).find("cage") != std::string::npos);
+    // the host: same kind, near where the client saw it
+    CHECK(SameNpc(true, 0.0f));
+    CHECK(SameNpc(true, 48.0f));    // Geoffrey's copy, 48 units off (12 October)
+    CHECK(!SameNpc(true, kTalkFindRadius + 1.0f));
+    CHECK(!SameNpc(false, 1.0f));
+    // the host keeps a line waiting while the player has answers to pick, for five minutes at most
+    CHECK(HoldLine(true, 4, 0.0));
+    CHECK(HoldLine(true, 1, kMaxHold - 1.0));
+    CHECK(!HoldLine(true, 4, kMaxHold));
+    CHECK(!HoldLine(true, 0, 1.0));     // nothing to answer: the game moves on with its timer
+    CHECK(!HoldLine(false, 4, 1.0));    // not shown on a player's screen
+    static_assert(kHoldSeconds >= 1.0f, "");   // a long frame at x3 never empties it between two of our ticks
+    // the talk order carries the NPC's kind and place: already in the Task command (no protocol change)
+    Command c;
+    c.kind = CommandKind::Task;
+    c.via = TaskVia::TaskNearest;
+    c.task = kTaskTalk;
+    c.seq = 7;
+    c.netId = 3;
+    c.add = true;
+    c.subject = Handle{1, 2, 3, 4, 5};
+    c.itemSid = "1304-gamedata.base";
+    c.subjectPos = {10, 20, 30};
+    c.pos = c.subjectPos;
+    Writer w;
+    Encode(w, c);
+    Reader r(w.data(), w.size());
+    CHECK(r.u8() == uint8_t(Msg::Command));
+    Command d;
+    CHECK(Decode(r, d));
+    CHECK(d.task == kTaskTalk && d.via == TaskVia::TaskNearest && d.itemSid == c.itemSid && d.add);
+    CHECK(Dist(d.subjectPos, c.subjectPos) < 0.01f && d.subject == c.subject);
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);   // every line out before a crash
     if (std::getenv("KC_ONLY_STREAMING")) {   // the 0.3.1 streaming tests alone
@@ -6377,6 +6443,7 @@ int main() {
     TestMotion();   // smooth motion, facing and posture on clients
     TestLootCreatures();   // every creature kind lootable from a client (leviathans...)
     TestBigBodyDrop();
+    TestTalkRules();   // 0.3.4: talk clicks without an order, NPC by kind and place, lines kept waiting
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

@@ -406,6 +406,15 @@ public:
     // starting a conversation with `target` would take an NPC out of another player's conversation
     // (one conversation at a time per NPC); the character asking is told "occupé".
     bool ConversationAllowed(void* dialogue, void* target);
+    // Client (0.3.4, hooks: the cursor over a character): a right click on `target` that gave no order
+    // at all. Logged with what we know of it; a standing NPC gets the talk order anyway (the host decides).
+    void ClickGaveNoOrder(kenshi::Character* target, bool otherMode);
+    // Client (0.3.4, hooks: RouteOrder): a talk order the selection could not give (logged, rate-limited).
+    void TalkNotSent(void* target, const char* why);
+    // Host (0.3.4): the NPC a client's talk order means, of that kind near where the client saw it.
+    kenshi::Character* NpcByKindAndPlace(const std::string& sid, const kc::Vec3& at, kenshi::Character* actor);
+    int talkClicksSent = 0, talkClicksLogged = 0;   // tests (0.3.4, "talkclick")
+    int dialogLinesHeld = 0;                         // tests (0.3.4, "npctalk"): lines kept waiting for a player's answer
     static bool SameOwner(const void* a, const void* b);   // host (0.3.2): two squad characters of one player
     // Host (tests): conversations shown on clients' screens, and talks refused because the NPC was busy.
     struct RemoteDialogInfo { uint32_t id; std::string pc, other; kc::Handle otherH; };
@@ -745,8 +754,20 @@ private:
         kc::Vec3 pcAt, otherAt;
         float startDist = 0;
         kc::Handle pcH, otherH;
+        // 0.3.4: the player's window (Open sent), when it opened, the answers it shows now and since
+        // when they wait, and whether the player answered at all (UpdateRemoteDialogs)
+        bool opened = false;
+        double openedAt = 0, waitingSince = 0;
+        size_t replies = 0;
+        bool answered = false, holdLogged = false, holdReleased = false;
+        std::string otherName, lastText;
     };
     std::unordered_map<void*, RemoteDialog> remoteDialogs_;
+    void UpdateRemoteDialogs();   // host, game thread (0.3.4): lines waiting for a player's answer kept up
+    kc::LogLimiter quickCloseLog_{4, 30.0};                  // host (0.3.4): a conversation closed by the game before any answer
+    // client (0.3.4): a right click on an NPC that gave no order
+    kc::LogLimiter talkClickLog_{4, 10.0};
+    std::unordered_map<kc::Handle, double, kc::HandleHash> talkClickSentAt_;
     kc::Handle lastDialogNpc_;   // (under dialogMutex_) LastDialogNpc
     std::vector<WorldRecruit> recruits_;                   // host, under dialogMutex_: recruitments in a client's conversation
     uint32_t nextDialogId_ = 1;

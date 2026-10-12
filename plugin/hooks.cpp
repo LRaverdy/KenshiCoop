@@ -28,6 +28,9 @@ std::mutex g_tickMutex;
 std::atomic<DWORD> g_liveThread{0}, g_menuThread{0};
 thread_local int g_hostCall = 0;   // >0 while KenshiCoop itself is calling into the game
 thread_local int g_animReplay = 0; // >0 while KenshiCoop replays one of the host's animations
+// 0.3.4: order hooks entered on this thread (the game's own UI calls). A right click on a character
+// that entered none gave no order at all (hk_charCursor).
+thread_local unsigned t_orderHooks = 0;
 
 // ---- originals
 using MainLoopFn = void (*)(void* gw, float t);
@@ -199,6 +202,7 @@ std::atomic<bool> g_haveMovePoint{false};
 float g_movePoint[3] = {};
 
 void hk_playerMove(void* pi, const float* pos, void* building) {
+    ++t_orderHooks;
     if (!g_hostCall && pos && std::isfinite(pos[0]) && std::isfinite(pos[1]) && std::isfinite(pos[2])) {
         g_movePoint[0] = pos[0], g_movePoint[1] = pos[1], g_movePoint[2] = pos[2];
         g_haveMovePoint = true;
@@ -292,7 +296,15 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
     std::vector<kc::Handle> sharedSel;
     if (settings)
         for (const auto& h : s.others) if (v->shared.count(h)) sharedSel.push_back(h);
+    const bool talk = task == kc::kTaskTalk || task == kc::kTaskTalkNearest;
     if (s.mine.empty() && sharedSel.empty()) {
+        // 0.3.4: a talk order nobody of ours could give, said in the log (12 October: two players could
+        // not talk to an NPC, and the host never got their talk order)
+        if (talk) {
+            void* t = subject ? subject : (subjectHandle ? kenshi::ResolveObject(*subjectHandle) : nullptr);
+            w->TalkNotSent(t, s.foreign ? "none of the selected characters is ours (another player's or an NPC is selected)"
+                                        : "none of our characters is selected");
+        }
         if (s.foreign) ToastForeign();
         return false;
     }
@@ -316,6 +328,11 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
     // what and where the subject is: the host finds it by that when its handle differs there
     void* subj = subject ? subject : (subjectHandle ? kenshi::ResolveObject(*subjectHandle) : nullptr);
     if (subj && !kenshi::IsCharacter(subj)) {
+        kenshi::ObjectTemplate(subj, c.itemSid);
+        kenshi::ObjectPosition(subj, c.subjectPos);
+    } else if (subj && talk) {
+        // 0.3.4: the NPC too, by its kind and where we see it: the host finds it that way when our copy
+        // is not linked to its NPC (a local character, a stand-in without its alias)
         kenshi::ObjectTemplate(subj, c.itemSid);
         kenshi::ObjectPosition(subj, c.subjectPos);
     }
@@ -471,12 +488,14 @@ bool ClientLootContainer(int task, void* subject) {
 }
 
 void hk_addOrder(void* pi, void* building, int task, void* subject, bool shift, bool addDontClear, const float* loc) {
+    ++t_orderHooks;
     if (ClientLoot(task, kenshi::IsCharacter(subject) ? static_cast<kenshi::Character*>(subject) : nullptr)) return;
     if (ClientLootContainer(task, subject)) return;
     if (RouteOrder(kc::TaskVia::AddOrder, task, subject, nullptr, building, loc, shift, addDontClear))
         o_addOrder(pi, building, task, subject, shift, addDontClear, loc);
 }
 void hk_newTask(void* pi, int task, const void* targetHand, void* building, const float* clickPos, bool addDontClear) {
+    ++t_orderHooks;
     kc::Handle th;
     const bool haveTarget = kenshi::HandleFromHand(targetHand, th);
     if (ClientLoot(task, haveTarget ? kenshi::Resolve(th) : nullptr)) return;
@@ -486,18 +505,22 @@ void hk_newTask(void* pi, int task, const void* targetHand, void* building, cons
 }
 // The right-click "loot" on a body goes through this one (the nearest selected character acts).
 void hk_addTaskNearest(void* pi, void* building, int task, void* subject, bool shift, const float* loc, bool noAnimals) {
+    ++t_orderHooks;
     if (ClientLoot(task, kenshi::IsCharacter(subject) ? static_cast<kenshi::Character*>(subject) : nullptr)) return;
     if (ClientLootContainer(task, subject)) return;
     if (RouteOrder(kc::TaskVia::TaskNearest, task, subject, nullptr, building, loc, shift, noAnimals))
         o_addTaskNearest(pi, building, task, subject, shift, loc, noAnimals);
 }
 void hk_addJob(void* pi, int task, void* subject, bool shift, bool add, const float* loc) {
+    ++t_orderHooks;
     if (RouteOrder(kc::TaskVia::AddJob, task, subject, nullptr, nullptr, loc, shift, add)) o_addJob(pi, task, subject, shift, add, loc);
 }
 void hk_setOrder(void* pi, int order) {
+    ++t_orderHooks;
     if (RouteOrder(kc::TaskVia::SetOrder, order, nullptr, nullptr, nullptr, nullptr, false, false)) o_setOrder(pi, order);
 }
 void hk_stopMove(void* pi) {
+    ++t_orderHooks;
     auto v = KenshiWorld::View();
     if (g_hostCall || !v->active) return o_stopMove(pi);
     const SelectionInfo s = ClassifySelection(*v);
@@ -891,6 +914,7 @@ void hk_collapse(void* med, bool medic, bool agony) {
 // A client's "pick up" goes to the host: the nearest selected character of ours walks there and the
 // host's game takes it (the pickup then reaches everyone like any other).
 void hk_pickup(void* pi, void* item) {
+    ++t_orderHooks;
     auto v = KenshiWorld::View();
     if (g_hostCall || !v->active || !v->client) return o_pickup(pi, item);
     kc::Handle ih;
@@ -914,6 +938,29 @@ void hk_pickup(void* pi, void* item) {
     c.pos = at;
     c.itemSid = st.templateSid;
     w->QueueLocalOrder(best, c);
+}
+// 0.3.4: the cursor over a character (PlayerInterface, 0x7FB410): each frame it sets the cursor, and
+// on the frame of a right click (+0x2F3) it gives the order the game chose: talk, attack, loot, carry...
+// through the order functions hooked above. A client's click that entered none of them gave no order
+// at all (the game's own checks on our copy of that character said no): KenshiWorld::ClickGaveNoOrder
+// says why in the log and, for a standing NPC, asks the host to talk to it anyway.
+using CursorFn = void (*)(void* pi, void* target);
+CursorFn o_charCursor = nullptr;
+void ClickGaveNoOrderSafe(KenshiWorld* w, void* target, bool otherMode) {
+    try {   // C++ exceptions must never unwind into game code
+        w->ClickGaveNoOrder(static_cast<kenshi::Character*>(target), otherMode);
+    } catch (...) {
+        Log("click on a character: exception caught");
+    }
+}
+void hk_charCursor(void* pi, void* target) {
+    if (g_hostCall || !KenshiWorld::ClientActive()) return o_charCursor(pi, target);
+    bool right = false, left = false, otherMode = false;
+    if (!kenshi::ReadCursorClick(pi, right, left, otherMode) || !right || left || !kenshi::IsCharacter(target)) return o_charCursor(pi, target);
+    const unsigned before = t_orderHooks;
+    o_charCursor(pi, target);
+    if (t_orderHooks != before) return;
+    if (KenshiWorld* w = TheWorld()) ClickGaveNoOrderSafe(w, target, otherMode);
 }
 // Items on the ground belong to the host's world: its pickups and drops are replayed on clients,
 // whose own are refused (any character's: an item taken here only would sit in an inventory the
@@ -1830,6 +1877,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnShowTradeWindow, reinterpret_cast<void*>(&hk_showTrade), reinterpret_cast<void**>(&o_showTrade)},
         {kenshi::FnShowInventoryBuilding, reinterpret_cast<void*>(&hk_showInvBuilding), reinterpret_cast<void**>(&o_showInvBuilding)},
         {kenshi::FnRecruit, reinterpret_cast<void*>(&hk_recruit), reinterpret_cast<void**>(&o_recruit)},
+        {kenshi::FnCharacterCursor, reinterpret_cast<void*>(&hk_charCursor), reinterpret_cast<void**>(&o_charCursor)},   // 0.3.4
         // ---- fix G5
         {kenshi::FnCharRemovePermajob, reinterpret_cast<void*>(&hk_removePermajob), reinterpret_cast<void**>(&o_removePermajob)},
         {kenshi::FnCharMovePermajob, reinterpret_cast<void*>(&hk_movePermajob), reinterpret_cast<void**>(&o_movePermajob)},

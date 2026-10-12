@@ -302,6 +302,9 @@ enum Fn : int {
     FnProspectShow,             // void ProspectingWindow::showT(const Vector3& pos, float skill, const std::string& name)   (what task 150 calls once done)
     FnCameraTarget,             // Vector3* GameWorld::<camera target>(Vector3* out)   (our name, 0x785F90: PlayerInterface+0x30 camera's node position)
     FnNearestSelected,          // Character* PlayerInterface::<selected character nearest>(const Vector3&)   (our name, 0x7F4BA0)
+    // ---- 0.3.4: a client's right click on a character, and the game's "can talk" check
+    FnCharacterCursor,          // void PlayerInterface::<character under the cursor>(Character*)   (our name, 0x7FB410: the cursor over a character; with +0x2F3, right click this frame, it gives the order: talk, attack, loot...)
+    FnCharacterCanTalk,         // bool Character::<can be talked to>()   (our name, 0x67AC00: its Dialogue, +0x280, has a "talk to me" line for the nearest selected character)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -662,6 +665,22 @@ void SetDialogueShouting(void* dialogue, bool shout);
 bool ReadDialogueWindowText(const void* dialogue, std::string& text, std::vector<std::string>& replies);
 bool DialogueEnded(const void* dialogue);                // Dialogue::_hasEnded (+0x148), set by endDialogue
 bool CallEndDialogue(void* dialogue);                    // Dialogue::endDialogue(true) (main thread)
+// 0.3.4: Dialogue::update (0x685090) counts down the line timers (+0x230 the line said: 2 s + 0.12 s a
+// character, set by say; +0x234 a dialogue action's pause) while a speech label exists (+0x228) and
+// the game is not paused; when both ran out it ends the conversation or moves it on by itself. In
+// single player the conversation window pauses the game: never while it is open.
+struct DialogueTimers { bool label = false; float line = 0, pause = 0; bool current = false, next = false; };
+bool ReadDialogueTimers(const void* dialogue, DialogueTimers& out);
+// Keeps the line timer at `atLeast` seconds or more (the conversation waits); false when unreadable.
+bool HoldDialogueLine(void* dialogue, float atLeast);
+// 0.3.4: the cursor over a character (PlayerInterface): right click this frame (+0x2F3), left click
+// (+0x2F1), another mode that blocks the click's orders (+0x268). False when unreadable.
+bool ReadCursorClick(const void* pi, bool& right, bool& left, bool& otherMode);
+// The game's own check before a "talk" order (Character::<can be talked to>): 1 yes, 0 no, -1 the call failed.
+int CallCanTalk(Character* c);
+// tests (0.3.4, "talkclick"): a right click on that character, as the mouse gives it (the cursor
+// function on the frame of a right click, through our hooks). False when it could not be called.
+bool CallCharacterRightClick(Character* target);
 // tests: `npc` sends that dialogue event to `pc` (EventTriggerEnum: 1 talk to me, 3 "I see a
 // neutral squad", the guards' check...), forced past the repeat timers
 bool CallDialogueEvent(Character* npc, Character* pc, int ev);

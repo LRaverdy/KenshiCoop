@@ -17,6 +17,22 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      lui, ce que le jeu ne laisse pas aborder. Il faut le journal de Geoffrey (`KenshiCoop.log` de son
      dossier Kenshi, 22:11-22:15) pour trancher ; ajouter un log côté client quand un clic « parler »
      ne donne pas d'ordre.
+   - **Fait (0.3.4, branche `fix-talk`, à vérifier en jeu : expérience `npctalk`)**. Le journal de l'hôte
+     contient bien celui des clients : aucune ligne « client order task 12 » ni refus pendant ces
+     minutes, donc le jeu de Geoffrey n'a appelé aucune fonction d'ordre. Désassemblage : le clic droit
+     sur un PNJ (`0x7FB410`) ne donne « parler » que si `Character::<peut qu'on lui parle>`
+     (`0x67AC00`) répond oui **sur la copie du client** ; sinon rien, sans message. Corrigé : clic sans
+     ordre repéré, expliqué dans le journal du client (lié ?, piloté par l'hôte ?, captif ici / chez
+     l'hôte ?, contrôle du jeu ici, distance) et l'ordre « parler » part quand même pour un PNJ debout ;
+     PNJ retrouvé chez l'hôte par type et endroit si la copie n'est pas liée. Aussi : « Ce personnage
+     appartient à un autre joueur. » à 22:13:58 et 22:14:14 chez Geoffrey = un clic pendant que sa
+     sélection n'avait aucun perso à lui (un PNJ sélectionné ?) : maintenant écrit aussi dans son
+     journal pour un ordre « parler ».
+   - Reste : ce qui différait sur la copie de Barth chez Geoffrey (la nouvelle ligne « right click on …
+     gave no order here » le dira à la prochaine partie : « the game's talk check here: NO » + lié ou
+     non). Piste : doublure refaite après le déchargement de sa zone, sans le dialogue ou la boutique de
+     l'original. Un PNJ couché « dans un lit » ici seulement (point 11) n'a pas d'ordre de secours (le
+     jeu donne alors des ordres de lit) : seulement écrit.
 2. **nass4 pose un corps au sol et le corps disparaît (vers 22:16:40).**
    - Corps `1:117:212280272:1` : « put down » 22:16:39, posé comme chez l'hôte chez les trois clients ;
      chez rob il était à 377 unités de celui de l'hôte (relevé puis refait tomber), et à 22:16:52
@@ -59,11 +75,23 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
    (point 1) : avant la resync, aucun ordre « talk » de rob n'arrive à l'hôte. Deux joueurs touchés le
    même soir : priorité. Ajouter un log client quand un clic « parler » ne produit pas d'ordre, et ce
    que le client sait du PNJ visé (lié à l'hôte ? stand-in ? captif ?).
+   - **Fait avec le point 1 (0.3.4)**, même cause et même correction ; à vérifier en jeu.
 8. **Conversation lancée par un PNJ refermée aussitôt (23:11:10)** : un « Cent Gardien » fait une
    vérification de contrebande sur rob : « conversation 25 opened for another player's character »,
    réponses envoyées à rob, puis « conversation 25 closed » 0,15 s plus tard : rob ne peut pas répondre.
    Voir ce qui ferme la conversation chez l'hôte (le jeu de l'hôte qui choisit seul ? la fenêtre de
    l'hôte ? un délai ?).
+   - **Fait (0.3.4, à vérifier en jeu : `npctalk`, point 4)**. Même chose chez nass4 à 22:24:58
+     (conversation 6 fermée 1 s après). Cause (désassemblage de `Dialogue::update` `0x685090`) : la
+     minuterie de la réplique dite en bulle (2 s + 0,12 s par caractère) est décomptée tant que le jeu
+     n'est pas en pause, et à zéro le jeu ferme la conversation ou la fait avancer seul (chez rob : suite
+     dans un autre `Dialogue`, conversation 26 sans nom, « Non. » sans réponse de rob). En solo la
+     fenêtre met le jeu en pause ; chez l'hôte, la conversation d'un client non. Corrigé : l'hôte garde
+     cette minuterie tant que le joueur a des réponses à choisir (5 min au plus) ; la conversation qui
+     continue dans l'autre dialogue garde le nom du PNJ ; une fermeture par le jeu avant toute réponse
+     est décrite dans le journal (« closed by the game … before any answer »).
+   - Reste : si une conversation se ferme encore tout de suite, la ligne « closed by the game » dira
+     l'état de son dialogue (bulle, minuteries, répliques) pour chercher l'autre cause.
 9. **nass4 à 69 fps** (23:11:07) quand les autres sont à 150-190 : voir son « sync perf ».
 10. **Après un « TP moi » de l'hôte, les persos de nass4 repartent en courant tout seuls (23:11:30).**
     « admin: teleported 2 of 2 character(s) of player 4 (nass4) to the host », puis nass4 voit ses persos

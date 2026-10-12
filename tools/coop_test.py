@@ -1125,6 +1125,129 @@ def exp_dialogue(host, cli):
     summary()
 
 
+# ---- 0.3.4: talking to NPCs (A_FAIRE, 12 October evening, points 1, 7 and 8)
+def exp_npctalk(host, cli):
+    """Sandbox (kctest_town). 1. The client right-clicks an NPC through the game's own cursor function
+    (talkclick ... click): a talk order reaches the host (the game's, or our fallback when the game
+    gives none). 2. The game gives no order (talkclick ... nogame): the client says why in its log and
+    sends the talk order anyway; the host runs it. 3. The client's copy is not linked to the host's NPC
+    (talkclick ... unlinked: a handle the host does not know): the host finds the NPC by kind and place
+    and the conversation opens. 4. An NPC starts the conversation (a guard's check, event 3, else 1),
+    at speed 3: it stays open on the client's screen while nobody answers (12 s), then the answer
+    reaches the host (12 October: rob1's guard check closed 0.15 s after it opened)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+
+    def dialog():
+        t = cmd(cli, "dialog")[1]
+        d = {}
+        for kv in t.split(" | ")[0].split()[1:]:
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                d[k] = v
+        d["raw"] = t
+        return d
+
+    def wait_open(want=True, seconds=15):
+        d = dialog()
+        for _ in range(int(seconds * 2)):
+            if (d.get("open") == "1") == want:
+                return d
+            time.sleep(0.5)
+            d = dialog()
+        return d
+
+    def leave():
+        if dialog().get("open") == "1":
+            cmd(cli, "answer leave")
+            wait_open(False, 10)
+        time.sleep(2)
+
+    log("host spawns an NPC next to the client's character", cmd(host, f"spawnnpc 15 15 {own}"))
+    time.sleep(3)
+
+    # 1. a right click as the mouse gives it
+    talkable = None
+    for k in range(5):
+        mark = len(host_log())
+        r = cmd(cli, f"talkclick {own} {k} click")
+        log(f"client: right click on the NPC nearest #{k}", r)
+        if not r[0]:
+            continue
+        time.sleep(1.5)
+        hl = host_log()[mark:]
+        got = 'order "talk"' in hl
+        check(f"parler : le clic droit sur le PNJ #{k} donne un ordre a l'hote (jeu ou secours)", got,
+              [l for l in hl.splitlines() if "talk" in l][-4:])
+        if got and wait_open(True, 15).get("open") == "1":
+            talkable = k
+            break
+    check("parler : un clic droit du client ouvre une conversation", talkable is not None, dialog()["raw"])
+    leave()
+
+    # 2. the game gives no order: our fallback
+    k = talkable if talkable is not None else 0
+    mark = len(host_log())
+    r = cmd(cli, f"talkclick {own} {k} nogame")
+    log("client: a click the game left without an order", r)
+    time.sleep(2)
+    hl = host_log()[mark:]
+    check("parler : sans ordre du jeu, le client le dit dans son journal", "gave no order here" in hl,
+          [l for l in hl.splitlines() if "no order" in l][-3:])
+    check("parler : sans ordre du jeu, l'ordre 'parler' part quand meme a l'hote", r[0] and "sent=1" in r[1] and 'order "talk"' in hl, r)
+    if talkable is not None:
+        check("parler : la conversation s'ouvre (ordre de secours)", wait_open(True, 15).get("open") == "1", dialog()["raw"])
+    leave()
+
+    # 3. a copy not linked to the host's NPC: found by kind and place
+    mark = len(host_log())
+    r = cmd(cli, f"talkclick {own} {k} unlinked")
+    log("client: talk order with a handle the host does not know", r)
+    time.sleep(2)
+    hl = host_log()[mark:]
+    check("parler : PNJ non lie : l'hote le retrouve par type et endroit",
+          "found by kind and place" in hl and "NOT found by kind and place" not in hl, [l for l in hl.splitlines() if "kind and place" in l][-3:])
+    if talkable is not None:
+        check("parler : PNJ non lie : la conversation s'ouvre", wait_open(True, 15).get("open") == "1", dialog()["raw"])
+    leave()
+
+    # 4. an NPC starts it, at speed 3: it waits for the player's answer
+    cmd(host, "speed 3")
+    time.sleep(2)
+    opened = None
+    for ev in (3, 1):
+        for which in ["dlg", "npc"] + [str(i) for i in range(8)]:
+            r = cmd(host, f"npcevent {own} {ev} {which}")
+            log("host: npcevent", ev, which, r)
+            if r[0] and wait_open(True, 8 if "talking=1" in r[1] else 3).get("open") == "1":
+                opened = (ev, which)
+                break
+        if opened:
+            break
+    d = dialog()
+    check("parler : un PNJ engage la conversation (controle de garde, sinon 'parle-moi')", d.get("open") == "1", f"{opened} | {d['raw']}")
+    if d.get("open") == "1":
+        mark = len(host_log())
+        time.sleep(12)
+        d2 = dialog()
+        hl = host_log()[mark:]
+        check("parler : la conversation attend la reponse du joueur (12 s a vitesse 3)",
+              d2.get("open") == "1" and "closed by the game" not in hl, f"{d2['raw']} | {[l for l in hl.splitlines() if 'conversation' in l][-4:]}")
+        log("host dialogs:", cmd(host, "dialogs")[1])
+        if "[" in d2["raw"]:
+            mark = len(host_log())
+            cmd(cli, "answer 0")
+            time.sleep(4)
+            check("parler : la reponse du joueur arrive ensuite a l'hote", "] answers: \"" in host_log()[mark:], dialog()["raw"])
+    leave()
+    cmd(host, "speed 1")
+    check("parler : l'hote est toujours vivant", alive(host) and cmd(host, "echo")[0])
+    check("parler : le client est toujours vivant", alive(cli) and cmd(cli, "echo")[0])
+    summary()
+
+
 # ---- lot A: doors and locks
 def exp_doors(host, cli):
     """Doors and locks: the host's doors reach the client; the client's own game cannot open a door by
@@ -8253,6 +8376,9 @@ def main():
     tk = sub.add_parser("talk")
     tk.add_argument("--save", default="kctest_base")
     tk.add_argument("--keep", action="store_true")
+    nt_ = sub.add_parser("npctalk", help="0.3.4: a right click on an NPC always talks (fallback, NPC found by kind and place); an NPC's conversation waits for the answer")
+    nt_.add_argument("--save", default="kctest_town")
+    nt_.add_argument("--keep", action="store_true")
     dl_ = sub.add_parser("dialogue", help="conversations: the client's own, an NPC's (guard check), one per NPC (occupe), leave, teleport, fight, speed 3")
     dl_.add_argument("--save", default="kctest_town")
     dl_.add_argument("--keep", action="store_true")
@@ -8469,6 +8595,8 @@ def main():
             exp_talk(host, cli)
         elif a.what == "actorsafety":
             exp_actorsafety(host, cli)
+        elif a.what == "npctalk":
+            exp_npctalk(host, cli)
         elif a.what == "dialogue":
             exp_dialogue(host, cli)
         elif a.what == "stuck":

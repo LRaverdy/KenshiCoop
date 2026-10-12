@@ -375,6 +375,26 @@ que là), puis répliqué par les synchronisations existantes :
 interrogatoire de la Nation Sainte) : la conversation que le jeu de l'hôte lance avec le perso d'un
 client s'ouvre chez **ce** client. Les bulles au-dessus des têtes sont montrées à tous.
 
+**La conversation attend la réponse du joueur (0.3.4)** 🟡 (tests unitaires ; expérience `npctalk` à
+lancer en jeu).
+- Bug du 12/10 : un garde fait sa « vérification de contrebande » à rob1 ; la fenêtre s'ouvre chez lui
+  et se ferme 0,15 s plus tard (pareil chez nass4 à 22:24, 1 s). Chez rob, la conversation a même
+  continué sans lui (« Non. », comme si une réponse avait été choisie).
+- Cause (désassemblage, voir MOTEUR « Clic droit sur un personnage et conversations ») : le jeu
+  décompte la minuterie de la réplique dite en bulle et, quand elle tombe à zéro, ferme la
+  conversation ou la fait avancer seul. En solo la fenêtre met le jeu en pause : ça n'arrive jamais
+  pendant qu'on choisit. Chez l'hôte, la conversation d'un client ne met rien en pause ; celles
+  ouvertes par « parler » n'ont pas de bulle et attendaient déjà, celles d'un garde commencent par une
+  bulle.
+- Maintenant : tant que le joueur a des réponses à choisir, l'hôte garde la minuterie de cette
+  conversation (comme la pause du solo), 5 min au plus sans réponse. Une réplique sans réponse avance
+  comme dans le jeu. Le monde continue pour tout le monde.
+- Si la conversation continue dans le dialogue de l'autre perso, la fenêtre du joueur garde le nom
+  du PNJ (avant : fenêtre sans nom, « walks away from the conversation with »).
+- Journal de l'hôte : « line kept waiting for the player's answer » ; une conversation que le jeu
+  ferme quand même avant toute réponse est décrite (« closed by the game … before any answer », avec
+  l'état de son dialogue).
+
 **Une conversation à la fois par PNJ.**
 - Ordre « parler » (12 et 126) d'un joueur vers un PNJ déjà en conversation avec quelqu'un d'autre
   (un autre joueur, l'hôte, un PNJ) : refusé avant d'être donné, `Result` « Busy », message
@@ -473,6 +493,30 @@ la fenêtre du client.
   Expérience `jobs`.
 - **Toutes les tâches de l'interface** sont permises sur la bonne cible (liste revue le 11/10 contre
   le désassemblage et la numérotation du jeu, `fcs_enums.def`) : voir docs/MOTEUR.md « Tâches ».
+- **Parler, clic sans effet (0.3.4)** 🟡 (expérience `npctalk` à lancer) : le 12/10, Geoffrey (22:11 à
+  22:15) puis rob1 (23:00 à 23:10) ne pouvaient pas parler à un marchand jusqu'à une resync ; l'hôte
+  n'a reçu **aucun** ordre « parler » d'eux, leurs autres ordres passaient.
+  - Cause : le clic droit sur un PNJ ne propose « parler » que si le jeu **du client** trouve une
+    réplique « parle-moi » sur **sa copie** du PNJ ; sinon le clic ne fait rien, sans ordre ni message
+    (désassemblage, voir MOTEUR). Ce qui différait sur leur copie n'est pas établi (pas de journal des
+    clients pour ces minutes : la ligne de journal ci-dessous le dira) ; piste : une copie refaite
+    après le déchargement de sa zone (doublure), sans le dialogue ou la boutique de l'original, que la
+    resync remplace par le vrai PNJ de la sauvegarde.
+  - Maintenant : un clic droit du client sur un personnage qui ne donne aucun ordre est repéré (aucun
+    hook d'ordre appelé pendant le clic). Le client écrit pourquoi dans son journal (« right click on
+    X gave no order here: … », avec : lié au perso de l'hôte ?, piloté par l'hôte ?, captif ici et chez
+    l'hôte ?, réponse du contrôle « parler » du jeu ici, distance). Si c'est un PNJ debout, ni animal,
+    ni dans un lit ou une cage ici, et qu'un de ses persos est sélectionné, l'ordre « parler » part quand
+    même à l'hôte : **le monde de l'hôte décide** (PNJ debout, « occupé », la conversation du jeu, ou
+    « nothing to say »).
+  - L'ordre « parler » nomme aussi le PNJ par **son type et l'endroit** où le client le voit : une copie
+    non liée au PNJ de l'hôte (perso local, doublure sans alias, handle qui désigne un autre perso chez
+    l'hôte) est retrouvée chez l'hôte (le PNJ de ce type le plus proche, à 300 unités au plus ; journal
+    « client talk: the NPC (…) found by kind and place »). Pas de changement de protocole : ces champs
+    existaient déjà dans l'ordre.
+  - Un ordre « parler » que la sélection ne peut pas donner (aucun perso à soi sélectionné : un PNJ ou le
+    perso d'un autre joueur sélectionné) est aussi écrit dans le journal du client (« talk order to X
+    not sent: … »), en plus du message « Ce personnage appartient à un autre joueur. ».
 - **Parler** : jamais « occupé » pour le joueur lui-même (même perso : la conversation revient sur son
   écran ; autre perso à lui : l'ancienne se termine) ; le client lit « X va parler à Y » pendant que
   son perso marche jusqu'au PNJ.

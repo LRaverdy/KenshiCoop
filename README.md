@@ -163,8 +163,9 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
   impossible (mauvaise cible) est refusé avec un message, sans rien faire.
 - **Dialogues** : les bulles chez tout le monde ; une conversation avec un PNJ (qu'on lui parle ou
   qu'il nous aborde : garde, mendiant, chasseur de primes...) s'ouvre chez le joueur concerné
-  seulement (fenêtre du mod, bouton « Partir »), qui choisit ses réponses ; le jeu ne se met pas en
-  pause pour une conversation. Un PNJ ne parle qu'à un joueur à la fois (« occupé »), jamais
+  seulement (fenêtre du mod, bouton « Partir »), qui choisit ses réponses et prend son temps (la
+  conversation l'attend) ; le jeu ne se met pas en pause pour une conversation. Un clic droit sur un
+  PNJ debout demande à l'hôte de lui parler même quand la copie du PNJ chez toi ne le propose pas. Un PNJ ne parle qu'à un joueur à la fois (« occupé »), jamais
   « occupé » pour ses propres conversations. Une recrue gagnée dans ta conversation est à toi (et
   son éditeur de perso, quand le jeu en propose un, s'ouvre chez toi, pas chez l'hôte).
 - **Achat d'animaux** : « T'as des animaux à vendre ? » ouvre la fenêtre d'achat d'animaux chez toi

@@ -9,6 +9,7 @@
 #include <fstream>
 
 #include "hooks.h"
+#include "kc/talk.h"
 
 namespace kcp {
 
@@ -337,6 +338,7 @@ void KenshiWorld::EndFrame() {
         Log("conversations far from the host's camera: %s", ok ? (farTalk ? "allowed" : "the game's rule again") : "CANNOT PATCH (unexpected bytes)");
     }
     if (active_ && !client_ && live_ && !pendingTalks_.empty()) UpdatePendingTalks();
+    if (active_ && !client_ && live_) UpdateRemoteDialogs();   // 0.3.4: lines waiting for a player's answer
     if (active_ && !client_ && live_ && !reRagdoll_.empty()) UpdateReRagdolls();
     if (active_ && client_ && live_) GroundReconcile();
     if (active_ && client_ && live_) UpdateFloorFocus();
@@ -2216,7 +2218,28 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
             subject = nullptr;
         }
         if (building && !sameThing(building, cmd.buildingSid, cmd.buildingPos)) building = nullptr;
-        if (cmd.subject.valid() && !subject && !cmd.itemSid.empty()) {
+        // 0.3.4: "talk" names the NPC by its kind and where the client saw it too (a client's copy not
+        // linked to the host's NPC has a handle that means nothing here, or another character)
+        const bool talk = cmd.task == kc::kTaskTalk || cmd.task == kc::kTaskTalkNearest;
+        if (talk && !cmd.itemSid.empty()) {
+            if (subject && kenshi::IsCharacter(subject)) {
+                std::string s;
+                kc::Vec3 p;
+                const bool same = kenshi::ObjectTemplate(subject, s) && kenshi::ObjectPosition(subject, p) &&
+                                  kc::talk::SameNpc(s == cmd.itemSid, Dist(p, cmd.subjectPos));
+                if (!same) {
+                    Log("client talk: its subject handle names another character here (%s): looked for by kind and place", TemplateName(s).c_str());
+                    subject = nullptr;
+                }
+            } else if (subject) {
+                subject = nullptr;   // not a character: looked for below
+            }
+            if (!subject) {
+                subject = NpcByKindAndPlace(cmd.itemSid, cmd.subjectPos, c);
+                Log("client talk: the NPC (%s) %sfound by kind and place", TemplateName(cmd.itemSid).c_str(), subject ? "" : "NOT ");
+            }
+        }
+        if (!talk && cmd.subject.valid() && !subject && !cmd.itemSid.empty()) {
             subject = byKindAndPlace(cmd.itemSid, cmd.subjectPos);
             Log("client task %d: subject %sfound by kind and place", cmd.task, subject ? "" : "NOT ");
         }
@@ -2303,6 +2326,163 @@ void KenshiWorld::UpdatePendingTalks() {
     }
 }
 
+// Host (0.3.4): the NPC of that kind nearest to where the client saw it (within kc::talk::kTalkFindRadius),
+// never a player's character nor the one that would talk.
+kenshi::Character* KenshiWorld::NpcByKindAndPlace(const std::string& sid, const kc::Vec3& at, kenshi::Character* actor) {
+    if (sid.empty()) return nullptr;
+    std::vector<kenshi::Character*> all;
+    kenshi::ActiveCharacters(all);
+    auto v = View();
+    kenshi::Character* best = nullptr;
+    float bestD = kc::talk::kTalkFindRadius;
+    for (kenshi::Character* ch : all) {
+        if (!ch || ch == actor || v->squadForeign.count(ch) || kenshi::IsDead(ch) || kenshi::InPlayerSquad(ch)) continue;
+        std::string s;
+        kc::Vec3 p;
+        if (!kenshi::ObjectTemplate(ch, s) || s != sid || !kenshi::GetPosition(ch, p)) continue;
+        const float d = Dist(p, at);
+        if (d <= bestD) { bestD = d; best = ch; }
+    }
+    return best;
+}
+
+// Host, game thread (0.3.4): a conversation shown on a client's screen waits for the player's answer.
+// Dialogue::update counts its line timers down while the game runs (the host's game is not paused by
+// a client's window) and, once they ran out, ended the conversation or moved it on by itself: a
+// guard's contraband check, its first line said aloud, closed 0.15 s and 1 s after it opened on
+// rob1's and nass4's screens (12 October). The line timer is kept up while the player has answers to
+// pick, as the single player pause keeps it (kc::talk::HoldLine).
+void KenshiWorld::UpdateRemoteDialogs() {
+    const double now = NowSeconds();
+    std::lock_guard<std::mutex> lk(dialogMutex_);
+    if (remoteDialogs_.empty()) return;
+    // One conversation per player's character is on their screen: the one whose line came last (the
+    // client shows the latest). An older one of the same character (a guard's check that goes on in
+    // another dialogue, 12 October) is left to the game, which ends it or hands it over.
+    std::unordered_map<kc::Handle, const RemoteDialog*, kc::HandleHash> latest;
+    for (const auto& [dl, r] : remoteDialogs_) {
+        const RemoteDialog*& l = latest[r.pcH];
+        if (!l || r.waitingSince > l->waitingSince || (r.waitingSince == l->waitingSince && r.id > l->id)) l = &r;
+    }
+    for (auto& [dl, r] : remoteDialogs_) {
+        if (latest[r.pcH] != &r) continue;
+        const double waiting = now - r.waitingSince;
+        if (!kc::talk::HoldLine(r.opened, r.replies, waiting)) {
+            if (r.opened && r.replies && !r.holdReleased && waiting >= kc::talk::kMaxHold) {
+                r.holdReleased = true;
+                Log("conversation %u: no answer from the player for %.0f s: the game's timers run again", r.id, waiting);
+            }
+            continue;
+        }
+        // only a dialogue still owned by one of its two characters, both still there
+        kenshi::Character* owner = kenshi::DialogueOwner(dl);
+        kenshi::Character* pc = r.pcH.valid() ? kenshi::Resolve(r.pcH) : nullptr;
+        kenshi::Character* other = r.otherH.valid() ? kenshi::Resolve(r.otherH) : nullptr;
+        if (!owner || (owner != pc && owner != other) || kenshi::DialogueEnded(dl)) continue;
+        kenshi::DialogueTimers t;
+        if (!kenshi::ReadDialogueTimers(dl, t) || !t.label) continue;   // no label: the game counts nothing down
+        if (std::isfinite(t.line) && t.line >= kc::talk::kHoldSeconds) continue;
+        if (!kenshi::HoldDialogueLine(dl, kc::talk::kHoldSeconds)) continue;
+        ++dialogLinesHeld;
+        if (!r.holdLogged) {
+            r.holdLogged = true;
+            Log("conversation %u: line kept waiting for the player's answer (%zu answer(s); its timer was down to %.2f s, the game would have moved on)",
+                r.id, r.replies, double(t.line));
+        }
+    }
+}
+
+// Client (0.3.4): RouteOrder could not give a talk order (none of the selected characters is ours...).
+void KenshiWorld::TalkNotSent(void* target, const char* why) {
+    ++talkClicksLogged;
+    uint32_t held = 0;
+    if (!talkClickLog_.Allow(NowSeconds(), &held)) return;
+    std::string name;
+    if (kenshi::IsCharacter(target)) kenshi::CharacterName(static_cast<kenshi::Character*>(target), name);
+    Log("talk order to %s not sent: %s%s", name.empty() ? "?" : name.c_str(), why,
+        held ? (" [" + std::to_string(held) + " more such lines not written]").c_str() : "");
+}
+
+// Client (0.3.4): a right click on a character gave no order at all (the game's own decision: it
+// offers "talk" only when its check on our copy of the NPC says so). On 12 October Geoffrey (22:11
+// to 22:15) and rob1 (23:00 to 23:10) could not talk to a merchant until a resync, and the host got no
+// talk order from them. What we know of the NPC goes to the log; a standing NPC gets the talk order
+// anyway, the host's world decides (kc::talk::DecideClick).
+void KenshiWorld::ClickGaveNoOrder(kenshi::Character* t, bool otherMode) {
+    if (!active_ || !client_ || !t) return;
+    auto v = View();
+    kc::Handle th;
+    if (!kenshi::GetHandle(t, th) || !th.valid()) return;
+    kc::talk::ClickFacts f;
+    f.rightClick = true;
+    f.character = true;
+    f.otherMode = otherMode;
+    f.animal = kenshi::IsAnimal(t);
+    f.playerSide = v->squadForeign.count(t) || v->controllable.count(th) || FindSquad(th) || kenshi::InPlayerSquad(t);
+    f.deadOrDown = kenshi::IsDead(t) || kenshi::IsDown(t) || kenshi::IsUnconscious(t) || kenshi::IsRagdoll(t);
+    int in = 0;
+    if (kenshi::ReadInSomething(t, in)) f.inSomething = in;
+    kc::Vec3 tp{};
+    const bool havePos = kenshi::GetPosition(t, tp);
+    // our selected character nearest to it (the one the game would have sent)
+    std::vector<kc::Handle> sel;
+    kenshi::SelectedHandles(sel);
+    kc::Handle actor;
+    float actorD = -1;
+    for (const auto& h : sel) {
+        if (!v->controllable.count(h)) continue;
+        kenshi::Character* ch = FindSquad(h);
+        kc::Vec3 p;
+        if (!ch) continue;
+        const float d = havePos && kenshi::GetPosition(ch, p) ? Dist(p, tp) : 1e9f;
+        if (!actor.valid() || d < actorD) { actor = h; actorD = d; }
+    }
+    f.ownSelected = actor.valid();
+    const kc::talk::ClickDecision dec = kc::talk::DecideClick(f);
+    if (dec.verdict == kc::talk::ClickVerdict::Ignore) return;
+    // what we know of it: linked to the host's character (our stand-in for it, or the same handle the
+    // host follows), driven by the host's state, captive here and on the host, the game's own check
+    const kc::Handle host = HostHandleOf(th);
+    const bool alias = !(host == th);
+    const bool known = alias || HostKnows(th);
+    const int canTalk = dec.verdict == kc::talk::ClickVerdict::SendTalk ? kenshi::CallCanTalk(t) : -2;
+    std::string name;
+    kenshi::CharacterName(t, name);
+    const double now = NowSeconds();
+    bool send = dec.verdict == kc::talk::ClickVerdict::SendTalk;
+    auto& last = talkClickSentAt_[th];
+    if (send && now - last < kc::talk::kResendAfter) send = false;   // the same click seen twice
+    if (talkClickSentAt_.size() > 256) talkClickSentAt_.clear();
+    ++talkClicksLogged;
+    uint32_t held = 0;
+    if (talkClickLog_.Allow(now, &held)) {
+        char b[600];
+        snprintf(b, sizeof(b),
+                 "right click on %s (%s) gave no order here: %s; linked to the host's character: %s, driven by the host: %s, captive here: %d, on the "
+                 "host: %s, the game's talk check here: %s, our nearest selected character %.0f units away%s%s",
+                 name.empty() ? "?" : name.c_str(), KeyOf(th).c_str(), dec.why, known ? (alias ? "yes (our copy for the host's)" : "yes") : "NO (a local character)",
+                 v->replicated.count(t) ? "yes" : "no", f.inSomething, hostCaptive_.count(host) ? "captive" : "free",
+                 canTalk == 1 ? "yes" : canTalk == 0 ? "NO" : canTalk == -1 ? "failed" : "not asked", double(actorD),
+                 send ? ": the talk order goes to the host anyway" : "", held ? (" [" + std::to_string(held) + " more such lines not written]").c_str() : "");
+        Log("%s", b);
+    }
+    if (!send) return;
+    last = now;
+    kc::Command c;
+    c.kind = kc::CommandKind::Task;
+    c.via = kc::TaskVia::TaskNearest;
+    c.task = kc::kTaskTalk;
+    c.add = true;   // (addTaskNearestSelectedCharacter's noAnimals, as the game passes it for "talk")
+    c.subject = th;   // our handle: TakeLocalOrders names it as the host knows it
+    kenshi::ObjectTemplate(t, c.itemSid);
+    if (havePos) {
+        c.subjectPos = tp;
+        c.pos = tp;
+    }
+    ++talkClicksSent;
+    QueueLocalOrder(actor, c);
+}
+
 void KenshiWorld::NoteSay(void* dialogue, const std::string& text) {
     kenshi::Character* me = kenshi::DialogueOwner(dialogue);
     kc::Handle h;
@@ -2354,16 +2534,32 @@ bool KenshiWorld::NoteDialogWindow(void* dialogue, bool open) {
     d.kind = open ? kc::DialogKind::Open : kc::DialogKind::Close;
     if (open) {
         RemoteDialog& r = Remember(dialogue, pc, other);
+        if (r.opened) return true;   // (opened already with its first line, NoteDialogText)
+        r.opened = true;
+        r.openedAt = NowSeconds();
         d.dialogId = r.id;
         d.pc = r.pcH;
         d.speaker = r.otherH;
         if (r.other) kenshi::CharacterName(r.other, d.text);
+        r.otherName = d.text;
         Log("conversation %u opened for another player's character", d.dialogId);
     } else {
         if (known == remoteDialogs_.end()) return true;
-        d.dialogId = known->second.id;
-        d.pc = known->second.pcH;
-        d.speaker = known->second.otherH;
+        const RemoteDialog& r = known->second;
+        d.dialogId = r.id;
+        d.pc = r.pcH;
+        d.speaker = r.otherH;
+        // 0.3.4: closed by the game before the player could answer (a guard's check closed 0.15 s
+        // after it opened on rob1's screen, 12 October): what the dialogue held, for the log
+        const double openFor = r.opened ? NowSeconds() - r.openedAt : -1.0;
+        if (!r.answered && openFor >= 0 && openFor < 5.0 && quickCloseLog_.Allow(NowSeconds())) {
+            kenshi::DialogueTimers t;
+            const bool read = kenshi::ReadDialogueTimers(dialogue, t);
+            Log("conversation %u closed by the game %.2f s after it opened, before any answer (%zu answer(s) shown; dialogue: %s, speech label %s, "
+                "line timer %.2f, pause timer %.2f, current line %s, next line %s)",
+                r.id, openFor, r.replies, kenshi::DialogueEnded(dialogue) ? "ended" : "not ended", read ? (t.label ? "yes" : "no") : "?", double(t.line),
+                double(t.pause), t.current ? "yes" : "no", t.next ? "yes" : "no");
+        }
         remoteDialogs_.erase(known);
         Log("conversation %u closed", d.dialogId);
     }
@@ -2379,12 +2575,35 @@ bool KenshiWorld::NoteDialogText(void* dialogue) {
     const bool remote = RemoteDialogParties(dialogue, pc, other);
     if (known == remoteDialogs_.end() && !remote) return false;   // (text before the window: open it now)
     RemoteDialog& r = Remember(dialogue, pc, other);
+    const double now = NowSeconds();
+    if (!r.opened) {
+        // 0.3.4: its first line before (or without) the window: the player's window opens now, with
+        // the NPC's name. A conversation that goes on in the other character's dialogue (12 October:
+        // rob1's guard check, conversation 26 had no name, "walks away from the conversation with ")
+        r.opened = true;
+        r.openedAt = now;
+        WorldDialog o;
+        o.kind = kc::DialogKind::Open;
+        o.dialogId = r.id;
+        o.pc = r.pcH;
+        o.speaker = r.otherH;
+        if (r.other) kenshi::CharacterName(r.other, o.text);
+        r.otherName = o.text;
+        Log("conversation %u opened for another player's character (its first line came before the window)", r.id);
+        dialogEvents_.push_back(std::move(o));
+    }
     WorldDialog d;
     d.kind = kc::DialogKind::Text;
     d.dialogId = r.id;
     d.pc = r.pcH;
     d.speaker = r.otherH;
     kenshi::ReadDialogueWindowText(dialogue, d.text, d.replies);
+    if (d.replies.size() != r.replies || d.text != r.lastText || !r.waitingSince) {   // a new line: its answers wait from now
+        r.waitingSince = now;
+        r.holdLogged = r.holdReleased = false;
+    }
+    r.replies = d.replies.size();
+    r.lastText = d.text;
     dialogEvents_.push_back(std::move(d));
     return true;
 }
@@ -2616,8 +2835,13 @@ void KenshiWorld::DialogAnswer(uint32_t dialogId, int index) {
     void* dialogue = nullptr;
     {
         std::lock_guard<std::mutex> lk(dialogMutex_);
-        for (const auto& [d, r] : remoteDialogs_)
-            if (r.id == dialogId) { dialogue = d; break; }
+        for (auto& [d, r] : remoteDialogs_)
+            if (r.id == dialogId) {
+                dialogue = d;
+                r.answered = true;
+                r.replies = 0;   // the line is answered: no longer held (its next one is, once shown)
+                break;
+            }
     }
     if (!dialogue) return;
     if (index == kc::kDialogLeave) { EndDialog(dialogId); return; }

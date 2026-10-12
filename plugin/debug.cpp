@@ -2060,7 +2060,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         std::ostringstream o;
         const auto list = w.RemoteDialogList();
         o << "ok n=" << list.size() << " open=" << s.openDialogs() << " busy=" << w.dialogsBusyRefused << " orderbusy=" << s.dialogBusyRefusals()
-          << " swept=" << w.dialogsSwept << " unpaused=" << w.hostDialogUnpaused << " same=" << w.dialogsSameOwnerRefused << " |";
+          << " swept=" << w.dialogsSwept << " unpaused=" << w.hostDialogUnpaused << " same=" << w.dialogsSameOwnerRefused << " held=" << w.dialogLinesHeld << " |";
         for (const auto& d : list) o << " " << d.id << ":" << d.pc << ">" << d.other;
         return o.str();
     }
@@ -2179,6 +2179,73 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         });
         o << "ok n=" << n << " missing=" << missing << " outside=" << outside << " conflicts=" << w.AliasConflicts() << " |" << list;
         return o.str();
+    }
+    // 0.3.4: talkclick <selectIndex> <k|name:part> [click|nogame|unlinked]: (client) that squad member
+    // alone is selected and the k-th nearest standing NPC (or the nearest whose name has that part) is
+    // right-clicked: "click" through the game's own cursor function (its order, or our fallback when it
+    // gives none), "nogame" as if the game had given no order (our fallback alone), "unlinked" a talk
+    // order whose NPC handle means nothing on the host (the host finds it by kind and place).
+    // Answer: ok <name> hooks=<order hooks entered> sent=<fallback talk orders> logged=<lines>
+    if (cmd == "talkclick") {
+        size_t sel = 0;
+        std::string which, mode = "click";
+        in >> sel >> which >> mode;
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kc::Vec3 mp, p;
+        if (!me || !kenshi::GetPosition(me, mp)) return "err";
+        std::string part;
+        if (which.rfind("name:", 0) == 0) {
+            part = which.substr(5);
+            std::replace(part.begin(), part.end(), '_', ' ');
+        }
+        const size_t k = which.empty() || !part.empty() ? 0 : std::strtoul(which.c_str(), nullptr, 10);
+        std::vector<kenshi::Character*> all;
+        kenshi::ActiveCharacters(all);
+        std::vector<std::pair<float, kenshi::Character*>> nearby;
+        for (kenshi::Character* c : all) {
+            kc::Handle h;
+            if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsDown(c) || kenshi::IsAnimal(c) || kenshi::InPlayerSquad(c) ||
+                !kenshi::GetPosition(c, p))
+                continue;
+            if (std::string nm; !part.empty() && (!kenshi::CharacterName(c, nm) || nm.find(part) == std::string::npos)) continue;
+            nearby.emplace_back((p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z), c);
+        }
+        std::sort(nearby.begin(), nearby.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        if (k >= nearby.size()) return "err no such NPC";
+        kenshi::Character* npc = nearby[k].second;
+        std::string name;
+        kenshi::CharacterName(npc, name);
+        const int sent0 = w.talkClicksSent, logged0 = w.talkClicksLogged;
+        bool ok = false;
+        if (mode == "unlinked") {
+            kc::Handle nh;
+            if (!kenshi::GetHandle(npc, nh)) return "err";
+            kc::Command c;
+            c.kind = kc::CommandKind::Task;
+            c.via = kc::TaskVia::TaskNearest;
+            c.task = kc::kTaskTalk;
+            c.add = true;
+            c.subject = nh;
+            c.subject.serial ^= 0x5A5A5A5Au;   // a handle nobody has
+            kenshi::ObjectTemplate(npc, c.itemSid);
+            kenshi::GetPosition(npc, c.subjectPos);
+            c.pos = c.subjectPos;
+            w.QueueLocalOrder(squad[sel], c);
+            ok = true;
+        } else {
+            kenshi::WithSelection(me, [&] {
+                if (mode == "nogame") {
+                    w.ClickGaveNoOrder(npc, false);
+                    ok = true;
+                } else {
+                    ok = kenshi::CallCharacterRightClick(npc);
+                }
+            });
+        }
+        return std::string(ok ? "ok " : "err ") + name + " sent=" + std::to_string(w.talkClicksSent - sent0) +
+               " logged=" + std::to_string(w.talkClicksLogged - logged0) + " cantalk=" + std::to_string(kenshi::CallCanTalk(npc));
     }
     if (cmd == "talkto") {   // talkto <selectIndex> <k|npc|dlg|name:part>: select that squad member alone, order it to talk to the k-th nearest NPC (npc: the last spawned; dlg: the NPC of the last client conversation, host; name:part the nearest whose name has that part, '_' for spaces)
         size_t sel = 0;

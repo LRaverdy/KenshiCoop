@@ -642,6 +642,15 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 - « Parler » d'un joueur à un PNJ de sa propre conversation : `TalkTargetBusy(from, …)` ne refuse
   jamais pour lui ; même perso → `ResendDialog` ; autre perso → `EndDialog` puis la nouvelle ;
   conversation du jeu avec un de ses persos sans fenêtre → `IWorld::EndConversationOf`.
+- 0.3.4 (`kc/talk.h`) : chez le client, le crochet de `PlayerInterface::<personnage sous le curseur>`
+  (`hk_charCursor`) compte les hooks d'ordre entrés pendant un clic droit (`t_orderHooks`) ; aucun →
+  `KenshiWorld::ClickGaveNoOrder` (journal, et ordre « parler » de secours selon
+  `kc::talk::DecideClick`). L'ordre « parler » porte le type et la place du PNJ (`itemSid`,
+  `subjectPos`) ; l'hôte le retrouve par `NpcByKindAndPlace` quand le handle ne désigne pas ce PNJ.
+  Chez l'hôte, `UpdateRemoteDialogs` (thread du jeu, chaque image) garde la minuterie de réplique
+  (`Dialogue`+0x230) des conversations affichées chez un client tant qu'elles attendent une réponse
+  (`kc::talk::HoldLine`) ; `NoteDialogText` envoie `Open` (avec le nom) avant la première réplique
+  d'une conversation dont la fenêtre n'a pas été vue.
 
 ### Inventaires (`SendInventories`, `ClientInventoryDiff`, `HostInvOp`)
 1. L'hôte envoie l'inventaire complet de chaque entité dont l'empreinte a changé ; celui d'un

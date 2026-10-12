@@ -259,6 +259,9 @@ const FunctionSig kFunctions[FnCount] = {
     {"ProspectingWindow::showT", 0x48E9E0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x81, 0xEC, 0x90, 0x00, 0x00}},
     {"GameWorld::<camera target>", 0x785F90, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x89, 0x80, 0x05, 0x00}},
     {"PlayerInterface::<selected nearest>", 0x7F4BA0, {0x40, 0x53, 0x55, 0x41, 0x54, 0x48, 0x83, 0xEC, 0x40, 0x33, 0xED, 0x0F}},
+    // ---- 0.3.4: a client's click on a character
+    {"PlayerInterface::<character under the cursor>", 0x7FB410, {0x40, 0x55, 0x53, 0x41, 0x54, 0x48, 0x8D, 0x6C, 0x24, 0xB9, 0x48, 0x81}},
+    {"Character::<can be talked to>", 0x67AC00, {0x48, 0x8B, 0x89, 0x80, 0x02, 0x00, 0x00, 0xE9, 0x7A, 0x8B, 0x9A, 0xFF}},
 };
 
 namespace {
@@ -1635,6 +1638,80 @@ bool DialogueEnded(const void* dialogue) {
 
 bool CallEndDialogue(void* dialogue) {
     return DialogueOwner(dialogue) && EndDialogueSeh(dialogue);
+}
+
+namespace {
+constexpr uintptr_t DL_lineCurrent = 0x190, DL_lineNext = 0x198, DL_label = 0x228, DL_lineTimer = 0x230, DL_pauseTimer = 0x234;
+constexpr uintptr_t PI_leftClick = 0x2F1, PI_rightClick = 0x2F3, PI_otherMode = 0x268;
+bool CanTalkSeh(void* fn, Character* c, bool& out) {
+    __try {
+        out = reinterpret_cast<bool (*)(Character*)>(fn)(c);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool ReadDialogueTimers(const void* dialogue, DialogueTimers& out) {
+    out = DialogueTimers{};
+    void* label = nullptr;
+    void* cur = nullptr;
+    void* next = nullptr;
+    if (!dialogue || !Rd(dialogue, DL_label, label) || !Rd(dialogue, DL_lineTimer, out.line) || !Rd(dialogue, DL_pauseTimer, out.pause) ||
+        !Rd(dialogue, DL_lineCurrent, cur) || !Rd(dialogue, DL_lineNext, next))
+        return false;
+    out.label = label != nullptr;
+    out.current = cur != nullptr;
+    out.next = next != nullptr;
+    return true;
+}
+
+bool HoldDialogueLine(void* dialogue, float atLeast) {
+    // only on a dialogue that is still its character's (DialogueOwner: Character+0x280 points back)
+    float t = 0;
+    if (!DialogueOwner(dialogue) || !Rd(dialogue, DL_lineTimer, t)) return false;
+    if (std::isfinite(t) && t >= atLeast) return true;
+    return Wr(dialogue, DL_lineTimer, atLeast);
+}
+
+bool ReadCursorClick(const void* pi, bool& right, bool& left, bool& otherMode) {
+    uint8_t r = 0, l = 0, m = 0;
+    if (!pi || !Rd(pi, PI_rightClick, r) || !Rd(pi, PI_leftClick, l) || !Rd(pi, PI_otherMode, m)) return false;
+    right = r != 0;
+    left = l != 0;
+    otherMode = m != 0;
+    return true;
+}
+
+namespace {
+bool CursorSeh(void* fn, void* pi, Character* target) {
+    __try {
+        reinterpret_cast<void (*)(void*, Character*)>(fn)(pi, target);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool CallCharacterRightClick(Character* target) {
+    PlayerInterface* pi = Player();
+    uint8_t right = 0, left = 0;
+    if (!pi || !IsCharacter(target) || !Rd(pi, PI_rightClick, right) || !Rd(pi, PI_leftClick, left)) return false;
+    // the frame of a right click, as PlayerInterface::update sets it (0x8016D5), then back as it was
+    Wr(pi, PI_rightClick, uint8_t(1));
+    Wr(pi, PI_leftClick, uint8_t(0));
+    const bool ok = CursorSeh(FnAddr(FnCharacterCursor), pi, target);   // through our hook (hk_charCursor)
+    Wr(pi, PI_rightClick, right);
+    Wr(pi, PI_leftClick, left);
+    return ok;
+}
+
+int CallCanTalk(Character* c) {
+    bool v = false;
+    if (!IsCharacter(c) || !CanTalkSeh(FnAddr(FnCharacterCanTalk), c, v)) return -1;
+    return v ? 1 : 0;
 }
 
 bool ReadDialogueWindowText(const void* dialogue, std::string& text, std::vector<std::string>& replies) {

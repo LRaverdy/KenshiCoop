@@ -320,6 +320,60 @@ classe ; seule celle des animaux est détournée pour l'instant. Décalages par 
 1.0.65 : +0x11D0 (zone 0x72xxxx : `OrdersPanel`), +0x780 (`ProspectingWindow` 0x48xxxx), +0x4B0
 (`getSingleton`), +0x1260 (`ForgottenGUI`).
 
+### Clic droit sur un personnage et conversations (0.3.4, A_FAIRE 12/10 points 1, 7, 8)
+
+| Groupe | Enum | Fonction | RVA | Hook | Rôle |
+|---|---|---|---|---|---|
+| parler | `FnCharacterCursor` | `PlayerInterface::<personnage sous le curseur>(Character*)` (notre nom) | `0x7FB410` | client | [D] appelée chaque image par `PlayerInterface::update` (`0x800250`, appel `0x80098F`) et par `0x7FC6E0` (appel `0x7FCA90`), deux arguments, ne rend rien. Choisit le curseur, et à l'image d'un clic droit donne l'ordre (voir plus bas). Prologue `40 55 53 41 54 48 8D 6C 24 B9 48 81` |
+| parler | `FnCharacterCanTalk` | `Character::<peut qu'on lui parle>()` (notre nom) | `0x67AC00` | — | [D] `mov rcx,[rcx+0x280]` puis saut à `0x67AA50` (son `Dialogue`) : le contrôle du jeu avant l'ordre « parler » |
+
+**Ce que fait un clic droit sur un personnage** (`0x7FB410`, `rcx` = `PlayerInterface`, `rdx` = la cible) [D] :
+- `PlayerInterface`+0x2F1 (clic gauche de l'image, mis par `update` en `0x8016B6`) : saut à `0x7F9000`
+  (la sélection). +0x2F3 = **clic droit de l'image** (`0x8016D5`) : sans lui, seul le curseur change
+  (survol). +0x268 : un autre mode de l'interface ; quand il est mis, le clic ne donne aucun ordre.
+- `rdi` = le perso sélectionné le plus proche de la cible (`0x7F4BA0`, sinon `0x7F2F70`) ; aucun :
+  rien.
+- `0x79CBE0(PI, cible)` (« hostile ») : ennemi → si la cible n'est pas en combat (`0x436610`, combat
+  au corps à corps ou à distance) et que `0x67AC00` dit oui, **parler** (curseur 7 ou 8, tâche 12 par
+  `addTaskNearestSelectedCharacter`, saut commun `0x7FC3CB`) ; sinon attaquer (curseur 5, tâches 235,
+  ou 5 puis 16).
+- Non hostile (`0x7FBC0C`) : un perso de la faction du joueur (`0x7916D0`, `Faction`+0x250) a ses
+  propres ordres ; quand `0x5C9750(rdi)` est vrai (`rdi` hors combat et `rdi`+0xD4, sens non établi),
+  un perso dans une cage ou un lit (`Character`+0x2F8 = 2 ou 1) aussi (tâches 76, 201, 228, et
+  `Character::addOrder` `0x5D20D0` directement pour la tâche 26 : **aucun hook d'ordre ne le voit**).
+  Sinon : `0x67AC00` oui → parler (tâche 12), **non → rien du tout** (ni ordre, ni message).
+- `Dialogue::<a une réplique « parle-moi »>` (`0x67AA50`) : vrai si une conversation est en cours
+  (+0xC8) ; sinon il faut des répliques pour l'événement 1 (`EV_PLAYER_TALK_TO_ME`) dans la table
+  +0x1A0, un PNJ qui n'est ni hors d'état (vt 0x30) ni de la faction du joueur (`Faction`+0x250), et
+  une réplique dont les conditions passent pour le perso sélectionné le plus proche
+  (`0x48CED`). Chez un client tout cela est lu sur **sa copie** du PNJ : une copie dont le dialogue ou
+  l'état diffère de l'hôte ne propose pas « parler », et le clic ne produit rien. Le mod le détecte
+  (aucun de ses hooks d'ordre n'a été appelé pendant le clic), le dit dans le journal du client et
+  envoie l'ordre « parler » quand même : l'hôte décide (voir FONCTIONNALITES « Parler »).
+
+**Minuteries d'une conversation** [D] (`Dialogue::update` `0x685090`, `Dialogue::say` `0x67FD80`) :
+- `Dialogue`+0x228 : l'étiquette de la bulle en cours (`0x672320` la place au-dessus de la tête) ;
+  +0x230 : minuterie de la réplique dite, mise par `say` à **2 s + 0,12 s par caractère** ; +0x234 :
+  pause d'une action de dialogue (action 12 de `_doActions`, `0x6823EE`) ; +0x190 réplique en cours,
+  +0x198 suivante, +0x2A0 le `hand` de l'autre.
+- `update` ne décompte ces minuteries que si +0x228 existe **et** que le jeu n'est pas en pause
+  (`GameWorld`+0x8B9, lu en `0x685284` à l'adresse `0x21349C9`). Quand les deux sont sous zéro : sans
+  réplique suivante, ou avec une réplique en cours sans suite (+0x1E1 de la réplique à 0), il appelle
+  `endDialogue` ; si la suite est dite par l'autre (+0x31C de la réplique), il termine celle-ci
+  (`endDialogue(false)`) et la fait continuer dans le `Dialogue` de l'autre (`0x49A85`) ; sinon il
+  dit la suite lui-même.
+- En solo, la fenêtre de conversation met le jeu en pause : rien n'avance tant qu'on n'a pas
+  répondu. Chez l'hôte, la conversation d'un client ne met pas le jeu en pause : une conversation
+  commencée par une bulle (le « Vérifications de contrebande » d'un garde, événement 3) se fermait
+  ou continuait toute seule quand la minuterie de la bulle tombait à zéro (12/10 : 0,15 s et 1 s
+  après l'ouverture chez rob1 et nass4 ; chez rob1 elle a continué dans un autre `Dialogue`, sans nom,
+  avec « Non. » comme si une réponse avait été choisie). Les conversations ouvertes par « parler »
+  n'ont pas de bulle : elles attendaient déjà. Le mod garde +0x230 à 3 s au moins tant que le joueur
+  a des réponses à choisir (`kenshi::HoldDialogueLine`, au plus 5 min sans réponse).
+- La fenêtre de dialogue du jeu (`0x727B20`) termine elle-même une conversation dont la réplique n'a
+  aucune réponse (+0x168 nombre de réponses à 0 → `endDialogue(true)`) : le mod ne garde donc une
+  réplique que si elle a des réponses.
+
 ### Autres adresses de fonctions utilisées directement
 
 | RVA | Fonction | Usage |
@@ -565,7 +619,9 @@ Emplacements de vtable :
 - +0x80 messages en attente des threads de travail (`vector<DT_MSG>` : 1 fin, 2 ouvrir la fenêtre,
   3 la fermer, 4 vider les réponses, 5 réponses, 6 réplique) ; +0x148 terminée (`_hasEnded`, bool) ;
   +0x149 crie (bool) ; +0x150 `me` ; +0x158 `hand` de l'interlocuteur ; +0x258 réponses
-  (`vector<std::string>`) ; +0x278 réplique de l'interlocuteur (`std::string`).
+  (`vector<std::string>`) ; +0x278 réplique de l'interlocuteur (`std::string`) ; +0x190 / +0x198
+  réplique en cours / suivante, +0x228 étiquette de la bulle, +0x230 / +0x234 minuteries (0.3.4 :
+  voir « Clic droit sur un personnage et conversations »).
 - Événements (`EventTriggerEnum`) : 1 = `EV_PLAYER_TALK_TO_ME`, 3 = `EV_I_SEE_NEUTRAL_SQUAD` (le
   contrôle des gardes, « halte »), 8 voleur pris, 44 prime repérée, 45 prisonnier évadé repéré...
 - **`endDialogue(bool)`** `0x674830` [D] (KenshiLib 1.0.65 `0x6740B0` + `0x780`, le même décalage que
@@ -1133,6 +1189,11 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
 - Le jeu prépare les conversations aussi sur des threads de travail. La première réplique peut
   arriver avant l'ouverture de la fenêtre.
 - Ouvrir la fenêtre de conversation met le jeu en pause (`userPause(true)` dans `0x727820`).
+- Hors pause, une conversation commencée par une bulle se ferme ou avance toute seule quand la
+  minuterie de la bulle (2 s + 0,12 s par caractère) est écoulée (`Dialogue::update`) : chez l'hôte,
+  la conversation d'un client n'a pas cette pause (0.3.4 : le mod garde la minuterie).
+- « Parler » n'est proposé par le clic droit que si le jeu trouve une réplique « parle-moi » sur la
+  copie locale du PNJ (`0x67AC00`) ; sinon le clic ne fait rien du tout.
 - `startConversation` / `startPlayerConversation` sont appelés sur le `Dialogue` de l'un ou l'autre
   des deux personnages : le mod regarde les deux côtés (propriétaire du dialogue et cible).
 

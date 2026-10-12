@@ -4,6 +4,30 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
+## v0.3.4 (en cours)
+
+Protocole inchangé (36).
+
+- **Parler à un PNJ (partie du 12/10, Geoffrey puis rob1 bloqués jusqu'à une resync)** : chez un
+  client, le clic droit sur un PNJ ne proposait « parler » que si le jeu **du client** trouvait une
+  réplique « parle-moi » sur sa copie du PNJ ; sinon le clic ne faisait rien, sans ordre ni message
+  (l'hôte n'a reçu aucun ordre « parler » d'eux pendant ces minutes). Maintenant un clic droit qui ne
+  donne aucun ordre est repéré (crochet de `PlayerInterface::<personnage sous le curseur>`,
+  `0x7FB410`) : le journal du client dit pourquoi et ce qu'il sait du PNJ (lié à l'hôte, piloté par
+  l'hôte, captif ici ou chez l'hôte, contrôle « parler » du jeu ici, distance), et pour un PNJ debout
+  l'ordre « parler » part quand même : l'hôte décide. L'ordre nomme aussi le PNJ par son type et sa
+  place : une copie non liée au PNJ de l'hôte est retrouvée chez l'hôte. Un ordre « parler » qu'aucun
+  perso à soi ne peut donner est écrit dans le journal du client.
+- **Conversation lancée par un PNJ fermée aussitôt (contrôle de contrebande, rob1 23:11, nass4
+  22:24)** : le jeu de l'hôte décompte la minuterie de la réplique dite en bulle et ferme ou fait
+  avancer seul la conversation quand elle tombe à zéro ; en solo la fenêtre met le jeu en pause,
+  chez l'hôte la conversation d'un client non. L'hôte garde maintenant cette minuterie tant que le
+  joueur a des réponses à choisir (5 min au plus), et une conversation qui continue dans le dialogue
+  de l'autre perso garde le nom du PNJ. Une conversation que le jeu ferme quand même avant toute
+  réponse est décrite dans le journal de l'hôte.
+- Tests : `TestTalkRules` (unitaire), expérience `npctalk`, commande `talkclick`, `held=` dans
+  `dialogs`. À vérifier en jeu.
+
 ## v0.3.3 (12 octobre 2026)
 
 **Protocole 36 : tout le monde doit installer cette version** (elle ne se connecte pas aux 0.3.1 et
