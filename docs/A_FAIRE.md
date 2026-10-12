@@ -2,6 +2,35 @@
 
 Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a vu.
 
+## 12 octobre 2026, soir : partie entre amis en v0.3.3 (journal de l'hôte `KenshiCoop.log`, 21:35-)
+
+1. **Geoffrey n'arrive pas à parler à Barth (marchand), puis ça marche après une resync (22:15:34).**
+   - Avant la resync, l'hôte ne reçoit **aucun** ordre « talk » de Geoffrey : son jeu n'a rien envoyé
+     (ses autres ordres passent : « medic » 22:11:41, « go to » 22:11:58). Après la resync : « talk order
+     sent: Plopette walks to Barth » (22:15:57), conversation puis commerce normaux.
+   - Indices : de 22:12 à 22:13:27 son rapport dit « 1 off, max offset 48 » (un perso décalé de ~48
+     unités chez lui, en permanence) ; captivité « a merchant caged (Lit) » / « free » répétée
+     (22:09-22:10) pour des marchands couchés dans leur lit, dont Barth (« captivity: Barth in Lit now
+     caged » 22:09:34, « free » 22:09:43).
+   - Pistes : (a) sa copie de Barth n'était pas liée à celle de l'hôte (copie locale ou stand-in sans
+     alias) et le clic ne produisait pas d'ordre capturé ; (b) Barth « en captivité » dans son lit chez
+     lui, ce que le jeu ne laisse pas aborder. Il faut le journal de Geoffrey (`KenshiCoop.log` de son
+     dossier Kenshi, 22:11-22:15) pour trancher ; ajouter un log côté client quand un clic « parler »
+     ne donne pas d'ordre.
+2. **nass4 pose un corps au sol et le corps disparaît (vers 22:16:40).**
+   - Corps `1:117:212280272:1` : « put down » 22:16:39, posé comme chez l'hôte chez les trois clients ;
+     chez rob il était à 377 unités de celui de l'hôte (relevé puis refait tomber), et à 22:16:52
+     « stand-in … for the host's 1:117:212280272:1 is gone here (no longer in the game) » chez rob1.
+   - À vérifier : disparu chez qui (nass4, l'hôte, rob) ; pourquoi la copie de rob a quitté le jeu (zone
+     déchargée ? détruite par le jeu quand le corps est posé loin de la copie ?). Elle doit revenir
+     (« can be recreated ») : vérifier qu'elle revient vraiment.
+3. **Un membre (101-limbs.mod) lâché puis ramassé en boucle par l'hôte** (22:13:46-22:13:49, toutes les
+   0,5 s chez nass4 et Geoffrey : « host dropped item 4960:3941772544 … placed here », « host picked up …
+   removed here ») : un objet au sol que l'IA de l'hôte ramasse et relâche, ou un aller-retour du mod.
+4. **Commerce** (connu, 0.3.2) : la fenêtre se ferme quand la copie du marchand est remplacée par le
+   vrai PNJ ; à faire : faire passer la fenêtre sur le vrai marchand (`ShopTrader`+0xC0) au lieu de la
+   fermer.
+
 ## Lot à faire : travaux de base (agriculture, cuisine, artisanat…) donnés aux persos de chaque joueur
 
 Demande de l'utilisateur (12/10 00:00) : « faire bien la réplication et les tests pour les attributions
