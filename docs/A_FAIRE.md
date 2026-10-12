@@ -79,6 +79,10 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
     Entre-temps « player gone: … halted » (23:17:23 : nass4 parti puis revenu ?). À faire : quand l'hôte
     dit « free » et que la copie est encore dans un lit/une cage, la sortir à chaque rafraîchissement
     (pas seulement au changement), et log si elle y reste.
+12. **« Le nom bouge mais pas le corps » (vers 23:44)** : chez un client, le nom au-dessus d'un perso suit
+    sa position, le corps reste sur place. Probablement une copie restée couchée (ragdoll ou « au lit »,
+    comme Meow au point 11) dont la position avance quand même. Perso et joueur concernés à préciser ; le
+    journal de l'hôte ne montre pas d'écart de position (« 0 off ») à ce moment.
 4. **Commerce** (connu, 0.3.2) : la fenêtre se ferme quand la copie du marchand est remplacée par le
    vrai PNJ ; à faire : faire passer la fenêtre sur le vrai marchand (`ShopTrader`+0xC0) au lieu de la
    fermer.
