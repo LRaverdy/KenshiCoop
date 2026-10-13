@@ -826,6 +826,10 @@ bool ReadPace(const Character* c, uint8_t& gait, float& pace);         // speed 
 Character* AnimOwner(const void* animationClass);
 bool ReadStdString(const void* gameString, std::string& out);   // a std::string as Kenshi's compiler lays it out
 void* AnimationOf(const Character* c);
+// The body's scene node (AnimationClass +0xB0): a ragdoll starts where it is, and a CharMovement
+// teleport does not move it (Character::setPosition does). Game thread only (Ogre scene graph).
+bool BodyNodePosition(Character* c, kc::Vec3& out);
+bool PlaceBodyNode(Character* c, const kc::Vec3& pos);
 std::string TechniqueName(const void* technique);       // CombatTechniqueData: its animation
 std::string AnimDataName(const void* animData);         // AnimationData: its data name
 void* FindTechnique(const std::string& name);           // in the game's list of every technique

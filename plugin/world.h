@@ -761,6 +761,7 @@ private:
         Stage stage = Check;
         bool noRelay = false;   // it took its old place back once when laid down: left for the game to lay down
         bool restopped = false; // 0.3.4: found walking at the check after the teleport: stopped once more
+        bool nodeTold = false;  // 0.3.4: where its body's scene node was, logged once
     };
     std::vector<ReRagdoll> reRagdoll_;                                     // host: teleported bodies to lay down again
     void UpdateReRagdolls();

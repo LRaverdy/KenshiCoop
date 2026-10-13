@@ -151,6 +151,10 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
     **Traité (`fix-char-states`, à tester en jeu : `tpstop`, `suite`, `tpdown`)** : `TeleportCharacters`
     appelle `kenshi::StopCharacter` (halt + `AITaskSystem` `0x5074A0`, ce que fait le bouton stop du
     jeu) sur chaque perso, et l'arrête encore s'il marche au contrôle 0,3 s après.
+    Essai du 13/10 : `tpstop` 4/4. `tpdown` 1/2 (193,5) : autre cause, le corps se recouchait là où
+    était son nœud de scène (resté où il gisait) ; corrigé (`kenshi::PlaceBodyNode`, voir CHANGELOG
+    0.3.4), à relancer. `suite` 30,1 : le membre 0 de l'hôte s'écarte du nouveau venu ; le test mesure
+    depuis l'endroit visé.
 11. **Meow (recrue de nass4) invisible chez nass4 et Geoffrey (23:18-23:36).** Couchée au sac de
     couchage à 23:18:10 (« put in its bed as on the host », inSomething 1, chez les trois clients), levée
     chez l'hôte à 23:18:53 (« Meow now free »), mais **aucun client ne l'a sortie du lit** (pas de « out of

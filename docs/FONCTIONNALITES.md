@@ -811,6 +811,11 @@ la fenêtre du client.
   puis se recouche 0,5 s plus tard s'il est toujours inconscient (un ragdoll lancé juste après une
   téléportation serait projeté). Un personnage porté par quelqu'un est d'abord posé.
 - Test : expérience `tpdown`.
+- **Le corps reste où on l'a envoyé (0.3.4, à vérifier en jeu)** : un ragdoll démarre là où est le
+  nœud de scène du corps, qu'une téléportation ne bouge pas ; le corps reprenait donc sa place
+  d'avant en se recouchant (`tpdown` du 13/10 : 193,5 unités). Le nœud est maintenant placé avec le
+  corps à chaque téléportation et avant qu'il se recouche (aussi chez le client avant chaque chute
+  d'une copie). Journal : « tp: … its body's scene node N units from there: moved with it ».
 - **Fin de la marche et des ordres (0.3.4, à vérifier en jeu)** : chaque perso téléporté reçoit le
   « stop » du jeu (arrêt de la marche, file d'ordres vidée : `kenshi::StopCharacter`), sans toucher à
   ses travaux permanents, puis est arrêté une seconde fois s'il marche encore au contrôle qui suit.

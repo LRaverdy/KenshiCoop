@@ -4926,14 +4926,26 @@ def exp_tpdown(host, cli):
     time.sleep(2)
     own = own_index(host)
     cmd(host, "moverel 0 200 0")
-    time.sleep(10)
+    last = None
+    for _ in range(20):   # until member 0 got there (stands still)
+        time.sleep(1)
+        cur = cmd(host, "where 0")[1]
+        if cur == last:
+            break
+        last = cur
     cmd(host, f"kosquad {own}")
     time.sleep(4)
+    # 0.3.4: measured from where member 0 stood when the TP sent the body next to it (the TP's target):
+    # a character that arrives a few units from another one makes both step apart afterwards
+    sent_to = vec(cmd(host, "where 0")[1])
     log("tp", cmd(host, "tpplayer 2"))
     time.sleep(5)
     p0, pc = vec(cmd(host, "where 0")[1]), vec(cmd(host, f"where {own}")[1])
     pcc = vec(cmd(cli, f"where {own}")[1])
-    check("TP admin (perso a terre) : il arrive pres de l'hote", dist(p0, pc) < 30, f"{dist(p0, pc):.1f}")
+    hl = host_log()
+    log("host's tp lines:", " | ".join(l.split("  ", 1)[-1] for l in hl.splitlines() if " tp: " in l)[-900:])
+    check("TP admin (perso a terre) : il arrive pres de l'hote", dist(sent_to, pc) < 30,
+          f"{dist(sent_to, pc):.1f} de l'endroit vise, {dist(p0, pc):.1f} du membre 0 maintenant")
     check("TP admin (perso a terre) : le client le voit au meme endroit", dist(pc, pcc) < 3, f"{dist(pc, pcc):.2f}")
     summary()
 
@@ -5483,11 +5495,16 @@ def exp_suite(host, cli):
         if cur == last:
             break
         last = cur
+    # 0.3.4: measured from where member 0 stood when the TP sent the character next to it: on 13/10
+    # (08:07) the character arrived 22 units from that spot, then member 0 itself stepped 51 units away
+    # from the newcomer (30.1 between them)
+    sent_to = vec(cmd(host, "where 0")[1])
     cmd(host, "tpplayer 2")
     time.sleep(3)
     p0, pc = vec(cmd(host, "where 0")[1]), vec(cmd(host, f"where {own}")[1])
     pcc = vec(cmd(cli, f"where {own}")[1])
-    check("TP admin : le perso du joueur arrive pres de l'hote", dist(p0, pc) < 30, f"{dist(p0, pc):.1f}")
+    check("TP admin : le perso du joueur arrive pres de l'hote", dist(sent_to, pc) < 30,
+          f"{dist(sent_to, pc):.1f} de l'endroit vise, {dist(p0, pc):.1f} du membre 0 maintenant")
     # knocked out in the save's fights, it lies there again: each game lays its own ragdoll (a body is
     # stood up to fall again only beyond kc::motion::kRelayOffset, 20 units)
     vt = cmd(host, f"vitals {own}")[1]
@@ -6719,6 +6736,7 @@ def exp_animalshop(host, cli):
     time.sleep(4)
     animals1_h, animals1_c = cmd(host, "squadanimals")[1], cmd(cli, "squadanimals")[1]
     log("squad animals host", animals0_h, "->", animals1_h, "/ client", animals0_c, "->", animals1_c)
+    log("host, the bought animal right after the sale:", " | ".join(l.split("  ", 1)[-1] for l in host_log().splitlines() if "bought animal now" in l)[-600:])
     n = lambda s: int((s.split() + ["0", "0"])[1]) if s.startswith("ok") else -1
     check("animaux (boutique) : l'animal rejoint l'escouade chez l'hote et le client", n(animals1_h) == n(animals0_h) + 1 and n(animals1_c) == n(animals1_h),
           f"hote {animals1_h} / client {animals1_c}")
@@ -6763,16 +6781,27 @@ def exp_prospect(host, cli):
     time.sleep(1)
     st_c2 = cmd(cli, "prospectstate")[1]
     check("prospection : un second appui la ferme", "visible=0" in st_c2, st_c2)
-    log("host presses PROSPECT for its own character:", cmd(host, "prospect 0"))
+    # 0.3.4: the game refuses PROSPECT indoors ("I need to go outside to do this.") or off solid ground
+    # (checkPlayerOrderForProblems 0x5D1940, task 150): in kctest_town member 0 stands in a building
+    # (floor group 9 in the dumps of 12/10 02:37 and 13/10 10:57, window never shown). The host prospects
+    # with one of its own characters that is outside (floor group below 9), as a player would.
+    d = dump(host, "h_prospect")
+    keys = sorted(d["squad"])
+    floors = {i: int(d["char"].get(k, {}).get("floor", "-1")) for i, k in enumerate(keys)}
+    outside = [i for i, f in floors.items() if i != own and 0 <= f < 9]
+    hi = outside[0] if outside else 0
+    log("host squad floor groups (9+: in a building):", floors, "-> prospects with member", hi)
+    log("host presses PROSPECT for its own character:", cmd(host, f"prospect {hi}"))
     st_h2 = "?"
     for _ in range(20):
         time.sleep(0.5)
         st_h2 = cmd(host, "prospectstate")[1]
         if "visible=1" in st_h2:
             break
-    check("prospection : l'hote prospecte comme en solo", "visible=1" in st_h2, st_h2)
+    check("prospection : l'hote prospecte comme en solo", "visible=1" in st_h2,
+          st_h2 + ("" if outside else " (aucun perso de l'hote dehors : le jeu refuse a l'interieur)"))
     check("prospection : le client n'en voit rien", "visible=1" not in cmd(cli, "prospectstate")[1], cmd(cli, "prospectstate")[1])
-    log("host closes it:", cmd(host, "prospect 0"))
+    log("host closes it:", cmd(host, f"prospect {hi}"))
     time.sleep(1)
     log("host presses PROSPECT for the client's character:", cmd(host, f"prospect {own}"))
     time.sleep(6)
