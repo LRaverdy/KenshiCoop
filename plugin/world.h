@@ -214,6 +214,15 @@ public:
     void TrackBuilding(const kc::Handle& h) override;
     void TakeBuildingRemovals(std::vector<kc::Handle>& out) override;
     bool RemoveBuilding(const kc::Handle& h) override;
+    // ---- player statistics (0.3.5, plugin/player_stats_ui.cpp): KenshiCoop_stats\<save>.txt next to
+    // the game. <save>: the save this world was loaded from (SaveManager's last request when the world
+    // became ready), then the name the host saves it under (hk_saveManagerSave: the stats follow the
+    // world into its new save). A new game never saved: "nouvelle partie".
+    bool LoadPlayerStats(std::string& text) override;
+    bool SavePlayerStats(const std::string& text) override;
+    void NoteHostSave(const std::string& name);        // the host's game saves under that name (not an autosave)
+    std::wstring PlayerStatsPath() const;               // the file the stats go to now
+    const std::string& StatsWorldName() const { return statsWorld_; }
     void TakeLocalBuildActions(std::vector<kc::BuildAction>& out) override;
     bool ExecuteBuildAction(const kc::BuildAction& a, std::string& refused) override;
     // What RootObjectFactory::createBuilding gets in build mode.
@@ -628,6 +637,8 @@ private:
     void RenameSpawned(const kc::Handle& before, const kc::Handle& after);
     void ResetWorldBound();
     uint32_t generation_ = 0;
+    std::string statsWorld_;                   // player statistics: the save name their file follows
+    std::set<std::wstring> statsBackedUp_;     // files already copied to .bak this run
     bool holding_ = false, pausedByHold_ = false;
     bool exporting_ = false;
     std::string exportFolder_;

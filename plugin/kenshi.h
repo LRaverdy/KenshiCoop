@@ -405,6 +405,7 @@ inline constexpr uintptr_t MS_anatomy = 0x190;       // lektor<HealthPartStatus*
 inline constexpr uintptr_t SM_localSavePath = 0x50;  // std::string (VS2010 layout)
 inline constexpr uintptr_t SM_userSavePath = 0x78;   // std::string
 inline constexpr uintptr_t SM_signal = 0xA0;         // int: pending save/load operation, 0 = idle
+inline constexpr uintptr_t SM_name = 0xB0;           // std::string: name of the last save/load request (load 0x47B5BF, save 0x47B978); 0.3.5
 inline constexpr uintptr_t SM_location = 0xD8;       // std::string: folder of the last save/load request
 // HealthPartStatus
 inline constexpr uintptr_t HP_flesh = 0x40;
@@ -770,6 +771,7 @@ bool GetGameHours(double& out);
 bool SetGameHours(double hours);
 // Save management (deferred operations, executed by the game a frame later).
 bool SaveManagerBusy();                                     // a save/load is pending or running
+bool LastSaveName(std::string& out);                       // the save named by the last save/load request (SaveManager +0xB0)
 bool ShowLoadWindow();                                      // opens the game's "Load" window
 size_t LocalTaskCount(Character* c);                        // tasks waiting in its own task system
 bool DropLocalTasks(Character* c);                          // it drops them (Character::reThinkCurrentAIAction)

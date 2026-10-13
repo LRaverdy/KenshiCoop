@@ -1931,6 +1931,11 @@ bool SaveManagerBusy() {
     return !sm || !Rd(sm, off::SM_signal, signal) || signal != 0;
 }
 
+bool LastSaveName(std::string& out) {
+    void* sm = SaveManagerInstance();
+    return sm && ReadGameString(reinterpret_cast<uint8_t*>(sm) + off::SM_name, out) && !out.empty();
+}
+
 bool SaveFolder(std::string& out) {
     void* sm = SaveManagerInstance();
     bool user = false;

@@ -965,6 +965,7 @@ const MessageRule kMessageRules[] = {
     {Msg::SquadRequest, AuthRole::InGame, AuthSubject::OwnCharacter, "squad request"},
     {Msg::JobState, AuthRole::HostOnly, AuthSubject::None, "job state"},
     {Msg::AnimalShop, AuthRole::HostOnly, AuthSubject::None, "animal shop"},
+    {Msg::PlayerStats, AuthRole::HostOnly, AuthSubject::None, "player stats"},
 };
 } // namespace
 const char* MsgName(Msg type) {
@@ -1042,6 +1043,7 @@ const char* MsgName(Msg type) {
     case Msg::JobState: return "JobState";
     case Msg::AnimalShop: return "AnimalShop";
     case Msg::AnimalBuy: return "AnimalBuy";
+    case Msg::PlayerStats: return "PlayerStats";
     }
 #pragma warning(pop)
     return nullptr;

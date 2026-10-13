@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <limits>
 #include <map>
@@ -24,6 +25,7 @@
 #include "kc/call_scopes.h"
 #include "kc/protocol.h"
 #include "kc/pack.h"
+#include "kc/player_stats.h"
 #include "kc/session.h"
 #include "kc/streaming.h"
 #include "kc/talk.h"
@@ -1041,6 +1043,11 @@ struct FakeWorld : IWorld {
     void TakeAnimEvents(std::vector<std::pair<Handle, AnimEvent>>& out, bool) override { out.swap(animPending); animPending.clear(); }
     void ApplyAnim(const Handle& h, const AnimEvent& e) override { animApplied.emplace_back(h.serial, e); }
     TimeState GetTime() override { return time; }
+    // player statistics: this world's file (0.3.5)
+    std::string statsFile;
+    int statsSaves = 0;
+    bool LoadPlayerStats(std::string& text) override { text = statsFile; return !statsFile.empty(); }
+    bool SavePlayerStats(const std::string& text) override { statsFile = text; ++statsSaves; return true; }
     void SetTime(const TimeState& t) override { time = t; }
     bool SetGameHours(double hours) override { time.gameHours = hours; ++hourSets; return true; }
     int hourSets = 0;
@@ -1706,6 +1713,7 @@ static void TestFuzz() {
     add([](Writer& w) { BuildPlace m; m.netId = 3; m.sid = "hut"; m.parentSid = "house"; Encode(w, m); });
     add([](Writer& w) { BuildStateMsg m; m.entries = {{1, "hut", {1, 2, 3}, 5, 1}}; Encode(w, m); });
     add([](Writer& w) { BuildMaterialsMsg m; m.entries = {{1, {2, 3}}}; Encode(w, m); });
+    add([](Writer& w) { PlayerStatsMsg m; PlayerStats p; p.key = "steam:1"; p.name = "a"; p.bestSkillName = "Force"; m.players = {p, p}; Encode(w, m); });
     add([](Writer& w) { Encode(w, BuildRemove{4, "hut", {}}); });
     add([](Writer& w) { BuildAction m; m.sid = "shop"; Encode(w, m); });
     add([](Writer& w) { Encode(w, StallMsg{90}); });   // fix G6
@@ -1767,6 +1775,7 @@ static void TestFuzz() {
         case Msg::BuildPlace: { BuildPlace m; Decode(r, m); break; }
         case Msg::BuildState: { BuildStateMsg m; Decode(r, m); break; }
         case Msg::BuildMaterials: { BuildMaterialsMsg m; Decode(r, m); break; }
+        case Msg::PlayerStats: { PlayerStatsMsg m; Decode(r, m); break; }
         case Msg::BuildRemove: { BuildRemove m; Decode(r, m); break; }
         case Msg::BuildAction: { BuildAction m; Decode(r, m); break; }
         case Msg::Stall: { StallMsg m; Decode(r, m); break; }
@@ -6873,6 +6882,214 @@ static void TestClientJobs() {
     }
 }
 
+// 0.3.5: player statistics, the pure part (kc/player_stats.h): the book and its file, the distance
+// filter, the page text, the message.
+static void TestPlayerStats() {
+    std::printf("player stats: book, file round trip, merge, distance filter, page text, message\n");
+    PlayerStatsBook book;
+    PlayerStats& a = book.Get("steam:77", "Walker");
+    a.playSeconds = 3725.5; a.sessions = 3; a.firstSeen = 1760000000; a.lastSeen = 1760300000; a.distance = 12345.25;
+    a.knockouts = 2; a.deaths = 1; a.characters = 2; a.recruits = 1; a.cashEarned = 1200; a.cashSpent = 3400; a.itemsLooted = 57;
+    a.buildings = 4; a.research = 2; a.bestSkill = 45; a.bestSkillName = "Attaque";
+    PlayerStats& h = book.Get("steam:1", "Hôte #1");
+    h.host = true; h.sessions = 1; h.playSeconds = 10;
+    CHECK(book.size() == 2);
+    book.Get("steam:77", "Walker2");   // a new name: the same person
+    CHECK(book.size() == 2 && book.Find("steam:77")->name == "Walker2");
+    CHECK(book.Get("name:x", "bad\nname\x01").name == "bad name ");   // one line, no control characters
+    book.Get("steam:77", "Walker");
+    // file round trip
+    const std::string text = book.Serialize();
+    PlayerStatsBook back;
+    CHECK(back.Parse(text));
+    CHECK(back.size() == book.size());
+    for (const auto& [k, p] : book.all()) CHECK(back.Find(k) && *back.Find(k) == p);
+    // unknown fields of a later version are skipped; a CRLF file (edited by hand) reads the same
+    std::string later = text;
+    later.insert(later.find("name Walker"), "future_field 12\n");
+    std::string crlf;
+    for (char c : later) { if (c == '\n') crlf += '\r'; crlf += c; }
+    PlayerStatsBook b2;
+    CHECK(b2.Parse(crlf) && b2.Find("steam:77") && *b2.Find("steam:77") == *book.Find("steam:77"));
+    std::string err;
+    PlayerStatsBook bad;
+    CHECK(!bad.Parse("hello\nplayer x\nend\n", &err) && bad.size() == 0 && !err.empty());
+    CHECK(!bad.Parse(""));
+    CHECK(bad.Parse("kc-player-stats 1\nplayer k\nsessions abc\ndistance -5\nplay_seconds nan\n") && bad.Find("k") &&
+          bad.Find("k")->sessions == 0 && bad.Find("k")->distance == 0 && bad.Find("k")->playSeconds == 0);   // a cut file keeps its last player
+    // merge: a file read while counting already went on
+    PlayerStatsBook live;
+    PlayerStats& l = live.Get("steam:77", "Walker");
+    l.playSeconds = 100; l.sessions = 1; l.firstSeen = 1760400000; l.lastSeen = 1760400100; l.distance = 5; l.bestSkill = 20; l.bestSkillName = "Force";
+    l.characters = 3;
+    live.Merge(back);
+    const PlayerStats* m = live.Find("steam:77");
+    CHECK(m && m->sessions == 4 && std::abs(m->playSeconds - 3825.5) < 1e-6 && m->firstSeen == 1760000000 && m->lastSeen == 1760400100);
+    CHECK(m && std::abs(m->distance - 12350.25) < 1e-6 && m->bestSkill == 45 && m->bestSkillName == "Attaque" && m->characters == 3);
+    CHECK(live.Find("steam:1") && live.Find("steam:1")->host);
+    // sorted: online first by player number, then the most recent
+    PlayerStatsBook order;
+    order.Get("a", "A").lastSeen = 5;
+    order.Get("b", "B").lastSeen = 9;
+    PlayerStats& c = order.Get("c", "C"); c.online = true; c.playerId = 2;
+    PlayerStats& d = order.Get("d", "D"); d.online = true; d.playerId = 1;
+    const auto sorted = order.Sorted();
+    CHECK(sorted.size() == 4 && sorted[0].key == "d" && sorted[1].key == "c" && sorted[2].key == "b" && sorted[3].key == "a");
+    // distance: walking counts, a teleport or a resync jump does not, nor jitter; game speed counts
+    CHECK(std::abs(DistanceStep({0, 0, 0}, {7, 0, 0}, 0.5, 1.0f) - 7.0f) < 1e-4f);
+    CHECK(DistanceStep({0, 0, 0}, {0.2f, 0, 0}, 0.5, 1.0f) == 0.0f);
+    CHECK(DistanceStep({0, 0, 0}, {5000, 0, 0}, 0.5, 1.0f) == 0.0f);
+    CHECK(DistanceStep({0, 0, 0}, {250, 0, 0}, 0.5, 3.0f) > 0.0f);      // running at speed x3
+    CHECK(DistanceStep({0, 0, 0}, {250, 0, 0}, 0.5, 1.0f) == 0.0f);     // too far for speed x1
+    CHECK(DistanceStep({0, 0, 0}, {50, 0, 0}, 0.5, 0.0f) == 0.0f);      // paused: only the slack
+    CHECK(DistanceStep({0, 0, 0}, {std::numeric_limits<float>::quiet_NaN(), 0, 0}, 0.5, 1.0f) == 0.0f);
+    // text
+    CHECK(FormatPlayTime(45) == "45 s" && FormatPlayTime(754) == "12 min" && FormatPlayTime(3725) == "1 h 02 min");
+    CHECK(FormatDistance(3500) == "350 m" && FormatDistance(12345) == "1,2 km");
+    CHECK(FormatDate(0) == "—" && FormatDate(1760000000).size() == 10);
+    std::vector<PlayerStats> page = {*book.Find("steam:1"), *book.Find("steam:77")};
+    page[0].online = true; page[0].playerId = 1;
+    const std::string pt = PlayerStatsPageText(page, true);
+    CHECK(pt.find("Hote ##1") != std::string::npos);                   // '#' doubled: MyGUI reads "#" as a colour code
+    // Kenshi's fonts: codes 32-126 and 8127-8217 only (no accented letter)
+    CHECK(FoldAccents("Été, Œuvre, côte — ok") == "Ete, OEuvre, cote — ok");
+    bool fontSafe = true;
+    for (size_t i = 0; i < pt.size(); ++i) {
+        const unsigned char ch = static_cast<unsigned char>(pt[i]);
+        if (ch == 0xE2 && i + 2 < pt.size() && static_cast<unsigned char>(pt[i + 1]) == 0x80) { i += 2; continue; }   // U+2000-203F
+        if (ch >= 0x80 || (ch < 32 && ch != '\n')) fontSafe = false;
+    }
+    CHECK(fontSafe);
+    CHECK(pt.find("Premiere") != std::string::npos && pt.find("Meilleure competence") != std::string::npos);
+    CHECK(pt.find("(en ligne)") != std::string::npos && pt.find("(hors ligne)") != std::string::npos);
+    CHECK(pt.find("#8C6E1B") != std::string::npos);                    // the host's gold, darkened for the parchment
+    CHECK(pt.find("1 h 02 min") != std::string::npos && pt.find("1,2 km") != std::string::npos && pt.find("Attaque 45") != std::string::npos);
+    CHECK(pt.find("1 200 cats") != std::string::npos);
+    CHECK(PlayerStatsPageText({}, false).find("Aucune statistique") != std::string::npos);
+    // message round trip
+    PlayerStatsMsg msg;
+    msg.players = page;
+    Writer w;
+    Encode(w, msg);
+    Reader r(w.data(), w.size());
+    CHECK(PeekType(r) == Msg::PlayerStats);
+    PlayerStatsMsg got;
+    CHECK(Decode(r, got) && got.players.size() == 2 && got.players[0] == page[0] && got.players[1] == page[1]);
+    Reader cut(w.data(), w.size() - 3);
+    PeekType(cut);
+    PlayerStatsMsg none;
+    CHECK(!Decode(cut, none));
+    CHECK(MessageRuleFor(Msg::PlayerStats) && MessageRuleFor(Msg::PlayerStats)->role == AuthRole::HostOnly);
+    static_assert(uint8_t(Msg::PlayerStats) == 66, "PlayerStats keeps its number (clients of 0.3.4 ignore it)");
+    // the file: written atomically, read back, folder made; save names made safe
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / ("kc_stats_test_" + std::to_string(_getpid()));
+    const std::filesystem::path file = dir / "KenshiCoop_stats" / (SafeFileStem("Ma partie: 2/3") + ".txt");
+    CHECK(SafeFileStem("Ma partie: 2/3") == "Ma partie_ 2_3" && SafeFileStem("..") == "monde" && SafeFileStem("Été") == "Été");
+    CHECK(WriteFileAtomic(file, text));
+    CHECK(WriteFileAtomic(file, text + "# again\n"));   // over the old one
+    std::string read;
+    CHECK(ReadTextFile(file, read) && read == text + "# again\n");
+    CHECK(!std::filesystem::exists(std::filesystem::path(file).concat(".tmp")));
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+// 0.3.5: player statistics in a session: the host counts a client's walk (not its teleport), its
+// knock-out and play time, the client receives them, the file is written when it leaves and a new
+// session of the host on the same world continues their totals.
+static void TestPlayerStatsSession() {
+    std::printf("player stats: counted by the host, sent to the client, saved and continued after a rejoin\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    AtMenu(cw);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.name = "Host"; hc.port = ++g_port; hc.steamId = 1;
+    SessionConfig cc; cc.name = "Walker"; cc.port = hc.port; cc.steamId = 77;
+    PlayerStats walkerBefore;
+    {
+        Session host(hw, hc, Now, Quiet("host"));
+        Session cli(cw, cc, Now, Quiet("cli"));
+        std::string err;
+        CHECK(host.Host(&err));
+        CHECK(host.playerStats().size() == 1 && host.playerStats()[0].host && host.playerStats()[0].sessions == 1);
+        CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+        const uint8_t me = cli.localId();
+        host.Assign(FakeWorld::H(2), me);
+        Run({{&host, &hw}, {&cli, &cw}}, 2.0, [&] { return cw.controllable.size() == 1; });
+        Run({{&host, &hw}, {&cli, &cw}}, Session::kStatsTick + 0.2);   // a stats tick since
+        auto walker = [&]() -> PlayerStats {
+            for (const auto& p : host.playerStats()) if (p.key == "steam:77") return p;
+            return {};
+        };
+        CHECK(walker().sessions == 1 && walker().online && walker().playerId == me && walker().characters == 1);
+        // a walk: counted
+        const Vec3 start = hw.chars[2].pos;
+        hw.chars[2].dest = {start.x + 120, 0, 0};
+        Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return Dist(hw.chars[2].pos, hw.chars[2].dest) < 1e-3f; });
+        Run({{&host, &hw}, {&cli, &cw}}, 0.7);
+        const double walked = walker().distance;
+        CHECK(walked > 90 && walked < 150);
+        // a teleport (admin TP, resync jump): not counted
+        hw.chars[2].pos = hw.chars[2].dest = {9000, 0, 9000};
+        Run({{&host, &hw}, {&cli, &cw}}, 1.2);
+        CHECK(walker().distance - walked < 1.0);
+        // a knock-out, then death
+        hw.chars[2].vit.flags = kVitUnconscious;
+        Run({{&host, &hw}, {&cli, &cw}}, 0.8);
+        CHECK(walker().knockouts == 1 && walker().deaths == 0);
+        hw.chars[2].vit.flags = kVitUnconscious | kVitDead;
+        Run({{&host, &hw}, {&cli, &cw}}, 0.8);
+        CHECK(walker().knockouts == 1 && walker().deaths == 1);
+        // the best skill of their characters
+        hw.skills[2] = std::vector<float>(kStatCount, 3.5f);
+        hw.skills[2][1] = 27.9f;
+        Run({{&host, &hw}, {&cli, &cw}}, 6.0, [&] { return walker().bestSkill > 0; });
+        CHECK(walker().bestSkill == 27 && walker().bestSkillName == StatNameFr(1));
+        CHECK(walker().playSeconds > 5);
+        // the client gets everyone's (on join, then every 10 s when they change)
+        Run({{&host, &hw}, {&cli, &cw}}, 12.0, [&] {
+            for (const auto& p : cli.playerStats()) if (p.key == "steam:77" && p.knockouts == 1 && p.bestSkill == 27) return true;
+            return false;
+        });
+        bool seen = false, hostSeen = false;
+        for (const auto& p : cli.playerStats()) {
+            if (p.key == "steam:77") seen = p.online && p.knockouts == 1 && p.deaths == 1 && p.distance > 90;
+            if (p.host) hostSeen = p.online && p.playerId == 1 && p.name == "Host";
+        }
+        CHECK(seen && hostSeen);
+        const uint32_t v = cli.playerStatsVersion();
+        CHECK(v > 0);
+        // the client leaves: the file is written at once
+        const int saves = hw.statsSaves;
+        walkerBefore = walker();
+        cli.Leave();
+        Run({{&host, &hw}}, 3.0, [&] { return host.players().empty(); });
+        CHECK(hw.statsSaves > saves && hw.statsFile.find("player steam:77") != std::string::npos);
+        CHECK(!walker().online);
+        for (const auto& p : cli.playerStats()) CHECK(!p.online);   // kept after the session, offline
+        host.Leave();   // the host stops: written again
+    }
+    PlayerStatsBook saved;
+    CHECK(saved.Parse(hw.statsFile) && saved.Find("steam:77") && saved.Find("steam:77")->sessions == 1 && saved.Find("steam:1"));
+    CHECK(saved.Find("steam:77") && std::abs(saved.Find("steam:77")->distance - walkerBefore.distance) < 1.0);
+    // another session of the host on this world: the totals go on
+    hw.chars[2].vit.flags = 0;
+    FakeWorld cw2;
+    AtMenu(cw2);
+    SessionConfig hc2 = hc; hc2.port = ++g_port;
+    SessionConfig cc2 = cc; cc2.port = hc2.port; cc2.name = "Walker NewName";
+    Session host(hw, hc2, Now, Quiet("host2"));
+    Session cli(cw2, cc2, Now, Quiet("cli2"));
+    std::string err;
+    CHECK(host.Host(&err));
+    CHECK(JoinAndWait(host, hw, cli, cw2, hc2.port, 3));
+    const PlayerStats* again = nullptr;
+    const auto view = host.playerStats();
+    for (const auto& p : view) if (p.key == "steam:77") again = &p;
+    CHECK(again && again->sessions == 2 && again->name == "Walker NewName" && again->knockouts == 1 && again->deaths == 1 &&
+          again->distance >= walkerBefore.distance - 1.0 && again->firstSeen == walkerBefore.firstSeen);
+    for (const auto& p : view) if (p.host) CHECK(p.sessions == 2);
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);   // every line out before a crash
     if (std::getenv("KC_ONLY_STREAMING")) {   // the 0.3.1 streaming tests alone
@@ -6880,6 +7097,12 @@ int main() {
         TestGroupCentres();
         TestPerPlayerStreaming();
         TestStandInArea();
+        std::printf("%d checks, %d failed\n", g_checks, g_failed);
+        return g_failed ? 1 : 0;
+    }
+    if (std::getenv("KC_ONLY_STATS")) {   // the 0.3.5 player statistics tests alone
+        TestPlayerStats();
+        TestPlayerStatsSession();
         std::printf("%d checks, %d failed\n", g_checks, g_failed);
         return g_failed ? 1 : 0;
     }
@@ -6948,6 +7171,8 @@ int main() {
     TestLootCreatures();   // every creature kind lootable from a client (leviathans...)
     TestBigBodyDrop();
     TestTalkRules();   // 0.3.4: talk clicks without an order, NPC by kind and place, lines kept waiting
+    TestPlayerStats();   // 0.3.5: player statistics (book, file, filter, message)
+    TestPlayerStatsSession();
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

@@ -154,7 +154,10 @@ void Session::HostBuildings(double now) {
     // The host player's own placements: built already; every client builds them too.
     world_.TakeLocalPlacements(scratchPlacements_);
     for (const auto& lp : scratchPlacements_)
-        if (lp.created.valid()) announce(lp.place, lp.created, "the host");
+        if (lp.created.valid()) {
+            announce(lp.place, lp.created, "the host");
+            if (PlayerStats* st = StatsOf(hostId_)) ++st->buildings;   // player statistics
+        }
     // Clients' placements: built here first, then everywhere.
     for (auto& [pid, p] : pendingPlaces_) {
         Handle created;
@@ -175,6 +178,7 @@ void Session::HostBuildings(double now) {
             continue;
         }
         announce(p, created, "[" + nameOf(pid) + "]");
+        if (PlayerStats* st = StatsOf(pid)) ++st->buildings;   // player statistics
     }
     pendingPlaces_.clear();
     // Buying and dismantling asked by clients: the host's game does it; a purchase is replayed by

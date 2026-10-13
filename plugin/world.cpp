@@ -66,6 +66,13 @@ std::string ToUtf8(const fs::path& p) {
     return std::string(u.begin(), u.end());
 }
 fs::path FromUtf8(const std::string& s) { return fs::path(std::u8string(s.begin(), s.end())); }
+// A name of the game (system code page) in UTF-8.
+std::string AcpToUtf8(const std::string& s) {
+    const int n = MultiByteToWideChar(CP_ACP, 0, s.c_str(), int(s.size()), nullptr, 0);
+    std::wstring w(size_t(std::max(n, 0)), L'\0');
+    if (n > 0) MultiByteToWideChar(CP_ACP, 0, s.c_str(), int(s.size()), w.data(), n);
+    return ToUtf8(fs::path(w));
+}
 } // namespace
 
 KenshiWorld::KenshiWorld(const Config& cfg) : cfg_(cfg) {}
@@ -128,6 +135,10 @@ void KenshiWorld::BeginFrame(bool live) {
             }
             generation_ = identity_.generation();
             ResetWorldBound();
+            // player statistics: their file follows the save this world was loaded from (the last
+            // request the SaveManager had: this load; a new game never saved has none)
+            std::string save;
+            statsWorld_ = kenshi::LastSaveName(save) && save.rfind("KenshiCoop", 0) != 0 ? AcpToUtf8(save) : std::string();
             if (!v.leftovers.empty())
                 Log("new world (generation %u): every per-world state reset; %d stand-in(s) of the previous one still here, removed", generation_,
                     destroyed);
@@ -4570,6 +4581,45 @@ void KenshiWorld::Toast(const std::string& msg) {
 std::vector<std::string> KenshiWorld::RecentToasts() {
     std::lock_guard<std::mutex> lk(toastMutex_);
     return recentToasts_;
+}
+
+// ---- player statistics (0.3.5): KenshiCoop_stats\<save>.txt next to the game
+std::wstring KenshiWorld::PlayerStatsPath() const {
+    const std::string stem = kc::SafeFileStem(statsWorld_.empty() ? std::string("nouvelle partie") : statsWorld_);
+    return (fs::path(GameDir()) / L"KenshiCoop_stats" / FromUtf8(stem + ".txt")).wstring();
+}
+
+bool KenshiWorld::LoadPlayerStats(std::string& text) {
+    text.clear();
+    const fs::path path(PlayerStatsPath());
+    const bool ok = kc::ReadTextFile(path, text) && !text.empty();
+    Log("player stats: world \"%s\", file %s%s", statsWorld_.c_str(), ToUtf8(path).c_str(), ok ? "" : " (none yet)");
+    return ok;
+}
+
+bool KenshiWorld::SavePlayerStats(const std::string& text) {
+    const fs::path path(PlayerStatsPath());
+    std::error_code ec;
+    // the file as it was before this run of the game, once: a copy next to it (.bak)
+    if (statsBackedUp_.insert(path.wstring()).second && fs::exists(path, ec)) {
+        fs::path bak = path;
+        bak += L".bak";
+        fs::copy_file(path, bak, fs::copy_options::overwrite_existing, ec);
+    }
+    std::string err;
+    if (!kc::WriteFileAtomic(path, text, &err)) {
+        Log("player stats: cannot write %s: %s", ToUtf8(path).c_str(), err.c_str());
+        return false;
+    }
+    return true;
+}
+
+void KenshiWorld::NoteHostSave(const std::string& name) {
+    if (name.empty() || name.rfind("KenshiCoop", 0) == 0) return;   // our own saves for joiners and imports
+    const std::string utf8 = AcpToUtf8(name);
+    if (utf8 == statsWorld_) return;
+    Log("player stats: the world is saved as \"%s\": its statistics follow it (were \"%s\")", utf8.c_str(), statsWorld_.c_str());
+    statsWorld_ = utf8;
 }
 
 std::vector<std::string> KenshiWorld::TakeToasts() {

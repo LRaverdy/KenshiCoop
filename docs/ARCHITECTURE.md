@@ -224,6 +224,7 @@ Ordre dans `Tick()` (`main.cpp`) :
 | Météo (`Weather`) | dès qu'une région change, et tout toutes les 10 s |
 | Effets météo (`Effects`) | dès qu'ils apparaissent, bougent ou finissent ; l'ensemble complet toutes les 5 s |
 | Intérêt (qui est répliqué) | recalculé toutes les 0,5 s |
+| Statistiques des joueurs (`PlayerStats`) | comptées toutes les 0,5 s ; envoyées toutes les 10 s si elles changent et à l'arrivée ; fichier toutes les minutes |
 
 ### Cadences côté client
 
@@ -347,7 +348,7 @@ Ordre dans `Tick()` (`main.cpp`) :
 Version du protocole : **36** (36 : boutique d'animaux (`AnimalShop`, `AnimalBuy`) ; `MachineState` porte le drapeau `kMachFarm` et l'état des cultures d'une ferme, `CropState` ; 35 : monde envoyé compressé : `WorldBegin` et `WorldChunk` portent les tailles décompressées ; `JoinQueue` aussi pour un joueur dans le monde qui attend l'éditeur ; 34 : atelier : `Research`, `ResearchRequest`, `Machines`, `MachineRequest` ; fenêtre Escouade : `SquadState`, `SquadRequest`, `JobState` ; 33 : sacs à dos portés : `BagBind` ; sécurité des acteurs : `Result` ; file d'attente des arrivées : `JoinQueue` ; diplomatie : `Diplomacy` ; carte : `MapMarkers`, `MapPing`) au moment de la rédaction. Elle augmente à chaque changement de
 format, et une version différente est refusée à la connexion.
 
-Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51, 63 à 67, 69, 73 à 79, 81, 84,
+Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51, 63 à 65, 67, 69, 73 à 79, 81, 84,
 86 à 89, 91 et plus) sont refusés par `PeekType`, qui n'accepte que les messages de l'énumération `Msg`
 (`MsgName`). Chaque message a sa règle d'autorité (`kMessageRules`, voir « Contrôle central ») ; sens
 « H→C » : règle `HostOnly`, refusé par l'hôte s'il vient d'un client.
@@ -421,6 +422,7 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | 82 | MapMarkers | H→C | carte : joueurs, position de chaque perso de l'escouade (joueur, perso du joueur, à terre, mort) et escouades hostiles proches, 3 fois par seconde |
 | 83 | MapPing | ⇄ | ping sur la carte (client : demande à l'hôte, au plus un toutes les 0,5 s ; hôte : à tous, avec son id et son joueur) |
 | 85 | Diplomacy | H→C | diplomatie, une partie par message : paires de factions (hors joueur) changées depuis le début, personnages uniques (mort, vivant, emprisonné, par les joueurs), villes (faction, variante) |
+| 66 | PlayerStats | H→C | 0.3.5 : statistiques de tous les joueurs du monde (`kc/player_stats.h`), à l'arrivée d'un joueur puis toutes les 10 s si elles changent ; ignoré par un client 0.3.4 (type inconnu), sans changement de version du protocole |
 | 90 | Result | H→C | sécurité des acteurs (protocole 33) : réponse à une demande (type, `seq` du `Command`, acteur) : rejetée (raison, texte français) ou faite ; le client annule ce qu'il avait prédit (tâche ajoutée au panneau) |
 
 ## Les flux, système par système
@@ -961,6 +963,30 @@ les mêmes partout) ; rien ne part vers l'hôte. Chez l'hôte, le bouton refuse 
 4. L'hôte l'applique (le jeu reconstruit le corps) et la renvoie aux autres. Les éditions de
    l'hôte partent à tout le monde.
 
+### Statistiques des joueurs (0.3.5 : `session_stats.cpp`, `kc/player_stats.h`, `plugin/player_stats_ui.cpp`)
+1. `Session::Host` lit le fichier du monde (`IWorld::LoadPlayerStats` : `KenshiCoop_stats\<sauvegarde>.txt`
+   dans le dossier de Kenshi ; `KenshiWorld` prend le nom de la sauvegarde chargée, `SaveManager` +0xB0,
+   quand le monde devient prêt, puis celui sous lequel l'hôte sauvegarde, crochet de `SaveManager::save`)
+   dans un `PlayerStatsBook` (un `PlayerStats` par joueur, clé `Session::PlayerKey` : `steam:<id>`,
+   sinon `name:<nom>` ; l'hôte : son compte Steam). Une session de plus pour l'hôte.
+2. `FinishJoin` : une session de plus pour le joueur, et il reçoit `PlayerStats` (tous les joueurs).
+3. `HostStats`, deux fois par seconde : temps de jeu (hôte et joueurs dans le monde), pas de chaque
+   perso de l'escouade pour le joueur qui le commande (`kc::DistanceStep` écarte les sauts), K.-O. et
+   morts (drapeaux de santé qui s'allument), personnages par joueur ; toutes les 5 s la meilleure
+   compétence. Toutes les 10 s, `PlayerStats` à tous si le message a changé ; toutes les minutes,
+   `IWorld::SavePlayerStats` (fichier temporaire puis renommage : `kc::WriteFileAtomic`).
+4. Compteurs d'événements là où l'hôte exécute : `HostTradeOp` (cats), `HostInvOp` (objets pris d'un
+   coffre, d'un corps, d'un animal), `HostBuildings` (poses, l'hôte compris), `HostWorkshopRequests`
+   (recherches mises en file), `RecruitJoined` (recrues).
+5. Fichier écrit aussi au départ d'un joueur (`OnDisconnect`), en fin de session (`Leave`, avant de tout
+   effacer) et quand le nom de la sauvegarde change (`PlayerStatsUiUpkeep`). Après la session, la
+   dernière vue reste affichée (hors ligne).
+6. Client : `ClientStatsPacket` garde la dernière liste reçue (`Session::playerStats()`).
+7. Interface (`PlayerStatsUiUpkeep`, fil du jeu, toutes les 0,5 s) : onglet « JOUEURS » ajouté au
+   `TabControl` de la fenêtre de gestion (`ManagementScreen` +0x2D0) par les exports de MyGUI, une
+   `EditBox` habillée `Kenshi_WordWrap` dedans ; texte (`kc::PlayerStatsPageText`, codes couleur de
+   MyGUI) donné quand l'onglet est affiché et qu'il a changé. Voir MOTEUR.md, « Onglet JOUEURS ».
+
 ### Resync
 - `RequestResync` (bouton, ou commande `resync [id]`) envoie `Resync` au joueur.
 - Le client quitte la session et rejoint la dernière adresse 1,5 s plus tard (`steam::LastJoin`) :
@@ -1020,6 +1046,8 @@ les mêmes partout) ; rien ne part vers l'hôte. Chez l'hôte, le bouton refuse 
 | `common/include/kc/admin.h`, `src/admin.cpp` | syntaxe des commandes `admin`, calcul de l'XP du jeu, registre du mode dieu (testés par `TestAdmin`) |
 | `plugin/steam_link.cpp`, `steam_link.h` | relais Steam P2P, amis, présence |
 | `plugin/util.cpp`, `util.h` | journal (et son archive), configuration, SHA-256 |
+| `common/include/kc/player_stats.h`, `src/player_stats.cpp`, `src/session_stats.cpp` | statistiques des joueurs : livre, fichier, filtre de distance, texte de l'onglet, message `PlayerStats` ; comptage par l'hôte |
+| `plugin/player_stats_ui.cpp`, `player_stats_ui.h` | onglet « JOUEURS » de la fenêtre de gestion (MyGUI du jeu) |
 | `plugin/debug.cpp`, `debug.h` | canal de commandes de test |
 | `tests/test_main.cpp` | tests unitaires (protocole, fuzzing, sessions avec faux monde) |
 | `tools/coop_test.py` | harnais de test en jeu |

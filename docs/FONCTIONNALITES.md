@@ -1442,6 +1442,70 @@ la fenêtre du client.
   du test, corrigé, voir CHANGELOG : un poste sans rien à faire n'a pas d'ouvrier, le test met une
   recherche en file).
 
+### Statistiques des joueurs 🟡 (v0.3.5, tests unitaires ; expérience `playerstats` et onglet à vérifier en jeu)
+- **Ce que voit le joueur** : dans la fenêtre de gestion du jeu (celle de la carte, ouverte par le
+  bouton « MAP »), un **onglet « JOUEURS »** à côté de CARTE, FACTION, RECHERCHE, ESCOUADES,
+  DIALOGUE, IA. Sur le parchemin de l'onglet DIALOGUE (même habillage, `Kenshi_WordWrap`, avec sa
+  barre de défilement), un bloc par joueur de ce monde : son nom **à sa couleur** (assombrie pour se
+  lire sur le parchemin) s'il est en ligne, en gris sinon, « (en ligne) » / « (hors ligne) », « hôte »
+  pour l'hôte ; puis :
+  - temps de jeu, nombre de sessions, première et dernière session (date) ;
+  - distance parcourue par ses persos, K.-O. subis, morts ;
+  - personnages (ceux qu'il commande maintenant), recrues, meilleure compétence (nom et niveau) ;
+  - commerce (cats gagnés et dépensés), objets fouillés ;
+  - constructions lancées, recherches lancées.
+  Les joueurs en ligne d'abord (par numéro), puis les autres, le plus récent d'abord. Le texte se
+  met à jour quand l'onglet est affiché et que les chiffres changent, sans perdre l'endroit où on a
+  fait défiler. Hôte et clients voient la même chose.
+- **Qui compte, et comment** : l'hôte seul (il fait tourner tous les persos et exécute les demandes
+  des clients). Un joueur est reconnu par son compte Steam (`steam:<id>`, la même clé que pour lui
+  rendre ses persos, `Session::PlayerKey`), sinon par son nom ; son dernier nom est gardé. L'hôte
+  est un joueur comme les autres (sa clé : son compte Steam). Deux fois par seconde
+  (`Session::HostStats`, `common/src/session_stats.cpp`) :
+  - **temps de jeu** de l'hôte et de chaque joueur dans le monde (de la fin de son chargement à son
+    départ ; une image figée plus de 5 s ne compte que 5 s), dernière session ;
+  - **distance** : pour chaque perso de l'escouade, le pas depuis la lecture précédente, compté pour
+    le joueur qui le commande à ce moment. Un pas plus long que ce qu'un perso peut courir
+    (`kc::DistanceStep` : 200 unités par seconde de jeu × vitesse du jeu, + 10) est un saut (TP admin,
+    resync, zone rechargée) : pas compté ; ni les pas d'un perso à terre, porté ou mort, ni le bruit
+    sous 0,5 unité. En pause : 10 unités au plus. Une unité ≈ 10 cm ;
+  - **K.-O. et morts** : le drapeau inconscient ou mort de la santé qui s'allume (le premier regard
+    sur un perso ne compte rien) ;
+  - **personnages** de chaque joueur ; toutes les 5 s, la **meilleure compétence** de ses persos (le
+    niveau entier le plus haut jamais vu, `StatNameFr`).
+  Aux endroits où l'hôte exécute : **commerce** (`HostTradeOp` : achat payé → dépensé, vente →
+  gagné), **objets fouillés** (`HostInvOp` : un objet qui passe d'un coffre, d'un corps ou d'un
+  animal à un de ses persos ou à son sac, en quantité), **constructions** (`HostBuildings` : une
+  pose bâtie, l'hôte compris), **recherches** (`HostWorkshopRequests` : mise en file acceptée),
+  **recrues** (`RecruitJoined` : PNJ recruté dans sa conversation, animal acheté), **sessions**
+  (début de l'hébergement, `FinishJoin`).
+- **Non compté** (pas mesurable de façon fiable avec ce que l'hôte a) : le commerce, la fouille,
+  les recherches et les recrues **de l'hôte lui-même** (ils se font dans son jeu, sans passer par le
+  mod ; l'onglet ne les affiche pas pour lui) ; les **ennemis mis K.-O. ou tués** (le jeu ne garde pas
+  d'attaquant facile à lire : à étudier) ; les **membres perdus** (pas de champ « membre coupé » connu
+  dans `HealthPartStatus`).
+- **Sauvegarde** : un fichier texte par monde, `KenshiCoop_stats\<sauvegarde>.txt` dans le dossier
+  de Kenshi (`kc-player-stats 1`, un bloc `player … end` par joueur, voir `kc/player_stats.h`). Le
+  nom est celui de la sauvegarde que l'hôte a chargée (`SaveManager` +0xB0, lu quand le monde est
+  prêt) ; quand l'hôte sauvegarde sous un autre nom (pas une sauvegarde automatique), les
+  statistiques suivent ce nom (crochet `SaveManager::save`). Une nouvelle partie jamais
+  sauvegardée : `nouvelle partie.txt`. Écrit **par fichier temporaire puis renommage** (un plantage
+  pendant l'écriture laisse l'ancien) : à l'hébergement (relu), **toutes les minutes**, au **départ
+  d'un joueur**, à la **fin de la session** et quand le nom change. Le fichier d'avant le premier
+  enregistrement de la partie est copié en `.bak`. Un joueur qui revient dans ce monde (même
+  session ou plus tard) **continue ses totaux** : une session de plus, mêmes chiffres.
+- **Réseau** : message `PlayerStats` (66, hôte → client, fiable) : tous les joueurs du monde, à
+  l'arrivée d'un joueur puis toutes les 10 s s'ils ont changé. **Pas de changement de version du
+  protocole** : un client 0.3.4 ignore un type inconnu (`PeekType` le refuse, `OnPacket` l'oublie
+  sans rien couper), comme `BuildMaterials` en 0.3.1.
+- **Commandes de test** : `pstats` (les chiffres, une ligne), `pstatssave` (écrit le fichier, rend
+  son chemin), `pstatsui [state|select|text]` (l'onglet). Expérience `playerstats`.
+- **Sans accents** dans l'onglet : les polices de Kenshi n'ont que les codes 32-126 et 8127-8217
+  (`kenshi_fonts.xml`), une lettre accentuée ne s'afficherait pas ; le texte passe par
+  `kc::FoldAccents` (« Premiere », « competence »…).
+- **À vérifier en jeu** : l'onglet (place des huit boutons, texte et couleurs lisibles), le nom de la sauvegarde lu à +0xB0 après un chargement depuis le menu « Continuer », la
+  distance à vitesse 3.
+
 ### Non vérifiés
 - Recrutement par dialogue.
 - Ces actions tournent chez l'hôte, mais rien ne garantit encore que leur résultat apparaît

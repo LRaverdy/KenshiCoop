@@ -209,6 +209,12 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
   pour un joueur arrivé après toi, v0.3.4) ;
   leur cadre de portrait coloré ; des pings
   partagés. La minicarte se déplace à la souris et se redimensionne. Réglages : fenêtre Multijoueur, « Affichage ».
+- **Statistiques des joueurs** (v0.3.5, à vérifier en jeu) : ouvre la fenêtre de gestion du jeu
+  (bouton MAP, celle de la carte) et choisis l'onglet **« JOUEURS »** : pour chaque joueur de ce
+  monde, à sa couleur et en ligne ou non, temps de jeu, sessions, distance parcourue, K.-O. subis,
+  morts, personnages et recrues, meilleure compétence, commerce, objets fouillés, constructions et
+  recherches. L'hôte les compte et les garde d'une session à l'autre, par sauvegarde, dans le
+  dossier `KenshiCoop_stats` de Kenshi : un joueur qui revient dans ce monde continue ses totaux.
 
 Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui reste à faire :
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).

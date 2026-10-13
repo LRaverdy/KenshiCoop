@@ -19,6 +19,7 @@
 #include "debug.h"
 #include "hooks.h"
 #include "map.h"
+#include "player_stats_ui.h"
 #include "kc/session.h"
 #include "kenshi.h"
 #include "overlay.h"
@@ -950,6 +951,8 @@ void Tick(bool live) {
     }
     SetCrashPhase("tick: map scene");
     UpdateMapScene(*g_session, *g_world, g_cfg, live);   // map markers, minimap, heads, squad bar, pings
+    SetCrashPhase("tick: player stats tab");
+    PlayerStatsUiUpkeep(*g_session, *g_world, live);   // the JOUEURS tab of the management window
     SetCrashPhase("tick: resync");
     ResyncUpkeep();
     AfterLeavingHostWorld();

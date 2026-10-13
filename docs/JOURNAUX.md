@@ -138,6 +138,12 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
 | `resync: X reloads the host's world` | resync demandé |
 | `* X left` | départ d'un joueur |
 | `session failed: …` | la session s'est arrêtée (connexion perdue, monde déchargé…) |
+| `player stats: world "S", file …\KenshiCoop_stats\S.txt` puis `player stats: N player(s) read from this world's file` / `none saved for this world yet` | (0.3.5) l'hôte héberge : statistiques des joueurs de ce monde relues |
+| `player stats: X plays this world for the first time` / `X is back (session N, T played so far)` | (0.3.5) un joueur arrive : une session de plus pour lui |
+| `player stats: saved (a player left / session end / …, N player(s))` / `NOT saved …` / `cannot write …` | (0.3.5) fichier des statistiques écrit (toutes les minutes sans ligne, sauf échec) |
+| `player stats: the world is saved as "S": its statistics follow it (were "T")` | (0.3.5) l'hôte a sauvegardé sous un autre nom : les statistiques vont dans le fichier de ce nom |
+| `player stats: X's character Y died` | (0.3.5) une mort comptée pour son joueur |
+| `player stats tab: "JOUEURS" added to the management window (tab 8 of 8, text box made)` / `… the management window was made again: the tab too` / `MyGUI exports …` | (0.3.5) l'onglet de la fenêtre de gestion |
 
 ### Ce que font les joueurs
 | Ligne | Sens |

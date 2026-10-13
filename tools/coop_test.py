@@ -8938,6 +8938,102 @@ def exp_research(host, cli):
     summary()
 
 
+def exp_playerstats(host, cli):
+    """0.3.5 player statistics: the host counts the client's walk and play time, the client gets
+    them, the world's file is written (KenshiCoop_stats) and read back when the client comes back
+    (one more session, the totals go on), and the JOUEURS tab of the management window shows them
+    on both sides."""
+    def pstats(pid):
+        """pid's statistics: key -> fields (debug command pstats)."""
+        ok, t = cmd(pid, "pstats")
+        players = {}
+        if ok and ";" in t:
+            for part in t.split(";", 1)[1].split():
+                fields = part.split(":")
+                d = {"name": fields[0]}
+                for f in fields[1:]:
+                    if "=" in f:
+                        k, v = f.split("=", 1)
+                        d[k] = v
+                players[d.get("key", fields[0])] = d
+        return players
+
+    def client_line(players):
+        for d in players.values():
+            if d.get("host") == "0" and d.get("key", "").endswith(str(CLIENT_FAKE_ID)):
+                return d
+        return {}
+
+    def num(d, k):
+        try:
+            return float(d.get(k, "-1"))
+        except ValueError:
+            return -1.0
+
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    h0 = client_line(pstats(host))
+    log("host's line for the client at first:", h0)
+    check("stats : l'hote a une ligne pour le client (en ligne, 1 session au moins)", h0.get("online") == "1" and num(h0, "sessions") >= 1, h0)
+    own = own_index(host)
+    log("client walks:", cmd(cli, f"moverel {own} 400 0"))
+    time.sleep(25)
+    h1 = client_line(pstats(host))
+    log("after the walk:", h1)
+    check("stats : distance comptee pendant la marche (> 10 m)", num(h1, "dist") - num(h0, "dist") > 100, f"{num(h0, 'dist')} -> {num(h1, 'dist')}")
+    check("stats : temps de jeu qui avance", num(h1, "play") - num(h0, "play") > 15, f"{num(h0, 'play')} -> {num(h1, 'play')}")
+    check("stats : persos du client comptes", num(h1, "chars") >= 1, h1.get("chars"))
+    time.sleep(12)   # one send (every 10 s when they change)
+    c1 = client_line(pstats(cli))
+    log("the client's view:", c1)
+    check("stats : le client recoit les statistiques (sa distance)", num(c1, "dist") >= num(h1, "dist") - 1, f"client {num(c1, 'dist')} host {num(h1, 'dist')}")
+    host_lines = [d for d in pstats(cli).values() if d.get("host") == "1"]
+    check("stats : le client voit aussi la ligne de l'hote", len(host_lines) == 1 and host_lines[0].get("online") == "1", host_lines)
+    ok, path = cmd(host, "pstatssave")
+    log("stats file:", ok, path)
+    text = ""
+    if ok and os.path.exists(path):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    check("stats : fichier du monde ecrit (KenshiCoop_stats)", ok and "KenshiCoop_stats" in path and text.startswith("kc-player-stats 1"), path)
+    check("stats : le fichier a la ligne du client", f"player steam:{CLIENT_FAKE_ID}" in text, text[:200])
+    # the JOUEURS tab of the management window, on both sides
+    for who, pid in (("hote", host), ("client", cli)):
+        log(who, "window:", cmd(pid, "mapui open"))
+        time.sleep(2)
+        log(who, "tab:", cmd(pid, "pstatsui select"))
+        time.sleep(1.5)
+        ok, st = cmd(pid, "pstatsui state")
+        log(who, "tab state:", st)
+        check(f"stats ({who}) : onglet JOUEURS dans la fenetre du jeu, affiche", ok and "tab=1" in st and "text=1" in st and "shown=1" in st, st)
+        ok, txt = cmd(pid, "pstatsui text")
+        check(f"stats ({who}) : texte de l'onglet (en ligne, distance)", ok and "(en ligne)" in txt and "Distance parcourue" in txt and "Temps de jeu" in txt,
+              txt[:300])
+        log(who, "close:", cmd(pid, "mapui close"))
+        time.sleep(1)
+    # the client leaves and comes back: the file is written, its totals go on, one more session
+    logged = len(host_log())
+    log("client leaves:", cmd(cli, "leave"))
+    time.sleep(5)
+    new = host_log()[logged:]
+    check("stats : fichier ecrit au depart du joueur", "player stats: saved (a player left" in new, new[-300:])
+    before = client_line(pstats(host))
+    log("client's line once gone:", before)
+    check("stats : le client parti est hors ligne", before.get("online") == "0", before)
+    ok, t = cmd(cli, "join " + os.environ["KC_JOIN"]) if os.environ.get("KC_JOIN") else cmd(cli, "join")
+    log("join again:", ok, t)
+    wait_for(cli, lambda s: s.get("state") == "connected" and s.get("ready") == "1", 240, "client back in the host's world")
+    cmd(cli, "editdone")
+    time.sleep(6)
+    after = client_line(pstats(host))
+    log("client's line once back:", after)
+    check("stats : au retour, une session de plus", num(after, "sessions") == num(before, "sessions") + 1, f"{before.get('sessions')} -> {after.get('sessions')}")
+    check("stats : au retour, la distance continue", num(after, "dist") >= num(before, "dist") - 1, f"{before.get('dist')} -> {after.get('dist')}")
+    check("stats : journal 'is back (session'", "is back (session" in host_log()[logged:], "")
+    summary()
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="what", required=True)
@@ -8969,6 +9065,10 @@ def main():
     sk.add_argument("--save", default="kctest_base")
     sk.add_argument("--minutes", type=int, default=20, help="duration in minutes (default 20)")
     sk.add_argument("--keep", action="store_true")
+    ps = sub.add_parser("playerstats", help="0.3.5: player statistics counted by the host (walk, play time), received by the client, "
+                        "saved to KenshiCoop_stats and continued after a rejoin; the JOUEURS tab of the game's window")
+    ps.add_argument("--save", default="kctest_base")
+    ps.add_argument("--keep", action="store_true")
     wk = sub.add_parser("walk")
     wk.add_argument("--save", default="kctest_base")
     t = sub.add_parser("trace")
@@ -9426,6 +9526,8 @@ def main():
             exp_bodies(host, cli)
         elif a.what == "trace":
             exp_trace(host, cli)
+        elif a.what == "playerstats":   # 0.3.5
+            exp_playerstats(host, cli)
         elif a.what == "walk":
             exp_walk(host, cli)
         elif a.what == "soak":

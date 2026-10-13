@@ -25,6 +25,7 @@
 #include "kc/loot.h"
 #include "kc/motion.h"
 #include "kc/net.h"
+#include "kc/player_stats.h"
 #include "kc/protocol.h"
 #include "kc/streaming.h"
 #include "kc/work_orders.h"
@@ -450,6 +451,11 @@ public:
     virtual void TrackBuilding(const Handle& h) { (void)h; }
     virtual void TakeBuildingRemovals(std::vector<Handle>& out) { out.clear(); }
     virtual bool RemoveBuilding(const Handle& h) { (void)h; return false; }
+    // ---- player statistics (host, 0.3.5): the text of this world's statistics file
+    // (KenshiCoop_stats/<save>.txt next to the game, kc/player_stats.h). Load: false when there is
+    // none yet; save: written atomically (temp file, then renamed over the old one).
+    virtual bool LoadPlayerStats(std::string& text) { text.clear(); return false; }
+    virtual bool SavePlayerStats(const std::string& text) { (void)text; return false; }
     virtual void TakeLocalBuildActions(std::vector<BuildAction>& out) { out.clear(); }
     // ok: done; refused: why not (French, for the player)
     virtual bool ExecuteBuildAction(const BuildAction& a, std::string& refused) { (void)a; refused.clear(); return false; }
@@ -755,6 +761,15 @@ public:
     bool netIdHandle(uint32_t netId, Handle& out) const;   // the character a map marker names
     static constexpr double kPingLife = 10.0, kPingInterval = 0.5;
     static constexpr size_t kPingsPerPlayer = 5;
+    // ---- player statistics (session_stats.cpp, kc/player_stats.h, 0.3.5). Host: counted for every
+    // player of its world (itself too), read from the world's file when it starts hosting and written
+    // back every minute, when a player leaves and when the session ends (IWorld::LoadPlayerStats /
+    // SavePlayerStats); sent to everyone (PlayerStats) on join and every 10 s when they change.
+    // Client: the host's, as last received. Online players first. The version changes with them.
+    std::vector<PlayerStats> playerStats() const;
+    uint32_t playerStatsVersion() const { return statsVersion_; }
+    bool SavePlayerStatsNow(const char* why);   // host: write the file now (false: not hosting, not written)
+    static constexpr double kStatsTick = 0.5, kStatsSendInterval = 10.0, kStatsSaveInterval = 60.0;
 
 private:
     using Sample = motion::Sample;
@@ -1459,6 +1474,23 @@ private:
     double offset_ = 0;
     bool offsetValid_ = false;
     uint32_t rttMs_ = 0;
+
+    // ---- player statistics (session_stats.cpp)
+    void HostStats(double now);                       // host: play time, distance, K.-O., deaths, skills; send and save
+    void StatsStart();                                // host: read the world's file, the host's session begins
+    void StatsJoined(const RemotePlayer& p);          // host: a player is in the world (FinishJoin)
+    void SendPlayerStats(PeerId onlyTo);              // host: to that player (kNoPeer: everyone in the world)
+    PlayerStats* StatsOf(uint8_t playerId);           // host: that player's line (null: unknown player)
+    std::string HostStatsKey() const;
+    void ClientStatsPacket(Reader& r);
+    PlayerStatsBook statsBook_;                       // host
+    bool statsActive_ = false;                        // host: counting (the file was read)
+    struct StatsChar { Vec3 pos; bool havePos = false; uint8_t vit = 0; bool haveVit = false; };
+    std::unordered_map<uint32_t, StatsChar> statsChars_;   // host: per squad character (netId)
+    double statsAt_ = 0, statsSendAt_ = 0, statsSaveAt_ = 0, statsSkillAt_ = 0;
+    uint64_t statsSentHash_ = 0;
+    std::vector<PlayerStats> clientStats_;            // client: the host's
+    uint32_t statsVersion_ = 0;
 
     // host per-tick caches
     std::unordered_map<uint32_t, EntityState> stateCache_;

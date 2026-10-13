@@ -808,6 +808,9 @@ Emplacements de vtable :
 ### SaveManager
 - +0x50 chemin local, +0x78 chemin utilisateur, +0xA0 opération en attente (0 = rien), +0xD8
   dossier de la dernière demande.
+- +0xB0 `std::string` : **nom** de la dernière demande (chargement `0x47B5BF`, sauvegarde `0x47B978`),
+  +0xA4 sauvegarde automatique (`save`, `0x47B993`). Lu par le mod quand un monde devient prêt : le
+  nom de la sauvegarde chargée, auquel les statistiques des joueurs sont rattachées (0.3.5).
 - Les sauvegardes sont dans `%LOCALAPPDATA%\kenshi\save\` sur cette machine.
 
 ### Gestionnaire de zones (`*(0x21349C0)`)
@@ -2199,3 +2202,55 @@ KenshiLib (`InventoryGUI::playSound(eventId, Item*)` dépend d'un objet) : les p
 - **Compilateur** : sous `/EHsc` (le mod), une exception non C++ (violation d'accès) rattrapée par
   un `__except` **ne lance pas les destructeurs** des objets C++ entre la faute et le gestionnaire
   (vérifié : `TestCallScopeRepair`, une portée laissée ouverte). Kenshi lui-même est en `/EHa`.
+
+## 15. Onglet « JOUEURS » de la fenêtre de gestion (statistiques des joueurs, 0.3.5) [D]
+
+`plugin/player_stats_ui.cpp`. La fenêtre de gestion (`Kenshi_OverviewWindow.layout`) est faite par le
+chargeur de mise en page de MyGUI ; le mod y ajoute un onglet par les **exports de
+`MyGUIEngine_x64.dll`** (MyGUI 3.2, compilé avec MSVC 2010 comme le jeu : `MSVCP100`/`MSVCR100`),
+exactement comme le chargeur le fait pour les onglets du jeu.
+
+- **`ManagementScreen` +0x2D0** : le `TabControl*` « TabsMain » (lu par le jeu en `0x48BB90`
+  `getIndexSelected`, `0x48BBB0` `getItemAt`, et à la création de la fenêtre en `0x49FA08`).
+  ManagementScreen +0x2C8 : un widget à qui le gestionnaire d'onglets passe le nom de l'onglet choisi (vt 0x88) [D, partiel].
+- **Création de la fenêtre** (`0x49FA0F`–`0x49FA4A`) : `setSmoothShow(false)`, puis
+  `setButtonDefaultWidth(largeur du TabControl (+0x28) / getItemCount())`, `setIndexSelected(0)`,
+  puis les noms traduits (`findItemWith("MAP")` → `setItemName`, etc.). Le mod refait le même
+  partage de la barre après avoir ajouté son onglet (8 boutons).
+- **Gestionnaire d'onglets** (`eventTabChangeSelect`, délégué posé en `0x49F990`–`0x49FA01`,
+  fonction `0x49BF90` via le saut `0x514AB`) : index `ITEM_NONE` (`[0x212F520]`) → rien ; sinon le
+  titre (+0x2C8, vt 0x88) prend le nom de l'onglet (`IItemContainer` du `TabControl` +0x478, vt 0x30),
+  puis `cmp rsi, 6 ; ja` → **seuls les index 0 à 6** passent par la table de sauts (`0x49C1E0`).
+  Le 8ᵉ onglet (index 7) ne déclenche rien d'autre. Les autres lectures de l'index (`0x495E4A`,
+  `0x49A178`, `0x49A517`, `0x49B575`, `0x49B778`, `0x49B79B`) le comparent à 0, 2, 3 ou 5 : sans effet
+  pour 7.
+- **Exports MyGUI utilisés** (noms décorés dans le code ; adresses : RVA dans `MyGUIEngine_x64.dll`) :
+  - `Widget::createWidgetRealT(type, skin, const FloatCoord&, Align, name)` (`0x1C46F0`) :
+    coordonnées relatives à la largeur / hauteur du parent (Widget +0x28 / +0x2C), `Align` passé par
+    valeur (5ᵉ argument, sur la pile), nom en 6ᵉ ;
+  - `TabControl::onWidgetCreated` (`0x1A6C50`) : tout `TabItem` créé sous le `TabControl` devient un
+    onglet (coordonnées et alignement du modèle « TabItem », `_insertItem(ITEM_NONE, "", item,
+    Any::Null)`) ;
+  - `Widget::setProperty(key, value)` (`0x1C2D00`) : copie ses deux chaînes (le mod les fabrique au
+    format `std::string` de MSVC 2010 : tampon ou pointeur, taille +0x10, capacité +0x18, 40 octets) ;
+    « Caption » d'un `TabItem` → `TabItem::setCaption` (`0x1A8DE0`) → `TabControl::setItemName` ;
+  - `TabControl::findItemIndex(TabItem*)` (compare des pointeurs : sûr même avec un pointeur
+    périmé), `getItemCount`, `getIndexSelected`, `setIndexSelected`, `setButtonDefaultWidth` ;
+  - `EditBox::getVScrollPosition` / `setVScrollPosition` (garder l'endroit lu quand le texte change) ;
+  - `Widget::getVisible`, `getInheritedVisible` (fenêtre ouverte).
+  - `ICroppedRectangle::getWidth` lit +0x20 (Widget +0x28).
+- **Habillage** : la zone de texte est une `EditBox` « Kenshi_WordWrap » (modèle `ResourceLayout` de
+  `data/gui/templates/kenshi_templates.xml` : `Kenshi_GenericInputBoxSkin`, texte
+  `Kenshi_EditBoxStandardText`, police `Kenshi_StandardFont_Medium`, couleur `0.078 0.031 0.024`
+  presque noire sur parchemin, barre `Kenshi_ScrollBarV`), comme l'onglet DIALOGUE, avec
+  `MultiLine`, `Static`, `ReadOnly`, `WordWrap`, `VisibleVScroll` et `MaxTextLength` 65536 (2048 par
+  défaut dans MyGUI). Couleurs par codes `#RRGGBB` dans le texte (`##` pour un « # »).
+- **Polices** (`data/gui/fonts/kenshi_fonts.xml`) : les polices de Kenshi (`Exo2`, `Sentencia`…) ne
+  contiennent que les codes 32 à 126 et 8127 à 8217 (`SubstituteCode` 0) : **aucune lettre accentuée**
+  ne s'affiche. Le texte de l'onglet passe par `kc::FoldAccents` (é → e, Œ → OE ; tirets et
+  guillemets de 8127-8217 gardés).
+- **Sûreté** : rien n'est gardé sans revérification. À chaque passage (0,5 s, fil du jeu, images
+  vivantes), le `TabControl` est relu depuis le singleton (vtable vérifiée), l'onglet retrouvé par
+  `findItemIndex` sur ce `TabControl`, la zone de texte parmi les enfants de l'onglet (Widget +0x3D8,
+  `vector<Widget*>`). Fenêtre refaite ou nouveau monde : l'onglet est refait. Chaque appel est sous
+  `__try/__except`.
