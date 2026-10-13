@@ -357,6 +357,7 @@ void KenshiWorld::EndFrame() {
     if (active_ && client_ && live_) GroundReconcile();
     if (active_ && client_ && live_) UpdateFloorFocus();
     if (active_ && !client_ && live_) UpdateHostRoof();
+    if (active_ && live_) UpdateJobsPanel();   // 0.3.4: host and client, after this frame's job lists and orders
     auto v = std::make_shared<HookView>();
     v->active = active_;
     v->client = client_;
@@ -1950,6 +1951,66 @@ void KenshiWorld::UpdateFloorFocus() {
 // Host: the same for the host's selected (or else followed) character. The host's game hides the
 // floors above it only in the buildings its own build mode made: one a client placed (made here by
 // the mod) kept its roof over the host's character inside (11 October).
+// 0.3.4: the Tâches panel (the job list under the squad bar) shows a job list changed from elsewhere
+// at once. The game rebuilds it only after its own panel clicks and Shift + right clicks
+// (kenshi::ReadJobsPanel): a client's own job shown ahead, the host's lists copied here
+// (ApplyJobList), a client's order run by the host on a character the host has selected, left it
+// as it was until another character was clicked (user report, 13 October). Each frame, the rows of
+// the panel are compared with the shown character's jobs (count, Tasker of each slot, enabled), and
+// the game's own rebuild runs when they differ. Never while the left button is down (a drag in the
+// panel may be under way: its drop reads the rows), and given up after 3 rebuilds that leave the
+// same list stale (no rebuild every frame).
+void KenshiWorld::UpdateJobsPanel() {
+    kenshi::JobsPanelView p;
+    kenshi::ReadJobsPanel(p);
+    if (!p.shown) {
+        panelShown_ = nullptr;
+        panelPending_ = false;
+        return;
+    }
+    if (p.shown != panelShown_) {   // another character: the game built the panel for it on selection
+        panelShown_ = p.shown;
+        panelJobsOn_ = p.jobsOn;
+        panelPending_ = false;
+        panelTries_ = 0;
+    } else if (p.jobsOn != panelJobsOn_) {   // its rows drawn enabled or not (the game's GUI event 6 rebuilds it too)
+        panelJobsOn_ = p.jobsOn;
+        panelPending_ = true;
+    }
+    if (!p.stale && !panelPending_) {
+        panelTries_ = 0;
+        return;
+    }
+    if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) return;
+    const uint64_t key = (uint64_t(reinterpret_cast<uintptr_t>(p.shown)) << 16) ^ (uint64_t(uint32_t(p.jobs)) << 8) ^ uint64_t(uint32_t(p.rows) & 0xFF);
+    if (key != panelKey_) {
+        panelKey_ = key;
+        panelTries_ = 0;
+    }
+    if (!panelPending_ && panelTries_ >= 3) {
+        if (panelTries_ == 3) {
+            panelTries_ = 4;
+            Log("jobs panel: still differs from its %d job(s) after 3 rebuilds (it shows %d); left as it is until the list changes", p.jobs, p.rows);
+        }
+        return;
+    }
+    ++panelTries_;
+    const bool toggled = panelPending_;
+    panelPending_ = false;
+    const bool ok = kenshi::RefreshJobsPanel();
+    ++panelUnlogged_;
+    const double now = NowSeconds();
+    if (now - panelLogAt_ >= 2.0 || !ok) {
+        std::string name;
+        kenshi::CharacterName(p.shown, name);
+        const std::string more = panelUnlogged_ > 1 ? " [" + std::to_string(panelUnlogged_ - 1) + " more since the last line]" : "";
+        Log("jobs panel: %s for %s (%d job(s), the panel showed %d%s)%s", ok ? "rebuilt" : "REBUILD FAILED", name.c_str(), p.jobs, p.rows,
+            toggled ? ", JOBS toggled" : "", more.c_str());
+        panelLogAt_ = now;
+        panelUnlogged_ = 0;
+    }
+}
+
 void KenshiWorld::UpdateHostRoof() {
     const double now = NowSeconds();
     if (now < nextHostRoofCheck_) return;

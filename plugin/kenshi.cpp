@@ -268,6 +268,8 @@ const FunctionSig kFunctions[FnCount] = {
     {"CharacterNameTag::<update>", 0x6E8100, {0x48, 0x8B, 0xC4, 0x55, 0x48, 0x8D, 0x68, 0xD8, 0x48, 0x81, 0xEC, 0x20}},
     // ---- 0.3.4: admin teleport of a knocked-out body
     {"AnimationClass::<set position and direction>", 0x5B18F0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48}},
+    // ---- 0.3.4: the Tâches panel rebuilt when a job list changes from elsewhere
+    {"ForgottenGUI::<refresh jobs panel>", 0x6E2050, {0x48, 0x8D, 0x91, 0xC0, 0x02, 0x00, 0x00, 0x48, 0x8B, 0x49, 0x10, 0xE9}},
 };
 
 namespace {
@@ -5558,6 +5560,84 @@ bool AddPermajob(Character* c, int task, void* subject, const kc::Vec3& location
     if (!HasOrdersReceiver(c) || task < 0) return false;
     const float loc[3] = {location.x, location.y, location.z};
     return AddJobSeh(FnAddr(FnCharAddJob), c, task, subject, loc);
+}
+
+// ---- the Tâches panel shown at once (v0.3.4) [D]
+// The job list under the squad bar is MainBarGUI (*(TheGui 0x21337B0 + 0x10) = *0x21337C0) +0x190.
+// Its rebuild (0x7263B0) empties the MyGUI::ItemBox (+0x20 -> +0xF0) and adds one row per job of the
+// character it shows: rows lektor at +0x40 (count +0x48, array +0x50, 0x40 bytes a row: +0x0 the
+// job's Tasker* from Character::getPermajobData, +0x8 the slot, +0x38 drawn enabled), the character
+// in its own hand (+0x8.., copied from Character+0x60 by 0x726930, which also sets the bar's toggle
+// buttons). The game rebuilds it only from its own paths: the panel's cross and drag (0x7265CE,
+// 0x72669D), the tail of newPlayerTaskSelectedCharacters (0x7FA824) and the MEDIC button (0x7FAE11),
+// which call 0x6E2050 on TheGui (rebuild for the GUI's hand +0x2C0 = 0x2133A70, the character shown),
+// and a JOBS toggle of the shown character (OrdersReceiver 0x508210 posts GUI event 6, whose handler
+// 0x7B66C1 calls 0x6E2050 when the hand is 0x2133A70). Character::addJob (0x5C8DA0),
+// addJobSelectedCharacters, removePermajob and movePermajob called directly (a client's prediction,
+// the host's job lists copied on a client, a client's order run by the host) rebuild nothing: the
+// panel kept the old list until another character was clicked.
+namespace {
+constexpr uintptr_t kRvaShownHand = 0x2133A70;   // TheGui +0x2C0
+constexpr uintptr_t TG_mainBar = 0x10, MB_jobsPanel = 0x190, JP_rowCount = 0x48, JP_rows = 0x50, JP_rowSize = 0x40, JR_tasker = 0x0, JR_enabled = 0x38;
+// the rebuild's own instructions that write / read these fields (another build: the panel is left alone)
+bool JobsPanelLayoutOk() {
+    static int ok = -1;
+    if (ok < 0) {
+        static const uint8_t rowCount[] = {0x44, 0x89, 0x7E, 0x48};   // 0x7263EB mov [rsi+0x48], r15d
+        static const uint8_t rows[] = {0x48, 0x8B, 0x46, 0x50};       // 0x7264D1 mov rax, [rsi+0x50]
+        static const uint8_t shown[] = {0x48, 0x8D, 0x0D};            // 0x7B66E0 lea rcx, [rip+..] (TheGui)
+        uint8_t a[4] = {}, b[4] = {}, c[3] = {};
+        int32_t disp = 0;
+        ok = SafeCopy(a, reinterpret_cast<void*>(Addr(0x7263EB)), 4) && SafeCopy(b, reinterpret_cast<void*>(Addr(0x7264D1)), 4) &&
+                     SafeCopy(c, reinterpret_cast<void*>(Addr(0x7B66E0)), 3) && SafeCopy(&disp, reinterpret_cast<void*>(Addr(0x7B66E3)), 4) &&
+                     !std::memcmp(a, rowCount, 4) && !std::memcmp(b, rows, 4) && !std::memcmp(c, shown, 3) && 0x7B66E7 + intptr_t(disp) == intptr_t(kTheGui)
+                 ? 1
+                 : 0;
+    }
+    return ok == 1;
+}
+void* JobsPanelObject() {
+    void* bar = nullptr;
+    void* panel = nullptr;
+    if (!JobsPanelLayoutOk() || !Rd(reinterpret_cast<void*>(Addr(kTheGui)), TG_mainBar, bar) || !bar || !Rd(bar, MB_jobsPanel, panel)) return nullptr;
+    return panel;
+}
+bool GuiRefreshSeh(void* fn, void* gui) {
+    __try { reinterpret_cast<void (*)(void*)>(fn)(gui); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+bool ReadJobsPanel(JobsPanelView& out) {
+    out = JobsPanelView{};
+    void* panel = JobsPanelObject();
+    out.panel = panel != nullptr;
+    kc::Handle shownH;
+    if (!ReadHandle(reinterpret_cast<void*>(Addr(kRvaShownHand)), shownH) || shownH.type != 1) return out.panel;   // nobody, or not a character
+    out.shown = Resolve(shownH);
+    if (!out.shown || !panel) return out.panel;
+    out.jobs = PermajobCount(out.shown);
+    out.jobsOn = GetStandingOrder(out.shown, 15);
+    int rows = -1;
+    void* data = nullptr;
+    kc::Handle panelH;
+    if (!Rd(panel, JP_rowCount, rows) || rows < 0 || rows > 256 || !Rd(panel, JP_rows, data) || !ReadHandle(panel, panelH)) { out.stale = true; return true; }
+    out.rows = rows;
+    out.stale = !(panelH == shownH) || rows != out.jobs || (rows && !data);
+    for (int i = 0; i < rows && !out.stale; ++i) {
+        const void* want = nullptr;
+        const void* have = nullptr;
+        uint8_t enabled = 0;
+        const auto* row = static_cast<const uint8_t*>(data) + size_t(i) * JP_rowSize;
+        if (!PtrOfIntSeh(FnAddr(FnCharGetPermajobData), out.shown, i, want) || !Rd(row, JR_tasker, have) || !Rd(row, JR_enabled, enabled)) { out.stale = true; break; }
+        // a job moved or replaced; JOBS on draws every row enabled (off: the game's own test per job)
+        if (have != want || (out.jobsOn && !enabled)) out.stale = true;
+    }
+    return true;
+}
+
+bool RefreshJobsPanel() {
+    if (!JobsPanelObject()) return false;   // no squad bar (menus, loading): nothing to rebuild, and 0x729B70 would read it
+    return GuiRefreshSeh(FnAddr(FnGuiRefreshJobs), reinterpret_cast<void*>(Addr(kTheGui)));
 }
 
 // ---- squad bar integrity (MainBarGUI, the portraits at the bottom of the screen) [D]

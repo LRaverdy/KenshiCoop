@@ -785,6 +785,15 @@ private:
     kc::Handle roofHandle_;
     int roofFloor_ = 0;
     std::unordered_map<kc::Handle, float, kc::HandleHash> syncErr_;   // client: last error per standing character
+    // 0.3.4: the Tâches panel rebuilt when the shown character's job list changes from elsewhere
+    void UpdateJobsPanel();
+    const void* panelShown_ = nullptr;   // the character the panel was last seen for
+    bool panelJobsOn_ = false;           // its JOBS toggle then
+    bool panelPending_ = false;          // a JOBS toggle changed: rebuild once the mouse button is up
+    int panelTries_ = 0;                 // rebuilds that left the same list stale (3: given up until it changes)
+    uint64_t panelKey_ = 0;              // that list (character, jobs, rows)
+    double panelLogAt_ = -1e9;           // the last log line (one every 2 s at most)
+    int panelUnlogged_ = 0;              // rebuilds since
     double nextPauseTry_ = 0;
     bool pauseRefusedLogged_ = false;
     std::mutex dialogMutex_;

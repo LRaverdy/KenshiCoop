@@ -8,6 +8,35 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 Protocole inchangé (36).
 
+- **Panneau Tâches à jour tout de suite (rapport du 13/10, branche `fix-jobs-ui`)**. Un joueur
+  sélectionne son perso côté client et lui donne des travaux. Les ordres partent bien, mais le
+  panneau Tâches (la liste sous la barre d'escouade) ne les montrait qu'après un clic sur un autre
+  perso puis un retour sur le sien.
+  Cause (désassemblage 1.0.68) : le jeu ne reconstruit ce panneau (`0x7263B0`) que depuis ses propres
+  chemins. Ce sont la croix et le glisser du panneau (`0x7265CE`, `0x72669D`), la fin de
+  `newPlayerTaskSelectedCharacters` (`0x7FA824`) et le bouton MEDIC (`0x7FAE11`), qui appellent
+  `0x6E2050` sur l'objet GUI `0x21337B0`. S'y ajoute une bascule JOBS du perso affiché :
+  `OrdersReceiver` `0x508210` poste l'événement GUI 6, traité en `0x7B66C1`. `Character::addJob`,
+  `addJobSelectedCharacters`, `removePermajob` et `movePermajob` appelés directement ne reconstruisent
+  rien. C'est le cas chez le client : son clic Maj + droit est bloqué et envoyé à l'hôte, puis le
+  travail est montré d'avance par `addJobSelectedCharacters`. C'est aussi le cas de la liste de l'hôte
+  recopiée par `ApplyJobList`, et chez l'hôte d'un ordre d'un client sur un perso que l'hôte a
+  sélectionné.
+  Correctif : à chaque image d'une partie à plusieurs (hôte et client), `KenshiWorld::UpdateJobsPanel`
+  compare les lignes du panneau avec les travaux du perso affiché (`kenshi::ReadJobsPanel`) : nombre,
+  `Tasker` de chaque ligne, lignes actives quand JOBS est allumé, et la bascule JOBS. S'ils diffèrent,
+  le mod lance la reconstruction du jeu lui-même (`kenshi::RefreshJobsPanel` = `0x6E2050`, nouvelle
+  entrée `FnGuiRefreshJobs`), qui remet aussi les boutons de la barre. Garde-fous :
+  - jamais pendant que le bouton gauche est enfoncé (un glisser en cours dans le panneau) ;
+  - rien sans barre d'escouade (menus, chargement) ;
+  - abandon après 3 reconstructions qui laissent la même liste différente ;
+  - disposition vérifiée sur les instructions du jeu ;
+  - partie solo non touchée.
+  Journal : « jobs panel: rebuilt for … » (une ligne toutes les 2 s au plus). Commande de test
+  `jobspanel`. L'expérience `clientjobs` sélectionne le perso du client et vérifie que le panneau suit
+  sans resélection : Maj + clic droit, travail ajouté, déplacé, retiré, deux bascules JOBS. Pas de test
+  unitaire (appel du moteur). **Non vérifié en jeu.**
+
 - **TP admin d'un perso K.-O. : il ne retourne plus là où il gisait (`suite` 29/32 du 13/10 16:19,
   branche `fix-tp3`)**. « TP admin : le perso du joueur arrive près de l'hôte » donnait 1147,2 et
   « le client le voit au même endroit » 257,63 (couché). Ce n'est pas une régression des fusions
