@@ -6125,9 +6125,17 @@ static void TestMotion() {
             stalled = NoteHeadway(hw, 0.5 + 0.05 * i, Vec3{(i % 2) ? 0.5f : -0.4f, 0, (i % 3) ? 0.3f : -0.2f}, true);
         CHECK(stalled && hw.stalled);
         CHECK(hw.s.size() <= 25);                                    // only about a second is kept
-        CHECK(!NoteHeadway(hw, 2.6, Vec3{3, 0, 0}, true));           // on its way again: walks at once
-        CHECK(!NoteHeadway(hw, 2.7, Vec3{3, 0, 0}, false));          // stopped: nothing kept
+        CHECK(NoteHeadway(hw, 2.55, Vec3{1.9f, 0, 0}, true));        // 2nd run: 1.5-2 units a second flipped it; stays stalled
+        CHECK(NoteHeadway(hw, 2.6, Vec3{3, 0, 0}, true));            // under 4 units net: still stalled
+        CHECK(!NoteHeadway(hw, 2.7, Vec3{6, 0, 0}, true));           // on its way again
+        CHECK(NoteHeadway(hw, 4.0, Vec3{6, 0, 0}, true));            // stuck again for a second
+        CHECK(!NoteHeadway(hw, 4.1, Vec3{6, 0, 0}, false));          // stopped: not walked, history dropped
+        CHECK(hw.s.empty() && hw.stalled);                           // a short stop keeps the stall
+        CHECK(NoteHeadway(hw, 4.5, Vec3{6.5f, 0, 0}, true));         // "walks" again on the spot: still stalled
+        CHECK(!NoteHeadway(hw, 4.6, Vec3{6.5f, 0, 0}, false));
+        CHECK(!NoteHeadway(hw, 7.0, Vec3{6.5f, 0, 0}, false));       // stood more than 2 s: forgotten
         CHECK(hw.s.empty() && !hw.stalled);
+        CHECK(!NoteHeadway(hw, 7.1, Vec3{6.5f, 0, 0}, true));        // a new walk walks at once
         Headway walk;                                                // a slow walker (4.5 u/s) is never stalled
         bool any = false;
         for (int i = 0; i <= 60; ++i) any = NoteHeadway(walk, 0.05 * i, Vec3{4.5f * 0.05f * i, 0, 0}, true) || any;
