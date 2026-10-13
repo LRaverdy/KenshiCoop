@@ -203,6 +203,7 @@ Les signatures sont celles du commentaire du code.
 | carte | `FnPortraitCellDtor` | `PortraitMainCellView::~PortraitMainCellView()` | `0x426450` | oui | destructeur complet (le destructeur virtuel `0x4264E0` l'appelle) : le mod oublie la cellule |
 | noms (0.3.4) | `FnNameTagUpdate` | `CharacterNameTag::<update>()` (notre nom, vt 1) | `0x6E8100` | oui | [D] chaque image, pour chaque nom au-dessus d'une tête : le place, et quand +0x18 est mis donne sa couleur et son texte à `NameText` ; le mod remet ensuite la couleur du joueur (voir « Noms au-dessus des têtes ») |
 | TP (0.3.4) | `FnAnimSetPosition` | `AnimationClass::<set position and direction>(const Vector3&, const Vector3&)` (notre nom) | `0x5B18F0` | non | écrit l'ancre du nœud de scène du corps (+0x258), sur laquelle la mise à jour de l'animation remet le nœud à chaque image ; `kenshi::PlaceBodyNode` l'appelle avec une direction nulle (voir « Ragdolls ») |
+| tâches (0.3.4) | `FnGuiRefreshJobs` | `ForgottenGUI::<refresh jobs panel>()` (notre nom) | `0x6E2050` | non | [D] sur l'objet GUI `0x21337B0` : `0x729B70(*(+0x10) MainBarGUI, &(+0x2C0))`, le panneau Tâches reconstruit pour le perso affiché (hand `0x2133A70`) avec les boutons de la barre ; ce que la fin de `newPlayerTaskSelectedCharacters` appelle (voir « Panneau Tâches ») |
 | barre | `FnMainBarUpdateCurrent` | `MainBarGUI::updateCurrentPlatoon()` | `0x415880` | non | remplit à nouveau l'onglet de l'escouade affichée, après qu'un onglet fautif a été vidé (`CheckSquadBar`) |
 | sol | `FnInventoryDropItem` | `Inventory::dropItem(Item*)` | `0x745D90` | oui | ce que fait une fenêtre d'inventaire d'un objet lâché sur le monde ; vt 0x38 de `Inventory` et `ShopTraderInventory` |
 | sol | `FnDropItemAnimal` | `CharacterAnimal::dropItem(RootObject*)` | `0x5CA4A0` | oui | même code que `CharacterHuman::dropItem`, pour les bêtes de somme |
@@ -1168,6 +1169,42 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
   ordre). Un combat passe avant : arrivé au filon de la ville au milieu d'une bagarre, le perso se bat
   (défense, robustesse, esquive, combat de masse qui montent) et ne s'assoit pas ; en mode dieu le
   combat ne finit jamais. Un ordre du joueur, lui, le met au travail tout de suite.
+- **Panneau Tâches : quand le jeu le reconstruit** (désassemblage 1.0.68, v0.3.4). La liste de travaux
+  sous la barre d'escouade est `MainBarGUI` (`*0x21337C0`, soit l'objet GUI `0x21337B0` +0x10)
+  +0x190. Le jeu l'écrit à `0x72B5F6` dans le global `0x2132C28`.
+  - *Sa reconstruction* (`0x7263B0`) vide le `MyGUI::ItemBox` (+0x20 → +0xF0) en gardant le
+    défilement. Elle ajoute une ligne par travail du perso, tiré de son propre `hand` (+0x8…, recopié
+    de `Character`+0x60 par `0x726930`).
+  - *Ses lignes* : `lektor` à +0x40 (nombre +0x48, tableau +0x50, 0x40 octets par ligne). Dans une
+    ligne : +0x0 le `Tasker*` de `Character::getPermajobData(i)`, +0x8 l'emplacement, +0x38 « actif ».
+    « Actif » vaut 1 si JOBS est allumé (`OrdersReceiver`+0x35) ; sinon, c'est le test du jeu
+    `0x50C1C0` sur le travail.
+  - *`0x726930(panneau, perso)`* met aussi l'état des boutons de la barre (ordres 12 à 15, etc.) puis
+    appelle la reconstruction. `0x729B70(barre, hand*)` résout le `hand` (types 1, 0x5B, 0x22) et
+    appelle `0x726930`, qui ne fait rien sans perso.
+  - *`0x6E2050(GUI)`* = `0x729B70(GUI+0x10, GUI+0x2C0)`. Le `hand` GUI+0x2C0 (`0x2133A70`) est le
+    perso affiché. C'est celui que lit `setOrderSelectedCharacters` (`0x7F3880`).
+  - *Appelants* : seuls les chemins du jeu reconstruisent le panneau.
+    - la croix d'une ligne (`0x7268B0`) et `OrdersPanel::removeJob` (`0x7265A0`) : `removePermajob`,
+      puis la reconstruction ;
+    - le glisser (`0x7265F0`) : `movePermajob`, puis la reconstruction ;
+    - la fin de `newPlayerTaskSelectedCharacters` (`0x7FA824`) et le bouton MEDIC (`0x7FAE11`) :
+      `0x6E2050` ;
+    - `OrdersReceiver` `0x508210` (bascule JOBS), si le perso est celui de `0x2133A70` : il poste
+      l'événement GUI 6 (liste `0x21346D8`, seul poste de ce type relevé). Le traitement des
+      événements (`0x7B65B0`, cas 6 en `0x7B66C1`) appelle `0x6E2050` si le `hand` est celui de
+      `0x2133A70` (ou nul).
+  - *Ce qui ne reconstruit rien* : `Character::addJob` (`0x5C8DA0`) et `addJobSelectedCharacters`
+    (`0x7F5A90`), ainsi que `removePermajob`, `movePermajob` et `removeJob` appelés directement.
+  Le mod appelle ces fonctions dans trois cas : un client qui montre d'avance un travail (son
+  `newPlayerTaskSelectedCharacters` est bloqué), `ApplyJobList`, et l'hôte qui exécute l'ordre d'un
+  client. D'où le panneau en retard (rapport du 13/10).
+  - *Correctif* : `KenshiWorld::UpdateJobsPanel` (fin de chaque image, en session) compare les lignes
+    au perso de `0x2133A70` (`kenshi::ReadJobsPanel`) et appelle `0x6E2050` s'ils diffèrent
+    (`kenshi::RefreshJobsPanel`, entrée `FnGuiRefreshJobs`).
+  - *Vérifications* : la disposition est contrôlée sur les instructions `0x7263EB` (`mov [rsi+0x48]`),
+    `0x7264D1` (`mov rax,[rsi+0x50]`) et `0x7B66E0` (`lea rcx, GUI`). Le pointeur de la barre et du
+    panneau doit être non nul : `0x729B70` / `0x726930` lisent le panneau sans le tester.
 - **Un poste sans rien à faire n'a pas d'ouvrier** (vu le 13/10, `workstations`) : cinq persos de
   l'hôte et celui du client avec un travail permanent 87 sur une ferme, une cuisinière, un établi, un
   banc de recherche et un puits posés en plein désert : 0 ouvrier partout pendant 2 min à x3. Aucune

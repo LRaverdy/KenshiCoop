@@ -1477,6 +1477,17 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         for (int i = 0; i < n; ++i) o += " " + std::to_string(kenshi::PermajobType(c, i));
         return o;
     }
+    if (cmd == "jobspanel") {   // jobspanel: the Tâches panel against its character's jobs (kenshi::ReadJobsPanel): shown=<squad index, -1 another, -2 none>
+        kenshi::JobsPanelView p;
+        kenshi::ReadJobsPanel(p);
+        int shown = p.shown ? -1 : -2;
+        auto squad = SortedSquad(w);
+        for (size_t i = 0; i < squad.size() && p.shown; ++i)
+            if (w.FindSquad(squad[i]) == p.shown) shown = int(i);
+        char b[160];
+        snprintf(b, sizeof(b), "ok panel=%d shown=%d jobs=%d rows=%d stale=%d jobsOn=%d", p.panel ? 1 : 0, shown, p.jobs, p.rows, p.stale ? 1 : 0, p.jobsOn ? 1 : 0);
+        return b;
+    }
     if (cmd == "jobreq") {   // jobreq <selectIndex> <task> <subjectIndex>: that member alone gets a permanent job on the other (addJobSelectedCharacters, as the UI does)
         size_t sel = 0, subj = 0;
         int task = 0;

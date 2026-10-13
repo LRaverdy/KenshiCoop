@@ -324,6 +324,14 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   l'hôte, juste même quand une cible n'est pas encore chargée chez le client). Une croix ou un
   glisser fait dans le panneau du client s'y voit aussitôt ; les listes de l'hôte attendent 3 s
   avant de s'appliquer à ce perso (plus de retour en arrière le temps que l'hôte le fasse).
+- **Panneau Tâches à jour tout de suite** (v0.3.4) : quand la liste du perso affiché change ailleurs
+  que dans le panneau, le panneau suit dans l'image, sans recliquer sur le perso. Cela couvre le
+  travail montré d'avance chez le client, la liste de l'hôte recopiée chez le client, et chez l'hôte
+  l'ordre d'un client sur un perso que l'hôte a sélectionné. Une bascule JOBS remet aussi les lignes
+  actives ou grisées et les boutons. Avant, il fallait cliquer sur un autre perso puis revenir. Le mod
+  lance la reconstruction du jeu lui-même, jamais pendant un glisser (bouton gauche enfoncé). Partie
+  solo non touchée. Journal « jobs panel: rebuilt for … ». Expérience `clientjobs` (commande
+  `jobspanel`).
 - **« Attribuer à »** : donner un personnage à un joueur reste réservé à l'hôte (console `give`,
   raccourci) ; tout le monde voit le nouveau propriétaire (`Bind`).
 - **Pas dans Kenshi 1.0.68** : il n'existe pas de case « fuir / se replier à faible santé » ni

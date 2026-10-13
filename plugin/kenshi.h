@@ -314,6 +314,8 @@ enum Fn : int {
     FnNameTagUpdate,            // void CharacterNameTag::<update>()   (our name, 0x6E8100: vtable slot 1, every frame for each name tag: places it, and when +0x18 is set gives NameText its colour and caption)
     // ---- 0.3.4: admin teleport of a knocked-out body (its body's scene node anchor)
     FnAnimSetPosition,          // void AnimationClass::<set position and direction>(const Vector3& pos, const Vector3& dir)   (our name, 0x5B18F0: +0x258 = pos lowered by +0x2C8 - +0x2CC, the anchor the animation update 0x5B5590 puts the scene node back on; called by CharMovement's update 0x65FFA0; a zero dir leaves the orientation)
+    // ---- 0.3.4: the Tâches panel rebuilt when a job list changes from elsewhere (kenshi::RefreshJobsPanel)
+    FnGuiRefreshJobs,           // void ForgottenGUI::<refresh jobs panel>()   (our name, 0x6E2050 on TheGui 0x21337B0: MainBarGUI (+0x10)'s job list rebuilt for the GUI's hand +0x2C0, the character shown; what newPlayerTaskSelectedCharacters calls at its end)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -743,6 +745,21 @@ int PermajobType(Character* c, int slot);              // TaskType, -1: none
 bool RemovePermajob(Character* c, int slot);
 bool MovePermajob(Character* c, int from, int to);
 bool RemoveJobKind(Character* c, int task);            // every job of that kind
+// The Tâches panel (the job list under the squad bar) against the list of the character it shows
+// (the GUI's hand 0x2133A70): stale when a job was added, removed or moved without the game
+// rebuilding it (our calls of addJob / removePermajob / movePermajob never do). Game thread only.
+struct JobsPanelView {
+    bool panel = false;           // the squad bar's job list exists
+    Character* shown = nullptr;   // the character it is for (null: none, or not a character)
+    int rows = -1;                // rows it shows
+    int jobs = 0;                 // jobs that character has
+    bool jobsOn = false;          // its JOBS toggle
+    bool stale = false;           // rows differ from its jobs (count, order, which job, enabled)
+};
+bool ReadJobsPanel(JobsPanelView& out);
+// The game's own rebuild (0x6E2050 on the GUI, as after a Shift + right click): the job list and the
+// bar's toggle buttons of the character shown. False without a squad bar. Game thread only.
+bool RefreshJobsPanel();
 bool IsDead(Character* c);
 bool IsUnconscious(Character* c);
 void SetUnconscious(Character* c, bool on);   // the medical state only (no fall, no timer)

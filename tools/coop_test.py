@@ -8587,11 +8587,42 @@ def exp_clientjobs(host, cli):
     # "hauling (88) with no subject" (13/10 run: the game makes no job of it, on the host as on the
     # client: jobs 1 -> 1, nor in exp_workstations' runs): the panel's follow job (31 on a squad
     # mate, exp_jobs), which the game does list.
+    # The panel itself (13/10 user report: a job given to the client's character showed only after
+    # clicking another character and back): with the client's character selected, the panel's rows
+    # must follow each change (the job added ahead then copied from the host, the move, the removal)
+    # without selecting it again (KenshiWorld::UpdateJobsPanel, debug command jobspanel).
+    def panel(pid):
+        t = cmd(pid, "jobspanel")[1]
+        return dict(kv.split("=", 1) for kv in t.split()[1:] if "=" in kv) if t.startswith("ok") else {}
+    log("client selects its character (the Tâches panel shows it):", cmd(cli, f"selectset {own}"))
+    time.sleep(1)
+    p0 = panel(cli)
+    panel_ok = p0.get("panel") == "1" and p0.get("shown") == str(own)
+    cmd(cli, "logcount jobs_panel:_rebuilt")   # starts counting
+    log("client's Tâches panel before:", p0, "| host's:", panel(host))
+    if not panel_ok:
+        log("NOT TESTED: the client's Tâches panel does not show its character after selectset:", p0)
+
+    def panel_check(what):
+        if not panel_ok:
+            return
+        p = {}
+        for _ in range(8):   # within 4 s, no click on another character in between
+            p = panel(cli)
+            if p.get("stale") == "0" and p.get("rows") == p.get("jobs"):
+                break
+            time.sleep(0.5)
+        check(f"jobs : panneau Taches du client a jour sans reselection ({what})",
+              p.get("shown") == str(own) and p.get("stale") == "0" and p.get("rows") == p.get("jobs"), str(p))
+        log("   panel rebuilds logged on the client so far:", cmd(cli, "logcount jobs_panel:_rebuilt")[1], "| host's panel:", panel(host))
+
     if "87" not in (jobs(host, own) or []):   # the node was not full: no permanent job on it yet
         log("client Shift + right click on the node (first job):", cmd(cli, f"workreq {own} {IRON_NODE} shift"))
         time.sleep(3)
+        panel_check("Maj + clic droit")
     log("client Tâches panel: follow job (31) on member", host_idx[-1], cmd(cli, f"jobreq {own} 31 {host_idx[-1]}"))
     time.sleep(4)
+    panel_check("travail ajoute")
     jh = jobs(host, own) or []
     log("jobs before the move (host):", jh)
     if len(jh) >= 2:
@@ -8605,6 +8636,7 @@ def exp_clientjobs(host, cli):
         jh2, jc2 = jobs(host, own), jobs(cli, own)
         check("jobs : deplacement fait chez l'hote", jh2 == want, f"{jh} -> {jh2} (voulu {want})")
         check("jobs : deplacement sans retour en arriere chez le client", all(s == want for s in seen) and jc2 == want, f"{seen}")
+        panel_check("travail deplace")
         log("client removes the top job:", cmd(cli, f"jobremove {own} 0"))
         seen = []
         for _ in range(8):
@@ -8613,6 +8645,14 @@ def exp_clientjobs(host, cli):
         jh3, jc3 = jobs(host, own), jobs(cli, own)
         check("jobs : retrait fait chez l'hote, meme liste partout", jh3 == want[1:] and jc3 == jh3, f"{jh3} / {jc3}")
         check("jobs : le travail retire ne revient pas chez le client", all(s == want[1:] for s in seen), f"{seen}")
+        panel_check("travail retire")
+        # the JOBS toggle on the shown character: its rows and the button follow (the game's own GUI
+        # event, and UpdateJobsPanel); twice, so that JOBS stays on for the rest
+        for k in range(2):
+            cmd(cli, f"orderreq {own} 15")
+            time.sleep(1.5)
+            panel_check(f"JOBS bascule {k + 1}")
+            time.sleep(1.5)
     else:
         check("jobs : deux travaux pour tester le panneau", False, jh)
 
