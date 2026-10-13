@@ -2484,8 +2484,11 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
             return false;
         }
     }
-    // any other order of that character cancels a talk it was walking to (UpdatePendingTalks)
-    if (!client_ && !(cmd.kind == kc::CommandKind::Task && (cmd.task == kc::kTaskTalk || cmd.task == kc::kTaskTalkNearest))) pendingTalks_.erase(h);
+    // any other order of that character cancels a talk it was walking to (UpdatePendingTalks). A task
+    // only once it is run (below): a refused one changes nothing on the character, which walks on to
+    // its NPC (13 October, recruits test: a right click on a client-only character, refused, dropped
+    // the walk to Chef Voleur, and with it the mod's start of that conversation)
+    if (!client_ && cmd.kind != kc::CommandKind::Task) pendingTalks_.erase(h);
     HostCallScope scope;   // lets the call through our own order-blocking hooks
     switch (cmd.kind) {
     case kc::CommandKind::MoveTo: return CallPlayerMoveOrder(c, cmd.pos);
@@ -2642,7 +2645,8 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
         std::string why;
         if (!kc::TaskTargetAllowed(cmd.via, cmd.task, flags, &why)) {
             ++targetRefusals_;
-            Log("refused: client task %d (via %d) not run: %s (subject flags %#x)", cmd.task, int(cmd.via), why.c_str(), unsigned(flags));
+            Log("refused: client task %d (via %d) not run: %s (subject flags %#x)%s", cmd.task, int(cmd.via), why.c_str(), unsigned(flags),
+                !client_ && pendingTalks_.count(h) ? "; the talk it walks to goes on" : "");
             orderRefusal_ = "Action refusée : cet ordre ne s'applique pas à cette cible (rien n'a été fait).";
             orderRefusalReason_ = kc::ResultReason::WrongTarget;
             return false;
@@ -2655,9 +2659,12 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
         for (int i = 0; i < jobsBefore && !hadSameKind; ++i) hadSameKind = kenshi::PermajobType(c, i) == cmd.task;
         const bool ok = RunPlayerTask(c, cmd, subject, building, &orderRefusal_);
         if (!ok && !orderRefusal_.empty()) orderRefusalReason_ = kc::ResultReason::SelectionBusy;
-        if (!client_ && ok && (cmd.task == kc::kTaskTalk || cmd.task == kc::kTaskTalkNearest) && subject && kenshi::IsCharacter(subject)) {
+        if (!client_ && ok) {
             kc::Handle nh;
-            if (kenshi::GetHandle(static_cast<kenshi::Character*>(subject), nh)) pendingTalks_[h] = {nh, NowSeconds() + 60.0, 0};
+            if (talk && subject && kenshi::IsCharacter(subject) && kenshi::GetHandle(static_cast<kenshi::Character*>(subject), nh))
+                pendingTalks_[h] = {nh, NowSeconds() + 60.0, 0};
+            else
+                pendingTalks_.erase(h);
         }
         Log("client task %d (via %d) run for a character: %s", cmd.task, int(cmd.via), ok ? "ok" : "failed");
         // What the player is told (kc::WorkOrderNote): a permanent job (Shift + right click, the Tâches

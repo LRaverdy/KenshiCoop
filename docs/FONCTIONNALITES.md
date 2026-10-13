@@ -1333,7 +1333,8 @@ la fenêtre du client.
   et le client les copies que l'hôte pilote (`hk_charUpdateView`) : les deux jeux les déplacent avec
   la même mise à jour complète (mêmes sols, mêmes murs, chaque image). Un dialogue demandé par un
   client loin de la caméra de l'hôte est lancé par l'hôte quand le perso est arrivé
-  (`UpdatePendingTalks`) ; le marchand d'une ville chargée après l'arrivée du client reçoit le
+  (`UpdatePendingTalks`). Un autre ordre de ce perso annule cette marche vers le PNJ, mais un ordre
+  refusé par l'hôte (cible absente chez lui…) ne l'annule plus (0.3.4) ; le marchand d'une ville chargée après l'arrivée du client reçoit le
   bâtiment de ses comptoirs (`GiveShopHome`, cherché autour des comptoirs).
 
 ### Recherche, fabrication, mines et machines, énergie 🟡 (implémenté, protocole 34, tests unitaires ; à vérifier en jeu)
