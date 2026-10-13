@@ -60,6 +60,7 @@ inline constexpr uintptr_t ManagementScreenSingleton = 0x212F4F8;   // Managemen
 inline constexpr uintptr_t VtManagementScreen = 0x16dcdf0;
 inline constexpr uintptr_t MarkerColourEnemy = 0x212F558;           // MapScreen::MarkerColourEnemy (what getMarkerColor returns for an enemy)
 inline constexpr uintptr_t VtPortraitCell = 0x16d26f8;              // PortraitMainCellView
+inline constexpr uintptr_t VtCharacterNameTag = 0x1703950;          // CharacterNameTag (the name above a squad character's head)
 } // namespace rva
 
 struct FunctionSig {
@@ -309,6 +310,8 @@ enum Fn : int {
     FnCharacterCanTalk,         // bool Character::<can be talked to>()   (our name, 0x67AC00: its Dialogue, +0x280, has a "talk to me" line for the nearest selected character)
     // ---- 0.3.4: admin teleport ends the walk and the orders (A_FAIRE 12/10 point 10)
     FnAiTasksClear,             // void AITaskSystem::<clear tasks>()   (our name, 0x5074A0: deletes every queued order (+0x80, count +0x78); what PlayerInterface::stopCharactersMovement (0x7F6470) calls on Character+0x650 -> +0x20 after CharMovement::halt; permanent jobs untouched)
+    // ---- 0.3.4: player colours on the game's own names above the heads (plugin/map.cpp)
+    FnNameTagUpdate,            // void CharacterNameTag::<update>()   (our name, 0x6E8100: vtable slot 1, every frame for each name tag: places it, and when +0x18 is set gives NameText its colour and caption)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];

@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "kc/colors.h"
 #include "kc/protocol.h"
 
 namespace kcp {
@@ -16,8 +17,14 @@ struct SceneChar {
     uint8_t owner = 0;
     std::string name;
     kc::Vec3 pos;
-    bool avatar = false, down = false, dead = false;
-    bool head = false;          // shown above its head (an avatar standing in this machine's world)
+    bool avatar = false, down = false, dead = false;   // avatar: the player's main character
+    // Its name above its head, in its player's colour (every character of a player, standing in this
+    // machine's world, alive). The game's own name tag shows it when it can (gameName: recoloured by
+    // plugin/map.cpp, the main character's framed by the overlay); otherwise the overlay draws the
+    // name itself at the head. Never both.
+    bool head = false;
+    bool gameName = false;
+    kc::Handle local;           // its handle in this machine's world (head only)
 };
 struct SceneThreat {
     kc::Vec3 pos;
@@ -74,6 +81,11 @@ struct MapScene {
     // what the GUI rectangles were read from, so the overlay can read them again in its own frame
     // (plugin/map.cpp, MapRefreshGui): squad bar cells with their owner, and the map's widgets
     std::vector<std::pair<void*, uint8_t>> portraitCells;
+    // the frames around the main characters' names, where the game's name tag shows them (MyGUI view
+    // pixels, the name's text with a margin; not under a game window), and the characters they are
+    // read from (again in the overlay's frame, like the squad bar)
+    std::vector<SceneRect> nameFrames;
+    std::vector<std::pair<kc::Handle, uint8_t>> nameFrameChars;
     // settings
     bool showMap = true, showHeads = true, showPortraits = true, showMinimap = true, minimapRotate = false, showPings = true;
     int minimapCorner = 1;              // 0 top left, 1 top right, 2 bottom left, 3 bottom right
@@ -87,7 +99,8 @@ struct MapDrawn {
     double at = -1e9;           // NowSeconds()
     float w = 0, h = 0;         // display size of that frame
     bool refreshed = false;     // GUI rectangles read again in that frame (same thread as the game's GUI)
-    int heads = 0;              // markers above heads
+    int heads = 0;              // above the heads: frames around the game's names + names drawn by the overlay
+    int nameFrames = 0;         // of which frames around the game's own name tags
     bool minimap = false;
     float mmX = 0, mmY = 0, mmR = 0;    // where the minimap was drawn: centre and radius (display pixels)
     bool mmFree = false;                // at a free position (else in its corner)
@@ -130,8 +143,50 @@ inline void SceneToDisplay(MapScene& s, float dispW, float dispH) {
     s.imgX *= g.fx; s.imgW *= g.fx; s.imgY *= g.fy; s.imgH *= g.fy;
     s.clipX0 *= g.fx; s.clipX1 *= g.fx; s.clipY0 *= g.fy; s.clipY1 *= g.fy;
     for (auto& r : s.portraits) r = GuiRectToDisplay(r, g);
+    for (auto& r : s.nameFrames) r = GuiRectToDisplay(r, g);
     s.guiW = dispW; s.guiH = dispH;
     s.inDisplay = true;
+}
+
+// ---- names above the heads (pure: plugin/map.cpp, the overlay and the tests)
+
+// The colour of a player's character's name (RGBA, 0..1, what MyGUI's TextBox::setTextColour takes):
+// the player's colour; a selected character's (the game shows it white instead of grey) is lifted
+// towards white, so the selection still shows.
+inline void NameTagColour(uint8_t owner, bool selected, float out[4]) {
+    const kc::PlayerColour c = kc::PlayerColor(owner);
+    const float lift = selected ? 0.35f : 0.0f;
+    const uint8_t rgb[3] = {c.r, c.g, c.b};
+    for (int i = 0; i < 3; ++i) {
+        const float v = float(rgb[i]) / 255.0f;
+        out[i] = v + (1.0f - v) * lift;
+    }
+    out[3] = 1.0f;
+}
+// Packed 0xRRGGBBAA of such a colour (to compare what was applied with what is wanted).
+inline uint32_t PackColour(const float c[4]) {
+    uint32_t v = 0;
+    for (int i = 0; i < 4; ++i) {
+        const float f = c[i] < 0 ? 0.0f : (c[i] > 1 ? 1.0f : c[i]);
+        v = v << 8 | uint32_t(f * 255.0f + 0.5f);
+    }
+    return v;
+}
+// The frame around a name: its text (textW x textH, centred in the name's box as the game's
+// layout does: TextAlign Center) with a margin. A text size that cannot be read (zero, absurd)
+// frames the whole box.
+constexpr float kNameFramePadX = 5.0f, kNameFramePadY = 2.0f;
+inline SceneRect NameFrameRect(float boxX, float boxY, float boxW, float boxH, float textW, float textH, uint8_t owner) {
+    SceneRect r;
+    r.owner = owner;
+    const bool textOk = textW >= 1.0f && textH >= 1.0f && textW <= 4096.0f && textH <= 512.0f;
+    const float w = textOk ? textW : boxW, h = textOk ? textH : boxH;
+    const float cx = boxX + boxW * 0.5f, cy = boxY + boxH * 0.5f;
+    r.x = cx - w * 0.5f - kNameFramePadX;
+    r.y = cy - h * 0.5f - kNameFramePadY;
+    r.w = w + 2 * kNameFramePadX;
+    r.h = h + 2 * kNameFramePadY;
+    return r;
 }
 
 // The map screen: MapScreen::worldToMapCoords puts (x, z) at (x - minX) / sizeX * image width,

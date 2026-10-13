@@ -1476,9 +1476,20 @@ def exp_map(host, clis):
         dots = items(t, 1)
         mine = [d for d in dots if d.get("owner") == k.get("me")]
         check(f"minicarte : {label} centree sur son perso, ses persos dedans", k.get("centre", "0").startswith("1") and len(mine) >= 1, t[:200])
+        # names above the heads: one per character (the game's own tag recoloured, label=jeu, or
+        # the overlay's, label=overlay), in the player's colour; the main character framed
         t = cmd(pid, "mapscene tetes")[1]
+        log(f"{label} names above heads:", t[:600])
         heads = items(t, 1)
-        check(f"tetes : {label} repere au-dessus des persos des joueurs, a leur couleur", len(heads) >= 1 and all(h.get("col") for h in heads), t[:300])
+        tinted = all(h.get("tint") == "1" for h in heads if h.get("label") == "jeu")
+        check(f"tetes : {label} nom de chaque perso des joueurs a la couleur de son joueur",
+              len(heads) >= 1 and all(h.get("col") and h.get("label") in ("jeu", "overlay") for h in heads) and tinted, t[:300])
+        shown_mains = [h for h in heads if h.get("main") == "1" and h.get("onscreen") == "1"]
+        head_owners = {h.get("owner") for h in heads}
+        main_owners = {h.get("owner") for h in heads if h.get("main") == "1"}
+        check(f"tetes : {label} perso principal de chaque joueur encadre, les autres seulement colores",
+              head_owners <= main_owners and len(shown_mains) >= 1 and all(h.get("frame") == "1" for h in shown_mains)
+              and all(h.get("frame") == "0" for h in heads if h.get("main") != "1"), t[:300])
         t = cmd(pid, "mapscene barre")[1]
         log(f"{label} squad bar frames:", t[:300])
         frames = items(t, 1)
@@ -1518,7 +1529,7 @@ def exp_map(host, clis):
 
     for pid, label in [(host, "hote")] + [(c, f"client {i + 1}") for i, c in enumerate(clis)]:
         k = check_frames(pid, label)
-        check(f"tetes : {label} vue 3D non couverte (ecran de gestion ferme), reperes dessines",
+        check(f"tetes : {label} vue 3D non couverte (ecran de gestion ferme), cadres ou noms dessines",
               k.get("covered") == "0" and int(k.get("heads", 0)) >= 1, k)
     # the game's map screen, opened by its own MAP button (clicked through MyGUI's input), on client 1
     c1 = clis[0]

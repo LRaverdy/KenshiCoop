@@ -201,6 +201,7 @@ Les signatures sont celles du commentaire du code.
 | carte | `FnWarCurrentCampaign` | `FactionWarMgr::getCurrentCampaign(Platoon*)` | `0x283500` | — | la campagne (raid, vague d'attaque, visite) d'une escouade, ou nul ; recherche dans `forces` (+0x28), sans insertion |
 | carte | `FnPortraitCellUpdate` | `PortraitMainCellView::update(const IBDrawItemInfo&, PortraitData*)` | `0x415150` | oui | un portrait de la barre d'escouade est (re)dessiné : le mod retient la cellule |
 | carte | `FnPortraitCellDtor` | `PortraitMainCellView::~PortraitMainCellView()` | `0x426450` | oui | destructeur complet (le destructeur virtuel `0x4264E0` l'appelle) : le mod oublie la cellule |
+| noms (0.3.4) | `FnNameTagUpdate` | `CharacterNameTag::<update>()` (notre nom, vt 1) | `0x6E8100` | oui | [D] chaque image, pour chaque nom au-dessus d'une tête : le place, et quand +0x18 est mis donne sa couleur et son texte à `NameText` ; le mod remet ensuite la couleur du joueur (voir « Noms au-dessus des têtes ») |
 | barre | `FnMainBarUpdateCurrent` | `MainBarGUI::updateCurrentPlatoon()` | `0x415880` | non | remplit à nouveau l'onglet de l'escouade affichée, après qu'un onglet fautif a été vidé (`CheckSquadBar`) |
 | sol | `FnInventoryDropItem` | `Inventory::dropItem(Item*)` | `0x745D90` | oui | ce que fait une fenêtre d'inventaire d'un objet lâché sur le monde ; vt 0x38 de `Inventory` et `ShopTraderInventory` |
 | sol | `FnDropItemAnimal` | `CharacterAnimal::dropItem(RootObject*)` | `0x5CA4A0` | oui | même code que `CharacterHuman::dropItem`, pour les bêtes de somme |
@@ -1914,6 +1915,25 @@ argument) et `Frustum::getProjectionMatrix` ; projection = proj × vue (lignes, 
 la vue = l'axe z de la caméra : la direction regardée est −(m[2][0], m[2][2]) en (x, z).
 [U : la vue rendue par `getViewMatrix` est la vue complète, même si Ogre rend « relatif à la
 caméra » ; à confirmer en jeu, la commande `mapscene tetes` donne les points projetés.]
+
+**Noms au-dessus des têtes** (0.3.4) [D] : `CharacterNameTag` (RTTI, vtable `0x1703950`, hérite de
+`ScreenLabelInterface` ; vt 0 destructeur `0x6F0D30`, vt 1 mise à jour `0x6E8100`, vt 2 `0x6E25B0`
+écrit +0x8). Créé (0x60 octets, constructeur `0x6EADC0`) par `0x5CC310` et `0x623920` pour un perso
+de la faction du joueur, gardé dans `Character`+0x638 ; inscrit dans la liste globale des étiquettes
+(`lektor<ScreenLabelInterface*>`, nombre `0x2133A28`, tableau `0x2133A30`). Champs : +0x8 affiché
+(réglage du jeu), +0x18 « à refaire » (couleur, texte, icônes au prochain passage ; mis par les
+accesseurs `0x6E28E0` (+0x21), `0x6E2900` (+0x20), `0x6E2920` (+0x24)), +0x20 un état d'affichage,
++0x21 sélectionné, +0x24 discrétion (0 à 3 : icône `StealthImage`), +0x28 `hand` du perso, +0x58
+`CharacterNameTagWidget*` (0xB8 octets, fait au premier passage, constructeur `0x6E7EC0`,
+`wraps::BaseLayout` sur `Kenshi_CharacterNamePanel.layout` : +0x8 `Root`, +0xA0 `NameText`
+(`MyGUI::TextBox`), +0xA8 `StealthImage`, +0xB0 `LightLevelImage`). La mise à jour `0x6E8100` :
+retrouve le perso par son `hand`, cache le nom si +0x8 est nul ou si le perso est trop loin de la
+caméra, sinon montre `Root` ; si +0x18 : `NameText->setTextColour` (vt 0xB0) avec `NameTagSelected`
+(`0x2132AE0`, blanc) quand +0x21, sinon `NameTagUnselected` (`0x2132AF0`, gris ; couleurs lues de
+`data/gui/colours/kenshi_colours.xml`), `setCaption` (vt 0x88) avec le nom (décoré quand
+sélectionné), icônes, puis +0x18 = 0 ; enfin place le widget au-dessus de la tête. La couleur n'est
+donc reposée par le jeu qu'au passage où +0x18 est mis : le mod remet la couleur du joueur juste
+après ce passage (même image), et met +0x18 pour rendre la main au jeu.
 
 **Barre d'escouade** : `PortraitMainCellView` (vtable `0x16D26F8`), une par portrait : +0x8
 widget principal (`BaseCellView::mMainWidget` ; `update` lit sa largeur à +0x28), +0xA8

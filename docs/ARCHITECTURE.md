@@ -807,6 +807,13 @@ les mêmes partout) ; rien ne part vers l'hôte. Chez l'hôte, le bouton refuse 
    pendant le glissé, réglages envoyés au relâchement) et les clics de ping ; le filtre DirectInput
    cache ces clics au jeu (`MapOverlayHoldsMouse`). Où va la minicarte : `PlaceMinimap`
    (`map_view.h`, testé par `TestMinimapPlace`).
+   Noms au-dessus des têtes (0.3.4) : `UpdateMapScene` note, pour chaque perso d'un joueur debout
+   dans le monde local, son `CharacterNameTag` (`Character`+0x638) et son joueur ; le détour
+   `mapmarks::hk_nameTagUpdate` (après `CharacterNameTag::<update>`) donne au texte du nom la couleur
+   du joueur (`NameTagColour`), et rend au jeu les noms qui ne sont plus à personne. `ReadGui` relit
+   le rectangle du texte du nom des persos principaux (`nameFrameChars` → `nameFrames`,
+   `NameFrameRect`) ; l'overlay y dessine le cadre, ou écrit le nom lui-même quand le jeu n'en
+   montre pas (`gameName` faux). Testé par `TestNameTags`.
 4. Ping : `Session::PlaceMapPing` (hôte : ajouté et diffusé ; client : `MapPing` à l'hôte, qui
    vérifie 0,5 s par joueur, garde 5 pings par joueur et le renvoie à tous) ; 10 s de vie.
 
@@ -1032,7 +1039,7 @@ les mêmes partout) ; rien ne part vers l'hôte. Chez l'hôte, le bouton refuse 
 | `[coop] own_character` | 1 | un personnage par joueur qui rejoint |
 | `[ui] overlay` | 1 | panneau d'état en haut à droite |
 | `[ui] map_markers` | 1 | joueurs et ennemis sur la carte du jeu |
-| `[ui] head_markers` | 1 | repère au-dessus des persos des joueurs |
+| `[ui] head_markers` | 1 | noms des persos des joueurs à leur couleur au-dessus des têtes, perso principal encadré |
 | `[ui] portrait_colours` | 1 | cadre coloré des portraits des joueurs |
 | `[ui] minimap` | 1 | minicarte (Ctrl+Shift+N) |
 | `[ui] minimap_rotate` | 0 | minicarte tournante (sinon nord en haut) |

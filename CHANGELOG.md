@@ -137,6 +137,21 @@ Pas de changement de protocole (36, comme la 0.3.3).
     perso même quand son handle local diffère de celui de l'hôte.
   - Commandes de test : `workreq <i> <sid> shift`, `jobmove`, `whoseidx`, `toastlast` ; test unitaire
     `TestClientJobs` ; expérience `clientjobs`.
+- **Noms des persos à la couleur de leur joueur (branche `fix-nametags`, à tester en jeu).** Le repère
+  de l'overlay (curseur + nom du joueur) s'affichait par-dessus le nom que le jeu écrit déjà au-dessus
+  de la tête : deux noms l'un sur l'autre. Le repère est retiré ; c'est maintenant **le nom du jeu
+  lui-même** (`CharacterNameTag`, son texte `NameText`) qui prend la couleur du joueur, pour **tous**
+  les persos de ce joueur (plus clair quand le perso est sélectionné, à la place du blanc du jeu). Le
+  **perso principal** de chaque joueur a en plus un **petit cadre** à sa couleur autour de son nom,
+  dessiné par l'overlay. La couleur est remise juste après la mise à jour du nom par le jeu (détour
+  de `CharacterNameTag::<update>`, `0x6E8100`) : pas de clignotement ; un perso qui n'est plus à un
+  joueur, ou le réglage éteint, rend au nom la couleur du jeu. Si le jeu n'affiche pas les noms
+  (option « Afficher les noms » éteinte), l'overlay écrit lui-même le nom du perso (pas celui du
+  joueur) à la couleur du joueur, encadré pour le perso principal : jamais deux noms. Chaque machine
+  colore les persos de tous les joueurs (flux de carte de l'hôte). Réglage : « Noms des persos à la
+  couleur de leur joueur » (`head_markers`, section « Affichage »). Protocole inchangé. Tests :
+  `TestNameTags` (unitaire), `mapscene tetes` (`label=`, `tint=`, `main=`, `frame=`, cadres lus),
+  contrôles « tetes : … » de l'expérience `map`.
 
 ## v0.3.3 (12 octobre 2026)
 

@@ -7,7 +7,10 @@
 //    zooms with the map) and the world rectangle the image covers (the projection of
 //    MapScreen::worldToMapCoords);
 //  - the 3D camera (PlayerInterface::camera -> Ogre::Camera): projection * view;
-//  - the squad bar's portraits (PortraitMainCellView, followed through their update/destructor).
+//  - the squad bar's portraits (PortraitMainCellView, followed through their update/destructor);
+//  - the game's own names above the heads (CharacterNameTag): recoloured in their player's colour
+//    right after the game updates them (hook on its update), the main character's framed by the
+//    overlay around the name's text.
 // Every read is guarded (SEH, vtable checks): a map opened while loading, a zone change or speed 3
 // only ever give an empty scene for a frame.
 #include "map.h"
@@ -53,6 +56,7 @@ const char* ThreatKindName(int kind) {
 namespace mapmarks {
 PortraitUpdateFn o_portraitUpdate = nullptr;
 PortraitDtorFn o_portraitDtor = nullptr;
+NameTagUpdateFn o_nameTagUpdate = nullptr;
 } // namespace mapmarks
 
 namespace {
@@ -81,6 +85,15 @@ constexpr uintptr_t kCampaignData = 0x10;       // CampaignInstance: CampaignDat
 constexpr uintptr_t kCampaignEnemy = 0x78;      // CampaignInstance: Faction* enemy (whom it attacks)
 constexpr uintptr_t kCampaignDataHostile = 0x12;// CampaignData: bool _isHostile
 constexpr uintptr_t kRoOwner = 0x10;            // RootObjectBase: Faction*
+// the game's name above a character's head (docs/MOTEUR.md, "Noms au-dessus des têtes")
+constexpr uintptr_t kCharNameTag = 0x638;       // Character: CharacterNameTag* (made for the player faction's characters, else null)
+constexpr uintptr_t kTagShown = 0x8;            // CharacterNameTag (ScreenLabelInterface): bool, names shown at all (vt slot 2 sets it)
+constexpr uintptr_t kTagDirty = 0x18;           // CharacterNameTag: bool, colour / caption / stealth icon to apply at the next update
+constexpr uintptr_t kTagSelected = 0x21;        // CharacterNameTag: bool, selected (NameTagSelected colour, else NameTagUnselected)
+constexpr uintptr_t kTagWidget = 0x58;          // CharacterNameTag: CharacterNameTagWidget* (made at its first update)
+constexpr uintptr_t kTagWidgetRoot = 0x8;       // CharacterNameTagWidget (wraps::BaseLayout::mMainWidget): "Root"
+constexpr uintptr_t kTagWidgetText = 0xA0;      // CharacterNameTagWidget: MyGUI::TextBox* "NameText"
+constexpr size_t kTextBoxSetColourSlot = 0xB0 / 8;   // MyGUI::TextBox vtable: setTextColour(const Colour&), as the update calls it
 
 template <typename T>
 bool Rd(const void* p, uintptr_t off, T& out) { return p && kenshi::ReadRaw(p, off, &out, sizeof(T)); }
@@ -110,6 +123,8 @@ using MouseButtonFn = bool (*)(void* input, int x, int y, int button);
 using MousePosFn = const int* (*)(const void* input);
 using TabIndexFn = void (*)(void* tabControl, size_t index);
 using SetVisibleFn = void (*)(void* widget, bool visible);
+using TextSizeFn = int* (*)(void* textBox, int* out);
+using TextColourFn = const float* (*)(void* textBox);
 struct Exports {
     bool tried = false;
     WidgetBoolFn inheritedVisible = nullptr, visible = nullptr;
@@ -125,6 +140,8 @@ struct Exports {
     MousePosFn mousePos = nullptr;
     TabIndexFn tabSelect = nullptr;
     SetVisibleFn windowSetVisible = nullptr;   // MyGUI::Window::setVisible (no fade), else Widget::setVisible
+    TextSizeFn textSize = nullptr;             // MyGUI::TextBox::getTextSize (the caption's size, pixels)
+    TextColourFn textColour = nullptr;         // MyGUI::TextBox::getTextColour (tests: the colour a name has now)
     MatrixFn viewMatrix = nullptr, projMatrix = nullptr;
     WidgetPtrFn camSceneMgr = nullptr;                       // Ogre::Camera::getSceneManager
     float* (*relativeOrigin)(const void* sm, float* out) = nullptr;   // Ogre::SceneManager::getRelativeOrigin (Kenshi's)
@@ -152,6 +169,8 @@ void ResolveExports() {
         g_ex.tabSelect = reinterpret_cast<TabIndexFn>(fn("?setIndexSelected@TabControl@MyGUI@@QEAAX_K@Z"));
         g_ex.windowSetVisible = reinterpret_cast<SetVisibleFn>(fn("?setVisible@Window@MyGUI@@UEAAX_N@Z"));
         if (!g_ex.windowSetVisible) g_ex.windowSetVisible = reinterpret_cast<SetVisibleFn>(fn("?setVisible@Widget@MyGUI@@UEAAX_N@Z"));
+        g_ex.textSize = reinterpret_cast<TextSizeFn>(fn("?getTextSize@TextBox@MyGUI@@UEAA?AU?$TSize@H@types@2@XZ"));
+        g_ex.textColour = reinterpret_cast<TextColourFn>(fn("?getTextColour@TextBox@MyGUI@@QEAAAEBUColour@2@XZ"));
     }
     if (HMODULE ogre = GetModuleHandleW(L"OgreMain_x64.dll")) {
         g_ex.viewMatrix = reinterpret_cast<MatrixFn>(GetProcAddress(ogre, "?getViewMatrix@Camera@Ogre@@UEBAAEBVMatrix4@2@XZ"));
@@ -160,11 +179,11 @@ void ResolveExports() {
         g_ex.relativeOrigin = reinterpret_cast<float* (*)(const void*, float*)>(
             GetProcAddress(ogre, "?getRelativeOrigin@SceneManager@Ogre@@QEBA?AVVector3@2@XZ"));
     }
-    Log("map: exports MyGUI visible=%d/%d coord=%d parent=%d name=%d view=%d layers=%d gui=%d input=%d, Ogre view=%d proj=%d origin=%d",
+    Log("map: exports MyGUI visible=%d/%d coord=%d parent=%d name=%d view=%d layers=%d gui=%d input=%d text=%d/%d, Ogre view=%d proj=%d origin=%d",
         g_ex.visible != nullptr, g_ex.inheritedVisible != nullptr, g_ex.absCoord != nullptr, g_ex.parent != nullptr, g_ex.name != nullptr,
         g_ex.renderMgr != nullptr, g_ex.layerMgr != nullptr && g_ex.widgetFromPoint != nullptr, g_ex.gui != nullptr,
-        g_ex.input != nullptr && g_ex.mousePress != nullptr, g_ex.viewMatrix != nullptr, g_ex.projMatrix != nullptr,
-        g_ex.camSceneMgr != nullptr && g_ex.relativeOrigin != nullptr);
+        g_ex.input != nullptr && g_ex.mousePress != nullptr, g_ex.textSize != nullptr, g_ex.textColour != nullptr, g_ex.viewMatrix != nullptr,
+        g_ex.projMatrix != nullptr, g_ex.camSceneMgr != nullptr && g_ex.relativeOrigin != nullptr);
 }
 
 bool CallBoolSEH(WidgetBoolFn f, const void* w, bool& out) {
@@ -351,6 +370,66 @@ bool MatricesSEH(const void* cam, float view[16], float proj[16]) {
     }
 }
 
+// ---- the game's names above the heads (CharacterNameTag, game thread)
+// A character's name tag, when it has one (the game makes them for the player faction's characters).
+void* NameTagOf(const kenshi::Character* c) {
+    void* tag = nullptr;
+    uintptr_t vt = 0;
+    if (!c || !Rd(c, kCharNameTag, tag) || !tag || !Rd(tag, 0, vt) || vt != kenshi::Addr(kenshi::rva::VtCharacterNameTag)) return nullptr;
+    return tag;
+}
+// Its "Root" widget and "NameText" TextBox (none before the tag's first update).
+bool NameTagWidgets(const void* tag, void*& root, void*& text) {
+    void* w = nullptr;
+    root = text = nullptr;
+    return Rd(tag, kTagWidget, w) && w && Rd(w, kTagWidgetRoot, root) && root && Rd(w, kTagWidgetText, text) && text;
+}
+bool SetTextColourSEH(void* textBox, const float colour[4]) {
+    __try {
+        using Fn = void (*)(void*, const float*);
+        void** vt = *static_cast<void***>(textBox);
+        reinterpret_cast<Fn>(vt[kTextBoxSetColourSlot])(textBox, colour);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+bool TextSizeSEH(void* textBox, int out[2]) {
+    if (!g_ex.textSize) return false;
+    __try {
+        int tmp[2] = {};
+        g_ex.textSize(textBox, tmp);
+        out[0] = tmp[0];
+        out[1] = tmp[1];
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+bool TextColourSEH(void* textBox, float out[4]) {
+    if (!g_ex.textColour) return false;
+    __try {
+        const float* c = g_ex.textColour(textBox);
+        if (!c) return false;
+        for (int i = 0; i < 4; ++i) out[i] = c[i];
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+// Which player each name tag belongs to, set by UpdateMapScene from the map feed (every character
+// of a player standing in this world), read by the update hook; and the colour the hook last gave
+// each one. A tag not wanted any more is handed back to the game (its dirty flag set: at its next
+// update it takes its own colour again).
+struct TagWant {
+    uint8_t owner = 0;
+    bool main = false;
+};
+std::mutex g_tagsMutex;
+std::unordered_map<const void*, TagWant> g_tagWant;
+std::unordered_map<const void*, uint32_t> g_tagApplied;
+unsigned long long g_tagsRecoloured = 0, g_tagsRestored = 0, g_tagsFailed = 0;
+
 // ---- game functions (kFunctions)
 using WorldToMapFn = int* (*)(void* mapScreen, int* out, const float* pos);
 using MarkerColourFn = const void* (*)(void* who);
@@ -435,6 +514,7 @@ bool MapWidgetsFor(void* mgmt, void* ms, MapWidgets& out) {
 // that same thread (MapRefreshGui), so what is drawn is what the game's GUI shows in that frame.
 struct GuiStats {
     int cells = 0, hidden = 0, clipped = 0, covered = 0;
+    int names = 0, namesHidden = 0, namesCovered = 0;   // main characters' name tags: read, not shown, under a game window
 };
 void ReadGui(MapScene& s, GuiStats* st) {
     s.inDisplay = false;
@@ -483,6 +563,26 @@ void ReadGui(MapScene& s, GuiStats* st) {
         if (CoveredAt(main, vis.left + vis.width / 2, vis.top + vis.height / 2)) { if (st) ++st->covered; continue; }
         s.portraits.push_back({float(vis.left), float(vis.top), float(vis.width), float(vis.height), owner});
     }
+    // frames around the main characters' names, where the game shows them: the name's text centred
+    // in its NameText box, with a margin
+    s.nameFrames.clear();
+    if (s.showHeads && !s.covered) {
+        for (const auto& [h, owner] : s.nameFrameChars) {
+            const void* tag = NameTagOf(kenshi::Resolve(h));
+            uint8_t shown = 0;
+            void *root = nullptr, *text = nullptr;
+            if (!tag || !Rd(tag, kTagShown, shown) || !shown || !NameTagWidgets(tag, root, text)) continue;
+            if (st) ++st->names;
+            Coord box{};
+            if (!WidgetShown(root) || !WidgetOnScreen(text, box)) { if (st) ++st->namesHidden; continue; }
+            int ts[2] = {};
+            if (!TextSizeSEH(text, ts)) ts[0] = ts[1] = 0;
+            const SceneRect r = NameFrameRect(float(box.left), float(box.top), float(box.width), float(box.height), float(ts[0]), float(ts[1]), owner);
+            // a game window over the name (the names are on MyGUI's "Back" layer, under every window)
+            if (CoveredAt(root, int(r.x + r.w * 0.5f), int(r.y + r.h * 0.5f))) { if (st) ++st->namesCovered; continue; }
+            s.nameFrames.push_back(r);
+        }
+    }
 }
 
 DWORD g_sceneThread = 0;   // the thread the game's GUI is read on (the tick's)
@@ -525,6 +625,48 @@ void hk_portraitDtor(void* cell) {
         g_cells.erase(cell);
     }
     o_portraitDtor(cell);
+}
+// The game updates a name tag above a head (every frame, game thread). When its dirty flag (+0x18)
+// was set, the game has just given NameText its own colour (white selected, grey otherwise) and its
+// caption: a player's character's name gets its player's colour back at once, in the same frame
+// (no flicker). Otherwise the colour is set only when it changes (selection, owner). Nothing else of
+// the tag is touched: caption, stealth icon, light level and position stay the game's.
+void hk_nameTagUpdate(void* tag, void* a2) {
+    uint8_t dirtyBefore = 0;
+    Rd(tag, kTagDirty, dirtyBefore);
+    o_nameTagUpdate(tag, a2);
+    if (!tag) return;
+    std::lock_guard<std::mutex> lk(g_tagsMutex);
+    auto want = g_tagWant.find(tag);
+    auto applied = g_tagApplied.find(tag);
+    if (want == g_tagWant.end()) {
+        if (applied != g_tagApplied.end()) {
+            // not a player's character any more (or the setting is off): the game's colour again
+            g_tagApplied.erase(applied);
+            const uint8_t one = 1;
+            kenshi::WriteRaw(tag, kTagDirty, &one, 1);
+            ++g_tagsRestored;
+        }
+        return;
+    }
+    uint8_t dirtyNow = 1, selected = 0;
+    Rd(tag, kTagDirty, dirtyNow);
+    Rd(tag, kTagSelected, selected);
+    if (dirtyNow) return;   // hidden this frame (far, names off): the game sets its colour when it shows it, then so do we
+    float col[4];
+    NameTagColour(want->second.owner, selected != 0, col);
+    const uint32_t packed = PackColour(col);
+    const bool gameSet = dirtyBefore != 0;
+    if (!gameSet && applied != g_tagApplied.end() && applied->second == packed) return;
+    void *root = nullptr, *text = nullptr;
+    if (!NameTagWidgets(tag, root, text)) return;
+    if (!SetTextColourSEH(text, col)) {
+        ++g_tagsFailed;
+        return;
+    }
+    if (g_tagApplied.size() > 4096) g_tagApplied.clear();   // tags of characters long gone
+    g_tagApplied[tag] = packed;
+    ++g_tagsRecoloured;
 }
 } // namespace mapmarks
 
@@ -601,7 +743,7 @@ void KenshiWorld::ReadMapThreats(const std::vector<kc::Vec3>& centers, float rad
 
 // ---- what the GUI part of the scene shows, in the log: on change, rate-limited
 namespace {
-StateLog g_logMap, g_logMapRect, g_logFrames, g_logGuiSize;
+StateLog g_logMap, g_logMapRect, g_logFrames, g_logGuiSize, g_logNames;
 void LogGuiState(const MapScene& s, const GuiStats& st) {
     char b[320];
     if (g_logGuiSize.Due(std::to_string(int(s.guiW)) + "x" + std::to_string(int(s.guiH)), 1.0))
@@ -624,6 +766,24 @@ void LogGuiState(const MapScene& s, const GuiStats& st) {
             Log("squad bar: %zu frame(s) (player portraits %d: %d hidden, %d cropped out, %d under a game window)", s.portraits.size(), st.cells, st.hidden,
                 st.clipped, st.covered);
     }
+    if (s.showHeads) {
+        int game = 0, overlay = 0;
+        for (const auto& c : s.chars)
+            if (c.head) ++(c.gameName ? game : overlay);
+        size_t tags = 0;
+        unsigned long long recoloured = 0, failed = 0;
+        {
+            std::lock_guard<std::mutex> lk(g_tagsMutex);
+            tags = g_tagWant.size();
+            recoloured = g_tagsRecoloured;
+            failed = g_tagsFailed;
+        }
+        snprintf(b, sizeof(b), "%d/%d/%zu/%zu/%d/%d/%llu", game, overlay, tags, s.nameFrames.size(), st.namesHidden, st.namesCovered, failed);
+        if (g_logNames.Due(b, 2.0))
+            Log("names above heads: %d by the game's name tags (%zu tag(s) in player colours, %llu recolour(s) so far, %llu failed), %d drawn by the "
+                "overlay; %zu main character frame(s) (%d main names hidden, %d under a game window)",
+                game, tags, recoloured, failed, overlay, s.nameFrames.size(), st.namesHidden, st.namesCovered);
+    }
 }
 } // namespace
 
@@ -645,6 +805,16 @@ void UpdateMapScene(kc::Session& session, KenshiWorld& world, const Config& cfg,
     const bool inSession = session.isHost() || session.state() == kc::SessionState::Connected;
     s.me = inSession ? session.localId() : 1;
     s.live = live && world.Ready() && kenshi::World() && kenshi::Player();
+    // the name tags to colour, handed to the update hook on the way out (none outside a session,
+    // with the setting off or without a world: the game's colours come back)
+    std::unordered_map<const void*, TagWant> tagWant;
+    struct PublishTags {
+        std::unordered_map<const void*, TagWant>& want;
+        ~PublishTags() {
+            std::lock_guard<std::mutex> lk(g_tagsMutex);
+            g_tagWant.swap(want);
+        }
+    } publishTags{tagWant};
     if (!s.live) {
         s.mapWhy = "no world running";
         g_scene = s;
@@ -721,8 +891,17 @@ void UpdateMapScene(kc::Session& session, KenshiWorld& world, const Config& cfg,
             kc::Vec3 lp;
             if (local && kenshi::GetPosition(local, lp)) {
                 sc.pos = lp;   // where it stands here, this frame (smooth)
-                sc.head = sc.avatar && !sc.dead;
+                sc.head = !sc.dead;
+                sc.local = h;
                 if (sc.avatar) avatarOwner[local] = c.owner;
+                // its name above its head: the game's own tag when it shows names, recoloured
+                if (s.showHeads)
+                    if (const void* tag = NameTagOf(local)) {
+                        tagWant[tag] = {c.owner, sc.avatar};
+                        uint8_t shown = 0;
+                        sc.gameName = Rd(tag, kTagShown, shown) && shown;
+                        if (sc.gameName && sc.avatar && !sc.dead) s.nameFrameChars.push_back({h, c.owner});
+                    }
             }
             s.chars.push_back(std::move(sc));
         }
@@ -878,16 +1057,48 @@ std::string DescribeMapScene(const std::string& what) {
         for (const auto& t : s.threats)
             if (s.centreOk && Dist2D(t.pos, s.centre) <= s.minimapZoom) o << " threat:kind=" << t.kind;
     } else if (what == "tetes") {
+        // Every character of a player standing here: its name in its player's colour, by the game's
+        // own name tag (label=jeu; tint: the tag's text has that colour now) or by the overlay
+        // (label=overlay); the main character's framed (frame: a frame around the game's name was
+        // read for that player, or the overlay frames its own).
+        size_t tags = 0;
+        unsigned long long recoloured = 0, restored = 0, failed = 0;
+        {
+            std::lock_guard<std::mutex> lk(g_tagsMutex);
+            tags = g_tagWant.size();
+            recoloured = g_tagsRecoloured;
+            restored = g_tagsRestored;
+            failed = g_tagsFailed;
+        }
         o << " enabled=" << s.showHeads << " cam=" << s.camOk << " covered=" << s.covered << " screen=" << w << "x" << h << " origin=" << s.originOk << ":"
-          << s.origin.x << "," << s.origin.y << "," << s.origin.z << " ;";
+          << s.origin.x << "," << s.origin.y << "," << s.origin.z << " tags=" << tags << " frames=" << s.nameFrames.size() << " recoloured=" << recoloured
+          << " restored=" << restored << " failed=" << failed << " ;";
         for (const auto& c : s.chars) {
             if (!c.head) continue;
             float sx = 0, sy = 0;
             const bool proj = WorldToScreen(s, {c.pos.x, c.pos.y + 22.0f, c.pos.z}, w, h, sx, sy);
             const bool on = proj && sx >= 0 && sy >= 0 && sx <= w && sy <= h;
-            o << ' ' << clean(c.name) << ":owner=" << int(c.owner) << ":col=" << colour(c.owner) << ":onscreen=" << on;
+            o << ' ' << clean(c.name) << ":owner=" << int(c.owner) << ":col=" << colour(c.owner) << ":main=" << c.avatar
+              << ":label=" << (c.gameName ? "jeu" : "overlay");
+            if (c.gameName) {
+                // the colour the game's name has now, against the player's
+                const void* tag = NameTagOf(kenshi::Resolve(c.local));
+                void *root = nullptr, *text = nullptr;
+                float now[4] = {}, want[4] = {};
+                uint8_t selected = 0;
+                const bool read = tag && NameTagWidgets(tag, root, text) && Rd(tag, kTagSelected, selected) && TextColourSEH(text, now);
+                NameTagColour(c.owner, selected != 0, want);
+                o << ":tint=" << (read && PackColour(now) == PackColour(want));
+            }
+            bool framed = false;
+            if (c.avatar)
+                for (const auto& r : s.nameFrames) framed = framed || r.owner == c.owner;
+            o << ":frame=" << (c.avatar && (c.gameName ? framed : on)) << ":onscreen=" << on;
             if (proj) o << ":sx=" << sx << ":sy=" << sy;   // off screen too: where it projects
         }
+        o << " ;";
+        for (const auto& r : s.nameFrames)
+            o << " frame:owner=" << int(r.owner) << ":col=" << colour(r.owner) << ":x=" << r.x << ":y=" << r.y << ":w=" << r.w << ":h=" << r.h;
     } else if (what == "barre") {
         o << " enabled=" << s.showPortraits << " frames=" << s.portraits.size();
         {
@@ -931,7 +1142,8 @@ std::string DescribeMapConversion() {
     o.precision(2);
     o << "ok bb=" << int(bw) << "x" << int(bh) << " client=" << cw << "x" << ch << " dpi=" << dpi << " gui=" << int(s.guiW) << "x" << int(s.guiH)
       << " fx=" << g.fx << " fy=" << g.fy << " known=" << g.known << " covered=" << s.covered << " drawnAge=" << std::min(99.0, NowSeconds() - d.at)
-      << " drawnBb=" << int(d.w) << "x" << int(d.h) << " refreshed=" << d.refreshed << " heads=" << d.heads << " minimap=" << d.minimap
+      << " drawnBb=" << int(d.w) << "x" << int(d.h) << " refreshed=" << d.refreshed << " heads=" << d.heads << " nameFrames=" << d.nameFrames
+      << " minimap=" << d.minimap
       << " mapOpen=" << s.mapOpen << " mapDrawn=" << d.mapOpen << " markers=" << d.mapMarkers << " ;";
     o.precision(1);
     for (const auto& r : s.portraits) {

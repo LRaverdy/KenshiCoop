@@ -2013,6 +2013,8 @@ bool InstallHooks(TickFn tick, std::string* err) {
         // ---- map markers: the squad bar's portraits
         {kenshi::FnPortraitCellUpdate, reinterpret_cast<void*>(&mapmarks::hk_portraitUpdate), reinterpret_cast<void**>(&mapmarks::o_portraitUpdate)},
         {kenshi::FnPortraitCellDtor, reinterpret_cast<void*>(&mapmarks::hk_portraitDtor), reinterpret_cast<void**>(&mapmarks::o_portraitDtor)},
+        // ---- map markers: the game's names above the heads, in the players' colours
+        {kenshi::FnNameTagUpdate, reinterpret_cast<void*>(&mapmarks::hk_nameTagUpdate), reinterpret_cast<void**>(&mapmarks::o_nameTagUpdate)},
         // ---- workshop: research, crafting benches, power
         {kenshi::FnResearchStart, reinterpret_cast<void*>(&workshophooks::hk_start), reinterpret_cast<void**>(&workshophooks::o_start)},
         {kenshi::FnResearchStop, reinterpret_cast<void*>(&workshophooks::hk_stop), reinterpret_cast<void**>(&workshophooks::o_stop)},

@@ -110,7 +110,8 @@ chez l'hôte, il observe et diffuse.
 - **IA, factions** : SensoryDialogAssessment, SensoryAssessCrimes, BlackboardUpdate,
   BlackboardPeriodic, FactionWarPeriodic, UniqueSquadPeriodic, AffectRelationsAmount,
   AffectRelationsEvent, SetRelation, SetCrime, AssignBounty.
-- **Étiquettes** : CreateScreenLabel, LabelSetTracking, LabelSetColor.
+- **Étiquettes** : CreateScreenLabel, LabelSetTracking, LabelSetColor ; NameTagUpdate (0.3.4,
+  `map.cpp` : le nom au-dessus de la tête des persos des joueurs à la couleur du joueur).
 - **PNJ** : CreateRandomCharacter (pas de création locale chez le client).
 - **Météo** : RegionUpdateBT, SeasonGetNewWeather, EffectHandlerCtor, EffectAffectObjects,
   EffectStop, RegionUpdateEffects.

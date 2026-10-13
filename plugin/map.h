@@ -29,14 +29,18 @@ std::string DescribeCamera();
 // Tests ("mapui open|close|maptab|state"): clicks the game's MAP button through MyGUI's input.
 std::string MapUi(const std::string& what);
 
-// Hooks on the squad bar's portraits (installed with the others in hooks.cpp).
+// Hooks on the squad bar's portraits and on the game's names above the heads (installed with the
+// others in hooks.cpp).
 namespace mapmarks {
 using PortraitUpdateFn = void (*)(void* cell, const void* info, void* data);
 using PortraitDtorFn = void (*)(void* cell);
+using NameTagUpdateFn = void (*)(void* tag, void* a2);
 extern PortraitUpdateFn o_portraitUpdate;
 extern PortraitDtorFn o_portraitDtor;
+extern NameTagUpdateFn o_nameTagUpdate;
 void hk_portraitUpdate(void* cell, const void* info, void* data);
 void hk_portraitDtor(void* cell);
+void hk_nameTagUpdate(void* tag, void* a2);   // CharacterNameTag::<update>: player colours on the names
 } // namespace mapmarks
 
 } // namespace kcp

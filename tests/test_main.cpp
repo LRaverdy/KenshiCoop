@@ -3694,6 +3694,51 @@ static void TestMinimapPlace() {
     CHECK(near(p.cx, 1920 - 18 - 118.8f) && near(p.cy, 1080 - 18 - 118.8f - 30));
 }
 
+// Names above the heads: the player's colour on the game's name, lifted when selected; the main
+// character's frame around the name's text, centred in the name's box.
+static void TestNameTags() {
+    std::printf("overlay: names above the heads in the players' colours, the main character's framed\n");
+    auto near = [](float a, float b) { return std::fabs(a - b) < 0.01f; };
+    float c[4];
+    // player 2 (blue 60,160,255): its colour as is, unselected
+    kcp::NameTagColour(2, false, c);
+    CHECK(near(c[0], 60 / 255.0f) && near(c[1], 160 / 255.0f) && near(c[2], 1.0f) && near(c[3], 1.0f));
+    CHECK(kcp::PackColour(c) == 0x3CA0FFFFu);
+    // selected: lighter (towards white), still that player's hue, and never the plain colour
+    float sel[4];
+    kcp::NameTagColour(2, true, sel);
+    CHECK(sel[0] > c[0] && sel[1] > c[1] && near(sel[2], 1.0f) && sel[0] < sel[1] && kcp::PackColour(sel) != kcp::PackColour(c));
+    // one colour per player, the same as everywhere else (kc::PlayerColor)
+    for (uint8_t a = 1; a <= 8; ++a)
+        for (uint8_t b = uint8_t(a + 1); b <= 8; ++b) {
+            float ca[4], cb[4];
+            kcp::NameTagColour(a, false, ca);
+            kcp::NameTagColour(b, false, cb);
+            CHECK(kcp::PackColour(ca) != kcp::PackColour(cb));
+        }
+    // out-of-range components are clamped when packed
+    const float wild[4] = {-1.0f, 2.0f, 0.5f, 1.0f};
+    CHECK(kcp::PackColour(wild) == 0x00FF80FFu);
+    // the frame: the text (80 x 16) centred in its box (200 x 32 at 100, 50), with the margins
+    kcp::SceneRect r = kcp::NameFrameRect(100, 50, 200, 32, 80, 16, 3);
+    CHECK(r.owner == 3 && near(r.x, 200 - 40 - kcp::kNameFramePadX) && near(r.y, 66 - 8 - kcp::kNameFramePadY));
+    CHECK(near(r.w, 80 + 2 * kcp::kNameFramePadX) && near(r.h, 16 + 2 * kcp::kNameFramePadY));
+    // a name longer than its box: the frame still surrounds the whole text, centred
+    r = kcp::NameFrameRect(100, 50, 200, 32, 260, 16, 3);
+    CHECK(near(r.x + r.w * 0.5f, 200) && near(r.w, 260 + 2 * kcp::kNameFramePadX));
+    // the text size unreadable (0 or absurd): the whole box is framed
+    r = kcp::NameFrameRect(100, 50, 200, 32, 0, 0, 1);
+    CHECK(near(r.x, 100 - kcp::kNameFramePadX) && near(r.w, 200 + 2 * kcp::kNameFramePadX) && near(r.h, 32 + 2 * kcp::kNameFramePadY));
+    r = kcp::NameFrameRect(100, 50, 200, 32, 1e7f, 16, 1);
+    CHECK(near(r.w, 200 + 2 * kcp::kNameFramePadX));
+    // the frame goes through the same GUI -> display conversion as the squad bar's
+    kcp::MapScene s;
+    s.guiW = 960; s.guiH = 540;
+    s.nameFrames.push_back(kcp::NameFrameRect(100, 50, 200, 32, 80, 16, 2));
+    kcp::SceneToDisplay(s, 1920, 1080);
+    CHECK(near(s.nameFrames[0].x, 2 * (200 - 40 - kcp::kNameFramePadX)) && near(s.nameFrames[0].w, 2 * (80 + 2 * kcp::kNameFramePadX)));
+}
+
 static void TestMap() {
     std::printf("session: map markers (players' characters, hostile squads) and pings reach every player\n");
     FakeWorld hw;
@@ -6742,6 +6787,7 @@ int main() {
     TestActorSafety();
     TestGuiToDisplay();
     TestMinimapPlace();
+    TestNameTags();
     TestDialogue();
     TestTalkAndRecruit();   // 10 oct. session: talk busy with oneself, recruits
     TestMap();
