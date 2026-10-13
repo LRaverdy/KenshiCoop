@@ -775,6 +775,9 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
    puis vend avec le gestionnaire gardé (`SellAnimals`) : vendeur et acheteur toujours les mêmes,
    animaux vivants et hors escouade, assez de cats, entrées cochées, `confirm()` du jeu (recrute
    chaque animal, prend les cats). Le gestionnaire est ensuite libéré comme le fait la fenêtre.
+   Le `confirm()` finit par ouvrir l'éditeur de persos sur les animaux achetés : pendant cette vente
+   il n'est pas ouvert chez l'hôte (`NoEditorScope`, `hk_showEditor`, 0.3.4) ; ouvert, il mettait le
+   jeu de l'hôte en pause et l'animal n'entrait jamais dans la liste de l'escouade.
 6. Chaque animal vendu est une recrue du joueur (`pendingRecruits_`) : il lui appartient dès qu'il
    rejoint la faction (`RecruitJoined`) et va dans l'escouade de son perso (`AnimalFollowsOwner`).
    L'argent, l'escouade et la position suivent par la synchro habituelle.

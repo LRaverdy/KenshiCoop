@@ -7989,10 +7989,26 @@ def exp_recruits(host, clis):
     ci = [int(x) for x in cmd(clis[0], f"squadidx {name}")[1].split()[1:]] + own_indices(clis[0])[:1]
     d0 = kvs(cmd(host, "dialogs")[1])
     log("client 1 selectset", ci, cmd(clis[0], "selectset " + " ".join(map(str, ci))))
-    log("client 1 talksel 0", cmd(clis[0], "talksel 0"))
-    time.sleep(15)
+    # (13 October, as on 12/10: "talksel 0", the nearest NPC, was Ribs / Lost Person, then a Ninja:
+    # the host's game walked Harp there and said "the NPC has nothing to say", no conversation; the
+    # mod did its part. As in npctalk, NPCs of kctest_town known to hold a conversation, by name, the
+    # nearest last; each one is given 30 s, Chef Voleur being a few houses away)
+    dl = ""
+    for k in ["name:Chef_Voleur", "name:Thief_Leader", "name:Marchand", "name:Trader", "0"]:
+        r = cmd(clis[0], f"talksel {k}")
+        log(f"client 1 talksel {k}", r)
+        if not r[0]:
+            continue
+        for _ in range(60):
+            time.sleep(0.5)
+            dl = cmd(clis[0], "dialog")[1]
+            if "open=1" in dl:
+                break
+        if "open=1" in dl:
+            break
+        log("   no conversation with it:", [l for l in host_log().splitlines() if "talk" in l][-2:])
+        cmd(clis[0], "selectset " + " ".join(map(str, ci)))
     d1 = kvs(cmd(host, "dialogs")[1])
-    dl = cmd(clis[0], "dialog")[1]
     log("host dialogs before/after:", d0, d1, "| client dialog:", dl)
     check("parler a deux : aucun refus 'occupe' pour le meme joueur", d1.get("busy") == d0.get("busy"), (d0, d1))
     check("parler a deux : la conversation s'ouvre chez le client", "open=1" in dl, dl)
@@ -8148,6 +8164,24 @@ def exp_workstations(host, cli, minutes=2.0):
         if queued:
             break
     log("research queued for the benches:", queued, "| host:", cmd(host, "research")[1][:200])
+    # (13/10 13:59-14:03: research 1884 queued, progress 0.00 and no worker anywhere for 2 min at x3.
+    # The host's members had their posts as PERMANENT jobs (workjob) only: the game does a permanent
+    # job only while the character's JOBS standing order (bit 64 of `modes`) is on, which nothing
+    # here made sure of for the host's members (exp_clientjobs does it for the client's character);
+    # the stove and the bench had nothing to work on (wheat straw refused, "Ble" went to the output),
+    # the desert farm grows nothing. exp_research, whose researcher works, gives a one-time right click
+    # order on the research bench.) JOBS on for every member, and one researcher by right click.
+    for i in range(n):
+        m = cmd(host, f"modes {i}")[1].split()
+        jobs_on = len(m) >= 2 and m[0] == "ok" and (int(m[1]) & 64) != 0
+        if not jobs_on:
+            log(f"member {i}: JOBS off ({' '.join(m)}): turned on", cmd(cli if i == own else host, f"orderreq {i} 15"))
+    researcher = host_idx[3] if len(host_idx) > 3 else (host_idx[-1] if host_idx else own)
+    if any(sid == RESEARCH_BENCH for sid, _ in placed.values()):
+        log("researcher", researcher, "by right click on the research bench:",
+            cmd(cli if researcher == own else host, f"workreq {researcher} {RESEARCH_BENCH}"))
+    time.sleep(3)
+    log("JOBS after:", [cmd(host, f"modes {i}")[1] for i in range(n)])
     time.sleep(20)   # they walk there
 
     def compare_all(label):
@@ -8200,7 +8234,8 @@ def exp_workstations(host, cli, minutes=2.0):
     hm1 = compare_all(f"apres {minutes} min a x3")
     worked |= set(with_workers(hm1))
     log("machines with workers (at any reading):", sorted(worked))
-    check("postes : au moins un poste a des ouvriers", bool(worked), f"research {queued} | {hm1}")
+    check("postes : au moins un poste a des ouvriers", bool(worked),
+          f"research {queued} {cmd(host, 'research')[1][:120]} | modes {[cmd(host, f'modes {i}')[1] for i in range(n)]} | {hm1}")
     for line in host_log()[-4000:]:
         if "machine:" in line and ("workers" in line or "crops" in line or "not found here" in line or "replanted" in line):
             log("  ", line.strip())
@@ -8407,13 +8442,25 @@ def exp_clientjobs(host, cli):
     marks = dict(tok.split(":") for tok in whose.split()[1:] if ":" in tok)
     for i in host_idx[:3]:
         log("host's character", i, "works the iron node:", cmd(host, f"workreq {i} {IRON_NODE}"))
+
+    # The node's operator set, read at one instant, comes and goes while the miners work (13/10
+    # 14:25:11.8-12.3, four reads 0.1 s apart: 3/3, 2/3, 3/3, 1/3, names changing; the session's own
+    # machine sync saw 3/3 from 14:25:09 to 14:25:36): read it several times, its best count counts
+    def ops_best(reads=10, gap=0.2):
+        seen = []
+        for _ in range(reads):
+            seen.append(ops())
+            time.sleep(gap)
+        best = max(seen, key=lambda t: int(t.split("/")[0]) if t.split("/")[0].isdigit() else -1)
+        return best, seen
     for _ in range(30):
         time.sleep(3)
         if ops().startswith("3/"):
             break
-    full = ops().startswith("3/")
-    log("iron node:", ops())
-    check("jobs : noeud de fer plein (3/3) avec les persos de l'hote", full, ops())
+    best, seen = ops_best()
+    full = best.startswith("3/")
+    log("iron node:", best, "reads:", seen)
+    check("jobs : noeud de fer plein (3/3) avec les persos de l'hote", full, f"{best} {seen}")
     j0 = jobs(host, own) or []
     if full:
         log("client one-time order on the full node:", cmd(cli, f"workreq {own} {IRON_NODE}"))

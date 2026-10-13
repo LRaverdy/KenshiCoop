@@ -8,6 +8,41 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 Protocole inchangé (36).
 
+- **Animal acheté par un client : il rejoint enfin l'escouade (test `animalshop`, en échec depuis la
+  0.3.3, 13/10 9/10)**. Cause trouvée dans le jeu (désassemblage 1.0.68) : le `confirm()` de la
+  boutique d'animaux, que l'hôte exécute pour l'achat d'un client, finit par
+  `ForgottenGUI::showCharacterEditor(animaux achetés, mode 1)` (l'éditeur pour nommer ses animaux,
+  appel en `0x6AB5A3`). Il s'ouvrait donc **chez l'hôte** : le jeu de l'hôte s'est mis en pause à cet
+  instant (relevé `h_animalshop2` du 13/10 : `paused=1`, horloge arrêtée au moment de la vente), et
+  la liste des persos du joueur, que `PlayerInterface` reconstruit à chaque image depuis les pelotons
+  de la faction (`0x801E26`) mais pas pendant qu'une fenêtre bloquante est affichée (`0x80168A`), n'a
+  plus bougé : la chèvre était bien dans le peloton du joueur (« player squad 1 ») mais jamais dans
+  la liste (« player characters list 0 », squadanimals 0, absente des relevés). L'hôte n'ouvre plus
+  l'éditeur pendant une vente pour un autre joueur (`NoEditorScope`, détour de
+  `showCharacterEditor`, `hk_showEditor` ; journal « character editor of N character(s) (mode 1) not
+  opened here ») ; l'animal garde son nom. L'achat de l'hôte pour lui-même ouvre l'éditeur comme en
+  solo. Le journal « bought animal now » dit aussi si un éditeur est ouvert. Non revérifié en jeu.
+- **Test `recruits` : « parler à deux : la conversation s'ouvre chez le client » (13/10 20/21, déjà
+  en échec le 12/10)** : venait du test, comme `npctalk`. `talksel 0` visait le PNJ le plus proche
+  (Ribs / « Lost Person », le 12/10 un Ninja) ; l'hôte a bien fait marcher Harp jusqu'à lui puis
+  « the NPC has nothing to say ». Le test essaie maintenant des PNJ qui ont une conversation, par nom
+  (Chef Voleur, Thief Leader, Marchand, Trader, puis le plus proche), 30 s chacun.
+- **Test `clientjobs` : « nœud de fer plein (3/3) avec les persos de l'hôte » (13/10 13/14, 20/20
+  au passage précédent)** : venait de la mesure. Le test a lu 3/3 puis, 0,1 s plus tard, 1/3 : quatre
+  lectures à 0,1 s d'écart donnaient 3/3, 2/3, 3/3, 1/3 (les noms changeant), alors que la
+  synchronisation des machines de l'hôte voyait 3/3 de 14:25:09 à 14:25:36. L'ensemble des opérateurs
+  du jeu va et vient pendant que les mineurs travaillent ; le test prend la meilleure de 10 lectures
+  sur 2 s. Pourquoi l'ensemble varie d'une image à l'autre n'est pas établi.
+- **Test `workstations` : « au moins un poste a des ouvriers » (13/10 44/45, recherche en file, 0
+  ouvrier)** : vient très probablement de la mise en place (l'état JOBS des persos de l'hôte n'a pas
+  été relevé pendant la partie). Les persos de l'hôte n'avaient leurs postes qu'en travail
+  **permanent** (`workjob`), que le jeu ne fait que si l'ordre permanent JOBS du perso est allumé
+  (bit 64 de `modes`), ce que rien ne vérifiait pour eux ; la cuisinière et l'établi n'avaient rien à
+  travailler (paille de blé refusée, « Ble » parti dans la sortie), la ferme du désert ne pousse pas.
+  Le test allume JOBS pour chaque membre qui ne l'a pas, envoie un chercheur au banc de recherche
+  par clic droit (comme `research`, dont le chercheur travaille) et écrit les `modes` dans le détail
+  de l'échec. Non revérifié en jeu : si ça échoue encore, la cause est dans la recherche elle-même.
+
 - **Noms au-dessus des têtes : le perso d'un joueur arrivé plus tard (test `map`, 13/10, 48/50)**.
   Chez le client 1, le nom du perso principal du client 2 (arrivé après lui) n'était ni à sa couleur
   (`tint=0`) ni encadré, de son arrivée (10:29:54) à la fin du test (10:30:41) : le jeu de ce client

@@ -28,6 +28,8 @@ std::mutex g_tickMutex;
 std::atomic<DWORD> g_liveThread{0}, g_menuThread{0};
 thread_local int g_hostCall = 0;   // >0 while KenshiCoop itself is calling into the game
 thread_local int g_animReplay = 0; // >0 while KenshiCoop replays one of the host's animations
+thread_local int g_noEditor = 0;    // >0 while the game's character editor must not open here (NoEditorScope)
+int g_editorsSkipped = 0;           // tests and logs: editors not opened because of a NoEditorScope
 // 0.3.4: order hooks entered on this thread (the game's own UI calls). A right click on a character
 // that entered none gave no order at all (hk_charCursor).
 thread_local unsigned t_orderHooks = 0;
@@ -802,6 +804,27 @@ void hk_closeEditor(void* gui) {
     o_closeEditor(gui);
     if (KenshiWorld* w = TheWorld(); w && KenshiWorld::View()->active)
         for (kenshi::Character* c : chars) w->NoteEdited(c);
+}
+
+// 0.3.4: the animal shop's confirm (0x6AAC20) ends with showCharacterEditor(bought animals, 1) (call at
+// 0x6AB5A3), as the player's own purchase names its animals. Run on the host for another player's
+// purchase (SellAnimals) it opened the editor on the host's screen, unseen: the host's game paused at
+// that very moment (animalshop test 13/10: game clock stopped at the sale), and the animal, in the
+// player's platoon, never reached the squad list (PlayerInterface's update rebuilds it from the
+// faction's platoons every frame, 0x801E26, but returns early while one of ForgottenGUI's blocking
+// windows is up, 0x80168A -> 0x6E2F00), so it never became a squad character of the mod (animalshop,
+// 12/10 and 13/10). Inside a NoEditorScope the editor is not opened: the list it is given by value
+// is freed the way the editor frees it (the game's delete on its storage).
+using ShowEditorFn = void (*)(void* gui, void* chars, int mode, const void* races);
+ShowEditorFn o_showEditor = nullptr;
+void hk_showEditor(void* gui, void* chars, int mode, const void* races) {
+    if (g_noEditor > 0) {
+        const uint32_t n = kenshi::DropCharacterList(chars);
+        ++g_editorsSkipped;
+        Log("character editor of %u character(s) (mode %d) not opened here: asked during another player's purchase", n, mode);
+        return;
+    }
+    o_showEditor(gui, chars, mode, races);
 }
 
 // Trade windows: on the host, a merchant's "let's trade" in another player's conversation asks the
@@ -1677,6 +1700,9 @@ int RepairCallScopes(const kc::ScopeCounts& mark, const char* where) {
 HostCallScope::HostCallScope() { ++g_hostCall; }
 // never below zero: a repair (RepairCallScopes) may have closed this scope already
 HostCallScope::~HostCallScope() { if (g_hostCall > 0) --g_hostCall; }
+NoEditorScope::NoEditorScope() { ++g_noEditor; }
+NoEditorScope::~NoEditorScope() { if (g_noEditor > 0) --g_noEditor; }
+int EditorsSkipped() { return g_editorsSkipped; }
 AnimReplayScope::AnimReplayScope() { ++g_animReplay; ++g_hostCall; }
 AnimReplayScope::~AnimReplayScope() {
     if (g_animReplay > 0) --g_animReplay;
@@ -1919,6 +1945,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnSquadAddCharacterAt, reinterpret_cast<void*>(&hk_addAt), reinterpret_cast<void**>(&o_addAt)},
         {kenshi::FnSquadSwapCharacters, reinterpret_cast<void*>(&hk_swap), reinterpret_cast<void**>(&o_swap)},
         {kenshi::FnCloseCharacterEditor, reinterpret_cast<void*>(&hk_closeEditor), reinterpret_cast<void**>(&o_closeEditor)},
+        {kenshi::FnShowCharacterEditor, reinterpret_cast<void*>(&hk_showEditor), reinterpret_cast<void**>(&o_showEditor)},   // 0.3.4
         {kenshi::FnSetStandingOrder, reinterpret_cast<void*>(&hk_standing), reinterpret_cast<void**>(&o_standing)},
         {kenshi::FnPickupCharacter, reinterpret_cast<void*>(&hk_pickChar), reinterpret_cast<void**>(&o_pickChar)},
         {kenshi::FnShowTradeWindow, reinterpret_cast<void*>(&hk_showTrade), reinterpret_cast<void**>(&o_showTrade)},

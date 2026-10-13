@@ -667,6 +667,9 @@ bool WriteAppearance(Character* c, const kc::AppearanceMsg& m);
 bool OpenCharacterEditor(Character* c);
 void EditorCharacters(std::vector<Character*>& out);           // who the open editor works on
 bool CharacterEditorOpen();
+// 0.3.4: a lektor<Character*> passed by value to the editor (showCharacterEditor) that will not be
+// opened: its storage freed as the callee would (the game's delete). Returns how many it held.
+uint32_t DropCharacterList(void* lektor);
 bool CallStartPlayerConversation(Character* npc, Character* pc);   // tests: npc talks to pc (its default conversation)                // tests: Dialogue::say through the hooks   // the float lies inside a live character's CharStats
 // Conversations (Dialogue, Character+0x280).
 void* CharacterDialogue(Character* c);

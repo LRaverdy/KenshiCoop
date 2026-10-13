@@ -135,7 +135,7 @@ Les signatures sont celles du commentaire du code.
 | 91 | `FnSquadAddCharacterAt` | `ActivePlatoon::addCharacterAt` | `0x796620` | oui | void ActivePlatoon::addCharacterAt(RootObject*, int index) (met un personnage dans une escouade) |
 | 92 | `FnCreateSquad` | `PlayerInterface::createSquad` | `0x7F4910` | — | ActivePlatoon* PlayerInterface::createSquad() |
 | 93 | `FnCloseCharacterEditor` | `ForgottenGUI::closeCharacterEditor` | `0x6E22B0` | oui | void ForgottenGUI::closeCharacterEditor() (seul le bouton de validation de l'éditeur l'appelle) |
-| 94 | `FnShowCharacterEditor` | `ForgottenGUI::showCharacterEditor` | `0x6E32F0` | — | void ForgottenGUI::showCharacterEditor(lektor<Character*>, CharacterEditMode, const vector<GameDataReference>* races) |
+| 94 | `FnShowCharacterEditor` | `ForgottenGUI::showCharacterEditor` | `0x6E32F0` | hôte (0.3.4) | void ForgottenGUI::showCharacterEditor(lektor<Character*>, CharacterEditMode, const vector<GameDataReference>* races). Détourné (`hk_showEditor`) : rien n'est ouvert dans un `NoEditorScope` (vente d'animaux à un autre joueur, voir « Boutique d'animaux ») ; la liste reçue par valeur est alors libérée comme l'éditeur le fait (`delete` du jeu sur son tableau) |
 | 95 | `FnSetAppearanceData` | `Character::setAppearanceData` | `0x5B9E90` | — | void Character::setAppearanceData(GameDataCopyStandalone*) |
 | 96 | `FnMapBool` | `GameData bool map []` | `0x6C7C0` | — | tables de valeurs d'une GameData : operator[](const std::string&) → pair* |
 | 97 | `FnMapString` | `GameData string map []` | `0x6D190` | — | idem (chaînes) |
@@ -301,7 +301,7 @@ Trouvées depuis KenshiLib (décalage +0x40 dans la zone `0xD0000`-`0xF8000` : `
 | Groupe | Enum | Fonction | RVA | Hook | Rôle |
 |---|---|---|---|---|---|
 | animaux | `FnAnimalTradeCtor` | constructeur du gestionnaire d'achat d'animaux (notre nom) `(this, Character* vendeur, Character* acheteur, lektor<Character*>* animaux, int prixDeBase)` | `0x6A9440` | hôte | [D] appelé par l'action de dialogue `CHOOSE_ANIMALS_BUYING` (0x30, `0x6817F4`) ; vtable `0x16FFAD8` ; prix de chaque animal = (prix de base, 14000 par défaut si ≤ 0) × (âge vt 0x398 + constante). L'hôte note celui fait pour le perso d'un autre joueur |
-| animaux | `FnAnimalTradeConfirm` | sa `confirm()` (vt 0, notre nom) | `0x6AAC20` | client | [D] rassemble les entrées cochées (`0x7261C0`, vivantes), vérifie la taille d'escouade (message sinon), puis pour chacune : `removePermajob`, `PlayerInterface::recruit(animal, false)` ; enfin `takeMoney(total)` sur la faction du joueur (`[0x2134690]`+0x2A0 → +0x80, vt 0). **Ne vérifie pas l'argent** (c'est la fenêtre qui grise le bouton) : l'hôte le vérifie avant |
+| animaux | `FnAnimalTradeConfirm` | sa `confirm()` (vt 0, notre nom) | `0x6AAC20` | client | [D] rassemble les entrées cochées (`0x7261C0`, vivantes), vérifie la taille d'escouade (message sinon), puis pour chacune : `removePermajob`, `PlayerInterface::recruit(animal, false)` ; puis `takeMoney(total)` sur la faction du joueur (`[0x2134690]`+0x2A0 → +0x80, vt 0) ; **enfin `ForgottenGUI::showCharacterEditor(animaux achetés, mode 1, nul)`** (appel en `0x6AB5A3`, 0.3.4) : l'éditeur pour nommer les animaux. **Ne vérifie pas l'argent** (c'est la fenêtre qui grise le bouton) : l'hôte le vérifie avant |
 | animaux | `FnCharTradeHandlerDtor` | `CharacterTradingHandler::~` (non virtuel) | `0x6A69D0` | — | la fenêtre l'appelle puis libère par l'`operator delete` importé `[0x2247198]` (alloué par `[0x22471A0]`, 0x88 octets) |
 | animaux | `FnCharTradeWindowCtor` | `CharacterTradingWindow::CharacterTradingWindow(handler)` | `0x72A880` | — | [D] 0x110 octets ; détruit l'`Instance` précédente (`0x2132C30`) puis prend sa place ; ne met pas le jeu en pause |
 | animaux | `FnCharTradeWindowShow` | `CharacterTradingWindow::show(bool)` (vt 0x10) | `0x7223A0` | hôte | [D] true : widget (+0x38) vt 0x18 `setVisible(true)` ; false : `close()` (`0x726830` : cache, `GameWorld::setPaused(false)` `0x787D40`, libère le gestionnaire +0xD0 et la fenêtre). L'hôte garde cachée la fenêtre d'un gestionnaire noté |
@@ -321,6 +321,22 @@ fenêtres de ce type (vente et achat d'esclaves 0x29 / 0x2A, caution 0x2B, anima
 classe ; seule celle des animaux est détournée pour l'instant. Décalages par rapport à KenshiLib
 1.0.65 : +0x11D0 (zone 0x72xxxx : `OrdersPanel`), +0x780 (`ProspectingWindow` 0x48xxxx), +0x4B0
 (`getSingleton`), +0x1260 (`ForgottenGUI`).
+
+**Animal acheté et liste de l'escouade (0.3.4, [D])** : la liste des persos du joueur
+(`PlayerInterface`+0x2B0, ce que lit le mod pour l'escouade) n'est pas tenue à jour au fil des
+recrutements : `PlayerInterface::<update>` (`0x801630`, appelée par la boucle de `GameWorld` en
+`0x788D9B`, pause ou pas) la **reconstruit à chaque image** (`0x801E26` : faction du joueur vt 8
+`getCharacters(liste, 1, false)` → pour chaque peloton +0x210/+0x218, `ActivePlatoon` (+0x1D8) vt 0x28,
+membres +0x58/+0x60). Mais cette fonction sort tout de suite (`0x801669` → `0x801F3D`) pendant un
+écran de chargement (`0x801676`) ou quand une des fenêtres bloquantes de `ForgottenGUI` est affichée
+(`0x80168A` → `0x6E2F00`, liste globale de fenêtres, drapeau +0xC0 ; que l'éditeur de persos en
+soit une est déduit de ce qu'on a vu en jeu, pas lu au désassemblage). Le `confirm()` des animaux finit
+par `showCharacterEditor(animaux, 1)` : exécuté par l'hôte pour l'achat d'un client, il ouvrait cet
+éditeur chez l'hôte (invisible pour le test), le jeu de l'hôte se mettait en pause à cet instant
+(horloge du relevé `h_animalshop2` du 13/10 arrêtée au moment de la vente) et l'animal, bien dans le
+peloton du joueur, n'entrait jamais dans la liste. L'hôte n'ouvre plus cet éditeur pendant une vente
+pour un autre joueur (`NoEditorScope` autour du `confirm`, `hk_showEditor`) ; l'animal garde son nom.
+L'achat de l'hôte pour lui-même ouvre toujours l'éditeur, comme en solo.
 
 PROSPECT (tâche 150) : `checkPlayerOrderForProblems` (`0x5D1940`) refuse si le perso n'est pas dehors
 (vt 0x1D8, handle du lieu, type ≠ 0xB : « I need to go outside to do this. ») ou pas sur le sol ferme
