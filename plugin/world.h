@@ -366,6 +366,9 @@ public:
         for (const auto& [host, l] : alias_) if (l == local) return host;
         return local;
     }
+    // client (0.3.4, tests): is that local character the copy of a host character (false: a character
+    // only this game has, which the host cannot talk to nor order about)
+    bool HostHasCopyOf(const kc::Handle& local) const { return HostKnows(HostHandleOf(local)); }
     size_t CharacterCount() const { return squad_.size(); }
     // tests (0.3.2, "squadcheck"): host characters linked to a local character whose own handle is
     // another host character (Stone taken for the copy of another one): always 0

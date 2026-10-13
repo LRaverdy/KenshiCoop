@@ -8031,14 +8031,23 @@ def exp_recruits(host, clis):
     # (13 October, as on 12/10: "talksel 0", the nearest NPC, was Ribs / Lost Person, then a Ninja:
     # the host's game walked Harp there and said "the NPC has nothing to say", no conversation; the
     # mod did its part. As in npctalk, NPCs of kctest_town known to hold a conversation, by name, the
-    # nearest last; each one is given 30 s, Chef Voleur being a few houses away)
+    # nearest last; each one is given 60 s: Chef Voleur is a few houses away, but the Marchand Shinobi
+    # of 13/10 17:25 was some 700 units off, upstairs, and still walking after 40 s)
+    # talksel never picks Skinner and Ribs, the characters step 1 made on this client only (0.3.4)
+    clog_path = os.path.join(KENSHI, f"KenshiCoop-{clis[0]}.log")
+    try:
+        clog_from = os.path.getsize(clog_path)
+    except OSError:
+        clog_from = None
+    sent = 0
     dl = ""
     for k in ["name:Chef_Voleur", "name:Thief_Leader", "name:Marchand", "name:Trader", "0"]:
         r = cmd(clis[0], f"talksel {k}")
         log(f"client 1 talksel {k}", r)
         if not r[0]:
             continue
-        for _ in range(60):
+        sent += 1
+        for _ in range(120):
             time.sleep(0.5)
             dl = cmd(clis[0], "dialog")[1]
             if "open=1" in dl:
@@ -8047,10 +8056,25 @@ def exp_recruits(host, clis):
             break
         log("   no conversation with it:", [l for l in host_log().splitlines() if "talk" in l][-2:])
         cmd(clis[0], "selectset " + " ".join(map(str, ci)))
+    # Orders this client sent that the test did not give (13/10 17:24: right clicks on Skinner, "stay
+    # close", "talk", Shift + "bodyguard", came in between talksel and the conversation; the walk to
+    # Chef Voleur was taken over, and the test failed for a reason that is not the mod's)
+    stray = []
+    if clog_from is not None:
+        try:
+            with open(clog_path, encoding="utf-8", errors="replace") as f:
+                f.seek(clog_from)
+                orders = [l.strip() for l in f.read().splitlines() if "client order task" in l]
+            stray = orders[sent:]
+        except OSError:
+            pass
+    if stray:
+        log("   ATTENTION: orders the test did not give (mouse or keys in the client's window?):", stray)
     d1 = kvs(cmd(host, "dialogs")[1])
     log("host dialogs before/after:", d0, d1, "| client dialog:", dl)
     check("parler a deux : aucun refus 'occupe' pour le meme joueur", d1.get("busy") == d0.get("busy"), (d0, d1))
-    check("parler a deux : la conversation s'ouvre chez le client", "open=1" in dl, dl)
+    check("parler a deux : la conversation s'ouvre chez le client", "open=1" in dl,
+          dl + (f" | ordres hors test: {len(stray)} ({stray[0]})" if stray else ""))
     cmd(clis[0], "answer leave")
     time.sleep(3)
 

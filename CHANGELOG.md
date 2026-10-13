@@ -36,6 +36,34 @@ Protocole inchangé (36).
   `jobspanel`. L'expérience `clientjobs` sélectionne le perso du client et vérifie que le panneau suit
   sans resélection : Maj + clic droit, travail ajouté, déplacé, retiré, deux bascules JOBS. Pas de test
   unitaire (appel du moteur). **Non vérifié en jeu.**
+- **`recruits` 20/21 du 13/10 17:22 (« parler a deux : la conversation s'ouvre chez le client »),
+  branche `fix-talk3`**. Pas d'erreur de correspondance des persos : l'ordre de `talksel
+  name:Chef_Voleur` est arrivé chez l'hôte sur Chef Voleur (« order "talk" (12) on Chef Voleur -> ok »,
+  « Joueur2 walks to Chef Voleur », 17:24:19). L'ordre refusé « on Sword for hire ex-slave: wrong
+  target » (17:24:28) visait Skinner. Skinner est un des deux persos que l'étape 1 du test crée chez le
+  client seul (`spawncreature 41370-Dialogue.mod`, à 25 unités de l'escouade). L'hôte ne l'a pas : « NOT
+  found by kind and place », et le refus est juste. Ce n'est pas le test qui a donné cet ordre : le
+  client n'a reçu que des `dialog` entre 17:24:19 et 17:25:02. Son journal montre des ordres d'interface
+  de 17:24:23 à 17:24:35 : « rester près » (31, menu du clic droit, deux fois), « parler » à Skinner
+  (clic droit, quatre fois, dont deux avec Maj), puis « garde du corps » (45, avec Maj). Ce sont des
+  clics dans la fenêtre du client, venus d'ailleurs que du test. Le garde du corps a été accepté
+  (« jobs 0 -> 2 ») et a remplacé la marche vers Chef Voleur. À 15:16 (21/21), la même conversation
+  s'était ouverte 8 s après l'ordre.
+  - Correctif du greffon : chez l'hôte, un ordre refusé n'annule plus la conversation vers laquelle le
+    perso marche. Avant, tout ordre autre que « parler » vidait `pendingTalks_` avant d'être vérifié.
+    Le « rester près » refusé de 17:24:23 a donc retiré le lancement de secours de la conversation
+    avec Chef Voleur (`UpdatePendingTalks`, utile loin de la caméra de l'hôte), alors qu'il ne changeait
+    rien au perso. Maintenant, seul un ordre exécuté l'annule ou le remplace. Un ordre refusé l'écrit
+    dans le journal : « the talk it walks to goes on ».
+  - `talksel` (commande de test) ne choisit plus, chez un client, un perso que seul ce client a
+    (`KenshiWorld::HostHasCopyOf`). Avant, « talksel 0 » choisissait Ribs, le 12/10 et le 13/10 à 14:07.
+  - Test : 60 s par PNJ au lieu de 30. Le Marchand Shinobi était à quelque 700 unités, à l'étage, et le
+    perso y marchait encore après 40 s (« walking to 645 units away » à 17:25:16). Citoyen Shinobi
+    (« le plus proche ») n'a rien à dire, comme prévu. Le journal du client est relu après la boucle :
+    les ordres que le test n'a pas donnés sont écrits (« ATTENTION: orders the test did not give ») et
+    ajoutés au détail de l'échec.
+  - Pas de test unitaire (le correctif est dans `KenshiWorld::Order`, qui appelle le jeu). Non relancé
+    en jeu : à voir avec `recruits` (21/21, pas de ligne « ATTENTION »).
 
 - **TP admin d'un perso K.-O. : il ne retourne plus là où il gisait (`suite` 29/32 du 13/10 16:19,
   branche `fix-tp3`)**. « TP admin : le perso du joueur arrive près de l'hôte » donnait 1147,2 et

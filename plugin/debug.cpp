@@ -2221,6 +2221,9 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         for (kenshi::Character* c : all) {
             kc::Handle h;
             if (!kenshi::GetHandle(c, h) || w.FindSquad(h) || kenshi::IsDead(c) || kenshi::IsDown(c) || kenshi::IsAnimal(c) || !kenshi::GetPosition(c, p)) continue;
+            // on a client, never a character only this game has (the recruits test's own Skinner and Ribs,
+            // made here next to the squad: "talksel 0" picked Ribs on 12 and 13 October)
+            if (s.isClient() && !w.HostHasCopyOf(h)) continue;
             if (std::string nm; !part.empty() && (!kenshi::CharacterName(c, nm) || nm.find(part) == std::string::npos)) continue;
             nearby.emplace_back((p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z), c);
         }
