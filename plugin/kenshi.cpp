@@ -2628,6 +2628,25 @@ std::string FirstSectionName(void* holder) {
     return key;
 }
 
+std::vector<std::string> SectionNames(void* holder) {
+    std::vector<std::string> out;
+    void* inv = InventoryOf(holder);
+    if (!inv) return out;
+    const auto* map = reinterpret_cast<const uint8_t*>(inv) + INV_sections;
+    uint64_t size = 0, bucketCount = 0;
+    void** buckets = nullptr;
+    if (!Rd(map, off::US_size, size) || size == 0 || size > 256) return out;
+    if (!Rd(map, off::US_bucketCount, bucketCount) || !Rd(map, off::US_buckets, buckets) || !buckets) return out;
+    void* node = nullptr;
+    if (!Rd(buckets, bucketCount * sizeof(void*), node)) return out;
+    std::string key;
+    for (uint64_t i = 0; node && i < size; ++i) {
+        if (ReadGameString(reinterpret_cast<uint8_t*>(node) + off::MapNode_key, key) && std::find(out.begin(), out.end(), key) == out.end()) out.push_back(key);
+        if (!Rd(node, off::USNode_next, node)) break;
+    }
+    return out;
+}
+
 
 namespace {
 struct Stack { void* item = nullptr; int qty = 0; };

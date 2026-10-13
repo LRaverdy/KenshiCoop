@@ -6180,6 +6180,34 @@ static void TestMotion() {
         PostureFacts dead = lying;
         dead.hostDead = true;
         CHECK(!MayRelay(r, dead, 30.0f, true, 200));
+        // 0.3.4 (carry test 13/10, 12 units off): a body put down from a carry, its first fall here
+        // measured, is stood up once to fall again on the host's spot; a knocked-out fighter is not
+        {
+            PostureBook fight;
+            CHECK(!MayFineRelay(fight, lying, 12.0f, true, true, 5));   // not put down from a carry
+            PostureBook put;
+            MarkPutDown(put, 0);
+            NoteFall(put, 1);
+            NoteFallSettled(put, true, true);
+            CHECK(!MayFineRelay(put, lying, 12.0f, true, false, 3));    // its fall not measured
+            CHECK(!MayFineRelay(put, lying, 4.0f, true, true, 3));      // close enough
+            CHECK(!MayFineRelay(put, lying, 25.0f, true, true, 3));     // the ordinary relay's case
+            CHECK(!MayFineRelay(put, lying, 12.0f, false, true, 3));    // nobody near
+            CHECK(!MayFineRelay(put, dead, 12.0f, true, true, 3));
+            NoteStanding(put, 1.5);   // a stale "up" right after the put-down does not cancel it
+            CHECK(MayFineRelay(put, lying, 12.0f, true, true, 3));
+            NoteFineRelay(put, 3);
+            CHECK(!MayFineRelay(put, lying, 12.0f, true, true, 20));    // once
+            CHECK(put.relays == 1);
+            PostureBook up;
+            MarkPutDown(up, 0);
+            NoteStanding(up, 10);   // stood up on the host since: over
+            CHECK(!MayFineRelay(up, lying, 12.0f, true, true, 12));
+            PostureBook spentPut;
+            MarkPutDown(spentPut, 0);
+            for (int i = 0; i < kMaxFalls; ++i) NoteFall(spentPut, 1.0);
+            CHECK(!MayFineRelay(spentPut, lying, 12.0f, true, true, 2.0));   // no fall left
+        }
         // standing up as on the host: never a dead body, never a held one
         PostureFacts up;
         up.localDown = true;

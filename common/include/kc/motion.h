@@ -251,6 +251,8 @@ struct PostureBook {
     double lastRelay = -1e9;
     bool pending = false;   // a fall was started; not checked yet
     bool gaveUp = false;    // until the window ends: its posture is left as it is
+    bool fineWanted = false; // put down from a carry here: may be stood up once for a small offset (kept across windows)
+    double putDownAt = -1e9; // when (kept across windows)
 };
 constexpr double kPostureWindow = 60.0;   // the limits below count over this long
 constexpr int kMaxFalls = 4;              // per body and window
@@ -271,10 +273,13 @@ struct PostureFacts {
 
 inline void PostureRoll(PostureBook& b, double now) {
     if (now - b.windowStart < kPostureWindow) return;
-    const bool pending = b.pending;
+    const bool pending = b.pending, fineWanted = b.fineWanted;
+    const double putDownAt = b.putDownAt;
     b = PostureBook{};
     b.windowStart = now;
     b.pending = pending;
+    b.fineWanted = fineWanted;
+    b.putDownAt = putDownAt;
 }
 // May it be laid down as on the host now?
 inline bool MayFall(PostureBook& b, const PostureFacts& f, double now) {
@@ -305,6 +310,34 @@ inline void NoteRelay(PostureBook& b, double now) {
     PostureRoll(b, now);
     ++b.relays;
     b.lastRelay = now;
+}
+// 0.3.4 (carry test of 13/10: a body put down lay 12 units from the host's on the client). A body
+// put down from a carry is let go standing here, moved to the host's spot and made to fall: it
+// collapses 7-12 units away, and that fall measured how far (the shift). Once, a body put down that
+// way, seen by a player, lying more than kFineOffset off (on the ground plane), is stood up and falls
+// again that shift short of the host's spot, so that it ends on it. Never without the shift (it would
+// only end as far off again), within the same budget as the other relays. Only bodies put down from
+// a carry (MarkPutDown): a knocked-out fighter 10 units off is left alone (no visible stand-up).
+constexpr float kFineOffset = 5.0f;
+inline void MarkPutDown(PostureBook& b, double now) {
+    b.fineWanted = true;
+    b.putDownAt = now;
+}
+inline bool MayFineRelay(PostureBook& b, const PostureFacts& f, float offset, bool seen, bool shiftKnown, double now) {
+    PostureRoll(b, now);
+    return !f.held && f.hostDown && f.localDown && !f.hostDead && !f.localDead && seen && shiftKnown && b.fineWanted &&
+           offset > kFineOffset && offset <= kRelayOffset && !b.gaveUp && b.relays < kMaxRelays && b.falls < kMaxFalls &&
+           now - b.lastRelay > kRelayCooldown;
+}
+inline void NoteFineRelay(PostureBook& b, double now) {
+    NoteRelay(b, now);
+    b.fineWanted = false;
+}
+// Standing here and on the host: whatever it was put down for is over (not in the first seconds
+// after the put-down: the host's "down" may arrive a moment after the carry ends).
+constexpr double kPutDownGrace = 3.0;
+inline void NoteStanding(PostureBook& b, double now) {
+    if (now - b.putDownAt > kPutDownGrace) b.fineWanted = false;
 }
 // May it be stood up because the host's is standing? Never a held one (a shackled captive sits).
 inline bool MayStand(const PostureFacts& f) { return !f.held && !f.hostDown && !f.hostDead && f.localDown && !f.localDead; }

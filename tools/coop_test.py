@@ -6817,7 +6817,9 @@ def exp_carry(host, cli):
           cf == "carried=1" and hf == "carried=1" and dist(rel(hme, hbody), rel(me, body)) < 2,
           f"client {cf} {rel(me, body)} / hote {hf} {rel(hme, hbody)}")
     log("carrydrop", cmd(host, "carrydrop 0"))
-    time.sleep(4)
+    # 0.3.4: the client's body falls ~1 s after the drop, settles 2 s, and if it lies more than 5
+    # units from the host's it is stood up once and falls again on the host's spot (~3 s more)
+    time.sleep(10)
     h1, c1 = pos(host, key), pos(cli, key)
     time.sleep(3)
     c2 = pos(cli, key)
@@ -6831,6 +6833,7 @@ def exp_carry(host, cli):
     pc = kv_of(cli, "posturecheck")
     log("client posturecheck:", cmd(cli, "posturecheck")[1])
     check("posture : apres le portage, rien que l'hote a debout n'est couche ou porte par personne chez le client", pc.get("n") == 0, pc)
+    summary()   # 13/10: missing, the run ended after "posture" without its BILAN line
 
 
 
@@ -7954,6 +7957,8 @@ SMALL_FARM = "1911-gamedata.base"          # Small Farm (FarmBuilding)
 HEMP_FARM = "2021-gamedata.base"           # Hemp Farm, if the small one cannot be placed
 WELL = "1921-gamedata.base"
 COOKING_STOVE = "1944-gamedata.base"
+WHEATSTRAW = "1913-gamedata.base"          # Wheatstraw (the stove's food; its French name is not "Ble")
+BREAD = "1946-gamedata.base"
 WORKSTATIONS = (("ferme", (SMALL_FARM, HEMP_FARM)), ("cuisiniere", (COOKING_STOVE,)), ("etabli", CRAFT_BENCHES),
                 ("recherche", (RESEARCH_BENCH,)), ("puits", (WELL,)), ("eolienne", (WIND_GENERATOR,)))
 
@@ -8044,10 +8049,16 @@ def exp_workstations(host, cli, minutes=2.0):
             time.sleep(1.5)
     time.sleep(5)
     keep_anchor_home(host)
-    # ---- materials: water, food, fabrics, books into the posts (host sandbox)
-    for sid, what in ((COOKING_STOVE, "Ble"), (COOKING_STOVE, "Wheat"),
-                      (RESEARCH_BENCH, "Livre"), (RESEARCH_BENCH, "Book"), (CRAFT_BENCHES[0], FABRICS), (CRAFT_BENCHES[0], "Tissus")):
-        log("sandbox: into", sid, what, cmd(host, f"machinegive {sid} {what} 20"))
+    # ---- materials: food, fabrics, books into the posts (host sandbox). Wheatstraw by its sid (13/10:
+    # "Ble" / "Wheat" match no item of the French game, "no room" in the stove); the first that goes in
+    # per post is enough (what stays in member 0's bag fills it: "giveItem refused (inventory full?)")
+    for sid, whats in ((COOKING_STOVE, (WHEATSTRAW, "Ble", "Wheat")), (RESEARCH_BENCH, ("Livre", "Book")),
+                       (CRAFT_BENCHES[0], (FABRICS, "Tissus", "Leather", "Iron"))):
+        for what in whats:
+            r = cmd(host, f"machinegive {sid} {what} 20")
+            log("sandbox: into", sid, what, r)
+            if r[0]:
+                break
     # ---- set to work: the client by right click and by the Tâches panel; the host the same
     cli_posts = [placed[k][0] for k in placed if k.endswith("/client")]
     host_posts = [placed[k][0] for k in placed if k.endswith("/hote")]
@@ -8055,10 +8066,30 @@ def exp_workstations(host, cli, minutes=2.0):
         log("client right click: its character works", cli_posts[0], cmd(cli, f"workreq {own} {cli_posts[0]}"))
     for sid in cli_posts[1:3]:
         log("client Tâches panel: permanent job on", sid, cmd(cli, f"workjob {own} {sid} 87"))
-    log("client Tâches panel: hauling (88)", cmd(cli, f"workjob {own} none 88"))
+    # Not "hauling (88) with no subject": the game makes no job of it, on the host as on the client
+    # (13/10 runs, jobs 2 -> 2; docs/MOTEUR.md). The panel's follow job (31 on a squad mate, as in
+    # exp_clientjobs), which the game does list.
+    if host_idx:
+        log("client Tâches panel: follow job (31) on member", host_idx[-1], cmd(cli, f"jobreq {own} 31 {host_idx[-1]}"))
     for i, sid in zip(host_idx, host_posts):
         how = "workreq" if i == host_idx[0] else "workjob"
         log(f"host {how}: member {i} works", sid, cmd(host, f"{how} {i} {sid}" + ("" if how == "workreq" else " 87")))
+    # Work for the posts: a worker only sits at a post that has something to do (13/10: 0 workers
+    # everywhere after 2 min: no research queued, an empty stove, no craft order, a desert farm). A
+    # research the benches can pay for, queued by the client (exp_research: its researcher sits).
+    picks = [p.split("=")[0] for p in cmd(host, "researchpick 6 cost")[1].split()[1:]]
+    picks += [p.split("=")[0] for p in cmd(cli, "researchpick 6")[1].split()[1:] if p.split("=")[0] not in picks]
+    queued = None
+    for tech in picks:
+        log("client queues the research", tech, cmd(cli, f"researchreq queue {tech}"))
+        for _ in range(8):
+            time.sleep(0.5)
+            if tech in cmd(host, "research")[1]:
+                queued = tech
+                break
+        if queued:
+            break
+    log("research queued for the benches:", queued, "| host:", cmd(host, "research")[1][:200])
     time.sleep(20)   # they walk there
 
     def compare_all(label):
@@ -8093,19 +8124,25 @@ def exp_workstations(host, cli, minutes=2.0):
 
     hm0 = compare_all("depart")
     own_jobs = cmd(host, f"jobs {own}")[1].split()[2:]
-    check("postes : taches permanentes du client chez l'hote (87 et 88)", "87" in own_jobs and "88" in own_jobs, own_jobs)
+    check("postes : taches permanentes du client chez l'hote (87 et suivre 31)", "87" in own_jobs and "31" in own_jobs, own_jobs)
+
+    def with_workers(m):
+        return [k for k in m if m[k].get("ops", "0/").split("/")[0] not in ("0", "")]
+    worked = set(with_workers(hm0))
     log("speed x3", cmd(host, "speed 3"))
     end = time.time() + 60 * minutes
     while time.time() < end:
         time.sleep(15)
         keep_anchor_home(host)
-        log("machines:", cmd(host, "machines")[1][:400])
+        hm = machines_map(host)
+        worked |= set(with_workers(hm))
+        log("machines with workers now:", with_workers(hm), "| research:", cmd(host, "research")[1][:120])
     log("speed x1", cmd(host, "speed 1"))
     time.sleep(4)
     hm1 = compare_all(f"apres {minutes} min a x3")
-    worked = [k for k in hm1 if hm1[k].get("ops", "0/").split("/")[0] not in ("0", "")]
-    log("machines with workers:", worked)
-    check("postes : au moins un poste a des ouvriers", bool(worked), hm1)
+    worked |= set(with_workers(hm1))
+    log("machines with workers (at any reading):", sorted(worked))
+    check("postes : au moins un poste a des ouvriers", bool(worked), f"research {queued} | {hm1}")
     for line in host_log()[-4000:]:
         if "machine:" in line and ("workers" in line or "crops" in line or "not found here" in line or "replanted" in line):
             log("  ", line.strip())
@@ -8142,9 +8179,12 @@ def exp_machineout(host, cli, seconds=60):
         log("finish:", cmd(host, f"buildprogress {COOKING_STOVE} 100000"))
         time.sleep(1.5)
     keep_anchor_home(host)
-    for what in ("Ble", "Wheat"):
-        log("sandbox: into the stove", what, cmd(host, f"machinegive {COOKING_STOVE} {what} 20"))
-    asked0 = cmd(cli, "logcount inventory_move_asked_of_the_host")[1]
+    for what in (WHEATSTRAW, "Ble", "Wheat"):   # 13/10: "Ble" / "Wheat" put nothing in ("no room")
+        r = cmd(host, f"machinegive {COOKING_STOVE} {what} 20")
+        log("sandbox: into the stove", what, r)
+        if r[0]:
+            break
+    asked0 =cmd(cli, "logcount inventory_move_asked_of_the_host")[1]
     cmd(cli, "logcount window_closed:_not_the_player's_doing")
     cmd(host, "logcount not_done_(nothing_to_do)")
     log("client's character works the stove:", cmd(cli, f"workreq {own} {COOKING_STOVE}"))
@@ -8167,7 +8207,18 @@ def exp_machineout(host, cli, seconds=60):
     log("client moves asked:", asked0, "->", asked1, "| closed-window differences seen:", closed, "| host 'nothing to do':", nothing)
     check("sortie machine : aucun deplacement demande par le client, fenetre fermee", asked1 == asked0, f"{asked0} -> {asked1}")
     check("sortie machine : aucune demande sans effet chez l'hote", nothing in ("ok 0", "0"), nothing)
-    # the client opens the stove and takes its output: that one is the player's, sent and done
+    if " stacks=0 " in f" {sh} ":
+        # nothing ever changed in it: the closed-window checks above saw no change to ignore
+        log("NOT TESTED (closed window): the stove held nothing during the work (no ingredient went in, or no cooking)")
+        for what in (WHEATSTRAW, BREAD):   # something to take, for the open-window part
+            r = cmd(host, f"machinegive {COOKING_STOVE} {what} 3")
+            log("sandbox: into the stove, to be taken", what, r)
+            if r[0]:
+                break
+        time.sleep(4)
+    # the client opens the stove and takes its output: that one is the player's, sent and done.
+    # containerreq takes the stove's sid (13/10: it matched translated names only, "no container
+    # called 1944-gamedata.base": the window was never asked for)
     r = cmd(cli, f"containerreq {own} {COOKING_STOVE}")
     log("client opens the stove:", r)
     opened = False

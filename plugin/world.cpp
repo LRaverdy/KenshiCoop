@@ -18,6 +18,11 @@ float Dist(const kc::Vec3& a, const kc::Vec3& b) {
     const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
+// on the ground plane (a ragdoll's root and a standing character's feet are not at the same height)
+float Dist2(const kc::Vec3& a, const kc::Vec3& b) {
+    const float dx = a.x - b.x, dz = a.z - b.z;
+    return std::sqrt(dx * dx + dz * dz);
+}
 std::string KeyOf(const kc::Handle& h) {
     char b[80];
     snprintf(b, sizeof(b), "%u:%u:%u:%u:%u", h.type, h.container, h.containerSerial, h.index, h.serial);
@@ -1089,16 +1094,28 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
             fallFrom_.erase(f);
         }
         const float off = Dist(local, target.pos);
-        if (kenshi::IsRagdoll(c) && kc::motion::MayRelay(book, pf, off, NearestSquadDistance(local) < kBodySeen, now)) {
+        const bool seen = NearestSquadDistance(local) < kBodySeen;
+        if (kenshi::IsRagdoll(c) && kc::motion::MayRelay(book, pf, off, seen, now)) {
             kc::motion::NoteRelay(book, now);
             HostCallScope scope;
             kenshi::SetRagdoll(c, false);
             postureFixed_[h] = 0;
             Log("posture: %s lies %.0f units from the host's body: stood up to fall where the host's lies (%d/%d this minute)", KeyOf(h).c_str(),
                 off, book.relays, kc::motion::kMaxRelays);
+        } else if (kenshi::IsRagdoll(c) && kc::motion::MayFineRelay(book, pf, Dist2(local, target.pos), seen, fallShift_.count(h) != 0, now)) {
+            // 0.3.4 (carry test 13/10: a body put down lay 12 units from the host's): its first fall
+            // collapsed that far from the host's spot; once, it falls again that much short of it
+            const kc::Vec3& s = fallShift_[h];
+            kc::motion::NoteFineRelay(book, now);
+            HostCallScope scope;
+            kenshi::SetRagdoll(c, false);
+            postureFixed_[h] = 0;
+            Log("posture: %s lies %.1f units from the host's body (its fall here shifted it %.1f,%.1f): stood up once to fall on the host's spot",
+                KeyOf(h).c_str(), Dist2(local, target.pos), s.x, s.z);
         }
         return;
     }
+    kc::motion::NoteStanding(book, now);
     fallFrom_.erase(h);
     fallShift_.erase(h);
 
@@ -1669,6 +1686,9 @@ void KenshiWorld::ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& 
         postureBook_.erase(dropped);   // put down by the host: a new fall, whatever happened before
         fallFrom_.erase(dropped);
         fallShift_.erase(dropped);
+        // 0.3.4: once fallen here, corrected once if it lies more than 5 units from the host's body
+        // (kc::motion::MayFineRelay; the carry test of 13/10 found it 12 units off)
+        if (!deadBody) kc::motion::MarkPutDown(postureBook_[dropped], NowSeconds());
         Log("carry: %s%s puts %s down as on the host; it falls where the host's lies (ragdoll %d)", carry ? "swaps and " : "", KeyOf(h).c_str(),
             KeyOf(dropped).c_str(), body ? int(kenshi::IsRagdoll(body)) : -1);
     }

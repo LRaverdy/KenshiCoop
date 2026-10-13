@@ -8,6 +8,43 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 Protocole inchangé (36).
 
+- **Postes de travail, sortie de machine et portage : tests du 13/10 (`machineout` 5/6,
+  `workstations` 43/45, `carry` sans bilan)**.
+  - `machineout` « le client ouvre la cuisinière » : **pas une régression** du correctif de la boucle
+    de sortie. La commande de test `containerreq` ne cherchait le conteneur que par son **nom
+    affiché** (traduit : « Cuisinière ») et le test lui passait l'identifiant `1944-gamedata.base` :
+    « err no container called 1944-gamedata.base », aucune fenêtre demandée. `containerreq`,
+    `contake` et `conput` acceptent maintenant aussi l'identifiant du modèle. La cuisinière était
+    de plus restée vide : « Ble » et « Wheat » ne désignent aucun objet du jeu en français, et
+    `machinegive` ne visait que la première section de la machine (« no room »). `machinegive`
+    essaie maintenant chaque section (et dit lesquelles en cas d'échec) ; les tests donnent la paille
+    de blé par son identifiant (`1913-gamedata.base`). Si la cuisinière reste vide pendant le travail,
+    le test le dit (« NOT TESTED » pour la partie fenêtre fermée) et y met de quoi prendre avant
+    d'ouvrir.
+  - `workstations` « tâches permanentes du client (87 et 88) » : le transport 88 sans cible ne
+    devient jamais un travail (voir `clientjobs`) ; le test donne maintenant « suivre » (31) sur un
+    perso de l'escouade et attend 87 et 31.
+  - `workstations` « au moins un poste a des ouvriers » (0 partout, persos de l'hôte compris) : ce
+    n'est pas le mod, les postes n'avaient **rien à faire**. Un perso ne s'installe à un poste que
+    s'il y a du travail : aucune recherche en file, cuisinière vide (ci-dessus), établi sans tissu
+    (« giveItem refused (inventory full?) » : le sac du membre 0 plein de ce qui n'était pas entré)
+    ni commande, ferme de chanvre en plein désert (pousse -0,20). Le test met maintenant une
+    recherche en file (demandée par le client, payable par les bancs, comme `research`), ne donne
+    qu'un objet par poste et relève les ouvriers à chaque lecture pendant les N minutes, pas
+    seulement à la fin.
+  - `carry` : l'expérience n'appelait pas `summary()` (pas de ligne BILAN, code de sortie 0).
+    Ajouté.
+  - `carry` « le corps est là où celui de l'hôte est tombé » (12 unités à côté) : chez le client le
+    corps posé est lâché debout, placé où est celui de l'hôte puis mis en ragdoll ; un corps qui
+    s'effondre finit à 7-12 unités de ses pieds, et la correction existante (relever puis refaire
+    tomber, décalage mesuré compensé) ne se déclenche qu'au-delà de 20 unités. Un corps **posé
+    après un portage**, vu par un joueur, qui finit à plus de 5 unités (au sol, sans la hauteur) de
+    celui de l'hôte est maintenant relevé **une fois** et refait tomber d'autant en deçà du point de
+    l'hôte (`kc::motion::MayFineRelay`, même budget que les autres relevages) ; journal « lies N
+    units from the host's body (its fall here shifted it …): stood up once to fall on the host's
+    spot ». Un perso K.-O. en combat n'est pas concerné (pas de relevage visible). Le test lit les
+    positions 10 s après la pose. Test `TestMotion` (posture).
+
 - **Travaux des persos d'un client : test `clientjobs` corrigé (13/10, 15/17)**. Les deux échecs
   venaient du test, pas du mod. (1) « une place libérée est reprise » (2/3 au bout de 60 s) : le perso
   du client est bien allé **de lui-même** au filon quand le mineur de l'hôte est parti (1904 -> 125
