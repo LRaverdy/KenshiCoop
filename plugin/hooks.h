@@ -47,6 +47,16 @@ struct CallScopeGuard {
     kc::ScopeCounts mark;
     const char* where;
 };
+// Host (0.3.4): the game's character editor does not open while this is alive (another player's
+// animal purchase: the shop's confirm opens it on the bought animals; on the host it paused the game
+// and kept them out of the squad list until closed). See hk_showEditor.
+struct NoEditorScope {
+    NoEditorScope();
+    ~NoEditorScope();
+    NoEditorScope(const NoEditorScope&) = delete;
+    NoEditorScope& operator=(const NoEditorScope&) = delete;
+};
+int EditorsSkipped();   // editors not opened because of a NoEditorScope (logs, tests)
 // Inside it, the animation hooks let a client play one of the host's animations (every other
 // animation call on the host's characters is refused on clients, ours included).
 std::string AnimHookStats();   // tests

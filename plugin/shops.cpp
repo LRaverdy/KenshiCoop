@@ -480,6 +480,10 @@ bool KenshiWorld::SellAnimals(uint64_t key, const std::vector<kc::Handle>& anima
     {
         CallScopeGuard guard("animal purchase");
         HostCallScope scope;
+        // 0.3.4: the confirm ends by opening the character editor on the bought animals (as for the
+        // player's own purchase); here it would open on the host's screen, pause the game and keep
+        // the animals out of the squad list until closed: not opened (hk_showEditor)
+        NoEditorScope noEditor;
         ran = kenshi::CallAnimalConfirm(h, sold);
     }
     kenshi::ReadPlayerMoney(after);
@@ -492,9 +496,10 @@ bool KenshiWorld::SellAnimals(uint64_t key, const std::vector<kc::Handle>& anima
     // the cats taken but no animal recruited (the game's recruit refused them: a test-spawned goat of no
     // seller did so on 12/10): the player gets the money back
     const bool joined = std::any_of(chosen.begin(), chosen.end(), [](kenshi::Character* a) { return kenshi::IsCharacter(a) && kenshi::InPlayerSquad(a); });
-    // 0.3.4: where each one is now. The animalshop test's goat (13/10 10:56, as on 12/10) was taken
-    // into a player squad here, yet never became a squad character of the mod (no "a new squad
-    // character ... goes to", squadanimals 0) and was in no dump 10 s later
+    // 0.3.4: where each one is now. The animalshop test's goat (12/10, 13/10) was taken into a player
+    // squad here, yet never became a squad character of the mod: the confirm had opened the character
+    // editor on the host (see hk_showEditor). The game's squad list is rebuilt on its next frame:
+    // "list 0" here is expected
     {
         std::vector<kenshi::Character*> listed;
         kenshi::PlayerCharacters(listed);
@@ -508,8 +513,9 @@ bool KenshiWorld::SellAnimals(uint64_t key, const std::vector<kc::Handle>& anima
                 kenshi::GetPosition(a, ap);
                 snprintf(akey, sizeof(akey), "%u:%u:%u:%u:%u", ah.type, ah.container, ah.containerSerial, ah.index, ah.serial);
             }
-            Log("animal shop: bought animal now %s: player squad %d, player characters list %d, at %.0f,%.0f", akey,
-                int(alive && kenshi::InPlayerSquad(a)), int(alive && std::find(listed.begin(), listed.end(), a) != listed.end()), ap.x, ap.z);
+            Log("animal shop: bought animal now %s: player squad %d, player characters list %d (rebuilt next frame), at %.0f,%.0f, editor open here %d", akey,
+                int(alive && kenshi::InPlayerSquad(a)), int(alive && std::find(listed.begin(), listed.end(), a) != listed.end()), ap.x, ap.z,
+                int(kenshi::CharacterEditorOpen()));
         }
     }
     if (!joined) {

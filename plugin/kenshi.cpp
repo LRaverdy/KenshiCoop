@@ -1294,6 +1294,23 @@ bool OpenCharacterEditor(Character* c) {
     return ShowEditorSeh(&lk);
 }
 
+namespace {
+void DeleteListSeh(void* p) {
+    __try { reinterpret_cast<void (*)(void*)>(Addr(rva::GameDelete))(p); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+} // namespace
+
+uint32_t DropCharacterList(void* lektor) {
+    auto* lk = static_cast<CharLektor*>(lektor);
+    uint32_t n = 0;
+    void** data = nullptr;
+    if (!lk || !Rd(lk, offsetof(CharLektor, count), n) || !Rd(lk, offsetof(CharLektor, data), data)) return 0;
+    if (data) DeleteListSeh(data);
+    lk->data = nullptr;
+    lk->count = lk->capacity = 0;
+    return n;
+}
+
 bool CharacterEditorOpen() {
     void* ed = nullptr;
     return Rd(reinterpret_cast<void*>(Addr(kTheGui)), GUI_editor, ed) && ed;
