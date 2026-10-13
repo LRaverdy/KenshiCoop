@@ -36,7 +36,7 @@ struct Config {
     bool characterPerPlayer = true; // host: [coop] own_character=1 gives every joining player a character
     // [ui] map layer (each player's own choice, changed in the Multijoueur window's "Affichage")
     bool mapMarkers = true;         // map_markers: players and enemies on the game's map screen
-    bool headMarkers = true;        // head_markers: a marker above each player's character
+    bool headMarkers = true;        // head_markers: players' characters' names in their colour, the main one framed
     bool portraitColours = true;    // portrait_colours: player colour frames in the squad bar
     bool minimap = true;            // minimap (also Ctrl+Shift+N)
     bool minimapRotate = false;     // minimap_rotate: turns with the camera (else north up)

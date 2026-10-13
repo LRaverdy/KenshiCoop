@@ -199,8 +199,9 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
   plus.
 - **Cadavres** : restent synchronisés et se fouillent, près des joueurs.
 - **Carte et repères** : sur la carte du jeu (onglet CARTE de la fenêtre de gestion, bouton MAP), tous les persos de tous les joueurs à la couleur
-  de leur joueur et les escouades hostiles qui nous visent en rouge ; une minicarte ronde ; un
-  repère au-dessus de la tête des persos des joueurs ; leur cadre de portrait coloré ; des pings
+  de leur joueur et les escouades hostiles qui nous visent en rouge ; une minicarte ronde ; le nom
+  au-dessus de la tête de chaque perso d'un joueur à sa couleur (son perso principal encadré) ;
+  leur cadre de portrait coloré ; des pings
   partagés. La minicarte se déplace à la souris et se redimensionne. Réglages : fenêtre Multijoueur, « Affichage ».
 
 Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui reste à faire :

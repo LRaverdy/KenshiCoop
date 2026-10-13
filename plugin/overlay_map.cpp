@@ -1,5 +1,6 @@
 // The overlay's map layer: markers on the game's map screen (legend, tooltips), the minimap, the
-// markers above the players' heads, the squad bar frames and the pings, plus their mouse input.
+// frames around the main characters' names (and the names themselves when the game shows none),
+// the squad bar frames and the pings, plus their mouse input.
 // Everything is drawn from the MapScene the game thread built this frame (plugin/map.cpp).
 #include "overlay_map.h"
 
@@ -87,7 +88,7 @@ float g_zoomPending = 0;             // a zoom change not yet back from the game
 double g_zoomPendingAt = 0;
 int g_midDownX = -1, g_midDownY = -1;
 MapDrawn g_drawn;                    // what the last frame drew (tests: mapconv), under g_mx
-int g_frameHeads = 0, g_frameMarkers = 0, g_frameMarkersTotal = 0;   // counted while drawing (render thread)
+int g_frameHeads = 0, g_frameNameFrames = 0, g_frameMarkers = 0, g_frameMarkersTotal = 0;   // counted while drawing (render thread)
 std::string g_lastMarkersKey;        // map screen markers log: on change, every 2 s at most
 double g_lastMarkersAt = -1e9;
 double g_midDownAt = 0;
@@ -254,22 +255,42 @@ void DrawMapScreen(const MapScene& s, float w, float h) {
 }
 
 // ---- above the heads, pings on the ground, squad bar frames
+// The frame around a main character's name: the player's colour, a dark edge outside for contrast
+// on bright ground. Only lines: the name under it stays the game's (or the overlay's) text.
+void DrawNameFrame(ImDrawList* dl, const SceneRect& r, float alpha = 1.0f) {
+    dl->AddRect(ImVec2(r.x - 1, r.y - 1), ImVec2(r.x + r.w + 1, r.y + r.h + 1), WithAlpha(kShadow, 0.6f * alpha), 4.0f, 0, 1.0f);
+    dl->AddRect(ImVec2(r.x, r.y), ImVec2(r.x + r.w, r.y + r.h), Col(r.owner, alpha), 3.0f, 0, 1.5f);
+}
+
 void DrawWorldMarkers(const MapScene& s, float w, float h) {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    // Names above the heads: one name per character, never two. Where the game shows its own name
+    // tag (recoloured in the player's colour by plugin/map.cpp), only the main character's frame
+    // is drawn, around that name; elsewhere (the game's names turned off, no tag) the overlay draws
+    // the character's name itself in the player's colour, framed for the main character.
+    if (s.showHeads && !s.covered) {
+        for (const auto& r : s.nameFrames) {
+            DrawNameFrame(dl, r);
+            ++g_frameHeads;
+            ++g_frameNameFrames;
+        }
+    }
     if (s.showHeads && s.camOk && !s.covered) {
         for (const auto& c : s.chars) {
-            if (!c.head) continue;
+            if (!c.head || c.gameName) continue;
             float x, y;
             if (!WorldToScreen(s, {c.pos.x, c.pos.y + kHeadHeight, c.pos.z}, w, h, x, y)) continue;
             if (x < -50 || y < -50 || x > w + 50 || y > h + 50) continue;
             ++g_frameHeads;
             const ImU32 col = Col(c.owner, c.down ? 0.6f : 1.0f);
-            // a small cursor pointing down at the head, the name above it
-            dl->AddTriangleFilled(ImVec2(x - 6, y - 10), ImVec2(x + 6, y - 10), ImVec2(x, y), col);
-            dl->AddTriangle(ImVec2(x - 6, y - 10), ImVec2(x + 6, y - 10), ImVec2(x, y), kShadow, 1.2f);
-            std::string who = c.name;
-            for (const auto& p : s.players) if (p.first == c.owner) who = p.second;
-            TextCentred(dl, ImVec2(x, y - 20), col, who.c_str());
+            const char* name = c.name.empty() ? "?" : c.name.c_str();
+            const ImVec2 sz = ImGui::CalcTextSize(name);
+            const float cy = y - sz.y * 0.5f - 4.0f;   // just above the head
+            TextCentred(dl, ImVec2(x, cy), col, name);
+            if (c.avatar) {
+                SceneRect r = NameFrameRect(x - sz.x * 0.5f, cy - sz.y * 0.5f, sz.x, sz.y, sz.x, sz.y, c.owner);
+                DrawNameFrame(dl, r, c.down ? 0.6f : 1.0f);
+            }
         }
     }
     if (s.showPings && s.camOk && !s.covered) {
@@ -665,6 +686,7 @@ void MapOverlayDraw(const MapScene& in, float w, float h, ID3D11Device* device) 
     g_drawnAt = NowSeconds();
     g_pingsArmed = s.live && s.showPings;
     g_frameHeads = 0;
+    g_frameNameFrames = 0;
     g_frameMarkers = 0;
     bool minimap = false;
     if (s.live) {
@@ -681,6 +703,7 @@ void MapOverlayDraw(const MapScene& in, float w, float h, ID3D11Device* device) 
     d.w = w; d.h = h;
     d.refreshed = refreshed;
     d.heads = g_frameHeads;
+    d.nameFrames = g_frameNameFrames;
     d.minimap = minimap;
     if (minimap) {
         d.mmX = g_lastPlace.cx; d.mmY = g_lastPlace.cy; d.mmR = g_lastPlace.r;

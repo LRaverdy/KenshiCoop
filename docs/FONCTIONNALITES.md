@@ -1213,9 +1213,29 @@ la fenêtre du client.
   glissé) ; **« Réinitialiser la position »** la remet dans son coin à sa taille normale.
   Infobulles en français. `mapscene minicarte` donne en plus `fx=`, `fy=`, `size=` (réglages) et
   `drawn=`, `pos=x,y`, `r=`, `free=`, `drag=`, `screen=` (ce que l'overlay a dessiné, en pixels).
-- **Repère au-dessus de la tête** de chaque perso de joueur (pas des recrues) : un petit curseur à
-  la couleur du joueur, avec son nom, projeté avec la caméra du jeu ; rien quand le perso est hors
-  de l'écran ou derrière la caméra.
+- **Noms au-dessus des têtes à la couleur du joueur** (0.3.4, à vérifier en jeu) : un seul nom par
+  perso, jamais deux l'un sur l'autre.
+  - Le **nom que le jeu écrit lui-même** au-dessus de la tête (`CharacterNameTag`, texte `NameText`
+    de `Kenshi_CharacterNamePanel.layout`) prend la **couleur du joueur** pour **tous** ses persos
+    (principal et secondaires) ; un perso sélectionné garde un nom plus clair (le jeu le met en blanc
+    au lieu de gris). Le reste du nom du jeu ne change pas : texte, icône de discrétion, lumière,
+    place. Un perso qui n'est à aucun joueur (hors du flux de carte), un PNJ, ou le réglage éteint :
+    couleur du jeu (rendue à la mise à jour suivante).
+  - Le **perso principal** de chaque joueur (celui créé pour lui ou qui porte son nom, sinon son
+    premier) a en plus un **petit cadre** à sa couleur autour de son nom (dessiné par l'overlay
+    autour du texte du nom relu dans l'interface du jeu à chaque image ; pas de cadre quand le nom est
+    caché, loin, ou sous une fenêtre du jeu).
+  - **Quand le jeu n'affiche pas les noms** (son option « Afficher les noms des persos » éteinte, ou
+    pas de nom pour ce perso) : l'overlay écrit lui-même le **nom du perso** à la couleur du joueur,
+    juste au-dessus de sa tête (projeté avec la caméra du jeu), encadré pour le perso principal.
+  - L'ancien repère (curseur + nom du **joueur**) est retiré : il se superposait au nom du jeu.
+  - Chaque machine (hôte et clients) colore les persos de tous les joueurs d'après le flux de carte
+    de l'hôte (`MapMarkers`, propriétaire et perso principal) ; seuls ceux debout dans son monde.
+  - Moteur : détour de `CharacterNameTag::<update>` (`0x6E8100`, docs/MOTEUR.md « Noms au-dessus
+    des têtes ») ; quand le jeu vient de remettre sa couleur (drapeau +0x18), la couleur du joueur est
+    remise dans la même image (pas de clignotement), sinon seulement quand elle change.
+  - Réglage : « Noms des persos à la couleur de leur joueur » (`head_markers`, section « Affichage »).
+  - Test : `mapscene tetes` ; journal « names above heads: … » à chaque changement (2 s au plus).
 - **Barre d'escouade** : le portrait des persos des joueurs reçoit un cadre à la couleur du joueur
   (dessiné par l'overlay sur la partie visible du portrait, relue dans le jeu à chaque image) ; les
   recrues gardent le cadre normal. Pas de cadre pour une case cachée (cases recyclées par la liste),
@@ -1232,12 +1252,12 @@ la fenêtre du client.
   du point avec la distance ; il s'efface en 10 s. Au plus un ping toutes les 0,5 s et 5 en même
   temps par joueur (le plus ancien part). Un ping ne change rien au monde. Pas de son (aucun son
   d'interface simple trouvé dans le jeu).
-- **Réglages** : fenêtre Multijoueur, section « Affichage » (carte, repères, barre d'escouade,
+- **Réglages** : fenêtre Multijoueur, section « Affichage » (carte, noms à la couleur des joueurs, barre d'escouade,
   minicarte, rotation, coin, « Réinitialiser la position », pings) ; tout est retenu dans `KenshiCoop.ini`.
 - **Fonctionnement** : l'hôte envoie trois fois par seconde à tout le monde (`MapMarkers`) la
   liste des joueurs, la position de chaque perso de l'escouade avec son joueur et s'il est « son »
   perso (celui créé pour lui ou qui porte son nom ; sinon son premier perso), et les escouades
-  hostiles (au plus 128 persos, 32 escouades). La carte, la minicarte, les repères et la barre de
+  hostiles (au plus 128 persos, 32 escouades). La carte, la minicarte, les noms colorés et la barre de
   chaque joueur, l'hôte compris, en sont tirés ; un perso présent dans le monde local est placé à
   sa position locale (fluide). Un ping de client part à l'hôte (`MapPing`), qui vérifie le rythme
   et le renvoie à tous. **Protocole 33.**
