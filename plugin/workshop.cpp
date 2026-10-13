@@ -1148,23 +1148,30 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
         CallScopeGuard scopeRepair("workshop");
         HostCallScope scope;
         std::string why;
+        // 0.3.4: every section of the machine, not only the first one (13/10 workstations and
+        // machineout runs: "no room" for the stove, whose first section did not take that item)
+        const std::vector<std::string> sections = kenshi::SectionNames(b);
         for (const auto& sid : cands) {
             if (!kenshi::GiveNewItem(c, sid, n, &why)) continue;
             std::vector<kc::ItemState> items;
             kenshi::ReadInventory(c, items);
             for (const auto& it : items) {
                 if (it.templateSid != sid) continue;
-                kc::InvOp op;
-                op.item = it;
-                op.toSection = kenshi::FirstSectionName(b);
-                op.toX = -1;
-                op.toY = -1;
-                std::string e;
-                if (kenshi::MoveInventoryItem(c, b, op, &e)) return "ok " + sid + " x" + std::to_string(it.quantity);
-                why = e;
+                for (const auto& sec : sections) {
+                    kc::InvOp op;
+                    op.item = it;
+                    op.toSection = sec;
+                    op.toX = -1;
+                    op.toY = -1;
+                    std::string e;
+                    if (kenshi::MoveInventoryItem(c, b, op, &e)) return "ok " + sid + " x" + std::to_string(it.quantity) + " in " + sec;
+                    why = e + " (" + sid + " in " + sec + ")";
+                }
             }
         }
-        return "err " + why;
+        std::string secs;
+        for (const auto& sec : sections) secs += (secs.empty() ? "" : ",") + sec;
+        return "err " + why + " [sections " + secs + "]";
     }
     if (cmd == "researchknown") {
         std::string sid;

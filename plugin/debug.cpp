@@ -1807,8 +1807,11 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         for (void* o : objs) {
             std::string sid, name;
             std::vector<kc::ItemState> items;
-            if (!kenshi::ObjectTemplate(o, sid) || !kenshi::TemplateDisplayName(sid, name) || (part != "any" && name.find(part) == std::string::npos) ||
-                !kenshi::ObjectPosition(o, op) || !kenshi::ReadInventory(o, items) || (cmd == "contake" && items.empty()))
+            // a name part or the template's sid (0.3.4: machineout passes the stove's sid, whose
+            // translated name it does not know; "no container called 1944-gamedata.base" on 13/10)
+            if (!kenshi::ObjectTemplate(o, sid) || !kenshi::TemplateDisplayName(sid, name) ||
+                (part != "any" && sid != part && name.find(part) == std::string::npos) || !kenshi::ObjectPosition(o, op) ||
+                !kenshi::ReadInventory(o, items) || (cmd == "contake" && items.empty()))
                 continue;
             const float d = (op.x - p.x) * (op.x - p.x) + (op.z - p.z) * (op.z - p.z);
             if (d < bestD) { bestD = d; best = o; bestName = name; }

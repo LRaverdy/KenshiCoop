@@ -505,6 +505,7 @@ float CharacterScale(Character* c);   // vt 0x390 (1 when unknown)
 void* WornBackpack(Character* c);   // the backpack it wears (an Item with an inventory), or null
 bool HasInventory(const void* obj);
 std::string FirstSectionName(void* holder);   // its inventory's first section (a backpack has one)   // a character, container or item with an inventory (RootObject::getInventory)
+std::vector<std::string> SectionNames(void* holder);   // every section name of its inventory (a machine: input, output...)
 // A merchant without a home building: the members of its squad (itself included) whose worn backpack
 // its trade window sells from.
 bool TravellingWearers(Character* trader, std::vector<Character*>& out);

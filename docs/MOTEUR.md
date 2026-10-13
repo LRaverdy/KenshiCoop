@@ -1138,6 +1138,16 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
   ordre). Un combat passe avant : arrivé au filon de la ville au milieu d'une bagarre, le perso se bat
   (défense, robustesse, esquive, combat de masse qui montent) et ne s'assoit pas ; en mode dieu le
   combat ne finit jamais. Un ordre du joueur, lui, le met au travail tout de suite.
+- **Un poste sans rien à faire n'a pas d'ouvrier** (vu le 13/10, `workstations`) : cinq persos de
+  l'hôte et celui du client avec un travail permanent 87 sur une ferme, une cuisinière, un établi, un
+  banc de recherche et un puits posés en plein désert : 0 ouvrier partout pendant 2 min à x3. Aucune
+  recherche en file, cuisinière vide, établi sans matière ni commande, ferme de chanvre qui ne pousse
+  pas (désert). Avec une recherche en file et des livres, un perso s'assoit au banc (`research`). Le
+  minerai d'un filon, lui, est toujours à prendre (mine 3/3).
+- **Nom ou identifiant** : les noms des modèles sont traduits (« Cuisinière » pour
+  `1944-gamedata.base`, la paille de blé `1913-gamedata.base` ne s'appelle pas « Ble ») ; les commandes
+  de test qui cherchent par nom acceptent aussi l'identifiant. Une machine peut avoir plusieurs
+  sections d'inventaire ; un objet refusé par l'une (« no room ») peut aller dans une autre.
 - `OrdersReceiver::movePermajob(from, to)` (`0x5078A0`, via `Character::movePermajob` `0x5C8FC0`) :
   retire le travail `from` puis l'insère à `to` (indice après retrait) ; `to = -1` : à la fin. Ne
   vérifie pas `from` (lecture hors du tableau si trop grand : le mod le vérifie).
@@ -1193,6 +1203,9 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
 - Un corps qui s'effondre ne reste pas où étaient ses pieds : sa position (le bassin) finit à une
   distance à peu près fixe, d'un essai à l'autre, de l'endroit où il était debout (7 à 12 unités
   pour un humain, 47 à 79 pour une chauve-souris terrestre ou une araignée ; stress4).
+  Posé d'un portage chez l'hôte, le corps tombe de l'épaule à ~2,5 unités du porteur ; chez le
+  client, lâché debout au point de l'hôte puis mis en ragdoll, il finissait à 12 unités (`carry`,
+  13/10). D'où le second essai, une fois, décalé de ce que la première chute a mesuré (0.3.4).
 
 **Heure**
 - L'heure du jeu (`0x21303D0`, +0xA0) est recalculée à chaque image (`0x66FF60`) : jour (+0x8,

@@ -1419,8 +1419,9 @@ la fenêtre du client.
   Une machine loin de tous nos persos n'est pas chargée chez nous : appliquée en arrivant (journal :
   « not loaded here yet »).
 - Tests : `TestWorkstationOrders`, `TestWorkshop`, `TestSquadWindow`, `TestClientJobs` (v0.3.4) ;
-  expériences `workstations` et `clientjobs` (v0.3.4 ; 13/10 : 15/17, les deux échecs venaient du
-  test, corrigé, voir CHANGELOG).
+  expériences `workstations` et `clientjobs` (v0.3.4 ; 13/10 : 15/17 et 43/45, les échecs venaient
+  du test, corrigé, voir CHANGELOG : un poste sans rien à faire n'a pas d'ouvrier, le test met une
+  recherche en file).
 
 ### Non vérifiés
 - Recrutement par dialogue.
