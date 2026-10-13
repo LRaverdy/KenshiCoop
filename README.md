@@ -193,8 +193,8 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
   sont dans la fenêtre. La sortie d'une machine (feu de camp, cuisinière) ne bouge plus toute seule
   dans ton inventaire : seul ce que tu fais fenêtre ouverte part à l'hôte (v0.3.4, à vérifier en jeu).
 - **Porter un corps** : un corps posé tombe chez toi où il est tombé chez l'hôte (v0.3.4 : s'il
-  finit à plus de 5 unités, il se relève une fois et retombe à la bonne place ; posé dans une maison à
-  étage, il n'est plus envoyé sur l'escalier ; à vérifier en jeu).
+  finit à plus de 5 unités, il se relève une fois et retombe à la bonne place ; il ne retourne plus
+  là où il gisait avant d'être ramassé ; à vérifier en jeu).
 - **Vol** : prendre dans un contenant qui n'est pas à toi est un vol, décidé par le jeu de l'hôte.
   Si on te voit, la fenêtre se ferme et l'objet reste.
 - **Objets au sol** : posés et ramassés, au même endroit pour tout le monde. Un objet que l'hôte ne

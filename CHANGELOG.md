@@ -34,7 +34,20 @@ Protocole inchangé (36).
     point de l'hôte) quand l'hôte le lit à plus de 4 unités au-dessus (`kc::motion::FallSpotHeight`,
     test unitaire). Nouveau journal quand les téléportations n'ont pas mis le corps à son point de
     chute (« falls N units from its fall spot … the game kept it at … ») ; le journal « puts … down »
-    donne les positions du porteur et du corps. Pas encore vérifié en jeu.
+    donne les positions du porteur et du corps.
+  - `carry`, nouvel essai (14:50-15:05, 6/7, corps **encore** à 24659,9 / 167,0 / 10544,9) : les
+    nouveaux journaux montrent la vraie cause. Dans l'image même du dépôt, le corps du client est à
+    24660,0 / 157,0 / 10545,1 (« puts … down … body at ») : **là où il gisait avant d'être ramassé**
+    (`spawnnpc 12 4` l'avait créé à 12 et 4 unités du perso 0 : 24647,96 + 12, 10541,1 + 4). La remise
+    d'un corps posé par le jeu le replace là, et les téléportations ne le bougent plus (« falls 12.3
+    units from its fall spot (24647.7,157.1,10543.6): the game kept it at (24660.0,157.0,10545.1) ») ;
+    la hauteur corrigée plus haut n'y changeait donc rien. Pour un corps posé après un portage que les
+    téléportations n'ont pas amené à son point de chute, le **nœud de scène du corps** (d'où part le
+    ragdoll, `AnimationClass::setRagdoll`) est maintenant mis sur ce point, laissé 0,25 s, puis le
+    corps tombe de là (`ReadyToFall`). Journaux « put down from a carry stays N units from its fall
+    spot … its body node is put there » et « falls from its body node at … » ; « puts … down » donne
+    aussi la position du nœud. Seulement pour les corps posés d'un portage (pas les chutes en
+    combat). Pas encore vérifié en jeu.
 - **Loin de l'hôte : marcheur qui va « dans tous les sens » et PNJ un étage plus bas chez un client
   (`farfps --clients 3`, 13/10, 42/44)**. Les deux échecs existaient **avant** la 0.3.4 : le relevé
   `farfps` du 12/10 à 02:51 (avant le gel des copies en sommeil, `2ec4fda`) avait déjà une marche à

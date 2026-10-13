@@ -1251,6 +1251,11 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
   l'air dans une maison à étage est posé par le jeu sur le navmesh le plus proche en 3D (ici
   l'escalier, 12 unités plus loin, 10 plus haut). Notre copie est donc mise debout à la hauteur du
   sol de son porteur (`kc::motion::FallSpotHeight`).
+  Troisième essai (15:05) : ce n'était pas la hauteur. Posé sans ragdoll (`dropCarriedObject`), le
+  corps K.-O. est remis par le jeu **là où il gisait avant d'être ramassé** (lu dans l'image même du
+  dépôt : 24660,0 / 10545,1, son point de `spawnnpc 12 4`), et `setPositionDirectionAndTeleport` ne le
+  déplace plus (position inchangée après 0,6 s de téléportations). Son ragdoll part du nœud de scène :
+  le mod met ce nœud sur le point de chute (`kenshi::PlaceBodyNode`) avant de le faire tomber.
 
 **Heure**
 - L'heure du jeu (`0x21303D0`, +0xA0) est recalculée à chaque image (`0x66FF60`) : jour (+0x8,

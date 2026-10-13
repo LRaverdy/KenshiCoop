@@ -625,9 +625,38 @@ bool KenshiWorld::ReadyToFall(const kc::Handle& h, kenshi::Character* c, const k
     const bool settled = it == fallPrep_.end() || now - it->second.lastMove >= kSettle;
     if (inPlace || (it != fallPrep_.end() && now - it->second.start >= kChase)) {
         if (!settled) return false;
+        const bool nodePlaced = it != fallPrep_.end() && it->second.nodePlaced;
+        // 0.3.4 (carry test 13/10, runs 2 and 3): a body put down from a carry is not moved by the
+        // teleports at all. The game's put-down puts it back where it lay before it was picked up
+        // (24660.0,157.0,10545.1, the very spot "spawnnpc 12 4" made it at, 12 units from the
+        // carrier, read in the frame of the drop), and its position stays there through every
+        // teleport ("the game kept it at" that same point): it fell there, to the thousandth, run
+        // after run, fine relay included. The ragdoll starts where the body's scene node is
+        // (AnimationClass::setRagdoll, MOTEUR.md), so for such a body the node is put on the fall
+        // spot itself, left to settle, and it falls from there.
+        if (!inPlace && !nodePlaced && putDownFloor_.count(h)) {
+            HostCallScope scope;
+            const bool placed = kenshi::PlaceBodyNode(c, at.pos);
+            if (it == fallPrep_.end()) it = fallPrep_.emplace(h, FallPrep{now, now}).first;
+            it->second.nodePlaced = true;
+            it->second.lastMove = now;
+            Log("posture: %s put down from a carry stays %.1f units from its fall spot (%.1f,%.1f,%.1f) after the teleports: its body node is "
+                "put there (%s) before it falls",
+                KeyOf(h).c_str(), Dist(local, at.pos), at.pos.x, at.pos.y, at.pos.z, placed ? "ok" : "failed");
+            return false;
+        }
         fallPrep_.erase(h);
-        // 0.3.4 (carry test 13/10, run 2): the teleports did not put it there (the game put it on
-        // the navmesh nearest to that point): it falls where it stands, said once in 10 s per body
+        if (nodePlaced) {
+            // its node is on the fall spot: it falls from there (the node is not put back on the body)
+            kc::Vec3 node;
+            const bool read = kenshi::BodyNodePosition(c, node);
+            Log("posture: %s falls from its body node at (%.1f,%.1f,%.1f), %.1f units from its fall spot (its position reads %.1f,%.1f,%.1f)",
+                KeyOf(h).c_str(), read ? node.x : 0.0f, read ? node.y : 0.0f, read ? node.z : 0.0f, read ? Dist(node, at.pos) : -1.0f, local.x,
+                local.y, local.z);
+            return true;
+        }
+        // 0.3.4 (carry test 13/10, run 2): the teleports did not put it there: it falls where it
+        // stands, said once in 10 s per body
         if (!inPlace && now - fallMissTold_[h] > 10.0) {
             fallMissTold_[h] = now;
             Log("posture: %s falls %.1f units from its fall spot (%.1f,%.1f,%.1f): the game kept it at (%.1f,%.1f,%.1f)", KeyOf(h).c_str(),
@@ -1733,10 +1762,14 @@ void KenshiWorld::ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& 
         if (!deadBody) kc::motion::MarkPutDown(postureBook_[dropped], NowSeconds());
         kc::Vec3 bodyAt;
         const bool bodyKnown = body && kenshi::GetPosition(body, bodyAt);
-        Log("carry: %s%s puts %s down as on the host; it falls where the host's lies (ragdoll %d, carrier at %.1f,%.1f,%.1f, body at %.1f,%.1f,%.1f)",
+        kc::Vec3 nodeAt;
+        const bool nodeKnown = body && kenshi::BodyNodePosition(body, nodeAt);
+        Log("carry: %s%s puts %s down as on the host; it falls where the host's lies (ragdoll %d, carrier at %.1f,%.1f,%.1f, body at %.1f,%.1f,%.1f, "
+            "body node at %.1f,%.1f,%.1f)",
             carry ? "swaps and " : "", KeyOf(h).c_str(), KeyOf(dropped).c_str(), body ? int(kenshi::IsRagdoll(body)) : -1,
             carrierKnown ? carrierAt.x : 0.0f, carrierKnown ? carrierAt.y : 0.0f, carrierKnown ? carrierAt.z : 0.0f, bodyKnown ? bodyAt.x : 0.0f,
-            bodyKnown ? bodyAt.y : 0.0f, bodyKnown ? bodyAt.z : 0.0f);
+            bodyKnown ? bodyAt.y : 0.0f, bodyKnown ? bodyAt.z : 0.0f, nodeKnown ? nodeAt.x : 0.0f, nodeKnown ? nodeAt.y : 0.0f,
+            nodeKnown ? nodeAt.z : 0.0f);
     }
     if (carry && who && (!carrying || kenshi::Resolve(local) != who)) {
         // only once it really is on the shoulder is it left alone by posture and position code

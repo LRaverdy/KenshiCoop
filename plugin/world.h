@@ -549,7 +549,7 @@ private:
     std::unordered_map<kc::Handle, double, HandleHash> postureSince_; // client: when host/local posture started to differ
     std::unordered_map<kc::Handle, double, HandleHash> postureFixed_; // client: last forced posture change
     std::unordered_map<kc::Handle, kc::EntityState, HandleHash> lastTarget_;   // client: where the host has it
-    struct FallPrep { double start, lastMove; };
+    struct FallPrep { double start, lastMove; bool nodePlaced = false; };
     std::unordered_map<kc::Handle, FallPrep, HandleHash> fallPrep_;   // client: moving into place before a fall
     std::unordered_map<kc::Handle, double, HandleHash> fellAt_;      // client: when we made it fall
     // client: what the posture code did to each body (falls, bodies stood up to fall closer to the
