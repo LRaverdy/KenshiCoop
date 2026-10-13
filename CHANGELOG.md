@@ -4,7 +4,7 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
-## v0.3.4 (en cours)
+## v0.3.4 (13 octobre 2026)
 
 Protocole inchangé (36).
 
