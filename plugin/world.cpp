@@ -274,6 +274,8 @@ void KenshiWorld::ResetWorldBound() {
     navRefreshed_.clear();
     reRagdoll_.clear();
     floorTry_.clear();
+    floorCheckAt_.clear();
+    headway_.clear();
     syncErr_.clear();
     syncMaxErr_ = 0;
     remoteDialogs_.clear();
@@ -1200,7 +1202,22 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         }
     }
     // The game's own locomotion animates the character (walking toward the host's destination)...
-    const bool hostMoving = (latest.flags & kc::kFlagMoving) != 0;
+    // ...unless the host's character gets nowhere (a walker stuck on the host for seconds, its facing
+    // changing every sample): ours stands on its spot instead of walking every way (kc::motion::NoteHeadway).
+    const bool hostWalks = (latest.flags & kc::kFlagMoving) != 0;
+    kc::motion::Headway& hw = headway_[h];
+    const bool wasStalled = hw.stalled;
+    const bool stalled = kc::motion::NoteHeadway(hw, now, latest.pos, hostWalks);
+    if (stalled != wasStalled && hostWalks) {
+        if (stalled) ++stalledWalkers;
+        static kc::LogLimiter stallLog{6, 30.0};
+        uint32_t held = 0;
+        if (stallLog.Allow(now, &held))
+            Log("motion: the host's %s %s (moved %.1f units in %.0f s while walking to %.0f units away)%s", KeyOf(h).c_str(),
+                stalled ? "gets nowhere: ours stands on its spot" : "walks on again", Dist(hw.s.front().second, latest.pos),
+                now - hw.s.front().first, Dist(latest.pos, latest.dest), held ? (" [" + std::to_string(held) + " more such lines not written]").c_str() : "");
+    }
+    const bool hostMoving = hostWalks && !stalled;
     // at the host's pace: a running character runs (animation included), a walking one walks
     kenshi::WritePace(c, latest.gait, latest.pace >= 6553.0f ? 999.0f : latest.pace);
     auto it = lastDest_.find(h);
@@ -1768,31 +1785,63 @@ bool KenshiWorld::ReadFloor(const kc::Handle& h, uint8_t& group) {
 }
 
 void KenshiWorld::ApplyFloor(const kc::Handle& h, uint8_t group) {
-    // Disabled: the game puts its own value back every frame, and a client crashed (kenshi_x64+0x95484b,
-    // read of -1) right after a burst of these writes inside a building. Not needed for the floor
-    // view: the game computes each character's floor from where it stands, and the view follows the
-    // focus character (UpdateFloorFocus).
-    static bool kWriteFloors = false;
-    if (!kWriteFloors) { (void)h; (void)group; return; }
-    kenshi::Character* c = Find(h);
-    int32_t g = 0;
-    if (!c || !kenshi::ReadFloorGroup(c, g) || g == group) { floorTry_.erase(h); return; }
-    // Not a raw write of floorGroup (the game put its value back every frame): the game's own
-    // _setPositionAndTeleport(here, floor), at most every 2 s per character and 3 times per
-    // target value. Groups below 9 have no floor number; a ragdoll is not teleported.
-    if (group < 9 || kenshi::IsRagdoll(c)) return;
+    // History: a raw write of floorGroup was put back by the game every frame (it recomputes the
+    // group from the surface under the character, kenshi_x64+0x65F564), and a client crashed
+    // (kenshi_x64+0x95484b) after a burst of those writes inside a building: turned off in 0.3.0,
+    // then (fix G7) rewritten on the game's own placement but left off.
+    // 0.3.4 (farfps 13/10, J4 at Okran's Fist): with nothing setting it, copies standing upstairs on
+    // the host stood a floor lower here for good (82.9 and 78.0 units under the host's, floor group 9
+    // here against 10, a teleport to the host's spot every frame dropping them back down). Turned on
+    // again, only for a copy that really stands on another floor than the host's (kc::motion::
+    // FloorFixWanted: same place on the ground, more than 20 units above or below), with the game's
+    // _setPositionAndTeleport(host's spot, floor), twice a second at most for the check, 2 s between
+    // placements and 3 placements per host value. Never a raw write.
+    if (group < 9) { floorTry_.erase(h); return; }   // no floor number: the game's own ground
     const double now = NowSeconds();
+    double& at = floorCheckAt_[h];
+    if (now - at < 0.5) return;   // called every frame for every copy
+    at = now;
+    kenshi::Character* c = Find(h);
+    auto lt = lastTarget_.find(h);
+    int32_t g = 0;
+    kc::Vec3 p;
+    if (!c || lt == lastTarget_.end() || !kenshi::ReadFloorGroup(c, g) || !kenshi::GetPosition(c, p)) return;
+    const kc::EntityState& host = lt->second;
+    int in = 0;
+    const bool down = (host.flags & (kc::kFlagDown | kc::kFlagDead)) != 0 || kenshi::IsRagdoll(c) || kenshi::IsDead(c);
+    const bool held = carriedHere_.count(h) != 0 || (kenshi::ReadInSomething(c, in) && in != 0);
+    if (!kc::motion::FloorFixWanted(int(group), g, host.pos, p, down, held)) {
+        auto t = floorTry_.find(h);
+        if (t != floorTry_.end() && g == int(group)) {
+            if (t->second.tries > 0)
+                Log("floor: %s stands on the host's floor now (group %d, %.1f units from the host's spot)", KeyOf(h).c_str(), g, Dist(p, host.pos));
+            floorTry_.erase(t);
+        }
+        return;
+    }
     FloorTry& t = floorTry_[h];
     if (t.group != group) t = FloorTry{group, 0, 0};
-    if (t.tries >= 3 || now < t.at) return;
+    if (t.tries >= 3) {
+        if (!t.told) {
+            t.told = true;
+            Log("floor: %s still on floor group %d here (%.0f units %s the host's, group %d there) after 3 placements: left to the game",
+                KeyOf(h).c_str(), g, std::fabs(p.y - host.pos.y), p.y < host.pos.y ? "under" : "above", int(group));
+        }
+        return;
+    }
+    if (now < t.at) return;
     t.at = now + 2.0;
     ++t.tries;
     HostCallScope scope;
-    const bool ok = kenshi::PlaceOnFloor(c, group);
-    int32_t after = g;
-    kenshi::ReadFloorGroup(c, after);
-    Log("floor: %s placed on floor group %d as on the host (was %d, now %d%s)%s", KeyOf(h).c_str(), int(group), int(g), int(after),
-        ok ? "" : ", call failed", t.tries >= 3 && after != group ? ": the game keeps its own floor, giving up" : "");
+    const bool ok = kenshi::PlaceOnFloorAt(c, host.pos, group);
+    lastDest_.erase(h);   // the placement halts it: a walker is sent on again by Apply
+    ++floorPlacements;
+    static kc::LogLimiter lim{8, 30.0};
+    uint32_t more = 0;
+    if (lim.Allow(now, &more))
+        Log("floor: %s stood %.0f units %s the host's (floor group %d here, %d on the host): put on the host's floor at its spot (%s, try %d/3)%s",
+            KeyOf(h).c_str(), std::fabs(p.y - host.pos.y), p.y < host.pos.y ? "under" : "above", g, int(group), ok ? "ok" : "call failed",
+            t.tries, more ? (" [" + std::to_string(more) + " more such lines not written]").c_str() : "");
 }
 
 // The floor view (which floors and roofs show) follows the PlayerInterface's tracked character as it

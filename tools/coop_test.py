@@ -3474,6 +3474,8 @@ def far_motion_step(p):
             f"{len(per)} persos, {moving_all} pas en mouvement")
     p.check(f"mouvement : jamais de marche a reculons (> {FAR_MOONWALK_DEG:.0f} deg entre deplacement et regard)", not back_all, back_all[:5])
     p.check(f"mouvement : aucun saut de plus de {FAR_JUMP:.0f} unites par echantillon", not jumps_all, jumps_all[:5])
+    # 0.3.4: host walkers that get nowhere (stand on their spot here) and copies put on the host's floor
+    p.log("copies fixed on the client (floors placed, stalled walkers):", cmd(p.cli, "copyfix"))
 
 
 def far_same_money(p, seconds=8):

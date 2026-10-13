@@ -597,6 +597,14 @@ Emplacements de vtable :
 - vt 0x30 `faceDirection` ; vt 0x90 `setDestination(pos, priorité, bool)` ; vt 0x98 `halt` ; vt
   0xB8 `_setPositionAndTeleport` ; vt 0xC0 `setPositionDirectionAndTeleport` (s'arrête d'abord) ;
   vt 0xC8 `_setPositionSimple` (déplace le corps et la capsule physique, sans arrêter la marche).
+- +0x334 `floorGroup` (9 = rez-de-chaussée, 10 = premier étage ; dehors : groupe de la surface, 2
+  pour le sol des persos relevés). Recalculé à chaque mise à jour depuis la surface trouvée sous le
+  perso (`0x65F564`, mot du résultat de la requête). Un perso ne tient que sur les surfaces de son
+  groupe : une doublure créée à l'étage avec le groupe 9 retombe au rez-de-chaussée à chaque
+  position écrite, téléportation comprise (vt 0xC0 appelle `_setPositionAndTeleport(pos, -1)` :
+  groupe inchangé) [observé, farfps 13/10]. `_setPositionAndTeleport(pos, étage)` (`0x65E940`) :
+  `halt` (vt 0x98), position valide ?, `_setPositionSimple` (vt 0xC8), +0x3B0 (vt 0x48) à la même
+  position, puis `floorGroup = étage + 9` si étage >= 0 [D].
 
 ### CombatClass
 - +0x130 mode combat actif ; +0x298 `hand` de la cible.

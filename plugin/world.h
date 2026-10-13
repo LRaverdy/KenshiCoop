@@ -85,6 +85,8 @@ public:
     void HoldStill(const kc::Handle& h, const kc::EntityState& at) override;   // 0.3.4: dormant copies frozen
     // tests ("dormant"): dormant copies frozen here since the start: stopped walking, put back
     std::atomic<long long> dormantHalts{0}, dormantPutBack{0};
+    // tests ("copyfix", 0.3.4): copies put on the host's floor, host walkers seen getting nowhere
+    std::atomic<long long> floorPlacements{0}, stalledWalkers{0};
     // tests ("posturecheck", 0.3.4): copies the host has standing whose body here lies, sits in a bed or
     // a cage, or hangs on nobody's shoulder (keys in `keys`); none should stay so
     int PostureMismatches(std::string& keys);
@@ -539,8 +541,10 @@ public:
     uint64_t purgedPointers = 0;   // tests: addresses of destroyed characters dropped from our state
 private:
     std::unordered_map<kc::Handle, double, HandleHash> strangerSince_;   // client: local-only NPCs, first seen
-    struct FloorTry { uint8_t group = 0; double at = 0; int tries = 0; };
+    struct FloorTry { uint8_t group = 0; double at = 0; int tries = 0; bool told = false; };
     std::unordered_map<kc::Handle, FloorTry, HandleHash> floorTry_;   // client: floor placements tried (fix G7)
+    std::unordered_map<kc::Handle, double, HandleHash> floorCheckAt_; // client: last floor check of a copy (0.3.4)
+    std::unordered_map<kc::Handle, kc::motion::Headway, HandleHash> headway_;   // client: host walkers that get nowhere (0.3.4)
     std::unordered_map<kc::Handle, kc::Vec3, HandleHash> lastDest_;   // client: destination last issued
     std::unordered_map<kc::Handle, double, HandleHash> postureSince_; // client: when host/local posture started to differ
     std::unordered_map<kc::Handle, double, HandleHash> postureFixed_; // client: last forced posture change

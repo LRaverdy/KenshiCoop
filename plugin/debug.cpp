@@ -2017,6 +2017,10 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
           << " putback=" << w.dormantPutBack.load();
         return o.str();
     }
+    if (cmd == "copyfix") {   // copyfix: client (0.3.4), copies put on the host's floor and host walkers seen getting nowhere since the start
+        if (!s.isClient()) return "err client only";
+        return "ok floors=" + std::to_string(w.floorPlacements.load()) + " stalled=" + std::to_string(w.stalledWalkers.load());
+    }
     if (cmd == "posturecheck") {   // posturecheck: client (0.3.4), copies the host has standing that lie, sit in a bed or cage, or hang on nobody here
         if (!s.isClient()) return "err client only";
         std::string keys;
