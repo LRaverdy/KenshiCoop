@@ -1298,12 +1298,21 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     const kc::Vec3 travel = kc::motion::TravelDir(target, latest);
     {
         kc::Vec3 mine;
-        const kc::Vec3 want = kc::motion::WantFacing(kenshi::ForwardOf(target.rot), travel, hostMoving, fighting);
+        kc::Vec3 want = kc::motion::WantFacing(kenshi::ForwardOf(target.rot), travel, hostMoving, fighting);
+        // 0.3.4: stopped on the host and already turned the other way while ours still slides the last
+        // units to its spot: ours faces the way it slides until it is there (kc::motion::SlideFacing),
+        // drawn rotation included (lastTarget_ feeds hk_moveUpdate's rotation)
+        kc::Quat drawn = target.rot;
+        if (kc::Vec3 slide; !hostMoving && !fighting && kc::motion::SlideFacing(local, target.pos, kenshi::ForwardOf(target.rot), slide)) {
+            want = slide;
+            drawn = kc::motion::YawQuat(slide);
+            lastTarget_[h].rot = drawn;
+        }
         const float limit = (!hostMoving || fighting) ? 0.999f : 0.9f;
         if (kenshi::GetFacing(c, mine) && mine.x * want.x + mine.z * want.z < limit) kenshi::FaceDirection(c, want);
         // the drawn rotation too (hk_moveUpdate does it after the game's movement update; this one
         // covers the frames the game does not update that character)
-        if (!fighting) kenshi::WriteRotation(c, target.rot);
+        if (!fighting) kenshi::WriteRotation(c, drawn);
     }
     // The host paused: its characters stopped mid-stride. Put them exactly there while the game still
     // runs (at a crawl, see EndFrame): paused, it would not commit the position.

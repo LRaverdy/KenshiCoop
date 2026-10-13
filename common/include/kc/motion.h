@@ -238,6 +238,26 @@ inline Vec3 Pull(const Vec3& local, const Vec3& target, const Vec3& travel, cons
     return {local.x + d.x * k, local.y + d.y * k, local.z + d.z * k};
 }
 
+// A host character that stops and turns at once (farfps --clients 2, 13/10 16:16, J2 Admag: walking
+// along -z, stopped and turned to face +z within 0.1 s) leaves our copy a few units short of its
+// spot, drawn with the host's new rotation while the pull slides it the rest of the way: 3.5, 2.0
+// and 0.9 units in 0.1 s steps at 131-132 degrees from where it faced (a walk backwards). While
+// more than kSlideFace units remain and the host's facing points away from them (beyond 90
+// degrees), ours faces the way it slides; once there, the host's facing.
+constexpr float kSlideFace = 1.0f;
+inline bool SlideFacing(const Vec3& local, const Vec3& target, const Vec3& hostForward, Vec3& out) {
+    const Vec3 d = Dir2(local, target, kSlideFace);
+    const Vec3 f = Flat(hostForward);
+    if (IsZero2(d) || IsZero2(f) || Dot2(d, f) >= 0.0f) return false;
+    out = d;
+    return true;
+}
+// A rotation about the vertical whose forward (q * (0,0,1)) is `dir` on the ground.
+inline Quat YawQuat(const Vec3& dir) {
+    const float a = 0.5f * std::atan2(dir.x, dir.z);
+    return Quat{std::cos(a), 0.0f, std::sin(a), 0.0f};
+}
+
 // ---------------------------------------------------------------- floors
 // 0.3.4 (farfps 13/10, client J4 at Okran's Fist; already on 12/10 at Okran's Shield): two paladins
 // standing upstairs on the host (floor group 10, y 1556) stood 83 units lower on the client, on the

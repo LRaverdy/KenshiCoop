@@ -108,6 +108,16 @@ Protocole inchangé (36).
       le même à-coup dans la fenêtre « correctif » (pire image 163-179 ms, contre 18-43 avant). Toute
       la machine était plus lente cette fois (« ensemble » 163-189 fps contre 195 au premier essai).
       Retiré quand même : la téléportation à chaque image des copies dont l'étage est refusé.
+  - **Troisième essai (`farfps --clients 2`, 13/10 16:12-16:17, 29/30 ; fps et étages passent)** :
+    reste une marche à reculons chez J2 (Admag, `1:42:2835449344:5`, 131-132° pour 3,5, 2,0 et 0,9
+    unités). Ce n'est ni l'hystérésis ni un virage en marchant : relevé à 10 Hz, la copie marche le
+    long de -z, s'arrête (vitesse 0 à 0,7 s) puis glisse encore de 7 unités en convergeant (3,4, 1,9,
+    0,8, 0,3…) vers un point fixe, la place où le perso de l'hôte s'est arrêté, alors que sa rotation
+    dessinée est déjà celle de l'hôte, qui s'est retourné (-0,86 ; 0,51) en s'arrêtant. La copie,
+    arrêtée un peu court, était tirée à reculons sur les dernières unités. Maintenant, tant qu'il lui
+    reste plus d'une unité jusqu'à la place de l'hôte et que le regard de l'hôte pointe à plus de 90°
+    de ce chemin, la copie regarde (et est dessinée) dans le sens où elle glisse ; arrivée, elle prend
+    le regard de l'hôte (`kc::motion::SlideFacing`, `TestMotion` 4c2).
     **Pas relancé en jeu.**
     le relevé de mouvement. Tests unitaires `TestMotion` (4c, 4d). **Pas relancé en jeu.**
 - **Tests du 13/10 15:05-15:32 sur la v0.3.4 fusionnée (`recruits` 21/21, `clientjobs` 21/21)** :

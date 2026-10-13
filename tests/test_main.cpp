@@ -6144,6 +6144,17 @@ static void TestMotion() {
         for (int i = 0; i <= 60; ++i) any = NoteHeadway(stand, 0.05 * i, Vec3{0, 0, 0}, false) || any;
         CHECK(!any);
     }
+    // 4c2. 0.3.4 (farfps --clients 2, 13/10 16:16): stopped and turned on the host, ours still a few
+    // units short: faces the way it slides, then the host's facing
+    {
+        const Vec3 hostFwd{-0.863f, 0, 0.506f};                       // turned back after walking along -z
+        Vec3 slide;
+        CHECK(SlideFacing(Vec3{0, 0, 7}, Vec3{0, 0, 0}, hostFwd, slide) && slide.z < -0.99f);
+        CHECK(!SlideFacing(Vec3{0, 0, 0.5f}, Vec3{0, 0, 0}, hostFwd, slide));   // there: the host's facing
+        CHECK(!SlideFacing(Vec3{0, 0, -7}, Vec3{0, 0, 0}, hostFwd, slide));     // sliding the way it faces
+        const Quat q = YawQuat(Vec3{0.6f, 0, -0.8f});
+        CHECK(std::fabs(HostForward(q).x - 0.6f) < 1e-4f && std::fabs(HostForward(q).z + 0.8f) < 1e-4f);
+    }
     // 4d. 0.3.4 (farfps 13/10, J4: two copies 83 units under the host's, floor group 9 against 10):
     // a copy standing on another floor than the host's is put on the host's floor, only then
     {
