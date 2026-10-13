@@ -18,6 +18,9 @@ comment s'en servir pour comprendre un problème.
 - **Chez un ami** : son propre `KenshiCoop.log` et son dossier `KenshiCoop-logs`, sur son PC.
   L'essentiel arrive de toute façon dans le journal de l'hôte (voir plus bas).
 - Les 500 dernières lignes restent aussi en mémoire, pour les consoles.
+- **Rapports de bug** (0.3.5, hôte) : `KenshiCoop_bugs\bug-AAAA-MM-JJ_HH-MM-SS-<nom>.txt`, dans le
+  dossier de Kenshi. Un fichier par `/bug` d'un joueur (voir plus bas). Les 10 dernières minutes du
+  journal y sont recopiées depuis la mémoire (20 000 lignes et 4 Mo au plus).
 
 ## Ce que l'hôte reçoit des clients
 
@@ -94,8 +97,36 @@ avec sa réponse en dessous.
 | `speed <x>` | hôte | vitesse du jeu (0,1 à 10) |
 | `tp <id> [vers <id>]` | hôte | téléporte les personnages du joueur `<id>` près de ton personnage sélectionné, ou de ceux d'un autre joueur |
 | `resync [id]` | hôte | le joueur `<id>`, ou tout le monde sans `id`, recharge ton monde tel qu'il est |
+| `/bug [phrase]` (ou `bug [phrase]`) | tous | rapport de bug : l'hôte enregistre un fichier dans `KenshiCoop_bugs` (voir plus bas) |
 
-Un client n'a que `help`, `fenetre`, `players` et `status`.
+Un client n'a que `help`, `fenetre`, `players`, `status` et `/bug`.
+
+## Rapport de bug (`/bug`, 0.3.5)
+
+Quand quelque chose cloche, le joueur concerné tape tout de suite, dans la console du jeu
+(Ctrl+Shift+K) : `/bug le marchand a disparu`. Personne n'a besoin d'envoyer son journal après
+coup.
+- **Le client** écrit `bug report requested: <phrase>` dans son journal, envoie à l'hôte toutes ses
+  lignes en attente, puis la demande (un message de chat que l'hôte ne montre pas).
+- **L'hôte**, 1,5 s plus tard, écrit `KenshiCoop_bugs\bug-AAAA-MM-JJ_HH-MM-SS-<nom>.txt` :
+  1. l'en-tête : heure, version du mod et protocole, joueur, phrase, vitesse et pause, horloge du jeu,
+     dernière sauvegarde chargée ou faite (`world:`), empreinte du monde ;
+  2. `== players ==` : chaque joueur avec son ping, son état (`in game`, `joining`, éditeur), son
+     dernier rapport de synchro et son âge, puis ses personnages (nom, handle, position) ;
+  3. `== host log, last 10 minutes ==` : le journal de l'hôte, lignes des clients comprises.
+- Tout le monde lit dans le chat « Rapport de bug de <nom> enregistré (<fichier>). ».
+- Un rapport par joueur toutes les 30 s au plus.
+
+Lignes correspondantes :
+
+| Ligne | Sens |
+|---|---|
+| `[X] bug report requested: <phrase>` | (client) la demande du joueur X, juste après ses dernières lignes |
+| `bug report requested by X: <phrase>` | (hôte) la demande reçue (ou tapée par l'hôte lui-même) |
+| `==== BUG REPORT from X: <phrase> -> bug-….txt ====` | (hôte) le repère dans le journal : ce qui précède est ce que le rapport montre |
+| `bug report written: <chemin> (N log lines)` | (hôte) fichier écrit |
+| `bug report: cannot write <chemin>` | (hôte) écriture impossible (droits du dossier de Kenshi ?) ; les joueurs en sont avertis |
+| `bug report from X not made: their previous one was N s ago` | (hôte) moins de 30 s après le précédent : refusé, le joueur en est averti |
 
 ## Lignes courantes et leur sens
 
@@ -247,5 +278,8 @@ Un client n'a que `help`, `fenetre`, `players` et `status`.
   `subject NOT found` dans le journal de l'hôte.
 - **Un joueur bloqué** : `tp <id>`, ou le bouton « TP vers moi ». Ne marche pas sur un personnage
   à terre.
+- **Un bug signalé par `/bug`** : ouvrir le fichier de `KenshiCoop_bugs` chez l'hôte et remonter
+  depuis la ligne `==== BUG REPORT from …` : les lignes `[nom]` juste au-dessus sont celles du
+  joueur qui l'a signalé.
 - **Un plantage** : récupérer le `KenshiCoop.log` de la machine qui a planté. Si elle a été
   relancée depuis, prendre le fichier le plus récent de son dossier `KenshiCoop-logs`.

@@ -1,5 +1,6 @@
 #include "debug.h"
 #include "admin.h"
+#include "bug_report.h"
 
 #include <windows.h>
 
@@ -2809,6 +2810,13 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         HostConsoleInject(line);
         return "ok";
     }
+    if (cmd == "bug") {   // bug [note...]: (0.3.5) this player asks for a bug report, as "/bug <note>" typed in the console (host or client)
+        std::string note;
+        std::getline(in, note);
+        HostConsoleInject("/bug" + note);
+        return "ok";
+    }
+    if (cmd == "buglast") return "ok " + (LastBugReport().empty() ? std::string("none") : LastBugReport());   // buglast: (host) the last report written here (path)
     if (cmd == "vitals") {   // vitals <squadIndex>: blood and the lowest body part health
         size_t idx = 0;
         in >> idx;

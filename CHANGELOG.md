@@ -4,6 +4,36 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
+## v0.3.5 (en cours)
+
+Protocole inchangé (36).
+
+- **Rapport de bug en une commande (branche `bugreport`)**. Quand un ami tombait sur un bug, il
+  fallait lui demander son `KenshiCoop.log` après coup. Désormais, n'importe quel joueur tape
+  `/bug <phrase>` dans la console du jeu (Ctrl+Shift+K) ou dans la console de l'hôte, et l'hôte
+  enregistre tout dans `KenshiCoop_bugs\bug-AAAA-MM-JJ_HH-MM-SS-<nom>.txt` :
+  - l'en-tête : heure, version, protocole, joueur, phrase, vitesse et pause, sauvegarde ;
+  - les joueurs : ping, dernier rapport de synchro et son âge, personnages et positions ;
+  - les 10 dernières minutes du journal de l'hôte, où sont déjà les lignes des clients.
+  Tout le monde lit « Rapport de bug de <nom> enregistré (<fichier>). » dans le chat, et le journal
+  de l'hôte porte `==== BUG REPORT from <nom>: <phrase> -> <fichier> ====`.
+  - **Pas de changement de protocole** : le client envoie un `Chat` ordinaire. L'hôte
+    (`Session::HostBugRequest`) le reconnaît (`/bug`, sans tenir compte de la casse) avant de le
+    diffuser et le garde au lieu de le montrer. Un hôte 0.3.4 l'affiche comme du chat.
+  - **Ordre** : le client écrit `bug report requested: <phrase>` dans son journal, l'ajoute à ses
+    lignes en attente, puis les envoie toutes (`SendLogBatch` jusqu'à vider `logOut_`) avant le
+    `Chat`, sur le même canal fiable. L'hôte écrit le fichier 1,5 s après la demande
+    (`TakeBugRequests`, sans bloquer le jeu).
+  - **Limite** : un rapport par joueur toutes les 30 s (« Rapport déjà envoyé il y a moins de
+    30 s. »).
+  - **Journal en mémoire** : `kcp::Log` alimente un tampon (`kc::bug::LogRing` : 10 min, 20 000
+    lignes et 4 Mo au plus), lu par `LogTail` ; le fichier n'est jamais relu.
+  - Règles pures dans `common/include/kc/bug_report.h` (analyse de `/bug`, nom de fichier sûr,
+    limite, tampon), testées par `TestBugReport` ; écriture dans `plugin/bug_report.cpp`.
+  - Commandes de test : `bug <phrase>` (n'importe quelle machine, comme `/bug` tapé dans la console)
+    et `buglast` (hôte : chemin du dernier rapport). Expérience `bugreport` dans
+    `tools/coop_test.py`.
+
 ## v0.3.4 (13 octobre 2026)
 
 Protocole inchangé (36).

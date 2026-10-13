@@ -2118,6 +2118,102 @@ static void TestSessionReplication() {
     CHECK(hw.controllable.size() == 3);
 }
 
+static bool ChatHasLine(const Session& s, const std::string& line) {
+    for (const auto& l : s.chatLog()) if (l == line) return true;
+    return false;
+}
+
+// 0.3.5: "/bug <note>" in the chat makes a bug report on the host (kc/bug_report.h)
+static void TestBugReport() {
+    std::printf("bug reports: /bug parsing, file names, throttle, log ring, session\n");
+    std::string note;
+    CHECK(bug::ParseCommand("/bug", note) && note.empty());
+    CHECK(bug::ParseCommand("/BUG  la porte ne s'ouvre pas  ", note) && note == "la porte ne s'ouvre pas");
+    CHECK(bug::ParseCommand("/Bug\tx", note) && note == "x");
+    CHECK(!bug::ParseCommand("/bugs", note) && !bug::ParseCommand("bug x", note) && !bug::ParseCommand(" /bug x", note) && !bug::ParseCommand("/bu", note));
+    CHECK(bug::ParseCommand("/bug " + std::string(500, 'a'), note) && note.size() == bug::kMaxNoteLen);
+    CHECK(bug::SafeName("rob1") == "rob1" && bug::SafeName("Coucoudz 2") == "Coucoudz_2" && bug::SafeName("a\\b:c.d") == "a_b_c_d");
+    CHECK(bug::SafeName("") == "player" && bug::SafeName("...") == "player" && bug::SafeName("\xc3\xa9t\xc3\xa9") == "__t__");
+    CHECK(bug::SafeName(std::string(100, 'x')).size() == 32);
+    CHECK(bug::FileName(2026, 10, 13, 22, 15, 4, "rob1") == "bug-2026-10-13_22-15-04-rob1.txt");
+    {
+        bug::Throttle t;
+        double ago = 0;
+        CHECK(t.Allow(2, 100.0));
+        CHECK(!t.Allow(2, 110.0, &ago) && std::fabs(ago - 10.0) < 1e-9);
+        CHECK(t.Allow(3, 110.0));   // per player
+        CHECK(!t.Allow(2, 129.9) && t.Allow(2, 130.0));
+        CHECK(!t.Allow(2, 140.0));   // counted from the last report made, not from the refused ones
+        t.Forget(2);
+        CHECK(t.Allow(2, 141.0));
+    }
+    {
+        bug::LogRing r(600.0, 5, 1000);
+        for (int i = 0; i < 8; ++i) r.Push(double(i), "line" + std::to_string(i));
+        CHECK(r.size() == 5 && r.Since(0).front() == "line3" && r.Since(6.0).size() == 2);
+        r.Push(700.0, "late");   // everything older than 10 minutes goes
+        CHECK(r.size() == 1 && r.Since(0).front() == "late" && r.bytes() == 4);
+        bug::LogRing small(600.0, 100, 10);
+        small.Push(1, "12345");
+        small.Push(2, "67890");
+        small.Push(3, "abc");   // over 10 bytes: the oldest goes
+        CHECK(small.size() == 2 && small.bytes() == 8 && small.Since(0).front() == "67890");
+        r.Trim(2000.0);
+        CHECK(r.size() == 0 && r.bytes() == 0);
+    }
+    // a session: the client's pending log lines reach the host before its request; nobody sees it as chat
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    AtMenu(cw);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.name = "Host"; hc.port = ++g_port;
+    SessionConfig cc; cc.name = "rob1"; cc.port = hc.port;
+    std::vector<std::string> hostLog;
+    Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    CHECK(host.Host(&err));
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}};
+    Run(all, 0.6);   // the log batch timer has just fired: the lines below wait for the next one
+    for (int i = 0; i < 100; ++i) cli.QueueLog("client line " + std::to_string(i));
+    cli.SendChat("/bug la porte");
+    Run(all, 0.5, [&] { for (const auto& l : hostLog) if (l.find("bug report requested by rob1") != std::string::npos) return true; return false; });
+    size_t lastLine = 0, request = 0;
+    for (size_t i = 0; i < hostLog.size(); ++i) {
+        if (hostLog[i] == "[rob1] client line 99") lastLine = i + 1;
+        if (hostLog[i] == "bug report requested by rob1: la porte") request = i + 1;
+    }
+    CHECK(lastLine && request && lastLine < request);   // flushed first (two ClientLog batches), then the request
+    CHECK(host.TakeBugRequests().empty());   // not before kWriteDelay
+    for (const auto& l : host.chatLog()) CHECK(l.find("/bug") == std::string::npos);
+    Run(all, bug::kWriteDelay + 0.2);
+    auto due = host.TakeBugRequests();
+    CHECK(due.size() == 1 && due[0].playerId == cli.localId() && due[0].name == "rob1" && due[0].note == "la porte");
+    host.Announce("Rapport de bug de rob1 enregistré (x.txt).");
+    Run(all, 1.0, [&] { return ChatHasLine(cli, "* Rapport de bug de rob1 enregistré (x.txt)."); });
+    CHECK(ChatHasLine(cli, "* Rapport de bug de rob1 enregistré (x.txt)."));
+    CHECK(ChatHasLine(host, "* Rapport de bug de rob1 enregistré (x.txt)."));
+    for (const auto& l : cli.chatLog()) CHECK(l.find("/bug") == std::string::npos);
+    // a second one within 30 s: refused, and the reporter is told
+    cli.SendChat("/bug encore");
+    Run(all, 1.0, [&] { return ChatHasLine(cli, "* Rapport déjà envoyé il y a moins de 30 s."); });
+    CHECK(ChatHasLine(cli, "* Rapport déjà envoyé il y a moins de 30 s."));
+    Run(all, bug::kWriteDelay + 0.2);
+    CHECK(host.TakeBugRequests().empty());
+    // the host's own: its throttle is its own
+    host.SendChat("/BUG");
+    CHECK(!ChatHasLine(host, "Host: /BUG"));
+    Run(all, bug::kWriteDelay + 0.2);
+    due = host.TakeBugRequests();
+    CHECK(due.size() == 1 && due[0].playerId == host.localId() && due[0].note.empty());
+    host.SendChat("/bug again");
+    CHECK(ChatHasLine(host, "* Rapport déjà envoyé il y a moins de 30 s."));
+    // ordinary chat still is chat
+    cli.SendChat("/bugs everywhere");
+    Run(all, 1.0, [&] { return ChatHasLine(host, "rob1: /bugs everywhere"); });
+    CHECK(ChatHasLine(host, "rob1: /bugs everywhere"));
+}
+
 static void TestDivergenceIsCorrected() {
     std::printf("session: a diverged client is pulled back to host state\n");
     FakeWorld hw, cw;
@@ -6893,6 +6989,7 @@ int main() {
     TestFuzz();
     TestJoinFromMenu();
     TestSessionReplication();
+    TestBugReport();   // 0.3.5: /bug
     TestDivergenceIsCorrected();
     TestRejections();
     TestWorldAuthority();

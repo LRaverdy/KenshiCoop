@@ -972,6 +972,16 @@ les mêmes partout) ; rien ne part vers l'hôte. Chez l'hôte, le bouton refuse 
 - `ClientReport` donne le nombre de personnages suivis, les PNJ et membres d'escouade manquants,
   les personnages décalés de plus de 5 unités, la plus grande correction et le nombre d'images par
   seconde. Détails dans [JOURNAUX.md](JOURNAUX.md).
+- **Rapport de bug** (0.3.5, `kc/bug_report.h`, `plugin/bug_report.cpp`) : `/bug <phrase>` tapé
+  dans une console (`ConsoleCommand`) part en `Chat` ordinaire. Le client écrit d'abord
+  `bug report requested`, le recopie dans `logOut_` (`ForwardClientLog`) et vide `logOut_`
+  (`SendLogBatch`) avant le `Chat` : même canal fiable, donc ses lignes arrivent avant. L'hôte
+  (`Session::HostBugRequest`, aussi pour son propre `/bug`) ne le diffuse pas, applique la limite
+  (`bug::Throttle`, 30 s par joueur) et garde la demande ; `TakeBugRequests` la rend 1,5 s plus
+  tard. `BugReportUpkeep` (tick du plugin, après `Session::Tick`) écrit alors
+  `KenshiCoop_bugs\bug-….txt` : en-tête, joueurs, et les 10 dernières minutes du journal, gardées en
+  mémoire par `kcp::Log` (`bug::LogRing`, lu par `LogTail`). Puis `Session::Announce` envoie la
+  ligne de chat à tous (avis `from = 0`).
 
 ### Console hors du jeu (`host_console.cpp`)
 - Fenêtre Win32 avec son propre thread.
@@ -1021,6 +1031,7 @@ les mêmes partout) ; rien ne part vers l'hôte. Chez l'hôte, le bouton refuse 
 | `plugin/steam_link.cpp`, `steam_link.h` | relais Steam P2P, amis, présence |
 | `plugin/util.cpp`, `util.h` | journal (et son archive), configuration, SHA-256 |
 | `plugin/debug.cpp`, `debug.h` | canal de commandes de test |
+| `common/include/kc/bug_report.h`, `plugin/bug_report.cpp`, `bug_report.h` | rapport de bug (`/bug`) : règles pures (testées par `TestBugReport`), écriture du fichier chez l'hôte |
 | `tests/test_main.cpp` | tests unitaires (protocole, fuzzing, sessions avec faux monde) |
 | `tools/coop_test.py` | harnais de test en jeu |
 | `build.ps1`, `install.ps1`, `package.ps1` | compilation, installation, zip pour les amis |

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "kc/admin.h"
+#include "kc/bug_report.h"
 #include "kc/protocol.h"
 
 namespace kcp {
@@ -26,6 +27,7 @@ std::deque<std::string> g_recent;   // newest last
 uint64_t g_logSeq = 0;
 constexpr size_t kRecentLines = 500;
 std::vector<std::pair<std::string, uint64_t>> g_watches;   // tests: lines containing that text, counted from LogWatch on
+kc::bug::LogRing g_tail;   // bug reports (0.3.5): the last 10 minutes, as written to the file
 
 std::string Narrow(const std::wstring& w) {
     if (w.empty()) return {};
@@ -98,6 +100,7 @@ void Log(const char* fmt, ...) {
     va_end(ap);
     SYSTEMTIME st;
     GetLocalTime(&st);
+    const double now = NowSeconds();
     std::lock_guard<std::mutex> lk(g_logMutex);
     char stamp[16];
     snprintf(stamp, sizeof(stamp), "%02d:%02d:%02d  ", st.wHour, st.wMinute, st.wSecond);
@@ -106,9 +109,19 @@ void Log(const char* fmt, ...) {
     ++g_logSeq;
     for (auto& [text, n] : g_watches)
         if (std::strstr(msg, text.c_str())) ++n;
+    char full[24];
+    snprintf(full, sizeof(full), "%02d:%02d:%02d.%03d  ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+    g_tail.Push(now, full + std::string(msg));
     if (!g_log) return;
-    fprintf(g_log, "%02d:%02d:%02d.%03d  %s\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg);
+    fprintf(g_log, "%s%s\n", full, msg);
     fflush(g_log);
+}
+
+std::vector<std::string> LogTail(double seconds) {
+    const double now = NowSeconds();
+    std::lock_guard<std::mutex> lk(g_logMutex);
+    g_tail.Trim(now);
+    return g_tail.Since(now - seconds);
 }
 
 uint64_t LogWatch(const std::string& text) {

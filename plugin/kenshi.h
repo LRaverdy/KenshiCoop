@@ -776,6 +776,7 @@ bool DropLocalTasks(Character* c);                          // it drops them (Ch
 bool RequestSave(const std::string& name, std::string* folderOut);   // folder = where it will be written
 bool RequestLoad(const std::string& name);
 bool SaveFolder(std::string& out);                          // where this machine's saves live
+bool LastSaveLocation(std::string& out);                    // folder of the last save/load request (bug reports: the world's name)
 
 // Character creation / removal (game thread, live world only).
 bool ReadSpawnSource(Character* c, kc::SpawnInfo& out);    // template + faction string ids, name, age

@@ -145,6 +145,11 @@ Pour signaler un plantage, joins le `KenshiCoop.log` de la machine qui a planté
 dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plus du
 `crashDump*.zip` du jeu.
 
+**En cas de bug** : tape `/bug` suivi d'une phrase dans le chat (la console du jeu, Ctrl+Shift+K),
+par exemple `/bug le marchand a disparu`, au moment où ça arrive. L'hôte enregistre tout seul un
+rapport avec les journaux de tout le monde dans `KenshiCoop_bugs\`, et le chat confirme
+« Rapport de bug de … enregistré ». Un rapport toutes les 30 s au plus par joueur.
+
 ## Ce qui est synchronisé
 
 - **Le monde** : le client joue dans une copie exacte du monde de l'hôte, sauvegarde transférée au
@@ -256,6 +261,7 @@ Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui
   tournent). Les sessions précédentes sont dans `KenshiCoop-logs\` (les 30 dernières). L'hôte voit
   aussi les lignes de chaque client dans son propre journal et dans sa console hors du jeu. Voir
   [docs/JOURNAUX.md](docs/JOURNAUX.md).
+- Rapports de bug (`/bug`) : chez l'hôte, dans `KenshiCoop_bugs\` (dossier de Kenshi).
 - « version/mods différents » : vérifier que les deux joueurs ont exactement les mêmes mods.
 - Rien ne se passe en rejoignant par IP : vérifier l'IP, le port UDP 27960 ouvert chez l'hôte et
   le pare-feu. Par Steam : lancer le jeu depuis Steam, et être amis (ou utiliser le code Steam).

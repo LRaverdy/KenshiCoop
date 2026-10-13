@@ -1938,6 +1938,11 @@ bool SaveFolder(std::string& out) {
     return ReadGameString(reinterpret_cast<uint8_t*>(sm) + (user ? off::SM_userSavePath : off::SM_localSavePath), out) && !out.empty();
 }
 
+bool LastSaveLocation(std::string& out) {
+    void* sm = SaveManagerInstance();
+    return sm && ReadGameString(reinterpret_cast<uint8_t*>(sm) + off::SM_location, out) && !out.empty();
+}
+
 bool RequestSave(const std::string& name, std::string* folderOut) {
     void* sm = SaveManagerInstance();
     GameString gs;

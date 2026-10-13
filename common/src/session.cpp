@@ -2393,6 +2393,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         c.from = pl->id;
         c.text = SanitizeChat(c.text);
         if (c.text.empty()) break;
+        if (std::string note; bug::ParseCommand(c.text, note)) { HostBugRequest(pl->id, pl->name, note); break; }   // 0.3.5: not chat
         Writer w;
         Encode(w, c);
         BroadcastReliable(w, false);
@@ -3478,12 +3479,7 @@ void Session::ClientTick(double now, bool live) {
     // Our log lines go to the host's log, and every 5 s a report on how well we follow.
     if (now >= nextLogSend_ && (!logOut_.empty() || logDropped_)) {
         nextLogSend_ = now + 0.5;
-        ClientLog m;
-        if (logDropped_) { m.lines.push_back("(" + std::to_string(logDropped_) + " lignes non transmises)"); logDropped_ = 0; }
-        while (!logOut_.empty() && m.lines.size() < kMaxLogLines) { m.lines.push_back(std::move(logOut_.front())); logOut_.erase(logOut_.begin()); }
-        Writer w;
-        Encode(w, m);
-        SendReliable(net_.serverPeer(), w);
+        SendLogBatch();
     }
     if (now >= nextReport_) {
         ClientReport rep;
@@ -4214,15 +4210,70 @@ void Session::SendChat(const std::string& text) {
     Chat c;
     c.text = clean;
     Writer w;
+    std::string note;
+    const bool bugReport = bug::ParseCommand(clean, note);   // 0.3.5: "/bug <note>" is a bug report, not chat
     if (isHost()) {
+        if (bugReport) { HostBugRequest(hostId_, cfg_.name, note); return; }
         c.from = hostId_;
         Encode(w, c);
         BroadcastReliable(w, false);
         AddChat(cfg_.name + ": " + clean);
     } else if (state_ == SessionState::Connected) {
+        // a bug report: our pending log lines go first (the same reliable channel: they are in the
+        // host's log before it writes the report)
+        if (bugReport)
+            while (!logOut_.empty() || logDropped_) SendLogBatch();
         Encode(w, c);
         SendReliable(net_.serverPeer(), w);
     }
+}
+
+void Session::SendLogBatch() {
+    ClientLog m;
+    if (logDropped_) { m.lines.push_back("(" + std::to_string(logDropped_) + " lignes non transmises)"); logDropped_ = 0; }
+    const size_t n = std::min(logOut_.size(), kMaxLogLines - m.lines.size());
+    for (size_t i = 0; i < n; ++i) m.lines.push_back(std::move(logOut_[i]));
+    logOut_.erase(logOut_.begin(), logOut_.begin() + ptrdiff_t(n));
+    Writer w;
+    Encode(w, m);
+    SendReliable(net_.serverPeer(), w);
+}
+
+void Session::HostBugRequest(uint8_t playerId, const std::string& name, const std::string& note) {
+    const double now = clock_();
+    double ago = 0;
+    if (!bugThrottle_.Allow(playerId, now, &ago)) {
+        const std::string fr = "Rapport déjà envoyé il y a moins de 30 s.";
+        const std::string why = "bug report from " + name + " not made: their previous one was " + std::to_string(int(ago)) + " s ago";
+        if (playerId == hostId_) {
+            AddChat("* " + fr, why);
+        } else {
+            log_(why);
+            SendNotice(playerId, fr);
+        }
+        return;
+    }
+    log_("bug report requested by " + name + (note.empty() ? std::string(" (no note)") : ": " + note));
+    if (bugRequests_.size() < 16) bugRequests_.push_back({playerId, name, note, now});
+}
+
+std::vector<Session::BugRequest> Session::TakeBugRequests() {
+    std::vector<BugRequest> due;
+    const double now = clock_();
+    for (auto it = bugRequests_.begin(); it != bugRequests_.end();) {
+        if (now - it->at >= bug::kWriteDelay) {
+            due.push_back(std::move(*it));
+            it = bugRequests_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    return due;
+}
+
+void Session::Announce(const std::string& shown, const std::string& logged) {
+    for (const auto& [id, p] : players_) SendNotice(id, shown);
+    AddChat("* " + SanitizeChat(shown), logged);
 }
 
 bool Session::SendNotice(uint8_t playerId, const std::string& text) {

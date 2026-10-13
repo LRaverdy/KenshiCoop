@@ -21,6 +21,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "kc/bug_report.h"
 #include "kc/clock.h"
 #include "kc/loot.h"
 #include "kc/motion.h"
@@ -593,6 +594,18 @@ public:
     // Host: a notice (French) for that player alone, shown in their chat as "* text" (a Chat with
     // from = 0, as for a refused trade). False: no such player.
     bool SendNotice(uint8_t playerId, const std::string& text);
+    // Bug reports (kc/bug_report.h, 0.3.5). A chat line "/bug <note>" is not chat: a client flushes
+    // its pending log lines before sending it (so they reach the host first); the host (its own line
+    // or a client's) keeps a request, one per player per 30 s (else the reporter is told so), and
+    // hands it out kc::bug::kWriteDelay later, once the reporter's last lines are in its log.
+    struct BugRequest {
+        uint8_t playerId = 0;
+        std::string name, note;
+        double at = 0;   // when it came (clock)
+    };
+    std::vector<BugRequest> TakeBugRequests();   // host: the requests due now
+    // Host: a line for everyone's chat ("* text": a notice to each player, and ours).
+    void Announce(const std::string& shown, const std::string& logged = {});
 
     SessionState state() const { return state_; }
     bool isHost() const { return state_ == SessionState::Hosting; }
@@ -1360,6 +1373,10 @@ private:
     bool resyncRequested_ = false;         // client: the host asked us to reload its world
     std::vector<std::string> logOut_;      // client: log lines waiting to go to the host
     size_t logDropped_ = 0;
+    void SendLogBatch();                   // client: one ClientLog of logOut_ (and the dropped count)
+    bug::Throttle bugThrottle_;            // host (0.3.5): one bug report per player per 30 s
+    std::vector<BugRequest> bugRequests_;  // host: waiting kc::bug::kWriteDelay
+    void HostBugRequest(uint8_t playerId, const std::string& name, const std::string& note);
     double nextLogSend_ = 0, nextReport_ = 0, reportStart_ = 0;
     uint32_t frames_ = 0;
     std::vector<Handle> scratchEdited_;

@@ -14,6 +14,7 @@ Deux niveaux de tests :
 .\build\bin\Release\kc_tests.exe       # dernière ligne : "54907 checks, 0 failed" (13 octobre 2026, branche fix-char-states)
 .\build\bin\Release\kc_tests.exe       # dernière ligne : "54945 checks, 0 failed" (13 octobre 2026)
 .\build\bin\Release\kc_tests.exe       # dernière ligne : "55030 checks, 0 failed" (13 octobre 2026, branche fix-nametags)
+.\build\bin\Release\kc_tests.exe       # dernière ligne : "55138 checks, 0 failed" (13 octobre 2026, branche bugreport)
 .\build.ps1 -Asan                      # variante AddressSanitizer, dans build-asan\
 ```
 
@@ -29,6 +30,7 @@ Ils font tourner de vraies sessions (vrai réseau en boucle locale) avec un faux
 | `TestWorldIdentity` | même monde après une coupure du tick (fenêtre, zone), nouveau monde après un chargement ; les doublures ne décident jamais ; celles restées d'un monde précédent sont nommées |
 | `TestNoDuplicatePlayers` | un client déjà là garde exactement une copie de chaque joueur arrivé après lui, à travers des coupures du tick et un vrai chargement |
 | `TestSessionReplication` | positions, santé, heure et pause répliquées |
+| `TestBugReport` | (0.3.5, `kc/bug_report.h`) `/bug` reconnu sans tenir compte de la casse, seul ou avec une phrase (bornée), pas `/bugs`, `bug x` ni ` /bug` ; nom de fichier (`bug-2026-10-13_22-15-04-rob1.txt`, nom nettoyé : espaces, accents, `\:.` → `_`, 32 caractères, `player` si vide) ; limite d'un rapport par joueur toutes les 30 s ; tampon du journal borné par l'âge, le nombre de lignes et la taille. En session : 100 lignes en attente chez le client arrivent dans le journal de l'hôte **avant** la demande ; rien avant 1,5 s, puis une demande (joueur, nom, phrase) ; « Rapport de bug de … enregistré » chez tous ; `/bug` jamais dans le chat ; second `/bug` refusé (« Rapport déjà envoyé… ») ; `/BUG` de l'hôte lui-même ; `/bugs …` reste du chat |
 | `TestDivergenceIsCorrected` | un client qui diverge est ramené à l'état de l'hôte |
 | `TestRejections` | version, exe, mods, nom, partie pleine, exclusion |
 | `TestWorldAuthority` | le client n'exécute rien lui-même, ses ordres passent par l'hôte |
@@ -135,6 +137,7 @@ Plusieurs joueurs sur un PC : avant chaque lancement le banc vérifie la RAM lib
 | `camfocus` (`kctest_town`, 0.3.2, A_FAIRE 3l) | caméra du client : après le chargement, le perso suivi (focus de la vue des étages) est un perso du client ; `camerafree` fait ce que font les touches de caméra (le jeu lâche le perso suivi) ; pendant 6 s le focus reste « aucun » et aucune nouvelle ligne « floor view: follows our » n'apparaît (avant : 2 par seconde, caméra ramenée sans cesse) |
 | `buildpause` (`kctest_base`, 0.3.2, 3n) | l'hôte ouvre le mode construction (`buildmode 1`, comme la touche B) : son jeu n'est pas en pause et le perso du client marche (> 30 unités en 3 s) ; si l'hôte avait mis pause avant, la pause reste ; le mode construction du client ne met ni l'hôte ni le client en pause |
 | `quietlogs` (`kctest_town`, `--clients N`, 0.3.2, 3h) | 3 min à x3 : chez chaque client, lignes de porte « stays » (≤ 5 par minute) et « captivity from the host » (≤ 40 par minute) comptées par `logcount`. À jouer aussi en ville la nuit (les PNJ au lit comptent comme « caged ») |
+| `bugreport` (`kctest_base`, 0.3.5) | rapport de bug : le client écrit une ligne repère (`console bugmarkN`) puis `bug <phrase>` (comme `/bug` tapé dans sa console) ; en moins de 10 s l'hôte a un nouveau fichier (`buglast`) qui contient `note: <phrase>`, la ligne repère du client (`[nom] > bugmarkN`) et sa ligne `bug report requested`, **avant** le repère `==== BUG REPORT from`, et la liste des joueurs avec leur rapport de synchro ; « Rapport de bug de … enregistré » dans le chat de l'hôte et du client, jamais `/bug` ; un second `bug` du client tout de suite : « Rapport déjà envoyé… » et pas de nouveau fichier ; `bug cote hote` chez l'hôte : son propre fichier. Lancer : `python tools/coop_test.py bugreport` |
 | `attackers` (`kctest_base`, 0.3.2, 3g) | le perso du client est envoyé à 6 km ; un PNJ créé près d'un perso de l'hôte le combat : le client, caméra sur le perso de l'hôte, a ce PNJ (`where <clé>`) en moins de 15 s |
 | `facing` | un personnage de l'hôte court dans plusieurs directions : le client doit vraiment courir, dans le même sens |
 | `jitter` (`kctest_town`) | les PNJ immobiles ne tremblent pas chez le client, quelle que soit la vitesse |
@@ -265,6 +268,23 @@ Historique des exécutions (`test_out/suite*.log`) :
 | 13 oct., 15 h 27 | 32/32 | perso du joueur debout au moment de la TP admin |
 | 13 oct., 16 h 19 | 29/32 | perso du joueur mis K.-O. par les combats de la sauvegarde : TP admin à 1147,2 et 257,63 chez le client, le corps se recouchait là où il gisait (ancre du nœud de scène, `AnimationClass`+0x258 ; corrigé en 0.3.4, branche `fix-tp3`, pas encore relancé) ; vitesse 3 : horloge 171/3619 |
 | 13 oct., 17 h 07 | 30/32 | avec `fix-tp3` : perso du joueur debout, TP réussie (« moved »), puis le membre 0 marche 28,6 unités en 3 s et le perso du joueur avec lui, dans le même sens (38,2 de l'endroit visé, 11,7 du membre 0) ; combat de la sauvegarde (membre 3 blessé à 17:07:25, membre 0 K.-O. à 17:07:46) ; client 4,02 en marche. Vérifications 20 et 21 ajustées |
+
+### Vérification à la main : rapport de bug (`/bug`, 0.3.5)
+1. Héberger, faire rejoindre un client (fenêtres côte à côte : `python tools/coop_test.py up`).
+2. Chez le client : Ctrl+Shift+K, taper `/bug test du rapport`, Entrée. La console répond
+   « rapport de bug envoyé à l'hôte ».
+3. Dans les 2 s, le chat (panneau en haut à droite) de l'hôte **et** du client affiche « * Rapport
+   de bug de <nom> enregistré (bug-….txt). ». Aucune ligne « <nom>: /bug … ».
+4. Ouvrir `KenshiCoop_bugs\` dans le dossier de Kenshi : le fichier a l'en-tête (`note: test du
+   rapport`, version, vitesse), `== players ==` avec le client (ping, rapport de synchro, persos et
+   positions), et le journal ; juste au-dessus de `==== BUG REPORT from <nom>` : `[nom] > /bug test
+   du rapport` et `[nom] bug report requested: test du rapport`.
+5. Retaper `/bug` chez le client : « * Rapport déjà envoyé il y a moins de 30 s. », pas de nouveau
+   fichier. Après 30 s, il passe.
+6. Chez l'hôte : `/bug` seul dans sa console (Ctrl+Shift+K ou la fenêtre hors du jeu) : un fichier à
+   son nom, `note: (none)`.
+7. Le faire aussi à vitesse 3 en pleine activité (combat) : pas d'à-coup visible à l'écriture du
+   fichier.
 
 ## 3. Canal de commandes de debug (`plugin/debug.cpp`)
 
@@ -507,6 +527,8 @@ l'escouade triée par handle.
 | `groundat <x> <z>` | le sol à cet endroit ici (sous l'eau, -99 = inconnu), la hauteur de référence du mode construction (surface de l'eau 100) et `land` / `water` / `unknown` |
 | `chatlast [n]` | les n dernières lignes du chat ici, avis de l'hôte compris (` \| ` entre les lignes) |
 | `toastlast` | (v0.3.4) les 8 derniers avis affichés en haut de l'écran ici (« Ce personnage appartient à un autre joueur. »…) |
+| `bug [phrase]` | (0.3.5, hôte ou client) demande un rapport de bug, exactement comme `/bug <phrase>` tapé dans la console (passe par la console au tick suivant) |
+| `buglast` | (0.3.5, hôte) chemin du dernier rapport écrit par ce jeu, ou `none` |
 | `furnplace <sid> <nom du bâtiment> <dx> <dz>` | un meuble dans le bâtiment à nous le plus proche de ce nom (position relative au bâtiment) |
 | `buildlist [nom] [rayon] [membre]` | bâtiments autour du membre 0 (ou de ce membre) : `sid@x,y,z:avancement/drapeaux` (1 terminé, 2 en pause, 4 démontage) |
 | `buildcount` | bâtiments suivis par la session, et combien sont trouvés ici |

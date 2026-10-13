@@ -16,6 +16,7 @@
 #include <string>
 
 #include "admin.h"
+#include "bug_report.h"
 #include "debug.h"
 #include "hooks.h"
 #include "map.h"
@@ -61,6 +62,7 @@ const char* StateName(kc::SessionState s) {
 
 std::string FrenchError(const std::string& e);
 const char* FrenchState(kc::SessionState s);
+void ForwardClientLog();   // client: our new log lines queued for the host's log
 
 void Toast(const std::string& msg, double seconds = 4.0) {
     const double now = NowSeconds();
@@ -280,11 +282,26 @@ void ConsoleCommand(const std::string& line) {
     auto out = [](const std::string& s) { Log("  %s", s.c_str()); };
     const bool host = g_session->isHost();
     const bool client = g_session->isClient();
+    // 0.3.5, every player: "/bug <note>" (or "bug <note>") makes a bug report on the host
+    // (kc/bug_report.h): it goes as a chat line the host keeps instead of showing it
+    if (std::string note; cmd == "bug" || kc::bug::ParseCommand(cmd, note)) {
+        std::getline(in, note);
+        if (!kc::bug::ParseCommand("/bug " + note, note)) note.clear();   // (trimmed, bounded)
+        if (!host && g_session->state() != kc::SessionState::Connected) { out("pas de partie multijoueur : le rapport de bug se fait en session"); return; }
+        if (client) {   // this line and everything before it reach the host's log ahead of the request
+            Log("bug report requested: %s", note.empty() ? "(no note)" : note.c_str());
+            ForwardClientLog();
+        }
+        g_session->SendChat("/bug " + note);
+        out(client ? "rapport de bug envoyé à l'hôte" : "rapport de bug demandé");
+        return;
+    }
     if (cmd == "help") {
         out("help                 cette aide");
         out("fenetre              ouvrir / fermer la console hors du jeu (aussi Ctrl+Shift+W)");
         out("players              joueurs : id, nom, ping, personnages");
         out("status               état de la session et de la synchro");
+        out("/bug <phrase>        signaler un bug : l'hôte enregistre un rapport (journaux de tous)");
         if (!client) {
             out("kick <id>            retirer un joueur (hôte)");
             out("give <id>            donner les personnages sélectionnés au joueur <id> (hôte)");
@@ -327,7 +344,7 @@ void ConsoleCommand(const std::string& line) {
         if (!g_session->lastError().empty() && !host && !client) out("dernière erreur : " + FrenchError(g_session->lastError()));
         return;
     }
-    if (client) { out("commande réservée à l'hôte (ici : help, players, status)"); return; }
+    if (client) { out("commande réservée à l'hôte (ici : help, players, status, /bug)"); return; }
     if (cmd == "kick" || cmd == "give") {
         int id = -1;
         in >> id;
@@ -586,6 +603,7 @@ void PublishOverlay() {
         if (g_session->isHost() || g_session->queueStatus()) m.lines.insert(m.lines.end(), m.queueLines.begin(), m.queueLines.end());
         if (g_session->isHost()) m.lines.push_back("Ctrl+Shift+G  confier la sélection au joueur suivant");
         m.lines.push_back("Ctrl+Shift+F  diplomatie (relations, primes, monde)");
+        m.lines.push_back("Un bug ? Ctrl+Shift+K puis /bug <phrase>");
         m.lines.push_back("Ctrl+Shift+L  quitter la session");
     }
     const auto& chat = g_session->chatLog();
@@ -709,7 +727,7 @@ void SteamUpkeep() {
 // then in one place, live). Host: the console window shows the session and runs its commands.
 uint64_t g_forwardedSeq = 0;
 bool g_consoleAutoOpened = false;
-void LogAndConsoleUpkeep() {
+void ForwardClientLog() {
     uint64_t seq = 0;
     RecentLog(0, &seq);
     if (g_session->isClient() && seq > g_forwardedSeq) {
@@ -720,6 +738,10 @@ void LogAndConsoleUpkeep() {
         }
     }
     g_forwardedSeq = seq;
+}
+
+void LogAndConsoleUpkeep() {
+    ForwardClientLog();
     if (g_session->isHost() && g_cfg.hostConsole && !g_consoleAutoOpened) {
         g_consoleAutoOpened = true;
         HostConsoleShow(true);
@@ -948,6 +970,8 @@ void Tick(bool live) {
         g_session->Tick(live);
         sessionSecs = NowSeconds() - t;
     }
+    SetCrashPhase("tick: bug reports");
+    BugReportUpkeep(*g_session, *g_world, g_cfg.name, kVersion);   // 0.3.5: host, the reports due
     SetCrashPhase("tick: map scene");
     UpdateMapScene(*g_session, *g_world, g_cfg, live);   // map markers, minimap, heads, squad bar, pings
     SetCrashPhase("tick: resync");

@@ -14,6 +14,10 @@ void Log(const char* fmt, ...);
 // The newest log lines (oldest first, at most `max`), for the in-game console. `seq` counts every
 // line ever logged, so a reader can tell whether anything new arrived.
 std::vector<std::string> RecentLog(size_t max, uint64_t* seq = nullptr);
+// Bug reports (0.3.5): the lines logged in the last `seconds`, as KenshiCoop.log has them
+// ("HH:MM:SS.mmm  message"), oldest first. Kept in memory as they are logged (kc::bug::LogRing:
+// 10 minutes, 20000 lines, 4 MB at most), so a report never re-reads the file.
+std::vector<std::string> LogTail(double seconds);
 // Tests (debug "logcount"): lines containing `text` logged since its first call (at most 16 texts).
 uint64_t LogWatch(const std::string& text);
 

@@ -838,7 +838,8 @@ void DrawConsole(const OverlayModel& m, float w, float h) {
         ImGui::SetScrollHereY(1.0f);
     }
     ImGui::EndChild();
-    ImGui::TextDisabled(m.fullConsole ? "Tape help pour la liste des commandes." : "Tape help pour la liste des commandes (client : consultation seulement).");
+    ImGui::TextDisabled(m.fullConsole ? "Tape help pour la liste des commandes. Un bug ? /bug suivi d'une phrase."
+                                      : "Tape help pour la liste des commandes (client : consultation). Un bug ? /bug suivi d'une phrase.");
     ImGui::SetNextItemWidth(-1.0f);
     if (g_refocusCommand) { ImGui::SetKeyboardFocusHere(); g_refocusCommand = false; }
     if (ImGui::InputText("##cmd", g_cmdBuf, sizeof(g_cmdBuf), ImGuiInputTextFlags_EnterReturnsTrue)) {

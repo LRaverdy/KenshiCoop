@@ -5329,6 +5329,65 @@ def exp_quietlogs(host, clis, minutes=3):
     summary()
 
 
+def exp_bugreport(host, cli):
+    """0.3.5: "/bug <note>" from the client (its debug "bug", as typed in its console): the host writes
+    KenshiCoop_bugs\\bug-<date>-<name>.txt with the note and the client's last log lines (flushed
+    before the request), everyone gets the chat line, nobody sees "/bug" as chat; a second one within
+    30 s is refused; the host's own works too."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(4)
+
+    def read_report(path):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                return f.read()
+        except OSError:
+            return ""
+
+    def wait_report(before, seconds=10):
+        end = time.time() + seconds
+        while time.time() < end:
+            last = cmd(host, "buglast")[1][3:].strip()
+            if last and last != "none" and last != before:
+                return last
+            time.sleep(0.5)
+        return None
+
+    before = cmd(host, "buglast")[1][3:].strip()
+    tag = f"bugmark{int(time.time()) % 100000}"
+    # a line in the client's log just before the request: it must be in the host's report
+    cmd(cli, f"console {tag}")
+    note = f"la porte ne s'ouvre pas {tag}"
+    log("client bug:", cmd(cli, f"bug {note}"))
+    path = wait_report(before)
+    check("bug : le rapport du client est ecrit chez l'hote", path is not None, path)
+    text = read_report(path) if path else ""
+    check("bug : la note est dans le rapport", f"note: {note}" in text, path)
+    check("bug : la ligne du client juste avant est dans le rapport", f"> {tag}" in text and "] > " + tag in text)
+    check("bug : 'bug report requested' du client dans le rapport", f"bug report requested: {note}" in text)
+    mark = text.find("==== BUG REPORT from")
+    check("bug : marqueur ==== BUG REPORT apres les lignes du client", mark > 0 and text.find(f"] > {tag}") < mark, mark)
+    check("bug : joueurs listes", "== players ==" in text and "last sync report" in text)
+    time.sleep(1)
+    cl = cmd(cli, "chatlast 5")[1]
+    hl = cmd(host, "chatlast 5")[1]
+    check("bug : le client voit 'Rapport de bug de ... enregistre'", "Rapport de bug de" in cl and "enregistr" in cl, cl)
+    check("bug : l'hote voit 'Rapport de bug de ... enregistre'", "Rapport de bug de" in hl, hl)
+    check("bug : '/bug' n'apparait pas dans le chat", "/bug" not in cl and "/bug" not in hl, (cl, hl))
+    # throttle: a second one at once is refused
+    cmd(cli, "bug encore une fois")
+    time.sleep(4)
+    cl = cmd(cli, "chatlast 3")[1]
+    check("bug : second rapport en moins de 30 s refuse (message)", "Rapport déjà envoyé" in cl, cl)
+    check("bug : pas de second fichier", cmd(host, "buglast")[1][3:].strip() == path)
+    # the host's own
+    cmd(host, "bug cote hote")
+    hpath = wait_report(path)
+    check("bug : le rapport de l'hote est ecrit", hpath is not None and "note: cote hote" in read_report(hpath), hpath)
+    summary()
+
+
 def exp_attackers(host, cli):
     """A_FAIRE 3g: an NPC fights the host's character far from the client's: the client is sent it
     anyway and makes it, so a player watching another player's fight sees who hits them."""
@@ -9068,6 +9127,9 @@ def main():
         sp_ = sub.add_parser(name_, help=hlp_)
         sp_.add_argument("--save", default=save_)
         sp_.add_argument("--keep", action="store_true")
+    br_ = sub.add_parser("bugreport", help="0.3.5: /bug from the client and the host: report file on the host with the note and the client's last lines, chat line, 30 s throttle")
+    br_.add_argument("--save", default="kctest_base")
+    br_.add_argument("--keep", action="store_true")
     ql_ = sub.add_parser("quietlogs", help="3h: door 'stays' and captivity lines counted on every client for 3 min at x3")
     ql_.add_argument("--save", default="kctest_town")
     ql_.add_argument("--keep", action="store_true")
@@ -9350,6 +9412,8 @@ def main():
             exp_buildpause(host, cli)
         elif a.what == "attackers":
             exp_attackers(host, cli)
+        elif a.what == "bugreport":   # 0.3.5
+            exp_bugreport(host, cli)
         elif a.what == "floor":
             exp_floor(host, cli)
         elif a.what == "factions":

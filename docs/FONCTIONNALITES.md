@@ -858,6 +858,32 @@ la fenêtre du client.
 - **En cours** : les accents de cette fenêtre s'affichaient mal (« Ã‰tat ») ; correction par la
   compilation des sources en UTF-8.
 
+### Rapport de bug en une commande (`/bug`) 🟡 (v0.3.5, tests unitaires ; expérience `bugreport` à lancer en jeu)
+- **Tout joueur** (hôte ou client) tape `/bug` suivi d'une courte phrase dans la console du jeu
+  (**Ctrl+Shift+K**), ou dans la console hors du jeu de l'hôte. `/bug` seul marche aussi ; `bug
+  <phrase>` est accepté. Il n'y a pas de zone de saisie de chat à part : la console sert de chat.
+- **L'hôte** écrit un fichier dans `KenshiCoop_bugs\` (dossier de Kenshi, à côté de
+  `KenshiCoop.log`), nommé `bug-AAAA-MM-JJ_HH-MM-SS-<nom>.txt`. Il contient :
+  - l'en-tête : heure, version du mod, protocole, joueur qui signale, sa phrase, vitesse et pause,
+    horloge du jeu, dernière sauvegarde chargée ou faite (si connue), empreinte du monde ;
+  - les joueurs : numéro, nom, ping, s'il est en jeu ou en train d'arriver, son dernier rapport
+    de synchro (et son âge), ses personnages avec leur position ;
+  - les **10 dernières minutes du journal de l'hôte**, qui contient déjà les lignes de chaque client
+    (`[nom] ...`).
+- **Tout le monde** voit dans le chat « Rapport de bug de rob1 enregistré
+  (bug-2026-10-13_22-15-04-rob1.txt). ». La ligne `/bug ...` elle-même n'est pas montrée comme du
+  chat.
+- **Ordre des lignes** : avant d'envoyer la demande, le client écrit `bug report requested: <phrase>`
+  et envoie toutes ses lignes de journal en attente. Elles passent par le même canal fiable que la
+  demande et arrivent donc avant elle. L'hôte attend encore 1,5 s avant d'écrire le fichier.
+- **Limite** : un rapport par joueur toutes les 30 s ; au-delà, le joueur lit « Rapport déjà envoyé
+  il y a moins de 30 s. ».
+- **Mémoire** : le journal récent est gardé en mémoire au fil de l'eau (10 minutes, 20 000 lignes et
+  4 Mo au plus) ; le rapport ne relit jamais le fichier.
+- **Sans changement de protocole** (36) : la demande est un message de chat ordinaire. Un hôte
+  0.3.4 l'affiche simplement comme du chat.
+- **Test** : `/bug` du client dans l'expérience `bugreport` (voir [TESTS.md](TESTS.md)).
+
 ---
 
 ## En cours et à faire
