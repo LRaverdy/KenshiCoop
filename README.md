@@ -193,7 +193,8 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
   sont dans la fenêtre. La sortie d'une machine (feu de camp, cuisinière) ne bouge plus toute seule
   dans ton inventaire : seul ce que tu fais fenêtre ouverte part à l'hôte (v0.3.4, à vérifier en jeu).
 - **Porter un corps** : un corps posé tombe chez toi où il est tombé chez l'hôte (v0.3.4 : s'il
-  finit à plus de 5 unités, il se relève une fois et retombe à la bonne place ; à vérifier en jeu).
+  finit à plus de 5 unités, il se relève une fois et retombe à la bonne place ; posé dans une maison à
+  étage, il n'est plus envoyé sur l'escalier ; à vérifier en jeu).
 - **Vol** : prendre dans un contenant qui n'est pas à toi est un vol, décidé par le jeu de l'hôte.
   Si on te voit, la fenêtre se ferme et l'objet reste.
 - **Objets au sol** : posés et ramassés, au même endroit pour tout le monde. Un objet que l'hôte ne
@@ -202,7 +203,8 @@ dit où le jeu est mort et ce que faisait le mod à ce moment (`phase=`), en plu
 - **Cadavres** : restent synchronisés et se fouillent, près des joueurs.
 - **Carte et repères** : sur la carte du jeu (onglet CARTE de la fenêtre de gestion, bouton MAP), tous les persos de tous les joueurs à la couleur
   de leur joueur et les escouades hostiles qui nous visent en rouge ; une minicarte ronde ; le nom
-  au-dessus de la tête de chaque perso d'un joueur à sa couleur (son perso principal encadré) ;
+  au-dessus de la tête de chaque perso d'un joueur à sa couleur (son perso principal encadré, aussi
+  pour un joueur arrivé après toi, v0.3.4) ;
   leur cadre de portrait coloré ; des pings
   partagés. La minicarte se déplace à la souris et se redimensionne. Réglages : fenêtre Multijoueur, « Affichage ».
 

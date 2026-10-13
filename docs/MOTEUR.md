@@ -1221,6 +1221,12 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
   Posé d'un portage chez l'hôte, le corps tombe de l'épaule à ~2,5 unités du porteur ; chez le
   client, lâché debout au point de l'hôte puis mis en ragdoll, il finissait à 12 unités (`carry`,
   13/10). D'où le second essai, une fois, décalé de ce que la première chute a mesuré (0.3.4).
+  Second essai du 13/10 : la chute n'avait rien décalé (-0,1 ; -0,2), le corps est retombé au même
+  point au millième près. Le corps posé de l'hôte se lit à la hauteur de l'épaule (17,5 unités
+  au-dessus du sol du porteur) ; un perso téléporté (`setPositionDirectionAndTeleport`) à un point en
+  l'air dans une maison à étage est posé par le jeu sur le navmesh le plus proche en 3D (ici
+  l'escalier, 12 unités plus loin, 10 plus haut). Notre copie est donc mise debout à la hauteur du
+  sol de son porteur (`kc::motion::FallSpotHeight`).
 
 **Heure**
 - L'heure du jeu (`0x21303D0`, +0xA0) est recalculée à chaque image (`0x66FF60`) : jour (+0x8,

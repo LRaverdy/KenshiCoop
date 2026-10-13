@@ -8,6 +8,34 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 Protocole inchangé (36).
 
+- **Noms des joueurs arrivés plus tard et corps posé après un portage (tests `map` 48/50 et `carry`
+  6/7, 13/10 13:45-14:00, branche `fix-tags-carry2`)**.
+  - `map` : chez le client 1, le nom de Joueur3 (perso principal du client 2, arrivé après lui)
+    restait `label=jeu tint=0 frame=0` ; le repli sur l'overlay du correctif précédent ne s'est pas
+    déclenché, et pour cause : le jeu met bien ce nom à jour (journal du client 1 : « 7 by the game's
+    name tags », 13 recolorations dont celle de ce nom à son arrivée). La cause : chez un client, le
+    perso d'un joueur arrivé après lui est une **copie faite sur place, sous un autre handle** que
+    celui de l'hôte (alias de `KenshiWorld`). La scène gardait le handle **de l'hôte** pour ce perso,
+    et les cadres (`ReadGui`) comme la lecture `tint=` le résolvaient directement
+    (`kenshi::Resolve`) : rien trouvé, donc ni cadre ni couleur relue, alors que le détour de mise à
+    jour colorait le bon nom (trouvé par `world.Find`, qui suit l'alias). La scène garde maintenant
+    le handle **de la copie locale**. De plus, un nom déjà coloré dont le texte a repris une autre
+    couleur sans que le jeu le signale (perso refait, apparence appliquée : « appearance of Joueur3
+    applied » 13 s après son arrivée) est recoloré à la mise à jour suivante. Toujours un seul nom.
+  - `carry` « le corps est là où celui de l'hôte est tombé » : la correction de 7c70d5c **a bien
+    tourné** (« stood up once to fall on the host's spot », 13:56:10) mais le corps est retombé
+    exactement au même endroit, au millième près, comme lors de l'essai d'avant ce correctif
+    (24659,9 / 167,0 / 10544,9). Le décalage mesuré de sa chute était nul (-0,1 ; -0,2) : il est tombé
+    là où il était debout, pas à côté. Le corps de l'hôte se lit à 17,5 unités au-dessus du sol de
+    son porteur (174,6 pour un porteur à 157,1 : hauteur de l'épaule) ; notre copie, téléportée
+    debout à ce point dans une maison à étage, était posée par le jeu sur le navmesh le plus proche
+    en 3D (l'escalier, 12 unités plus loin et 10 plus haut), puis tombait là, à chaque fois. Un corps
+    posé après un portage est maintenant mis debout **à la hauteur du sol de son porteur** (sous le
+    point de l'hôte) quand l'hôte le lit à plus de 4 unités au-dessus (`kc::motion::FallSpotHeight`,
+    test unitaire). Nouveau journal quand les téléportations n'ont pas mis le corps à son point de
+    chute (« falls N units from its fall spot … the game kept it at … ») ; le journal « puts … down »
+    donne les positions du porteur et du corps. Pas encore vérifié en jeu.
+
 - **Noms au-dessus des têtes : le perso d'un joueur arrivé plus tard (test `map`, 13/10, 48/50)**.
   Chez le client 1, le nom du perso principal du client 2 (arrivé après lui) n'était ni à sa couleur
   (`tint=0`) ni encadré, de son arrivée (10:29:54) à la fin du test (10:30:41) : le jeu de ce client

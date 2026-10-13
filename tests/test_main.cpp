@@ -6226,6 +6226,12 @@ static void TestMotion() {
             for (int i = 0; i < kMaxFalls; ++i) NoteFall(spentPut, 1.0);
             CHECK(!MayFineRelay(spentPut, lying, 12.0f, true, true, 2.0));   // no fall left
         }
+        // 0.3.4 (carry test 13/10, run 2): a put-down body read at shoulder height on the host is
+        // stood on its carrier's floor before it falls, never at that height (snapped to the stairs)
+        CHECK(FallSpotHeight(174.6f, true, 157.1f) == 157.1f);
+        CHECK(FallSpotHeight(158.5f, true, 157.1f) == 158.5f);   // lying on that floor: the host's
+        CHECK(FallSpotHeight(150.0f, true, 157.1f) == 150.0f);   // fell lower (steps): the host's
+        CHECK(FallSpotHeight(174.6f, false, 0.0f) == 174.6f);    // no carrier known
         // standing up as on the host: never a dead body, never a held one
         PostureFacts up;
         up.localDown = true;

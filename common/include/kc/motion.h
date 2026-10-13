@@ -339,6 +339,16 @@ constexpr double kPutDownGrace = 3.0;
 inline void NoteStanding(PostureBook& b, double now) {
     if (now - b.putDownAt > kPutDownGrace) b.fineWanted = false;
 }
+// The height our copy of a body put down from a carry is stood at before it falls (carry test of
+// 13/10, run 2): the host's body read 17.5 units above the floor its carrier stood on (the shoulder's
+// height), and a character teleported to that point lands on the navmesh nearest to it in 3D (a
+// staircase 12 units away, 10 units up): it fell there, then again there after its fine relay, to the
+// thousandth of a unit. A lying body is never more than a few units above that floor: above that, our
+// copy stands on the carrier's floor (floorY), right under the host's spot.
+constexpr float kLyingAboveFloor = 4.0f;
+inline float FallSpotHeight(float hostY, bool floorKnown, float floorY) {
+    return floorKnown && hostY > floorY + kLyingAboveFloor ? floorY : hostY;
+}
 // May it be stood up because the host's is standing? Never a held one (a shackled captive sits).
 inline bool MayStand(const PostureFacts& f) { return !f.held && !f.hostDown && !f.hostDead && f.localDown && !f.localDead; }
 

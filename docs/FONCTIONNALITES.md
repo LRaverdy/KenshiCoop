@@ -1233,7 +1233,8 @@ la fenêtre du client.
   - **Quand le jeu n'affiche pas les noms** (son option « Afficher les noms des persos » éteinte, ou
     pas de nom pour ce perso, ou un nom que **le jeu ne met pas à jour** : son widget pas encore fait,
     ou le jeu met à jour les autres noms mais pas celui-là depuis plus de 30 images — 13/10, chez le
-    client 1, le perso d'un joueur arrivé après lui) : l'overlay écrit lui-même le **nom du perso** à la couleur du joueur,
+    client 1, le perso d'un joueur arrivé après lui ; ce perso, copie faite chez ce client sous un
+    autre handle que celui de l'hôte, est suivi par le handle de sa copie pour son cadre) : l'overlay écrit lui-même le **nom du perso** à la couleur du joueur,
     juste au-dessus de sa tête (projeté avec la caméra du jeu), encadré pour le perso principal.
   - L'ancien repère (curseur + nom du **joueur**) est retiré : il se superposait au nom du jeu.
   - Chaque machine (hôte et clients) colore les persos de tous les joueurs d'après le flux de carte

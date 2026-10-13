@@ -566,6 +566,10 @@ private:
     bool PostureHeld(const kc::Handle& h, kenshi::Character* c);
     std::unordered_map<kc::Handle, kc::Vec3, HandleHash> fallFrom_;  // client: where our copy stood when we made it fall
     std::unordered_map<kc::Handle, kc::Vec3, HandleHash> fallShift_; // client: where its body then lay, relative to that (x, z)
+    // client (0.3.4): the height of the floor our carrier stood on when it put this body down (the
+    // body is stood there before it falls, never at the host's shoulder-height reading: FallSpot)
+    std::unordered_map<kc::Handle, float, HandleHash> putDownFloor_;
+    std::unordered_map<kc::Handle, double, HandleHash> fallMissTold_;   // client: last "not put on its fall spot" line per body
     std::unordered_multimap<uint32_t, kc::Handle> bySerial_;          // this frame's characters by handle serial (FindMoved)
     bool bySerialBuilt_ = false;
     std::unordered_set<kc::Handle, HandleHash> carriedHere_;

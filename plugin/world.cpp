@@ -244,6 +244,8 @@ void KenshiWorld::ResetWorldBound() {
     destCheckAt_.clear();
     fallFrom_.clear();
     fallShift_.clear();
+    putDownFloor_.clear();
+    fallMissTold_.clear();
     lastDest_.clear();
     postureSince_.clear();
     postureFixed_.clear();
@@ -622,6 +624,13 @@ bool KenshiWorld::ReadyToFall(const kc::Handle& h, kenshi::Character* c, const k
     if (inPlace || (it != fallPrep_.end() && now - it->second.start >= kChase)) {
         if (!settled) return false;
         fallPrep_.erase(h);
+        // 0.3.4 (carry test 13/10, run 2): the teleports did not put it there (the game put it on
+        // the navmesh nearest to that point): it falls where it stands, said once in 10 s per body
+        if (!inPlace && now - fallMissTold_[h] > 10.0) {
+            fallMissTold_[h] = now;
+            Log("posture: %s falls %.1f units from its fall spot (%.1f,%.1f,%.1f): the game kept it at (%.1f,%.1f,%.1f)", KeyOf(h).c_str(),
+                Dist(local, at.pos), at.pos.x, at.pos.y, at.pos.z, local.x, local.y, local.z);
+        }
         // 0.3.4: the ragdoll about to start does so where the body's scene node is, which a teleport
         // does not move (a body stood up on the ground keeps it where it lay): put on the body first
         if (kc::Vec3 p; kenshi::GetPosition(c, p)) {
@@ -647,6 +656,10 @@ kc::EntityState KenshiWorld::FallSpot(const kc::Handle& h, const kc::EntityState
         at.pos.x -= s->second.x;
         at.pos.z -= s->second.z;
     }
+    // put down from a carry: on the floor its carrier stood on, not at the host's shoulder-height
+    // reading (kc::motion::FallSpotHeight)
+    auto f = putDownFloor_.find(h);
+    at.pos.y = kc::motion::FallSpotHeight(at.pos.y, f != putDownFloor_.end(), f != putDownFloor_.end() ? f->second : 0.0f);
     return at;
 }
 
@@ -1124,6 +1137,7 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     kc::motion::NoteStanding(book, now);
     fallFrom_.erase(h);
     fallShift_.erase(h);
+    if (now - book.putDownAt > kc::motion::kPutDownGrace) putDownFloor_.erase(h);
 
     const float err = Dist(local, target.pos);
     // Far from our squad (beyond what the player sees) the local game hardly runs a character and
@@ -1692,15 +1706,25 @@ void KenshiWorld::ApplyCarry(const kc::Handle& h, bool carry, const kc::Handle& 
         postureBook_.erase(dropped);   // put down by the host: a new fall, whatever happened before
         fallFrom_.erase(dropped);
         fallShift_.erase(dropped);
+        // the floor our carrier stands on: the body is stood there before it falls (FallSpot)
+        kc::Vec3 carrierAt;
+        const bool carrierKnown = kenshi::GetPosition(c, carrierAt);
+        if (carrierKnown && !deadBody) putDownFloor_[dropped] = carrierAt.y;
+        else putDownFloor_.erase(dropped);
         // 0.3.4: once fallen here, corrected once if it lies more than 5 units from the host's body
         // (kc::motion::MayFineRelay; the carry test of 13/10 found it 12 units off)
         if (!deadBody) kc::motion::MarkPutDown(postureBook_[dropped], NowSeconds());
-        Log("carry: %s%s puts %s down as on the host; it falls where the host's lies (ragdoll %d)", carry ? "swaps and " : "", KeyOf(h).c_str(),
-            KeyOf(dropped).c_str(), body ? int(kenshi::IsRagdoll(body)) : -1);
+        kc::Vec3 bodyAt;
+        const bool bodyKnown = body && kenshi::GetPosition(body, bodyAt);
+        Log("carry: %s%s puts %s down as on the host; it falls where the host's lies (ragdoll %d, carrier at %.1f,%.1f,%.1f, body at %.1f,%.1f,%.1f)",
+            carry ? "swaps and " : "", KeyOf(h).c_str(), KeyOf(dropped).c_str(), body ? int(kenshi::IsRagdoll(body)) : -1,
+            carrierKnown ? carrierAt.x : 0.0f, carrierKnown ? carrierAt.y : 0.0f, carrierKnown ? carrierAt.z : 0.0f, bodyKnown ? bodyAt.x : 0.0f,
+            bodyKnown ? bodyAt.y : 0.0f, bodyKnown ? bodyAt.z : 0.0f);
     }
     if (carry && who && (!carrying || kenshi::Resolve(local) != who)) {
         // only once it really is on the shoulder is it left alone by posture and position code
         const bool ok = kenshi::CarryCharacter(c, who);
+        putDownFloor_.erase(carried);
         if (ok) { carriedHere_.insert(carried); carrierOf_[carried] = h; }
         else { carriedHere_.erase(carried); carrierOf_.erase(carried); }
         fallPrep_.erase(carried);

@@ -665,9 +665,12 @@ void hk_nameTagUpdate(void* tag, void* a2) {
     NameTagColour(want->second.owner, selected != 0, col);
     const uint32_t packed = PackColour(col);
     const bool gameSet = dirtyBefore != 0;
-    if (!gameSet && applied != g_tagApplied.end() && applied->second == packed) return;
     void *root = nullptr, *text = nullptr;
     if (!NameTagWidgets(tag, root, text)) return;
+    // 0.3.4: set once, kept while its text still has it; a colour put back by the game without its
+    // dirty flag (a character remade, its look applied) is given again at the next update
+    float now[4];
+    if (!gameSet && applied != g_tagApplied.end() && applied->second == packed && (!TextColourSEH(text, now) || PackColour(now) == packed)) return;
     if (!SetTextColourSEH(text, col)) {
         ++g_tagsFailed;
         return;
@@ -912,6 +915,13 @@ void UpdateMapScene(kc::Session& session, KenshiWorld& world, const Config& cfg,
             if (local && kenshi::GetPosition(local, lp)) {
                 sc.pos = lp;   // where it stands here, this frame (smooth)
                 sc.head = !sc.dead;
+                // 0.3.4 (map test 13/10, run 2): our copy's own handle, not the host's. A player who
+                // joined after us has a copy made here (KenshiWorld's alias), under another handle:
+                // resolved by the host's one, its tag was not found by the frames and the "tetes"
+                // reading (Joueur3 on client 1: label=jeu, tint=0, frame=0, while the update hook
+                // had coloured the right tag)
+                kc::Handle own;
+                if (kenshi::GetHandle(local, own)) h = own;
                 sc.local = h;
                 if (sc.avatar) avatarOwner[local] = c.owner;
                 // its name above its head: the game's own tag when the game really shows it
