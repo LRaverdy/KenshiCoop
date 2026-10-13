@@ -117,6 +117,8 @@ enum class Msg : uint8_t {
     // ---- animal shops (protocol 36)
     AnimalShop = 91,      // S->C  the animals a seller offers your character (the dialogue's "animals for sale?"): open its window
     AnimalBuy = 92,       // C->S  the animals the player chose in that window (none: closed without buying)
+    // ---- player statistics (0.3.5, no protocol change: older clients ignore an unknown type)
+    PlayerStats = 66,     // S->C  every player's statistics in this world (kc/player_stats.h), on join and every 10 s when they change
 };
 
 // World transfer limits (a Kenshi save is a few MB).

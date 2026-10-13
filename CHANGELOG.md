@@ -6,7 +6,7 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 ## v0.3.5 (en cours)
 
-Protocole inchangé (36).
+Protocole inchangé (36) : le nouveau message des stats est ignoré par un client 0.3.4.
 
 - **Rapport de bug en une commande (branche `bugreport`)**. Quand un ami tombait sur un bug, il
   fallait lui demander son `KenshiCoop.log` après coup. Désormais, n'importe quel joueur tape
@@ -33,6 +33,34 @@ Protocole inchangé (36).
   - Commandes de test : `bug <phrase>` (n'importe quelle machine, comme `/bug` tapé dans la console)
     et `buglast` (hôte : chemin du dernier rapport). Expérience `bugreport` dans
     `tools/coop_test.py`.
+
+- **Statistiques des joueurs, gardées d'une session à l'autre (branche `playerstats`)**. Demande :
+  « un système de stat persistant entre les sessions et accessible via l'UI classique de Kenshi ».
+  - **Où les voir** : un onglet **« JOUEURS »** ajouté à la fenêtre de gestion du jeu (celle de la
+    carte), avec l'habillage de l'onglet DIALOGUE : un bloc par joueur, son nom à sa couleur, en
+    ligne ou non, temps de jeu, sessions (première, dernière), distance parcourue, K.-O. subis,
+    morts, personnages, recrues, meilleure compétence, commerce (cats gagnés et dépensés), objets
+    fouillés, constructions et recherches lancées. L'hôte et les clients voient la même chose.
+  - **Comptées par l'hôte** (`common/src/session_stats.cpp`, logique pure dans
+    `common/include/kc/player_stats.h`) pour chaque joueur, reconnu par son compte Steam (la même clé
+    que pour lui rendre ses persos), l'hôte compris. La distance ignore les sauts (TP, resync : plus
+    de 200 unités par seconde de jeu) et les persos à terre. Le commerce, la fouille, les recherches
+    et les recrues de l'hôte lui-même ne passent pas par le mod : non comptés (pas affichés pour
+    lui). Ennemis mis K.-O. / tués et membres perdus : non comptés (pas de donnée fiable).
+  - **Gardées** dans `KenshiCoop_stats\<sauvegarde>.txt` (dossier de Kenshi, texte), écrit par
+    fichier temporaire puis renommage toutes les minutes, au départ d'un joueur et en fin de
+    session ; relu quand l'hôte héberge ce monde. Le nom suit la sauvegarde chargée (`SaveManager`
+    +0xB0) puis celle sous laquelle l'hôte sauvegarde. Un joueur qui revient continue ses totaux.
+  - **Réseau** : message `PlayerStats` (66, hôte → client), à l'arrivée puis toutes les 10 s s'ils
+    changent.
+  - **Interface** (`plugin/player_stats_ui.cpp`) : faite avec le MyGUI du jeu par ses exports
+    (`Widget::createWidgetRealT`, `Widget::setProperty`, `TabControl::findItemIndex`…), comme le
+    chargeur de mise en page du jeu fait ses onglets ; le `TabControl` est `ManagementScreen` +0x2D0.
+    Le gestionnaire d'onglets du jeu (`0x49BF90`) ne traite que les index 0 à 6 : le 8ᵉ ne le gêne
+    pas. L'onglet est recherché à chaque fois dans la fenêtre vivante (aucun pointeur gardé n'est
+    utilisé sans cette vérification) et refait si le jeu reconstruit la fenêtre.
+  - Commandes de test `pstats`, `pstatssave`, `pstatsui` ; expérience `playerstats` ; tests
+    `TestPlayerStats`, `TestPlayerStatsSession`. **Non vérifié en jeu.**
 
 ## v0.3.4 (13 octobre 2026)
 

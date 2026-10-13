@@ -137,6 +137,8 @@ void Session::HostWorkshopRequests() {
         const bool ok = world_.ExecuteResearchRequest(req, entities_[req.actorNetId].handle, why);
         log_("[" + who + "] research: " + ResearchWord(req.action) + " " + world_.TemplateName(req.sid) + (ok ? " -> done" : " -> refused: " + why));
         answer(from, Msg::ResearchRequest, req.seq, req.actorNetId, ok, why.empty() ? "Recherche refusée par l'hôte." : why);
+        if (ok && req.action == ResearchAction::Queue)
+            if (PlayerStats* st = StatsOf(from)) ++st->research;   // player statistics
         nextResearch_ = 0;    // everyone sees the result now
         nextInventory_ = 0;   // artifacts or a blueprint consumed
     }

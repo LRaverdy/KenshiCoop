@@ -122,12 +122,14 @@ bool Session::Host(std::string* err) {
     controllableDirty_ = true;
     nextInterest_ = 0;
     log_("hosting on UDP port " + std::to_string(cfg_.port));
+    StatsStart();   // player statistics: this world's file
     return true;
 }
 
 bool Session::Join(const std::string& address, uint16_t port, std::string* err, uint32_t mtu) {
     Leave();
     if (!net_.Connect(address, port, err, mtu)) return false;
+    clientStats_.clear();   // the last session's player statistics: this host sends its own
     state_ = SessionState::Connecting;
     lastError_.clear();
     connectStarted_ = clock_();
@@ -139,6 +141,14 @@ bool Session::Join(const std::string& address, uint16_t port, std::string* err, 
 void Session::Leave() {
     const bool wasActive = state_ != SessionState::Idle && state_ != SessionState::Failed;
     const bool roleWasSet = state_ == SessionState::Hosting || state_ == SessionState::Connected;
+    if (statsActive_) {   // player statistics: written, and the last view kept to show after the session
+        SavePlayerStatsNow("session end");
+        clientStats_ = playerStats();
+        statsActive_ = false;
+        statsBook_.Clear();
+        statsChars_.clear();
+    }
+    for (auto& s : clientStats_) { s.online = false; s.playerId = 0; }
     net_.Close();
     entities_.clear();
     byHandle_.clear();
@@ -318,6 +328,7 @@ void Session::HostTick(double now, bool live) {
     HostBuildings(now);
     HostFloors(now);   // fix G6
     HostJobs(now);   // fix G5
+    HostStats(now);   // player statistics
     // A player's new looks: applied here, then shown to everyone else.
     for (auto& [from, m] : pendingLooks_) {
         auto it = entities_.find(m.netId);
@@ -858,6 +869,7 @@ void Session::FinishJoin(RemotePlayer& p) {
     effectsFullAt_ = clock_() + 1.0;   // and every weather effect once that weather is in place
     AddChat("* " + p.name + " est dans la partie", "* " + p.name + " is in the world");
     squadsAt_ = -1e9;   // the newcomer gets the squads now
+    StatsJoined(p);     // player statistics: a session more for them; they get everyone's
     s.inGameAt = clock_();
     if (s.ownCreated && s.own.valid()) {
         // their turn in the character editor comes once everyone who arrived before them is done
@@ -2117,6 +2129,7 @@ void Session::RecruitJoined(Entity& e, const PendingRecruit& r) {
     auto pl = players_.find(rec.player);
     if (pl == players_.end()) return;
     log_("a new squad character (" + world_.CharacterNameOf(e.handle) + ") goes to " + pl->second.name + ", who recruited it");
+    if (PlayerStats* st = StatsOf(rec.player)) ++st->recruits;   // player statistics
     controllableDirty_ = true;
     if (rec.player != hostId_) AnimalFollowsOwner(e.handle, rec.player);   // a bought animal: into the buyer's squad, not the host's
     if (rec.editor && pl->second.inGame) {   // the game wanted its editor: on that player's screen
@@ -2612,7 +2625,11 @@ void Session::HostInvOp(uint8_t from, const InvOp& op, const InvOp* swapWith) {
     }
     // the world says what it did ("client item move done" / "refused: <why>" / "not done: inventory
     // not found here")
-    world_.ExecuteInvOp(src->second.handle, dst->second.handle, op);
+    const bool moved = world_.ExecuteInvOp(src->second.handle, dst->second.handle, op);
+    // player statistics: an item taken from a chest, a body or an animal into their own inventory
+    auto ours = [&](const Entity& e) { const Entity* w = Wearer(e); return w && !w->container && w->squad && w->owner == from; };
+    if (moved && ours(dst->second) && !ours(src->second))
+        if (PlayerStats* st = StatsOf(from)) st->itemsLooted += uint32_t(std::max(1, op.item.quantity));
     // Whatever happened, everyone (the requester first) gets the real state of both inventories.
     src->second.invHash = 0;
     dst->second.invHash = 0;
@@ -2677,6 +2694,10 @@ void Session::HostTradeOp(uint8_t from, const InvOp& op) {
     log_("[" + who + "] " + (buying ? "buys " : "sells ") + world_.TemplateName(op.item.templateSid) + " x" + std::to_string(op.item.quantity) +
          (buying ? " from " : " to ") + world_.CharacterNameOf(trader->second.handle) + " for " + std::to_string(buying ? op.price : -op.price) +
          " cats" + (paid ? "" : " (PAYMENT FAILED)"));
+    if (PlayerStats* st = paid ? StatsOf(from) : nullptr) {   // player statistics: the cats of their trades
+        if (buying) st->cashSpent += op.price;
+        else st->cashEarned += -int64_t(op.price);
+    }
     src->second.invHash = 0;
     dst->second.invHash = 0;
     moneyAt_ = -1e9;
@@ -4077,6 +4098,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
     case Msg::JobState: ClientJobStatePacket(r); break;
     case Msg::SquadState: ClientSquadStatePacket(r); break;
     case Msg::Shots: case Msg::Ranged: ClientRangedPacket(type, r); break;   // lot C
+    case Msg::PlayerStats: ClientStatsPacket(r); break;
     case Msg::Result: {   // the host's answer to one of our requests
         Result m;
         if (Decode(r, m)) OnResult(m);
@@ -4118,6 +4140,7 @@ void Session::OnDisconnect(PeerId peer) {
         log_(name + " disconnected (" + (kicked ? "removed" : "left, or connection lost: game closed, crashed or network cut") +
              "): cleaning up after them");
     ForgetPlayer(id);
+    SavePlayerStatsNow("a player left");
     Writer w;
     Encode(w, PlayerLeft{id});
     BroadcastReliable(w, false);

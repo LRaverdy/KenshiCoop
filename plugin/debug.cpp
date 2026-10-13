@@ -16,6 +16,7 @@
 
 #include "hooks.h"
 #include "map.h"
+#include "player_stats_ui.h"
 #include "ranged.h"
 #include "steam_link.h"
 #include "kenshi.h"
@@ -184,6 +185,37 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         o << " ;";
         for (const auto& t : m.threats) o << " threat:kind=" << int(t.kind) << ":n=" << int(t.count) << ":x=" << t.pos.x << ":z=" << t.pos.z;
         return o.str();
+    }
+    // ---- player statistics (0.3.5, exp_playerstats)
+    if (cmd == "pstats") {   // pstats: every player's statistics as this machine has them (host: counted; client: received)
+        std::ostringstream o;
+        o.setf(std::ios::fixed);
+        o.precision(1);
+        const auto all = s.playerStats();
+        o << "ok n=" << all.size() << " version=" << s.playerStatsVersion() << " world=\"" << w.StatsWorldName() << "\" ;";
+        for (const auto& p : all) {
+            std::string n = p.name;
+            for (char& ch : n) if (ch == ' ' || ch == '=' || ch == ';' || ch == ':' || (unsigned char)ch < 32) ch = '_';
+            std::string key = p.key;   // "steam:<id>" -> "steam-<id>" (':' separates the fields here)
+            for (char& ch : key) if (ch == ':' || ch == ' ' || ch == ';') ch = '-';
+            o << ' ' << (n.empty() ? "-" : n) << ":key=" << key << ":host=" << p.host << ":online=" << p.online << ":id=" << int(p.playerId)
+              << ":play=" << p.playSeconds << ":sessions=" << p.sessions << ":dist=" << p.distance << ":ko=" << p.knockouts << ":deaths=" << p.deaths
+              << ":chars=" << p.characters << ":recruits=" << p.recruits << ":earned=" << p.cashEarned << ":spent=" << p.cashSpent
+              << ":looted=" << p.itemsLooted << ":builds=" << p.buildings << ":research=" << p.research << ":best=" << p.bestSkill;
+        }
+        return o.str();
+    }
+    if (cmd == "pstatssave") {   // pstatssave: host: write this world's statistics file now; its path
+        if (!s.SavePlayerStatsNow("debug command")) return "err not hosting, or not written";
+        const std::wstring path = w.PlayerStatsPath();
+        char b[1024];
+        WideCharToMultiByte(CP_UTF8, 0, path.c_str(), -1, b, sizeof(b), nullptr, nullptr);
+        return std::string("ok ") + b;
+    }
+    if (cmd == "pstatsui") {   // pstatsui [state|select|text]: the JOUEURS tab of the management window
+        std::string what;
+        in >> what;
+        return PlayerStatsUi(what);
     }
     if (cmd == "mapconv") return DescribeMapConversion();   // mapconv: MyGUI view -> back buffer -> display, frames read now and drawn
     if (cmd == "mapui") {   // mapui open|close|maptab|state: the game's map screen, through its MAP button

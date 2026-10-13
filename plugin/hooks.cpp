@@ -1647,6 +1647,10 @@ void hk_saveManagerSave(void* sm, void* name, bool autosave) {
         Log("client: the game's %s refused (the world is the host's: it must not overwrite a save of this player)", autosave ? "autosave" : "save");
         return;
     }
+    // player statistics (0.3.5): saved under another name, the world takes its statistics along
+    std::string saveName;
+    if (!autosave && name && kenshi::ReadStdString(name, saveName))
+        if (KenshiWorld* w = TheWorld()) w->NoteHostSave(saveName);
     o_saveManagerSave(sm, name, autosave);
 }
 
