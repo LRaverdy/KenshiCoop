@@ -4996,7 +4996,12 @@ def exp_tpdown(host, cli):
     log("host's tp lines:", " | ".join(l.split("  ", 1)[-1] for l in hl.splitlines() if " tp: " in l)[-900:])
     check("TP admin (perso a terre) : il arrive pres de l'hote", dist(sent_to, pc) < 30,
           f"{dist(sent_to, pc):.1f} de l'endroit vise, {dist(p0, pc):.1f} du membre 0 maintenant")
-    check("TP admin (perso a terre) : le client le voit au meme endroit", dist(pc, pcc) < 3, f"{dist(pc, pcc):.2f}")
+    # 0.3.4: each game lays its own ragdoll. The client stands its copy on the host's spot as soon as
+    # it sees the TP (17:08:49.94, before the host's body lay down at ~50.2) and lets it fall there;
+    # the host's body then collapsed 4.9 units from where it stood (24853.7,10543.7 -> 24849.3,10541.2),
+    # the copy its own way: 3.17 (16:28) and 5.79 (17:08). A knocked-out body is stood up again only
+    # beyond kc::motion::kRelayOffset (20), as in the suite's lying check
+    check("TP admin (perso a terre) : le client le voit au meme endroit", dist(pc, pcc) < 20, f"{dist(pc, pcc):.2f}")
     summary()
 
 
@@ -5553,14 +5558,23 @@ def exp_suite(host, cli):
     time.sleep(3)
     p0, pc = vec(cmd(host, "where 0")[1]), vec(cmd(host, f"where {own}")[1])
     pcc = vec(cmd(cli, f"where {own}")[1])
-    check("TP admin : le perso du joueur arrive pres de l'hote", dist(sent_to, pc) < 30,
-          f"{dist(sent_to, pc):.1f} de l'endroit vise, {dist(p0, pc):.1f} du membre 0 maintenant")
+    # 0.3.4 (13/10 17:07): the save's fights move the squad right after the TP. Member 0 walked 28.6
+    # units in 3 s, the player's character with it, the same way (38.2 from the target, 11.7 from
+    # member 0); member 3 was bleeding 20 s later and member 0 knocked out at 40 s. Next to member 0
+    # where it is now counts as arrived too.
+    squad_moved = dist(sent_to, p0) > 10
+    check("TP admin : le perso du joueur arrive pres de l'hote", dist(sent_to, pc) < 30 or (squad_moved and dist(p0, pc) < 30),
+          f"{dist(sent_to, pc):.1f} de l'endroit vise, {dist(p0, pc):.1f} du membre 0 maintenant"
+          f"{' (membre 0 a bouge de %.1f)' % dist(sent_to, p0) if squad_moved else ''}")
     # knocked out in the save's fights, it lies there again: each game lays its own ragdoll (a body is
-    # stood up to fall again only beyond kc::motion::kRelayOffset, 20 units)
+    # stood up to fall again only beyond kc::motion::kRelayOffset, 20 units). Walking with the squad,
+    # host and client positions are read a moment apart (17:07: 4.02 while both walked ~10 units/s)
     vt = cmd(host, f"vitals {own}")[1]
     m = re.search(r"flags=(\d+)", vt)
     lying = bool(m and int(m.group(1)) & 3)
-    check("TP admin : le client le voit au meme endroit", dist(pc, pcc) < (20 if lying else 2), f"{dist(pc, pcc):.2f}{' (couche)' if lying else ''}")
+    tol = 20 if lying else (10 if squad_moved else 2)
+    check("TP admin : le client le voit au meme endroit", dist(pc, pcc) < tol,
+          f"{dist(pc, pcc):.2f}{' (couche)' if lying else (' (en marche)' if squad_moved else '')}")
     # --- 9. host console and logs from the client
     cw = cmd(host, "consolewin")[1]
     check("console externe : ouverte chez l'hote avec le journal", "window" in cw and int(cw.split("log=")[1]) > 100, cw)

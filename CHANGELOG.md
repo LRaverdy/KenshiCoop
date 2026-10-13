@@ -34,6 +34,19 @@ Protocole inchangé (36).
     se couchait (24853,7 / 10541,8), puis le corps de l'hôte a encore glissé de 3,8 unités en
     s'effondrant (24857,3 / 10542,7). C'est l'écart ordinaire d'un corps qui s'effondre. Rien ne
     change ici.
+  - Relancé à 17:05-17:09 avec ce correctif (`carry` 7/7, `workstations` 45/45). `tpdown` : chez
+    l'hôte, 2,8 de l'endroit visé, et plus de « away again » ni de « went back » : l'ancre tient. Chez
+    le client, 5,79. Il a mis sa copie debout sur la place de l'hôte à 49,94, avant que le corps de
+    l'hôte se couche (~50,2) et s'effondre de 4,9 unités (24853,7 / 10543,7 → 24849,3 / 10541,2).
+    La copie s'est couchée de son côté (à sa place à 0,5 près). Le seuil du test passe de 3 à 20,
+    `kc::motion::kRelayOffset` : un corps K.-O. n'est relevé qu'au-delà, comme pour la vérification
+    « couché » de `suite`.
+  - `suite` 30/32 : cette fois, le perso du joueur était debout (« tp: … moved »). La TP a réussi,
+    puis le membre 0 a marché 28,6 unités en 3 s, et le perso du joueur avec lui, dans le même sens
+    (38,2 de l'endroit visé, 11,7 du membre 0). C'est le combat de la sauvegarde : membre 3 blessé
+    à 17:07:25, membre 0 K.-O. à 17:07:46. Le client était à 4,02 pendant qu'ils marchaient. Si le
+    membre 0 a bougé de plus de 10, être à moins de 30 de lui compte comme arrivé. Le seuil du client
+    passe alors à 10 (2 à l'arrêt, 20 couché).
 
 - **Noms des joueurs arrivés plus tard et corps posé après un portage (tests `map` 48/50 et `carry`
   6/7, 13/10 13:45-14:00, branche `fix-tags-carry2`)**.
