@@ -600,6 +600,8 @@ bool ReadFloorGroup(const Character* c, int32_t& group);
 bool WriteFloorGroup(Character* c, int32_t group);
 // The game's own way to put a character on a floor group (>= 9): _setPositionAndTeleport(here, group - 9).
 bool PlaceOnFloor(Character* c, int32_t group);
+// The same at a given position (0.3.4: a copy put on the host's floor where the host's character stands).
+bool PlaceOnFloorAt(Character* c, const kc::Vec3& pos, int32_t group);
 bool GodMode(const void* c);   // tests: increaseStat on that stat
 bool CallSay(Character* c, const std::string& text);
 bool FocusCamera(Character* c);   // tests: the camera goes to that character

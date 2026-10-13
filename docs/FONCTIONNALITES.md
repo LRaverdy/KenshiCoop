@@ -260,9 +260,13 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   la surface sous ses pieds) au dernier vu et affiche le nouveau. Le jeu d'un client gardait le
   perso suivi de la partie chargée (celui de l'hôte) : le client le pointe sur un des siens (le
   sélectionné d'abord), sans bouger la caméra ; un double appui sur la touche d'escouade ou un
-  portrait reste le choix du joueur. L'hôte envoie toujours l'étage de chaque perso (message 71)
-  mais le client ne l'écrit plus (écriture désactivée : le jeu remettait sa valeur et un client a
-  planté après une rafale d'écritures). Expérience `floor`.
+  portrait reste le choix du joueur. L'hôte envoie toujours l'étage de chaque perso (message 71).
+  De la 0.3.0 à la 0.3.3 le client ne l'appliquait plus (écriture brute : le jeu remettait sa valeur
+  et un client a planté après une rafale d'écritures). 0.3.4 : une copie qui se trouve à un autre
+  étage que le perso de l'hôte (même place, plus de 20 unités plus haut ou plus bas : une doublure
+  créée à l'étage reste au rez-de-chaussée, 83 unités plus bas dans `farfps`) est replacée par la
+  fonction du jeu (`_setPositionAndTeleport` avec l'étage), à la place de l'hôte, 3 fois au plus par
+  valeur. Expérience `floor`, point « positions identiques » de `farfps`.
 - **Caméra libre** (0.3.2) : ce perso suivi est aussi celui que la caméra suit, et le jeu le lâche
   dès que le joueur bouge la caméra. Le mod 0.3.1 le reprenait toutes les 0,5 s : la caméra d'un
   client « allait partout ». Il n'est plus posé qu'une fois après le chargement (ou s'il revient sur

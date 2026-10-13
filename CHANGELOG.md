@@ -8,6 +8,39 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 Protocole inchangé (36).
 
+- **Loin de l'hôte : marcheur qui va « dans tous les sens » et PNJ un étage plus bas chez un client
+  (`farfps --clients 3`, 13/10, 42/44)**. Les deux échecs existaient **avant** la 0.3.4 : le relevé
+  `farfps` du 12/10 à 02:51 (avant le gel des copies en sommeil, `2ec4fda`) avait déjà une marche à
+  reculons (J2, 140°) et un PNJ 65,9 unités plus haut (J3, étages 9/10). Les persos en cause ne sont
+  pas des copies en sommeil (à 250-535 unités du perso du client, envoyés). Pas une régression.
+  - *Marche dans tous les sens* (J3, Bouclier d'Okran, 15 pas à reculons sur 46 pour un Grand Paladin,
+    1 à 5 pour ses 9 suivants) : chez l'hôte, ce chef de patrouille « marchait » (vitesse 12 à 15,
+    destination à 3800 unités) **sans avancer** : même place à 0,4 unité près sur 24 s (relevés de
+    14:14:27, :37, :51), regard qui change d'un relevé à l'autre, ses 14 suivants piétinant autour. Notre
+    copie marchait vers un point 60 unités devant, dans une direction tirée des petits écarts de
+    l'hôte, donc différente à chaque échantillon, pendant que le rappel la ramenait : elle allait dans
+    tous les sens dans un carré de 8 unités (relevé à 10 Hz). Maintenant une copie dont le perso de
+    l'hôte « marche » sans avancer (moins de 1,5 unité nette en 1 s) reste debout à sa place, tournée
+    comme lui ; elle repart dès que l'hôte avance (`kc::motion::NoteHeadway`). Journal « motion: the
+    host's … gets nowhere: ours stands on its spot » / « walks on again ». Pourquoi le jeu de l'hôte
+    bloque ce chef (loin de sa caméra) n'est pas cherché ici.
+  - *Un étage plus bas* (J4, Poing d'Okran, deux Paladins 82,9 et 78,0 unités sous ceux de l'hôte
+    pendant tout le test) : debout à l'étage chez l'hôte (groupe d'étage 10), au rez-de-chaussée chez
+    le client (groupe 9). Ce sont des doublures créées par le client à la place de l'hôte : elles
+    gardent le groupe du rez-de-chaussée, et un perso ne tient que sur les surfaces de son groupe ;
+    chaque position écrite (même la téléportation, faite à chaque image au-delà de 15 unités, qui ne
+    touche pas au groupe) la faisait retomber. Le groupe envoyé par l'hôte (message 71) n'était plus
+    appliqué depuis la 0.3.0 (écriture brute remise par le jeu, plantage après une rafale) ; la
+    version par la fonction du jeu (fix G7) était restée coupée. Elle est remise, seulement pour une
+    copie qui est vraiment à un autre étage que celle de l'hôte (même place au sol à 10 unités près,
+    plus de 20 unités au-dessus ou au-dessous, debout, ni au lit, ni en cage, ni portée ;
+    `kc::motion::FloorFixWanted`) : `_setPositionAndTeleport(place de l'hôte, étage)` du jeu, jamais
+    d'écriture brute ; vérifié 2 fois par seconde au plus, 2 s entre deux placements, 3 par valeur
+    de l'hôte. Journal « floor: … put on the host's floor at its spot », « stands on the host's floor
+    now », « … after 3 placements: left to the game ».
+  - Commande `copyfix` (étages placés, marcheurs immobiles vus), écrite par `farfps`/`faraway` après
+    le relevé de mouvement. Tests unitaires `TestMotion` (4c, 4d). **Pas relancé en jeu.**
+
 - **Noms au-dessus des têtes : le perso d'un joueur arrivé plus tard (test `map`, 13/10, 48/50)**.
   Chez le client 1, le nom du perso principal du client 2 (arrivé après lui) n'était ni à sa couleur
   (`tint=0`) ni encadré, de son arrivée (10:29:54) à la fin du test (10:30:41) : le jeu de ce client

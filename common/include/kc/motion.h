@@ -238,6 +238,53 @@ inline Vec3 Pull(const Vec3& local, const Vec3& target, const Vec3& travel, cons
     return {local.x + d.x * k, local.y + d.y * k, local.z + d.z * k};
 }
 
+// ---------------------------------------------------------------- floors
+// 0.3.4 (farfps 13/10, client J4 at Okran's Fist; already on 12/10 at Okran's Shield): two paladins
+// standing upstairs on the host (floor group 10, y 1556) stood 83 units lower on the client, on the
+// ground floor (group 9), for the whole test: the stand-ins were made there with the ground floor's
+// group, and a character only stands on the surfaces of its own floor group, so every position
+// written to it (even a teleport, which leaves the group alone) dropped it back down. Its group is
+// set with the game's own placement (_setPositionAndTeleport(host's spot, floor)) when the host's
+// character has another floor group (one with a floor number: >= 9) and ours stands well above or
+// below it at the same place. Never a body, a held one (bed, cage, shoulder) or one that is not
+// where the host's is on the ground (the pull and the walk settle that first).
+constexpr float kFloorGap = 20.0f;       // units above or below: another floor (a floor is ~80 high)
+constexpr float kFloorSamePlace = 10.0f; // units apart on the ground at most
+inline bool FloorFixWanted(int hostGroup, int localGroup, const Vec3& hostPos, const Vec3& localPos, bool down, bool held) {
+    if (hostGroup < 9 || hostGroup > 255 || hostGroup == localGroup || down || held) return false;
+    return Dist2(hostPos, localPos) <= kFloorSamePlace && std::fabs(hostPos.y - localPos.y) > kFloorGap;
+}
+
+// ---------------------------------------------------------------- walkers that get nowhere
+// 0.3.4 (farfps 13/10, client J3 at Okran's Shield): the host's game had a patrol leader "walking"
+// (moving flag, speed 12-15, destination 3800 units away) that stayed on the same spot for 24 s,
+// its facing changing from one sample to the next, its 14 followers shuffling around it. Our copy
+// walked toward a point 60 units ahead along a way that changed every sample while the pull held
+// it on the host's spot: it went in every direction within 8 units, walking backwards 15 times in
+// 5 s (as did its followers). A copy whose host character makes no headway is not walking: it
+// stands on the host's spot (the pull keeps any small move), facing the host's way.
+// Headway is the host's net displacement (newest sample) over the last kStallWindow seconds; a
+// walk that has just started (less history than that) is never "stalled".
+struct Headway {
+    std::deque<std::pair<double, Vec3>> s;   // (time, host position), oldest first
+    bool stalled = false;
+};
+constexpr double kStallWindow = 1.0;       // seconds of history looked at
+constexpr float kStallDistance = 1.5f;     // net units over that time below which it gets nowhere
+inline bool NoteHeadway(Headway& hw, double now, const Vec3& hostPos, bool hostMoving) {
+    if (!hostMoving) {
+        hw.s.clear();
+        hw.stalled = false;
+        return false;
+    }
+    if (hw.s.empty() || now - hw.s.back().first >= 0.05) hw.s.emplace_back(now, hostPos);
+    else hw.s.back().second = hostPos;
+    // keep one sample at least kStallWindow old, drop the older ones
+    while (hw.s.size() > 2 && now - hw.s[1].first >= kStallWindow) hw.s.pop_front();
+    hw.stalled = now - hw.s.front().first >= kStallWindow && Dist3(hw.s.front().second, hostPos) < kStallDistance;
+    return hw.stalled;
+}
+
 // ---------------------------------------------------------------- posture (lying / standing)
 // Our copy lies where and when the host's does. Each body keeps a book of what was done to it, so
 // that a correction that does not take (the game puts the body back as it was: a shackled captive

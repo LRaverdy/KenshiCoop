@@ -5289,6 +5289,13 @@ bool PlaceOnFloor(Character* c, int32_t group) {
     return CallSetPosFloor(FnAddr(FnCMSetPositionAndTeleport), m, v, group - 9);
 }
 
+bool PlaceOnFloorAt(Character* c, const kc::Vec3& pos, int32_t group) {
+    void* m = Movement(c);
+    if (!m || group < 9 || !Finite(pos)) return false;
+    const float v[3] = {pos.x, pos.y, pos.z};
+    return CallSetPosFloor(FnAddr(FnCMSetPositionAndTeleport), m, v, group - 9);
+}
+
 // ---- fix G5: selection kept, job lists
 namespace {
 using FnIntOfConst = int (*)(const void* self);

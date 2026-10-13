@@ -6113,6 +6113,43 @@ static void TestMotion() {
         CHECK(PausedState(buf).pos.x == 2.3f);
         CHECK(PausedState(std::deque<Sample>{}).pos.x == 0.0f);
     }
+    // 4c. 0.3.4 (farfps 13/10, J3): a host walker that gets nowhere (patrol leader "walking" on one
+    // spot for 24 s, facing changing every sample) is not walked by our copy; a real walk is, from its
+    // first step; a walk that starts again ends the stall
+    {
+        Headway hw;
+        CHECK(!NoteHeadway(hw, 0.0, Vec3{0, 0, 0}, true));
+        CHECK(!NoteHeadway(hw, 0.5, Vec3{0.4f, 0, 0.3f}, true));    // under a second of history: not yet
+        bool stalled = false;
+        for (int i = 0; i <= 40; ++i)                                // 2 s of jitter within a unit
+            stalled = NoteHeadway(hw, 0.5 + 0.05 * i, Vec3{(i % 2) ? 0.5f : -0.4f, 0, (i % 3) ? 0.3f : -0.2f}, true);
+        CHECK(stalled && hw.stalled);
+        CHECK(hw.s.size() <= 25);                                    // only about a second is kept
+        CHECK(!NoteHeadway(hw, 2.6, Vec3{3, 0, 0}, true));           // on its way again: walks at once
+        CHECK(!NoteHeadway(hw, 2.7, Vec3{3, 0, 0}, false));          // stopped: nothing kept
+        CHECK(hw.s.empty() && !hw.stalled);
+        Headway walk;                                                // a slow walker (4.5 u/s) is never stalled
+        bool any = false;
+        for (int i = 0; i <= 60; ++i) any = NoteHeadway(walk, 0.05 * i, Vec3{4.5f * 0.05f * i, 0, 0}, true) || any;
+        CHECK(!any);
+        Headway stand;                                               // standing: never "stalled"
+        for (int i = 0; i <= 60; ++i) any = NoteHeadway(stand, 0.05 * i, Vec3{0, 0, 0}, false) || any;
+        CHECK(!any);
+    }
+    // 4d. 0.3.4 (farfps 13/10, J4: two copies 83 units under the host's, floor group 9 against 10):
+    // a copy standing on another floor than the host's is put on the host's floor, only then
+    {
+        const Vec3 up{100, 1556, 50}, below{100, 1473, 50}, beside{103, 1473, 52}, away{140, 1473, 50};
+        CHECK(FloorFixWanted(10, 9, up, below, false, false));       // the farfps case
+        CHECK(FloorFixWanted(9, 10, below, up, false, false));       // 12/10: 66 units above, host on the ground floor
+        CHECK(FloorFixWanted(10, 9, up, beside, false, false));
+        CHECK(!FloorFixWanted(10, 10, up, below, false, false));     // same group: the height is not the floor's
+        CHECK(!FloorFixWanted(2, 10, up, below, false, false));      // the host outdoors: no floor number to set
+        CHECK(!FloorFixWanted(10, 9, up, Vec3{100, 1545, 50}, false, false));   // 11 units: stairs, a slope
+        CHECK(!FloorFixWanted(10, 9, up, away, false, false));       // not at the host's spot yet: the pull first
+        CHECK(!FloorFixWanted(10, 9, up, below, true, false));       // a body
+        CHECK(!FloorFixWanted(10, 9, up, below, false, true));       // in a bed, a cage, on a shoulder
+    }
     // 5. the pull: never backwards against the walk (a little ahead: held back gently, still going
     // forwards), sideways and standing errors corrected, the same at any frame rate
     {
