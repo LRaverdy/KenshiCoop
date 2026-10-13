@@ -1157,7 +1157,16 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     // Far off (late join, lag spike, teleport on the host): snap straight to the host state. Also
     // once after a zone resync (0.3.1), whatever the offset.
     const bool resync = !resyncSnap_.empty() && resyncSnap_.erase(h) > 0 && err > 1.0f;
-    if (err > cfg_.snapDistance || resync) {
+    // 0.3.4 (second farfps run, 13/10 15:09): a copy whose floor the game would not take (3 placements
+    // on the host's floor, put back on its own each time) stood 79 units under the host's at its
+    // spot and was teleported there every frame for nothing (the game dropped it back each time).
+    // Only the ground position is followed then: no teleport, no pull up or down.
+    bool otherFloor = false;
+    if (err > cfg_.snapDistance && kc::motion::Dist2(local, target.pos) <= kc::motion::kFloorSamePlace) {
+        auto ft = floorTry_.find(h);
+        otherFloor = ft != floorTry_.end() && ft->second.tries >= 3;
+    }
+    if ((err > cfg_.snapDistance && !otherFloor) || resync) {
         kenshi::Teleport(c, target.pos, target.rot);
         lastDest_.erase(h);
         return;
@@ -1287,7 +1296,8 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         pp.gameSpeed = haveHostTime_ ? std::max(1.0f, hostTime_.speed) : 1.0f;
         pp.moving = hostMoving;
         pp.combat = fighting;
-        kenshi::SetPositionSimple(c, kc::motion::Pull(local, target.pos, travel, pp));
+        const kc::Vec3 to = otherFloor ? kc::Vec3{target.pos.x, local.y, target.pos.z} : target.pos;
+        if (!otherFloor || kc::motion::Dist2(local, to) > 0.01f) kenshi::SetPositionSimple(c, kc::motion::Pull(local, to, travel, pp));
     }
     if (traceFrames > 0 && h == traceHandle && (--traceFrames % 15 == 0 || err > 1.0f || (haveHostTime_ && hostTime_.paused))) {
         kc::Vec3 after;

@@ -265,23 +265,36 @@ inline bool FloorFixWanted(int hostGroup, int localGroup, const Vec3& hostPos, c
 // stands on the host's spot (the pull keeps any small move), facing the host's way.
 // Headway is the host's net displacement (newest sample) over the last kStallWindow seconds; a
 // walk that has just started (less history than that) is never "stalled".
+// Second farfps run (13/10 15:12, same leader): with a single 1.5-unit threshold the leader's 0.3 to
+// 2.0 units per second flipped the copy between standing and walking several times a second
+// ("walks on again" / "gets nowhere" 0.05 to 0.3 s apart), each walk toward a new point 60 units off
+// in another direction: still 5 backward steps (up to 6 units in 0.1 s). Hysteresis now: stalled
+// below 2 units net in a second, walking again only beyond 4 units net (a real walker passes them in
+// a quarter to half a second), and a stalled walker that stops for less than 2 s stays stalled when
+// it "walks" again.
 struct Headway {
     std::deque<std::pair<double, Vec3>> s;   // (time, host position), oldest first
     bool stalled = false;
+    double stoppedAt = -1e9;                 // when the host's character last stood (moving flag off)
 };
 constexpr double kStallWindow = 1.0;       // seconds of history looked at
-constexpr float kStallDistance = 1.5f;     // net units over that time below which it gets nowhere
+constexpr float kStallDistance = 2.0f;     // net units over that time below which it gets nowhere
+constexpr float kUnstallDistance = 4.0f;   // net units (since the oldest kept sample) to walk again
+constexpr double kStallMemory = 2.0;       // seconds standing after which a stall is forgotten
 inline bool NoteHeadway(Headway& hw, double now, const Vec3& hostPos, bool hostMoving) {
     if (!hostMoving) {
+        if (!hw.s.empty() || hw.stoppedAt < -1e8) hw.stoppedAt = now;
         hw.s.clear();
-        hw.stalled = false;
+        if (now - hw.stoppedAt > kStallMemory) hw.stalled = false;
         return false;
     }
     if (hw.s.empty() || now - hw.s.back().first >= 0.05) hw.s.emplace_back(now, hostPos);
     else hw.s.back().second = hostPos;
     // keep one sample at least kStallWindow old, drop the older ones
     while (hw.s.size() > 2 && now - hw.s[1].first >= kStallWindow) hw.s.pop_front();
-    hw.stalled = now - hw.s.front().first >= kStallWindow && Dist3(hw.s.front().second, hostPos) < kStallDistance;
+    const float net = Dist3(hw.s.front().second, hostPos);
+    if (hw.stalled) hw.stalled = net <= kUnstallDistance;
+    else hw.stalled = now - hw.s.front().first >= kStallWindow && net < kStallDistance;
     return hw.stalled;
 }
 

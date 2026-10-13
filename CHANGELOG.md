@@ -66,7 +66,36 @@ Protocole inchangé (36).
     de l'hôte. Journal « floor: … put on the host's floor at its spot », « stands on the host's floor
     now », « … after 3 placements: left to the game ».
   - Commande `copyfix` (étages placés, marcheurs immobiles vus), écrite par `farfps`/`faraway` après
-    le relevé de mouvement. Tests unitaires `TestMotion` (4c, 4d). **Pas relancé en jeu.**
+    le relevé de mouvement. Tests unitaires `TestMotion` (4c, 4d).
+  - **Deuxième essai (`farfps --clients 3`, 13/10 15:05-15:12, 38/44)** :
+    - *Marche à reculons (J3, même chef de patrouille)* : la détection marchait (« gets nowhere », 62
+      lignes chez J3, `copyfix` stalled=233) mais basculait : l'hôte faisait 0,3 à 2,0 unités par
+      seconde autour du seuil de 1,5, d'où « walks on again » / « gets nowhere » 0,05 à 0,3 s
+      d'intervalle (15:12:00.497 à .921, pendant le relevé), chaque reprise lançant la copie vers un
+      autre point à 60 unités : 5 pas à reculons (jusqu'à 6,1 unités en 0,1 s). Maintenant avec
+      hystérésis : immobile sous 2 unités nettes en 1 s, repart seulement au-delà de 4 ; un arrêt de
+      moins de 2 s garde l'état.
+    - *Un étage plus bas (J4)* : le placement a bien eu lieu (`copyfix` floors=11) et a tenu pour
+      d'autres copies (« stands on the host's floor now »), mais pour les deux Paladins en cause le jeu
+      du client remet le groupe 9 dans la demi-seconde, trois fois de suite (« after 3 placements:
+      left to the game », 15:09:18 et 15:09:33) : à cet endroit le jeu du client ne trouve pas de sol
+      d'étage sous eux. Chez l'hôte ils sont hors de sa vue (`inview=0`), immobiles au même point
+      d'un essai à l'autre (-9427,3 / 1523,4 / -77169,6), regard tourné vers le bas (y -0,45 et -0,6) :
+      vraisemblablement la place de la sauvegarde, que la mise à jour réduite de l'hôte ne recalcule
+      pas. **Non résolu** (à vérifier caméra de l'hôte sur place). Ces copies-là étaient en plus
+      téléportées à chaque image (écart de 79 > 15) sans effet : une copie dont le jeu refuse l'étage
+      ne suit plus que la position au sol (ni téléportation, ni rappel en hauteur).
+    - *J2 Admag, 3,2 unités* : un marcheur exactement à la place x,z de l'hôte, 3,2 unités plus bas
+      (sol 2/2, hors de la vue des deux jeux ; déjà +3,0 le 12/10). La hauteur d'un marcheur loin de
+      la caméra de l'hôte est celle de sa mise à jour réduite, le client le pose sur son sol. Le test
+      compare maintenant un perso debout au sol (3,0) et en hauteur à part (6,0 ; un étage fait ~80).
+    - *FPS (144->125, 131->119, 174->152)* : **pas notre travail par image** : 0,61/0,68, 0,77/0,76,
+      0,58/0,62 ms entre les deux fenêtres (+0,07 ms au plus), alors que l'image prend 0,8 à 1,1 ms
+      de plus ; l'hôte, que ce code ne touche pas, perd aussi (112 -> 105 fps), et les quatre jeux ont
+      le même à-coup dans la fenêtre « correctif » (pire image 163-179 ms, contre 18-43 avant). Toute
+      la machine était plus lente cette fois (« ensemble » 163-189 fps contre 195 au premier essai).
+      Retiré quand même : la téléportation à chaque image des copies dont l'étage est refusé.
+    **Pas relancé en jeu.**
 - **Animal acheté par un client : il rejoint enfin l'escouade (test `animalshop`, en échec depuis la
   0.3.3, 13/10 9/10)**. Cause trouvée dans le jeu (désassemblage 1.0.68) : le `confirm()` de la
   boutique d'animaux, que l'hôte exécute pour l'achat d'un client, finit par

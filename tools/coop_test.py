@@ -3052,6 +3052,11 @@ FAR_NOT_TOWNS = ("camp", "nest", "ruin", "lair", "hideout", "den", "tower", "ban
 FAR_MIN = 30000          # the client's character at least that far from the host's squad
 FAR_ZONE = 3000          # sync compared within that distance of the client's character
 FAR_POS_TOL, FAR_DOWN_TOL = 3.0, 20.0
+# Height of a standing character, apart (0.3.4, farfps 13/10 15:12, J2 Admag: a walker at exactly the
+# host's x,z, 3.2 units under it on a slope; dy +3.0 already on 12/10): far from its camera the host's
+# game keeps its own idea of a walker's height, the client's stands it on its ground. Another floor is
+# ~80 units, so a floor error still fails.
+FAR_DY_TOL = 6.0
 FAR_CAM_NEAR = 5000      # the host's camera eye stays within that (x,z) distance of its own squad
 FAR_JUMP = 25.0          # a client sample moving more than that per 0.1 s is a teleport-like jump
 FAR_MOONWALK_DEG = 120.0
@@ -3336,7 +3341,8 @@ def far_zone_sync(players, round_label, rounds, gap):
                 down = int(near[k].get("flags", "0") or 0) & 12
                 e = dist(near[k]["pos"], cv["pos"])
                 errs.append(e)
-                if e > (FAR_DOWN_TOL if down else FAR_POS_TOL):
+                dy_abs = abs(cv["pos"][1] - near[k]["pos"][1])
+                if (e > FAR_DOWN_TOL) if down else (xz(near[k]["pos"], cv["pos"]) > FAR_POS_TOL or dy_abs > FAR_DY_TOL):
                     dy = cv["pos"][1] - near[k]["pos"][1]
                     off.append((k, round(e, 1), "a terre" if down else "debout", f"dy {dy:+.1f}", f"vue {near[k].get('inview', '?')}/{cv.get('inview', '?')}", f"etage {near[k].get('floor', '?')}/{cv.get('floor', '?')}",
                                 f"action {near[k].get('action', '?')}/{cv.get('action', '?')}", f"lit {near[k].get('in', '?')}/{cv.get('in', '?')}"))
@@ -3356,7 +3362,7 @@ def far_zone_sync(players, round_label, rounds, gap):
         a, name = acc[p.tag], (p.town["name"] if p.town else "?")
         p.check(f"synchro {name} : des PNJ autour du perso du client chez l'hote", min(a["sizes"]) >= 2, a["sizes"])
         p.check(f"synchro {name} : aucun PNJ manquant deux releves de suite", not a["persist"], sorted(a["persist"])[:5])
-        p.check(f"synchro {name} : positions identiques (debout {FAR_POS_TOL}, a terre {FAR_DOWN_TOL})", not a["off"],
+        p.check(f"synchro {name} : positions identiques (debout {FAR_POS_TOL} au sol et {FAR_DY_TOL} en hauteur, a terre {FAR_DOWN_TOL})", not a["off"],
                 f"pire ecart par releve {a['worst']} | {a['off'][:5]}")
         p.check(f"synchro {name} : memes vitaux (sang, etat, membres)", not a["vit"], a["vit"][:5])
 
