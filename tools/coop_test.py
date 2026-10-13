@@ -252,6 +252,15 @@ def parse_state(path):
     return st
 
 
+def entity_of(state, key):
+    """The session entity of that character handle in a parsed dump ("entity" is keyed by netId: a
+    lookup by handle found nothing, the animalshop owner check of 13/10 15:14 read None for owner=2)."""
+    for e in state["entity"].values():
+        if e.get("key") == key:
+            return e
+    return {}
+
+
 def dist(a, b):
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
@@ -969,9 +978,11 @@ def exp_dialogue(host, cli):
         return d
 
     def wait_open(want=True, seconds=15):
+        # an "err" answer is no state: "err no live world" while the client loads a zone (13/10
+        # 15:31:55, right after the teleport of step 5) was taken for a closed window
         d = dialog()
         for _ in range(int(seconds * 2)):
-            if (d.get("open") == "1") == want:
+            if not d["raw"].startswith("err") and (d.get("open") == "1") == want:
                 return d
             time.sleep(0.5)
             d = dialog()
@@ -1151,9 +1162,11 @@ def exp_npctalk(host, cli):
         return d
 
     def wait_open(want=True, seconds=15):
+        # an "err" answer is no state: "err no live world" while the client loads a zone (13/10
+        # 15:31:55, right after the teleport of step 5) was taken for a closed window
         d = dialog()
         for _ in range(int(seconds * 2)):
-            if (d.get("open") == "1") == want:
+            if not d["raw"].startswith("err") and (d.get("open") == "1") == want:
                 return d
             time.sleep(0.5)
             d = dialog()
@@ -6705,7 +6718,7 @@ def exp_pets(host, cli):
     log("host gives the animal to the client:", cmd(host, f"give 2 {idx}"))
     time.sleep(4)
     d = dump(host, "h_pet0")
-    owner = d["entity"].get(akey, {}).get("owner")
+    owner = entity_of(d, akey).get("owner")
     check("animaux : l'animal donne appartient au client", owner == "2", f"proprietaire {owner}")
     log("client moves its animal:", cmd(cli, f"moverel {idx} 20 0"))
     time.sleep(8)
@@ -6773,10 +6786,14 @@ def exp_animalshop(host, cli):
           f"hote {animals1_h} / client {animals1_c}")
     if n(animals1_h) > 0:
         akey = animals1_h.split()[-1].split(":", 1)[1].rsplit(":", 1)[0]
-        owner = dump(host, "h_animalshop")["entity"].get(akey, {}).get("owner")
+        owner = entity_of(dump(host, "h_animalshop"), akey).get("owner")
         check("animaux (boutique) : l'animal appartient au client", owner == "2", f"proprietaire {owner} ({akey})")
+    # the squad's positions (the bought animal included): the NPCs walking around are dumped a few
+    # tenths of a second apart on each side (13/10 15:14: 10 walkers at ~15 units/s, 4-9 units apart;
+    # it passed before only because the host's game was paused by the editor, see SellAnimals)
     rep = compare(dump(host, "h_animalshop2"), dump(cli, "c_animalshop2"), "animal shop")
-    check("animaux (boutique) : positions identiques apres l'achat", rep["pos_err_over_tol"] == 0, rep.get("pos_err_over_tol"))
+    far = [s for s in rep["squad"] if len(s) < 3 or s[1] > 3.0]
+    check("animaux (boutique) : positions identiques apres l'achat", not far, f"{far} | PNJ au-dela de 3 : {rep.get('pos_err_over_tol')}")
     # the host's own purchase: its window on its screen, the game's usual path
     mine = cmd(host, "animalshop 0 1500")
     time.sleep(1)
@@ -8231,6 +8248,9 @@ def exp_workstations(host, cli, minutes=2.0):
         hm = machines_map(host)
         worked |= set(with_workers(hm))
         log("machines with workers now:", with_workers(hm), "| research:", cmd(host, "research")[1][:120])
+        # (13/10 15:21: JOBS was on for everyone ('ok 68 0'), research queued, still 0/1 on the benches:
+        # where the researcher is and what it does, and the bench's own state, to find out)
+        log("   researcher", researcher, cmd(host, f"charstate {researcher}")[1][:160], "| bench", cmd(host, f"machine {RESEARCH_BENCH}")[1][:200])
     log("speed x1", cmd(host, "speed 1"))
     time.sleep(4)
     hm1 = compare_all(f"apres {minutes} min a x3")

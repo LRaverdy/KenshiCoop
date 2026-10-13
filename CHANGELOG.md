@@ -67,6 +67,28 @@ Protocole inchangé (36).
     now », « … after 3 placements: left to the game ».
   - Commande `copyfix` (étages placés, marcheurs immobiles vus), écrite par `farfps`/`faraway` après
     le relevé de mouvement. Tests unitaires `TestMotion` (4c, 4d). **Pas relancé en jeu.**
+- **Tests du 13/10 15:05-15:32 sur la v0.3.4 fusionnée (`recruits` 21/21, `clientjobs` 21/21)** :
+  - `animalshop` 9/11 : l'animal rejoint maintenant l'escouade (journal de l'hôte : « character
+    editor of 1 character(s) (mode 1) not opened here », puis « a new squad character (Chèvre) goes
+    to Coucoudz 2 »). Les deux échecs restants venaient du test. « l'animal appartient au client :
+    propriétaire None » : le relevé avait bien `entity 74 1:1:3769653248:5:1589599616 owner=2`, mais le
+    test cherchait l'entité par sa poignée dans un tableau rangé par netId (même erreur dans `pets`) ;
+    nouvelle fonction `entity_of`. « positions identiques après l'achat : 10 » : dix PNJ qui
+    marchaient (~15 unités/s), relevés à quelques dixièmes de seconde d'écart de chaque côté (4 à 9
+    unités) ; le contrôle passait avant seulement parce que l'éditeur avait mis l'hôte en pause. Il
+    porte maintenant sur l'escouade (l'animal acheté compris), à 3 unités.
+  - `dialogue` 17/18, « une téléportation ferme la conversation : err no live world » : venait du
+    test. Le mod a fermé la conversation à la téléportation (hôte, 15:31:54 : « conversation 2 ends: a
+    character in it jumped away », `dialogs` n=0) ; le client chargeait la zone d'arrivée (image hors
+    boucle du jeu) quand le test l'a interrogé, et `wait_open` prenait la réponse « err » pour une
+    fenêtre fermée. Une réponse « err » n'est plus un état (`exp_dialogue`, `exp_npctalk`).
+  - `workstations` 44/45 : JOBS était allumé partout (`modes` « ok 68 0 » pour chaque membre), donc
+    **ce n'était pas la cause** avancée plus bas ; recherche toujours en file (1884, 0,00), aucun
+    ouvrier même après un clic droit du chercheur sur le banc (148 unités). Lu dans le jeu :
+    l'ajout d'un opérateur (`0x2B5BF0`) n'est refusé par un banc de recherche (`ResearchBuilding`
+    vt 0x4E8, `0x2995E0`) que si la file de recherche est vide ; ce n'est donc pas ce refus. Cause
+    toujours inconnue : le test écrit maintenant toutes les 15 s l'état du chercheur (`charstate`) et
+    celui du banc (`machine`, drapeaux et opérateurs) pour la trouver au prochain passage.
 - **Animal acheté par un client : il rejoint enfin l'escouade (test `animalshop`, en échec depuis la
   0.3.3, 13/10 9/10)**. Cause trouvée dans le jeu (désassemblage 1.0.68) : le `confirm()` de la
   boutique d'animaux, que l'hôte exécute pour l'achat d'un client, finit par
