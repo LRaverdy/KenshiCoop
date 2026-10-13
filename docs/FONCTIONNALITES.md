@@ -1361,7 +1361,10 @@ la fenêtre du client.
   liste (« If this is disabled then the character won't do any of the jobs listed »).
 - **Machine pleine** : le jeu met le travail permanent dans la liste même sans place libre
   (`OrdersReceiver::addJob` ne regarde pas les places) ; le perso s'y met dès qu'une place se libère.
-  Le même travail sur la même cible n'est jamais ajouté deux fois.
+  Le même travail sur la même cible n'est jamais ajouté deux fois. Vu en jeu le 13/10 chez un client
+  (`clientjobs`) : Maj + clic droit sur le filon plein ajoute le travail chez l'hôte et chez le client,
+  et quand un mineur part, le perso du client y va **de lui-même** ; un combat en cours passe avant
+  (il se bat d'abord, comme en solo).
 - **Ce que le joueur apprend (chat, v0.3.4)** : l'hôte compare la liste du perso avant et après
   l'ordre et la machine visée (`kc::WorkOrderNote`) : travail permanent ajouté mais toutes les places
   prises (il attendra), rien à faire pour l'instant, JOBS éteint, déjà dans sa liste, pas de travail
@@ -1382,7 +1385,8 @@ la fenêtre du client.
   Une machine loin de tous nos persos n'est pas chargée chez nous : appliquée en arrivant (journal :
   « not loaded here yet »).
 - Tests : `TestWorkstationOrders`, `TestWorkshop`, `TestSquadWindow`, `TestClientJobs` (v0.3.4) ;
-  expériences `workstations` et `clientjobs` (v0.3.4, à lancer).
+  expériences `workstations` et `clientjobs` (v0.3.4 ; 13/10 : 15/17, les deux échecs venaient du
+  test, corrigé, voir CHANGELOG).
 
 ### Non vérifiés
 - Recrutement par dialogue.

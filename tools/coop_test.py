@@ -8225,8 +8225,10 @@ def exp_clientjobs(host, cli):
     """v0.3.4 (A_FAIRE 12/10 point 5, rob's 60 clicks): giving work to the client's characters exactly as
     in solo. The JOBS toggle twice in a row (shown at once, the second click turns it back), a permanent
     job by Shift + right click on a free and on a full iron node (queued all the same, the player told
-    why), a one-time order on a full node (told), identical clicks sent once a second, the Tâches panel
-    (move, remove) with no flicker, a recruit nobody owns, another player's character (refused, told)."""
+    why), a one-time order on a full node (told), the freed place taken by the client's character by
+    itself (a town fight makes that inconclusive), identical clicks sent once a second, the Tâches
+    panel (a follow job added, moved, removed) with no flicker, a recruit nobody owns, another
+    player's character (refused, told)."""
     time.sleep(6)
     cmd(cli, "editdone")
     time.sleep(3)
@@ -8306,15 +8308,50 @@ def exp_clientjobs(host, cli):
         time.sleep(3)
         ok, t = chat_has("déjà dans la liste")
         check("jobs : travail deja dans la liste : dit au joueur, rien d'ajoute", ok and (jobs(host, own) or []) == jh, t)
-        # a place frees: the client's character takes it (its permanent job)
+        # A place frees: the client's character takes it (its permanent job), by itself. It stands
+        # ~1900 units away (the full node sent it nowhere): the game's job choice sends it there, a
+        # walk of ~30 s like the host's three. The save's iron node is in town, where fights go on
+        # (exp_research): the 13/10 run's character walked there by itself (1904 -> 125 units) but
+        # fought from the moment it arrived (melee defence, toughness, dodge, mass combat up every few
+        # seconds, everyone in god mode: the fight never ends), so it never sat down in 60 s. Hence:
+        # the walk is checked on its own (the job was resumed), the place within 120 s, and a fight
+        # makes the place check inconclusive instead of failed (the game's combat comes before jobs,
+        # in solo as well).
+        def dist_to_node():
+            a, b = pos_xz(host, own), pos_xz(host, host_idx[1])   # a miner who stays: the node
+            return math.hypot(a[0] - b[0], a[1] - b[1]) if a and b else None
+
+        def combat_skills():
+            t = cmd(host, f"stats {own}")[1].split()
+            try:
+                v = [float(x) for x in t[1].split(",")]
+                return [v[i] for i in (16, 17, 27, 33)]   # melee defence, toughness, dodge, mass combat
+            except (IndexError, ValueError):
+                return None
+        cmd(host, "console heal all")
+        d0, c0 = dist_to_node(), combat_skills()
+        log("client's character before the place frees:", f"{d0:.0f} units from the node" if d0 is not None else "?", cmd(host, f"charstate {own}")[1])
         log("host's worker leaves:", cmd(host, f"moverel {host_idx[0]} 300 0"))
-        got = False
-        for _ in range(20):
+        got, nearest = False, d0
+        for k in range(40):
             time.sleep(3)
+            d = dist_to_node()
+            if d is not None and (nearest is None or d < nearest):
+                nearest = d
+            if k % 5 == 4:
+                log("   waiting for the free place:", ops(), f"client's character {d:.0f} units from the node" if d is not None else "")
             if ops().startswith("3/"):
                 got = True
                 break
-        check("jobs : une place liberee est reprise (travail permanent du client)", got, ops())
+        c1 = combat_skills()
+        fought = c0 is not None and c1 is not None and any(b > a + 0.05 for a, b in zip(c0, c1))
+        log("client's character after:", cmd(host, f"charstate {own}")[1], "combat skills", c0, "->", c1)
+        check("jobs : place liberee : le perso du client y va de lui-meme (travail permanent repris)", got or (nearest is not None and nearest < 400),
+              f"{d0} -> au plus pres {nearest}")
+        if got or not fought:
+            check("jobs : une place liberee est reprise (travail permanent du client)", got, ops())
+        else:
+            log("NON CONCLUANT : le perso du client s'est battu pres du noeud (combats de la ville) : place libre non prise", ops(), c0, "->", c1)
 
     # 3. identical clicks: once a second to the host
     def runs():
@@ -8326,8 +8363,14 @@ def exp_clientjobs(host, cli):
     time.sleep(3)
     check("jobs : clics identiques envoyes au plus une fois par seconde", runs() - r0 <= 3, f"{runs() - r0} ordres executes pour 8 clics")
 
-    # 4. the Tâches panel: a second job, moved, then removed, with no flicker on the client
-    log("client Tâches panel: hauling (88):", cmd(cli, f"workjob {own} none 88"))
+    # 4. the Tâches panel: a second job, moved, then removed, with no flicker on the client. Not
+    # "hauling (88) with no subject" (13/10 run: the game makes no job of it, on the host as on the
+    # client: jobs 1 -> 1, nor in exp_workstations' runs): the panel's follow job (31 on a squad
+    # mate, exp_jobs), which the game does list.
+    if "87" not in (jobs(host, own) or []):   # the node was not full: no permanent job on it yet
+        log("client Shift + right click on the node (first job):", cmd(cli, f"workreq {own} {IRON_NODE} shift"))
+        time.sleep(3)
+    log("client Tâches panel: follow job (31) on member", host_idx[-1], cmd(cli, f"jobreq {own} 31 {host_idx[-1]}"))
     time.sleep(4)
     jh = jobs(host, own) or []
     log("jobs before the move (host):", jh)

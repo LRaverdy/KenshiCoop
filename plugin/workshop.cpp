@@ -1067,8 +1067,9 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
     if (cmd == "workjob") {
         // workjob <squadIndex> <sid|none> [task]: that member alone gets a PERMANENT job (the Tâches
         // panel, addJobSelectedCharacters with shift, as a right click in jobs mode does) on the
-        // instance of that template nearest to squad member 0, or with no subject ("none": haul 88,
-        // keep everything running 89...); default task 87. On a client the order goes to the host.
+        // instance of that template nearest to squad member 0, or with no subject ("none"); default
+        // task 87. On a client the order goes to the host. Hauling 88 with no subject makes no job in
+        // 1.0.68 (13/10: jobs 1 -> 1 on the host and on the client): the game wants a target for it.
         size_t idx = 0;
         std::string sid;
         int task = 87;

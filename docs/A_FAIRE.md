@@ -74,7 +74,9 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      joueur quand un ordre de travail n'a rien créé (machine pleine, pas de mode Travaux).
    - « aux autres » : vérifier les persos partagés (recrues de personne) et ceux d'un autre joueur
      (refus attendu, avec un message).
-   - **Corrigé dans le code (v0.3.4), à tester en jeu (`coop_test.py clientjobs`)** :
+   - **Corrigé dans le code (v0.3.4) ; `coop_test.py clientjobs` le 13/10 : 15/17, les deux échecs
+     venaient du test (corrigé : transport 88 sans cible jamais ajouté par le jeu ; combat au filon de
+     la ville), à relancer** :
      - cause : en solo un travail permanent vient de **Maj + clic droit** (le bouton JOBS dit seulement
        si le perso fait ses travaux). `newPlayerTaskSelectedCharacters` lit la touche lui-même : celle
        du client n'arrivait jamais, l'hôte utilisait celle de son propre joueur. Les travaux de nass4

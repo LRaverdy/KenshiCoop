@@ -1128,6 +1128,15 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
   machine (un travail sur une machine pleine est mis dans la liste, le perso attend) ; ne l'ajoute pas
   si un travail du même type (`Tasker` +0x70 → +0x44) existe déjà sans cible (+8 nul) ou sur la même
   cible.
+- **Transport 88 sans cible** (`addJobSelectedCharacters(88, nul, shift = 1, …)`) : le jeu n'ajoute
+  **aucun** travail (vu le 13/10 chez l'hôte et chez le client : liste 1 -> 1, et dans les parties
+  `workstations`) ; il lui faut une cible. Le travail « suivre » 31 sur un autre perso, lui, va bien
+  dans le panneau Tâches.
+- **Reprise d'un travail permanent** (vu le 13/10, `clientjobs`) : quand une place se libère sur la
+  machine pleine, le choix du travail du jeu y envoie le perso de lui-même (1904 -> 125 unités, sans
+  ordre). Un combat passe avant : arrivé au filon de la ville au milieu d'une bagarre, le perso se bat
+  (défense, robustesse, esquive, combat de masse qui montent) et ne s'assoit pas ; en mode dieu le
+  combat ne finit jamais. Un ordre du joueur, lui, le met au travail tout de suite.
 - `OrdersReceiver::movePermajob(from, to)` (`0x5078A0`, via `Character::movePermajob` `0x5C8FC0`) :
   retire le travail `from` puis l'insère à `to` (indice après retrait) ; `to = -1` : à la fin. Ne
   vérifie pas `from` (lecture hors du tableau si trop grand : le mod le vérifie).

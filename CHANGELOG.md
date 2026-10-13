@@ -8,6 +8,21 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 Protocole inchangé (36).
 
+- **Travaux des persos d'un client : test `clientjobs` corrigé (13/10, 15/17)**. Les deux échecs
+  venaient du test, pas du mod. (1) « une place libérée est reprise » (2/3 au bout de 60 s) : le perso
+  du client est bien allé **de lui-même** au filon quand le mineur de l'hôte est parti (1904 -> 125
+  unités sans aucun ordre : son travail permanent a été repris par le jeu de l'hôte), mais il s'est
+  battu dès son arrivée (défense, robustesse, esquive et combat de masse en hausse de 08:18:25 à
+  08:19:01 : les combats de la ville autour du filon, tout le monde en mode dieu, le combat ne finit
+  pas) ; le jeu fait passer le combat avant les travaux, comme en solo. Le test vérifie maintenant à
+  part que le perso y va de lui-même, attend la place 120 s et dit « NON CONCLUANT » au lieu d'un
+  échec si le perso s'est battu. (2) « deux travaux pour tester le panneau » : le transport 88 sans
+  cible ne devient **jamais** un travail dans le jeu (liste 1 -> 1 chez l'hôte comme chez le client,
+  et déjà dans les parties `workstations`) ; le second travail est maintenant « suivre » (31) sur un
+  perso de l'escouade, que le panneau Tâches accepte (`exp_jobs`). Le mod disait déjà au joueur
+  « Aucun travail permanent ajouté ». Le reste (Maj + clic droit, liste chez l'hôte et le client,
+  messages, JOBS, clics répétés, recrue à personne, perso d'un autre joueur) a réussi en jeu.
+
 - **Parler à un PNJ (partie du 12/10, Geoffrey puis rob1 bloqués jusqu'à une resync)** : chez un
   client, le clic droit sur un PNJ ne proposait « parler » que si le jeu **du client** trouvait une
   réplique « parle-moi » sur sa copie du PNJ ; sinon le clic ne faisait rien, sans ordre ni message
