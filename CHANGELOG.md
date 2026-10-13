@@ -27,6 +27,24 @@ Protocole inchangé (36).
   réponse est décrite dans le journal de l'hôte.
 - Tests : `TestTalkRules` (unitaire), expérience `npctalk`, commande `talkclick`, `held=` dans
   `dialogs`. À vérifier en jeu.
+- **Correctif après l'essai du 13/10 (`dialogue` 14/16, `npctalk` 13/14)** :
+  - *Une TP ne fermait pas la conversation* : ouverte à 08:26:30.450, TP de 2100 unités à .865,
+    toujours ouverte 14 s plus tard (c'est la TP de retour qui l'a fermée). Les premières positions
+    d'une conversation n'étaient relevées qu'au balayage suivant (toutes les 0,5 s), ici après la TP :
+    le saut n'était pas vu, et l'écart de départ mesuré incluait déjà la TP. Une nouvelle conversation
+    est maintenant placée dès l'image où l'hôte la voit.
+  - *Un combat ne fermait pas la conversation* : aucune règle « combat » dans le balayage (seulement
+    à terre, mort, TP, éloignés). Un combat d'un des deux persos commencé après l'ouverture, vu sur
+    deux balayages de suite, la termine maintenant (un combat déjà en cours à l'ouverture non).
+  - La minuterie gardée pendant que le joueur choisit n'y était pour rien : `held=0` pendant tout
+    l'essai (la réplique du Chef Voleur dure plus de 20 s, jamais sous les 3 s gardées).
+  - *`npctalk`, « un clic droit du client ouvre une conversation »* (test) : les 5 PNJ les plus
+    proches ont bien reçu l'ordre « parler » chez l'hôte (5 vérifications réussies), mais aucun n'a de
+    conversation à réponses (« the NPC has nothing to say », le Chirurgien ne fait que parler). Le test
+    essaie maintenant les 3 plus proches puis le Chef Voleur et un marchand par leur nom. Le mod n'est
+    pas en cause.
+  - Tests unitaires : `TestTalkRules` (TP, éloignement, combat après/avant l'ouverture). Pas relancé
+    en jeu.
 Pas de changement de protocole (36) : se connecte aux 0.3.3 (un hôte 0.3.3 garde le défaut côté hôte,
 les clients 0.3.4 s'en protègent seuls).
 

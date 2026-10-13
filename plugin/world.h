@@ -790,6 +790,10 @@ private:
         bool placed = false;
         kc::Vec3 pcAt, otherAt;
         float startDist = 0;
+        // 0.3.4 (fix): a fight going on when it was first placed, and sweeps in a row with a fight
+        // that began after (kc::talk::CountFightSweeps)
+        bool fightAtStart = false;
+        int fightSweeps = 0;
         kc::Handle pcH, otherH;
         // 0.3.4: the player's window (Open sent), when it opened, the answers it shows now and since
         // when they wait, and whether the player answered at all (UpdateRemoteDialogs)

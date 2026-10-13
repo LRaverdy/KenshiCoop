@@ -6490,6 +6490,39 @@ static void TestTalkRules() {
     CHECK(!HoldLine(true, 0, 1.0));     // nothing to answer: the game moves on with its timer
     CHECK(!HoldLine(false, 4, 1.0));    // not shown on a player's screen
     static_assert(kHoldSeconds >= 1.0f, "");   // a long frame at x3 never empties it between two of our ticks
+    // the host's sweep ends what the game does not (in-game test of 13 October: teleport, fight)
+    SweepFacts sf;
+    sf.dist = sf.startDist = 420.0f;   // the Chef Voleur talks from 42 m: nothing to end
+    CHECK(DecideSweep(sf) == SweepEnd::None);
+    SweepFacts sj = sf;
+    sj.pcMoved = 2121.0f;   // the test's teleport: 1500 units on x and z
+    CHECK(DecideSweep(sj) == SweepEnd::Jump);
+    sj = sf;
+    sj.otherMoved = kJumpUnits + 1.0f;
+    CHECK(DecideSweep(sj) == SweepEnd::Jump);
+    sj = sf;
+    sj.pcMoved = 150.0f;   // a run at x3 between two sweeps: not a jump
+    CHECK(DecideSweep(sj) == SweepEnd::None);
+    sj = sf;
+    sj.dist = sf.startDist + kApartUnits + 1.0f;   // walked away step by step
+    CHECK(DecideSweep(sj) == SweepEnd::Apart);
+    // a fight that starts after it opened ends it on the second sweep in a row; one going on when it
+    // opened does not, until it is over and a new one starts
+    bool atStart = false;
+    int sweeps = 0;
+    sweeps = CountFightSweeps(atStart, true, sweeps);
+    sj = sf;
+    sj.fightSweeps = sweeps;
+    CHECK(sweeps == 1 && DecideSweep(sj) == SweepEnd::None);   // a flicker of the combat flag
+    sweeps = CountFightSweeps(atStart, true, sweeps);
+    sj.fightSweeps = sweeps;
+    CHECK(sweeps == 2 && DecideSweep(sj) == SweepEnd::Fight);
+    CHECK(CountFightSweeps(atStart, false, sweeps) == 0);   // the flag dropped: counted anew
+    atStart = true;
+    CHECK(CountFightSweeps(atStart, true, 0) == 0 && atStart);
+    CHECK(CountFightSweeps(atStart, true, 0) == 0);
+    CHECK(CountFightSweeps(atStart, false, 0) == 0 && !atStart);   // that fight is over
+    CHECK(CountFightSweeps(atStart, true, 0) == 1);                // a new one counts
     // the talk order carries the NPC's kind and place: already in the Task command (no protocol change)
     Command c;
     c.kind = CommandKind::Task;

@@ -432,6 +432,16 @@ lancer en jeu).
   (TP), ou qui se sont éloignés de 100 m de plus qu'au début. Pas de distance absolue : une
   conversation peut commencer de loin (essai du 10/10 : le Chef Voleur aborde le perso du client à
   plus de 40 m, et l'ancienne règle « plus de 40 m » la fermait aussitôt).
+- **0.3.4 (correctif, essai `dialogue` du 13/10, 14/16)** : une TP 0,4 s après l'ouverture n'était
+  pas vue (les premières positions étaient relevées au balayage suivant, après la TP), et un combat
+  ne fermait rien (aucune règle « combat » : la conversation restait ouverte chez le client pendant
+  tout le combat). Maintenant une nouvelle conversation est placée dès l'image où l'hôte la voit, et
+  un combat d'un des deux persos commencé **après** l'ouverture (vu sur deux balayages de suite) la
+  termine ; un combat déjà en cours à l'ouverture ne la ferme pas, jusqu'à ce qu'il finisse
+  (`kc::talk::DecideSweep`, `CountFightSweeps`). Journal de l'hôte : « conversation N ends: a fight
+  started », « jumped away (teleport: X and Y units since the last sweep) ». La minuterie gardée
+  pendant que le joueur choisit (plus haut) n'y était pour rien (`held=0` pendant tout l'essai : la
+  réplique du Chef Voleur dure plus de 20 s). À vérifier en jeu.
 - **Réplique en double** : le jeu remplit la fenêtre deux fois par réplique (texte, puis réponses) ;
   la même réplique n'est envoyée et numérotée qu'une fois.
 - **Vitesse 3** : chaque réplique porte un numéro ; une réponse à une réplique déjà dépassée est
