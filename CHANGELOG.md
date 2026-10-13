@@ -64,6 +64,43 @@ Protocole inchangé (36).
     units from the host's body (its fall here shifted it …): stood up once to fall on the host's
     spot ». Un perso K.-O. en combat n'est pas concerné (pas de relevage visible). Le test lit les
     positions 10 s après la pose. Test `TestMotion` (posture).
+- **TP admin d'un perso à terre : le corps ne revient plus à sa place d'avant (test `tpdown`, 13/10
+  10:43 : 193,5 unités de l'hôte)**. Journal de l'hôte : le corps est relevé, téléporté, recouché…
+  et « went back 200 away when it lay down again », deux fois. Lu dans le jeu (désassemblage 1.0.68) :
+  `Character::ragdollMode` ne fait que mettre la demande en file ; quand elle est appliquée,
+  `AnimationClass::setRagdoll` (`0x5B9A10`) **crée un ragdoll neuf à l'endroit du nœud de scène du
+  corps** (`AnimationClass`+0xB0, `Node::getPosition` ; il ne le remet sur le perso que s'il lit
+  `Vector3::ZERO`), et la position du perso suit ensuite celle du ragdoll (`0x7D16F0`). Or la
+  téléportation du mod (`CharMovement::setPositionDirectionAndTeleport`) ne bouge pas ce nœud ; seuls
+  `Character::setPosition` (`0x5CA680`, via `AnimationClass` `0x5B1B00`) et la remise d'un corps posé
+  par son porteur (`0x5CCBA0`) le font. Le nœud d'un corps tenu debout pendant la TP restait donc là
+  où il gisait. Maintenant le nœud est placé avec le corps à chaque téléportation d'un corps
+  (`kenshi::PlaceBodyNode`, `Ogre::Node::setPosition` comme le jeu), revérifié juste avant de le
+  recoucher ; même chose chez le client avant chaque chute d'une copie (`ReadyToFall`). Journal :
+  « tp: … teleported, its body's scene node N units from there: moved with it », et la distance du
+  nœud dans « went back ». Le test mesure depuis l'endroit visé (le membre 0 au moment de la TP) et
+  recopie les lignes « tp: » de l'hôte.
+- **Test `suite`, « TP admin : le perso du joueur arrive près de l'hôte » (30,1 pour 30, 13/10
+  08:07)** : venait du test. Le perso du client est arrivé à 22 unités de l'endroit visé (debout, « walk
+  and orders ended »), puis le membre 0 de l'hôte s'est lui-même écarté de 51 unités du nouveau venu
+  (posé à 7,5 unités de lui). La distance se mesure maintenant depuis l'endroit visé.
+- **Test `prospect` : « l'hôte prospecte comme en solo » (déjà en échec le 12/10 à 02:37 sur
+  `night-fixes`, donc pas une régression de la 0.3.4)** : le jeu refuse PROSPECT à l'intérieur (« I need
+  to go outside to do this. ») ou hors du sol ferme (« I need to be stood on solid ground. »)
+  (`checkPlayerOrderForProblems` `0x5D1940`, tâche 150), et dans `kctest_town` le membre 0 de l'hôte
+  (Su) est dans un bâtiment (groupe d'étage 9 dans les relevés du 12/10 et du 13/10). Le test fait
+  prospecter l'hôte avec un de ses persos qui est dehors (groupe d'étage < 9, rob). Non revérifié en
+  jeu. Reste : chez le client, la fenêtre s'ouvre sans ces vérifications du jeu (on peut prospecter à
+  l'intérieur).
+- **Test `animalshop` : « l'animal rejoint l'escouade » (déjà en échec le 12/10 à 02:36, 03:03 et
+  03:12, noté « reste ouvert » dans la 0.3.3 : pas une régression)**. L'achat est fait par le jeu de
+  l'hôte (cats prises, même argent partout) et la chèvre est bien dans une escouade du joueur juste
+  après (pas de remboursement), mais elle ne devient jamais un perso de l'escouade pour le mod (pas de
+  « a new squad character … goes to ») et n'est plus dans les relevés 10 s plus tard. Cause pas
+  trouvée ; l'hôte écrit maintenant où est chaque animal acheté juste après la vente (« animal shop:
+  bought animal now … player squad, player characters list, at … », recopié par le test), et la
+  session dit quand une recrue ou un animal attendu n'est jamais arrivé (« never joined the player's
+  squads within 60 s »). À vérifier avec un vrai vendeur d'animaux.
 
 - **Travaux des persos d'un client : test `clientjobs` corrigé (13/10, 15/17)**. Les deux échecs
   venaient du test, pas du mod. (1) « une place libérée est reprise » (2/3 au bout de 60 s) : le perso

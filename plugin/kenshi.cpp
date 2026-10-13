@@ -3948,6 +3948,50 @@ void* AnimationOf(const Character* c) {
     return IsCharacter(c) && Rd(c, CH_animation, ac) && AnimOwner(ac) == c ? ac : nullptr;
 }
 
+// The body's scene node (AnimationClass +0xB0, live once its visuals are built, +0x88). A ragdoll is
+// started from where this node is (AnimationClass::setRagdoll, 0x5B9A10, reads Node::getPosition and
+// puts the node on the character only when it reads Vector3::ZERO), and only Character::setPosition
+// (0x5CA680, through AnimationClass 0x5B1B00) and the reset of a body put down (0x5CCBA0) move it with
+// the character; a CharMovement teleport leaves it where it was.
+namespace {
+constexpr uintptr_t AC_visualsBuilt = 0x88;    // AnimationClass: bool
+constexpr uintptr_t AC_node = 0xB0;            // AnimationClass: Ogre::SceneNode*
+using NodeGetPosFn = float* (*)(const void* node, float* out);   // Vector3 Node::getPosition() const (hidden return)
+using NodeSetPosFn = void (*)(void* node, const float* pos);      // void Node::setPosition(const Vector3&)
+void* OgreNodeExport(const char* name) {
+    static HMODULE ogre = GetModuleHandleW(L"OgreMain_x64.dll");
+    return ogre ? reinterpret_cast<void*>(GetProcAddress(ogre, name)) : nullptr;
+}
+void* BodyNode(Character* c) {
+    void* ac = AnimationOf(c);
+    bool built = false;
+    void* node = nullptr;
+    return ac && Rd(ac, AC_visualsBuilt, built) && built && Rd(ac, AC_node, node) ? node : nullptr;
+}
+bool SehNodeGetPos(void* fn, const void* node, float* out) {
+    __try { reinterpret_cast<NodeGetPosFn>(fn)(node, out); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool SehNodeSetPos(void* fn, void* node, const float* p) {
+    __try { reinterpret_cast<NodeSetPosFn>(fn)(node, p); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+bool BodyNodePosition(Character* c, kc::Vec3& out) {
+    static void* fn = OgreNodeExport("?getPosition@Node@Ogre@@QEBA?AVVector3@2@XZ");
+    void* node = BodyNode(c);
+    float p[3] = {0, 0, 0};
+    if (!fn || !node || !SehNodeGetPos(fn, node, p)) return false;
+    out = {p[0], p[1], p[2]};
+    return Finite(out);
+}
+
+bool PlaceBodyNode(Character* c, const kc::Vec3& pos) {
+    static void* fn = OgreNodeExport("?setPosition@Node@Ogre@@QEAAXAEBVVector3@2@@Z");
+    void* node = BodyNode(c);
+    const float p[3] = {pos.x, pos.y, pos.z};
+    return fn && node && Finite(pos) && SehNodeSetPos(fn, node, p);
+}
+
 std::string TechniqueName(const void* t) {
     std::string s;
     if (t) ReadGameString(reinterpret_cast<const uint8_t*>(t) + TQ_animation, s);

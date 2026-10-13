@@ -622,6 +622,12 @@ bool KenshiWorld::ReadyToFall(const kc::Handle& h, kenshi::Character* c, const k
     if (inPlace || (it != fallPrep_.end() && now - it->second.start >= kChase)) {
         if (!settled) return false;
         fallPrep_.erase(h);
+        // 0.3.4: the ragdoll about to start does so where the body's scene node is, which a teleport
+        // does not move (a body stood up on the ground keeps it where it lay): put on the body first
+        if (kc::Vec3 p; kenshi::GetPosition(c, p)) {
+            HostCallScope scope;
+            kenshi::PlaceBodyNode(c, p);
+        }
         return true;
     }
     if (it == fallPrep_.end()) it = fallPrep_.emplace(h, FallPrep{now, now}).first;
@@ -2021,6 +2027,20 @@ void KenshiWorld::UpdateReRagdolls() {
                 break;
             }
             kenshi::Teleport(c, it->to, it->rot);
+            // 0.3.4: its scene node goes with it. The ragdoll it lies down with starts where that node
+            // is (AnimationClass::setRagdoll, 0x5B9A10), and a CharMovement teleport leaves the node
+            // where the body lay: "went back 200 away when it lay down again" twice, then 193.5 units
+            // from the host (tpdown, 13/10 10:43), as in 0.3.1 (392.8)
+            {
+                kc::Vec3 node;
+                const float nodeOff = kenshi::BodyNodePosition(c, node) ? Dist(node, it->to) : -1.0f;
+                const bool placed = kenshi::PlaceBodyNode(c, it->to);
+                if (!it->nodeTold || !placed) {
+                    it->nodeTold = true;
+                    Log("tp: %s teleported, its body's scene node %.0f units from there%s: %s", KeyOf(it->h).c_str(), nodeOff,
+                        nodeOff < 0 ? " (unreadable)" : "", placed ? "moved with it" : "NOT moved (no node or call failed)");
+                }
+            }
             it->stage = ReRagdoll::Check;
             it->at = now + 0.3;
             break;
@@ -2039,6 +2059,7 @@ void KenshiWorld::UpdateReRagdolls() {
                     Log("tp: %s still %.0f away and a ragdoll: stood up, teleported next (%d)", KeyOf(it->h).c_str(), off, it->tries);
                 } else {
                     kenshi::Teleport(c, it->to, it->rot);
+                    if (it->body) kenshi::PlaceBodyNode(c, it->to);
                     it->at = now + 0.4;
                     Log("tp: %s still %.0f away from where it was sent: teleported again (%d)", KeyOf(it->h).c_str(), off, it->tries);
                 }
@@ -2046,6 +2067,11 @@ void KenshiWorld::UpdateReRagdolls() {
             }
             if (off >= kThere) Log("tp: %s did not reach its destination (%.0f away)", KeyOf(it->h).c_str(), off);
             if (down && !kenshi::IsRagdoll(c) && !it->noRelay) {
+                // the node once more on the body, right before its ragdoll starts from it
+                kc::Vec3 node;
+                if (kenshi::BodyNodePosition(c, node) && Dist(node, at) > kThere)
+                    Log("tp: %s: its body's scene node %.0f units away again before it lies down: put back on it (%s)", KeyOf(it->h).c_str(),
+                        Dist(node, at), kenshi::PlaceBodyNode(c, at) ? "ok" : "call failed");
                 kenshi::SetRagdoll(c, true);   // knocked out or dead: lying again, where it was sent
                 it->stage = ReRagdoll::Settle;
                 it->at = now + 0.6;
@@ -2057,7 +2083,9 @@ void KenshiWorld::UpdateReRagdolls() {
             // lying again: still there? A ragdoll that took its old place back is stood up and sent
             // again, and then left standing for the game to lay down (its own fall starts where it is)
             if (off >= kThere && ++it->tries < kTries) {
-                Log("tp: %s went back %.0f away when it lay down again: stood up and sent again", KeyOf(it->h).c_str(), off);
+                kc::Vec3 node;
+                Log("tp: %s went back %.0f away when it lay down again (scene node %.0f from where it was sent): stood up and sent again",
+                    KeyOf(it->h).c_str(), off, kenshi::BodyNodePosition(c, node) ? Dist(node, it->to) : -1.0f);
                 kenshi::SetRagdoll(c, false);
                 it->stage = ReRagdoll::Stand;
                 it->noRelay = true;

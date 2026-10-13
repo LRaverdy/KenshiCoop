@@ -26,6 +26,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -491,6 +492,26 @@ bool KenshiWorld::SellAnimals(uint64_t key, const std::vector<kc::Handle>& anima
     // the cats taken but no animal recruited (the game's recruit refused them: a test-spawned goat of no
     // seller did so on 12/10): the player gets the money back
     const bool joined = std::any_of(chosen.begin(), chosen.end(), [](kenshi::Character* a) { return kenshi::IsCharacter(a) && kenshi::InPlayerSquad(a); });
+    // 0.3.4: where each one is now. The animalshop test's goat (13/10 10:56, as on 12/10) was taken
+    // into a player squad here, yet never became a squad character of the mod (no "a new squad
+    // character ... goes to", squadanimals 0) and was in no dump 10 s later
+    {
+        std::vector<kenshi::Character*> listed;
+        kenshi::PlayerCharacters(listed);
+        for (kenshi::Character* a : chosen) {
+            kc::Handle ah;
+            kc::Vec3 ap{};
+            const bool alive = kenshi::IsCharacter(a);
+            char akey[80] = "gone";
+            if (alive) {
+                kenshi::GetHandle(a, ah);
+                kenshi::GetPosition(a, ap);
+                snprintf(akey, sizeof(akey), "%u:%u:%u:%u:%u", ah.type, ah.container, ah.containerSerial, ah.index, ah.serial);
+            }
+            Log("animal shop: bought animal now %s: player squad %d, player characters list %d, at %.0f,%.0f", akey,
+                int(alive && kenshi::InPlayerSquad(a)), int(alive && std::find(listed.begin(), listed.end(), a) != listed.end()), ap.x, ap.z);
+        }
+    }
     if (!joined) {
         if (price > 0) kenshi::WritePlayerMoney(before);
         Log("animal shop: no bought animal joined the player's squads: %d cats given back", int(price));

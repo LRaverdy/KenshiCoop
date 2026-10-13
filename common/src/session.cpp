@@ -2076,6 +2076,9 @@ const Session::EditorChar* Session::EditorCharOf(const Entity& e, std::string* k
 void Session::TakeRecruits() {
     world_.TakeRecruits(scratchRecruits_);
     const double now = clock_();
+    for (const auto& r : pendingRecruits_)   // 0.3.4: said, so that a recruit or a bought animal that never came is seen in the log
+        if (now - r.at > 60.0 && players_.count(r.player))
+            log_("a newcomer for " + players_[r.player].name + " (recruited or bought) never joined the player's squads within 60 s: no longer awaited");
     pendingRecruits_.erase(std::remove_if(pendingRecruits_.begin(), pendingRecruits_.end(),
                                           [&](const PendingRecruit& r) { return now - r.at > 60.0 || !players_.count(r.player); }),
                            pendingRecruits_.end());

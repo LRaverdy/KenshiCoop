@@ -322,6 +322,11 @@ classe ; seule celle des animaux est détournée pour l'instant. Décalages par 
 1.0.65 : +0x11D0 (zone 0x72xxxx : `OrdersPanel`), +0x780 (`ProspectingWindow` 0x48xxxx), +0x4B0
 (`getSingleton`), +0x1260 (`ForgottenGUI`).
 
+PROSPECT (tâche 150) : `checkPlayerOrderForProblems` (`0x5D1940`) refuse si le perso n'est pas dehors
+(vt 0x1D8, handle du lieu, type ≠ 0xB : « I need to go outside to do this. ») ou pas sur le sol ferme
+(`CharMovement`+0x340 ≠ 0xB : « I need to be stood on solid ground. ») ; la tâche (`0x348610`) ouvre
+la fenêtre après 1 s de mise à jour du perso.
+
 ### Clic droit sur un personnage et conversations (0.3.4, A_FAIRE 12/10 points 1, 7, 8)
 
 | Groupe | Enum | Fonction | RVA | Hook | Rôle |
@@ -1199,6 +1204,16 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
 - Téléporter juste avant le début d'un ragdoll projette le corps : la vitesse vient des écarts
   entre les dernières poses.
 - Une téléportation ne déplace pas un ragdoll actif.
+- `Character::ragdollMode` (`0x5CBD60`) ne fait que mettre la demande en file (+0x3E0) ; appliquée,
+  elle passe par `AnimationClass::setRagdoll` (`0x5B9A10`) : à l'arrêt, le ragdoll (`AnimationClass`
+  +0x2E8) est **détruit** ; au démarrage, un ragdoll neuf est créé **à la position du nœud de scène**
+  (`AnimationClass`+0xB0, `Node::getPosition`), remis sur le perso seulement si ce nœud est à
+  `Vector3::ZERO`. La position du perso suit ensuite la racine du ragdoll (`0x7D16F0`, appelée par la
+  mise à jour `0x5CF130`). `CharMovement::setPositionDirectionAndTeleport` (vt 0xC0, `0x65E9E0`) ne
+  bouge pas ce nœud ; `Character::setPosition` (`0x5CA680`) et la remise d'un corps posé (`0x5CCBA0`,
+  depuis `dropCarriedObject`) le font, par `AnimationClass` `0x5B1B00` (`Node::setPosition` si +0x88).
+  Un corps K.-O. tenu debout puis téléporté gardait son nœud là où il gisait et s'y recouchait
+  (0.3.4 : `kenshi::PlaceBodyNode`).
 - Reconstruire un ragdoll le lance en l'air.
 - Un corps qui s'effondre ne reste pas où étaient ses pieds : sa position (le bassin) finit à une
   distance à peu près fixe, d'un essai à l'autre, de l'endroit où il était debout (7 à 12 unités
