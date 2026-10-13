@@ -266,6 +266,8 @@ const FunctionSig kFunctions[FnCount] = {
     {"AITaskSystem::<clear tasks>", 0x5074A0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x48, 0x83, 0xC1}},
     // ---- 0.3.4: names above the heads in the players' colours
     {"CharacterNameTag::<update>", 0x6E8100, {0x48, 0x8B, 0xC4, 0x55, 0x48, 0x8D, 0x68, 0xD8, 0x48, 0x81, 0xEC, 0x20}},
+    // ---- 0.3.4: admin teleport of a knocked-out body
+    {"AnimationClass::<set position and direction>", 0x5B18F0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48}},
 };
 
 namespace {
@@ -3991,6 +3993,10 @@ bool SehNodeGetPos(void* fn, const void* node, float* out) {
 bool SehNodeSetPos(void* fn, void* node, const float* p) {
     __try { reinterpret_cast<NodeSetPosFn>(fn)(node, p); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+using AnimSetPosFn = void (*)(void* anim, const float* pos, const float* dir);
+bool SehAnimSetPos(void* fn, void* anim, const float* p, const float* dir) {
+    __try { reinterpret_cast<AnimSetPosFn>(fn)(anim, p, dir); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
 } // namespace
 
 bool BodyNodePosition(Character* c, kc::Vec3& out) {
@@ -4002,11 +4008,20 @@ bool BodyNodePosition(Character* c, kc::Vec3& out) {
     return Finite(out);
 }
 
+// 0.3.4 (suite 13/10 16:19): the node alone did not stay put. The animation update (0x5B5590,
+// AnimationClass vtable) puts it back every frame on the anchor AnimationClass +0x258, which only
+// AnimationClass::<set position and direction> (0x5B18F0) writes, from CharMovement's update
+// (0x65FFA0). A knocked-out body stood up and teleported got neither: its node was back where it
+// lay 0.3 s later ("1066 units away again before it lies down"), and its ragdoll started there.
+// The anchor is moved with the node (a zero direction leaves the orientation as it is).
 bool PlaceBodyNode(Character* c, const kc::Vec3& pos) {
     static void* fn = OgreNodeExport("?setPosition@Node@Ogre@@QEAAXAEBVVector3@2@@Z");
     void* node = BodyNode(c);
     const float p[3] = {pos.x, pos.y, pos.z};
-    return fn && node && Finite(pos) && SehNodeSetPos(fn, node, p);
+    if (!fn || !node || !Finite(pos)) return false;
+    const float noTurn[3] = {0.0f, 0.0f, 0.0f};
+    const bool anchored = SehAnimSetPos(FnAddr(FnAnimSetPosition), AnimationOf(c), p, noTurn);
+    return SehNodeSetPos(fn, node, p) && anchored;
 }
 
 std::string TechniqueName(const void* t) {

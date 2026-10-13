@@ -8,6 +8,33 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 Protocole inchangé (36).
 
+- **TP admin d'un perso K.-O. : il ne retourne plus là où il gisait (`suite` 29/32 du 13/10 16:19,
+  branche `fix-tp3`)**. « TP admin : le perso du joueur arrive près de l'hôte » donnait 1147,2 et
+  « le client le voit au même endroit » 257,63 (couché). Ce n'est pas une régression des fusions
+  4931ea4 / 8ec40dd / f9f0397 : elles ne touchent que le client, et la TP se fait chez l'hôte. Ce
+  qui a changé, c'est la partie : à 15:27 (32/32) le perso du joueur était debout (« tp: … moved »),
+  à 16:19 les combats de la sauvegarde l'avaient mis K.-O. (« faints as on the host » à 16:19:10),
+  et la TP passait par le chemin du corps au sol, à 1066 unités. Journal de l'hôte : « teleported,
+  its body's scene node 1066 units from there: moved with it », 0,3 s plus tard « its body's scene
+  node 1066 units away again before it lies down », puis « went back 1077 away when it lay down
+  again ». Le nœud de scène du corps, posé à destination, revenait tout seul à l'ancienne place.
+  Cause (désassemblage) : la mise à jour de l'animation (`0x5B5590`, table virtuelle
+  d'`AnimationClass`) remet ce nœud à chaque image sur une ancre, `AnimationClass`+0x258. Seule
+  `AnimationClass::<set position and direction>` (`0x5B18F0`) écrit cette ancre, appelée par la mise à
+  jour de `CharMovement` (`0x65FFA0`). Ni la téléportation ni `Node::setPosition` ne la déplacent. Le
+  ragdoll part du nœud : selon que la demande de ragdoll passait avant ou après cette remise en
+  place, le corps se couchait à destination (`tpdown`, 202 unités, réussi) ou à son ancienne place.
+  `kenshi::PlaceBodyNode` déplace maintenant l'ancre avec le nœud (nouvelle entrée
+  `FnAnimSetPosition`, direction nulle : l'orientation ne change pas). Tous ses appels en profitent :
+  TP admin chez l'hôte, chute d'une copie et corps posé d'un portage chez le client. Pas de test
+  unitaire (appel du moteur). Non relancé en jeu : à voir avec `suite` (si le perso est K.-O., plus
+  de « away again » ni de « went back » dans les lignes « tp: ») et `tpdown`.
+  - `tpdown` 1/2 à 16:28 (« le client le voit au même endroit » 3,17, seuil 3) est un autre cas.
+    L'hôte a réussi (11,3). Le client s'est mis debout au point lu sur l'hôte au moment où celui-ci
+    se couchait (24853,7 / 10541,8), puis le corps de l'hôte a encore glissé de 3,8 unités en
+    s'effondrant (24857,3 / 10542,7). C'est l'écart ordinaire d'un corps qui s'effondre. Rien ne
+    change ici.
+
 - **Noms des joueurs arrivés plus tard et corps posé après un portage (tests `map` 48/50 et `carry`
   6/7, 13/10 13:45-14:00, branche `fix-tags-carry2`)**.
   - `map` : chez le client 1, le nom de Joueur3 (perso principal du client 2, arrivé après lui)

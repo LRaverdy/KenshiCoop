@@ -202,6 +202,7 @@ Les signatures sont celles du commentaire du code.
 | carte | `FnPortraitCellUpdate` | `PortraitMainCellView::update(const IBDrawItemInfo&, PortraitData*)` | `0x415150` | oui | un portrait de la barre d'escouade est (re)dessiné : le mod retient la cellule |
 | carte | `FnPortraitCellDtor` | `PortraitMainCellView::~PortraitMainCellView()` | `0x426450` | oui | destructeur complet (le destructeur virtuel `0x4264E0` l'appelle) : le mod oublie la cellule |
 | noms (0.3.4) | `FnNameTagUpdate` | `CharacterNameTag::<update>()` (notre nom, vt 1) | `0x6E8100` | oui | [D] chaque image, pour chaque nom au-dessus d'une tête : le place, et quand +0x18 est mis donne sa couleur et son texte à `NameText` ; le mod remet ensuite la couleur du joueur (voir « Noms au-dessus des têtes ») |
+| TP (0.3.4) | `FnAnimSetPosition` | `AnimationClass::<set position and direction>(const Vector3&, const Vector3&)` (notre nom) | `0x5B18F0` | non | écrit l'ancre du nœud de scène du corps (+0x258), sur laquelle la mise à jour de l'animation remet le nœud à chaque image ; `kenshi::PlaceBodyNode` l'appelle avec une direction nulle (voir « Ragdolls ») |
 | barre | `FnMainBarUpdateCurrent` | `MainBarGUI::updateCurrentPlatoon()` | `0x415880` | non | remplit à nouveau l'onglet de l'escouade affichée, après qu'un onglet fautif a été vidé (`CheckSquadBar`) |
 | sol | `FnInventoryDropItem` | `Inventory::dropItem(Item*)` | `0x745D90` | oui | ce que fait une fenêtre d'inventaire d'un objet lâché sur le monde ; vt 0x38 de `Inventory` et `ShopTraderInventory` |
 | sol | `FnDropItemAnimal` | `CharacterAnimal::dropItem(RootObject*)` | `0x5CA4A0` | oui | même code que `CharacterHuman::dropItem`, pour les bêtes de somme |
@@ -1238,6 +1239,17 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
   depuis `dropCarriedObject`) le font, par `AnimationClass` `0x5B1B00` (`Node::setPosition` si +0x88).
   Un corps K.-O. tenu debout puis téléporté gardait son nœud là où il gisait et s'y recouchait
   (0.3.4 : `kenshi::PlaceBodyNode`).
+- Le nœud a une **ancre**, `AnimationClass`+0x258 (Vector3 ; +0x25C, la hauteur, est lissée). La
+  mise à jour de l'animation (`0x5B5590`, table virtuelle d'`AnimationClass`, slot à `0x16F12A0`) et
+  `0x5B5980` remettent le nœud dessus à chaque image. Seule `AnimationClass::<set position and
+  direction>` (`0x5B18F0`, notre nom) écrit l'ancre : +0x258 = position abaissée de +0x2C8 − +0x2CC,
+  +0x25C = hauteur si le propriétaire le veut, orientation (+0x78) seulement si la direction n'est
+  pas nulle en x/z. Elle est appelée par la mise à jour de `CharMovement` (`0x65FFA0`, avec sa
+  position +0xC4 et sa direction +0xD0 ; sautée tant que son +0x320 est nul), par `0x7D3130`
+  (position du perso) et par `0x62B210`. Un `Node::setPosition` seul est donc défait à l'image
+  suivante si rien n'appelle cette fonction. C'était le cas pour un corps K.-O. relevé et téléporté
+  (`suite` 13/10 16:19 : nœud « 1066 units away again » 0,3 s après, recouché à 1147 de l'hôte).
+  Depuis 0.3.4, `kenshi::PlaceBodyNode` déplace le nœud et son ancre.
 - Reconstruire un ragdoll le lance en l'air.
 - Un corps qui s'effondre ne reste pas où étaient ses pieds : sa position (le bassin) finit à une
   distance à peu près fixe, d'un essai à l'autre, de l'endroit où il était debout (7 à 12 unités

@@ -114,6 +114,8 @@ recrutement au centre d'emploi, refusés avec un message.
     **Faire apparaître** : les objets sont posés par terre autour du perso, en piles de la taille
     que le jeu permet, et tout le monde les voit et peut les ramasser.
 
+  Un perso K.-O. téléporté se recouche à l'arrivée et ne retourne plus là où il gisait (v0.3.4, à
+  vérifier en jeu).
   Le joueur concerné reçoit un message (« L'hôte t'a téléporté près de lui. »…). Les mêmes actions
   existent en commandes : `admin god <id|all|host> on|off`, `admin tp <id|all> host`,
   `admin tp host <id>`, `admin tp <id> <id>`, `admin tp <id> point`, `admin tp <id> <x> <y> <z>`,

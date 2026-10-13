@@ -312,6 +312,8 @@ enum Fn : int {
     FnAiTasksClear,             // void AITaskSystem::<clear tasks>()   (our name, 0x5074A0: deletes every queued order (+0x80, count +0x78); what PlayerInterface::stopCharactersMovement (0x7F6470) calls on Character+0x650 -> +0x20 after CharMovement::halt; permanent jobs untouched)
     // ---- 0.3.4: player colours on the game's own names above the heads (plugin/map.cpp)
     FnNameTagUpdate,            // void CharacterNameTag::<update>()   (our name, 0x6E8100: vtable slot 1, every frame for each name tag: places it, and when +0x18 is set gives NameText its colour and caption)
+    // ---- 0.3.4: admin teleport of a knocked-out body (its body's scene node anchor)
+    FnAnimSetPosition,          // void AnimationClass::<set position and direction>(const Vector3& pos, const Vector3& dir)   (our name, 0x5B18F0: +0x258 = pos lowered by +0x2C8 - +0x2CC, the anchor the animation update 0x5B5590 puts the scene node back on; called by CharMovement's update 0x65FFA0; a zero dir leaves the orientation)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
