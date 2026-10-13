@@ -1196,7 +1196,13 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         otherFloor = ft != floorTry_.end() && ft->second.tries >= 3;
     }
     if ((err > cfg_.snapDistance && !otherFloor) || resync) {
-        kenshi::Teleport(c, target.pos, target.rot);
+        // drawn the way it goes, not backwards (see DrawnRotation below)
+        const bool snapFight = latest.combatTarget != 0;
+        const kc::Vec3 snapWant = kc::motion::WantFacing(kenshi::ForwardOf(target.rot), kc::motion::TravelDir(target, latest),
+                                                         (latest.flags & kc::kFlagMoving) != 0, snapFight);
+        const kc::Quat snapRot = snapFight ? target.rot : kc::motion::DrawnRotation(target.rot, snapWant);
+        lastTarget_[h].rot = snapRot;
+        kenshi::Teleport(c, target.pos, snapRot);
         lastDest_.erase(h);
         return;
     }
@@ -1302,12 +1308,14 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         // 0.3.4: stopped on the host and already turned the other way while ours still slides the last
         // units to its spot: ours faces the way it slides until it is there (kc::motion::SlideFacing),
         // drawn rotation included (lastTarget_ feeds hk_moveUpdate's rotation)
-        kc::Quat drawn = target.rot;
-        if (kc::Vec3 slide; !hostMoving && !fighting && kc::motion::SlideFacing(local, target.pos, kenshi::ForwardOf(target.rot), slide)) {
+        if (kc::Vec3 slide; !hostMoving && !fighting && kc::motion::SlideFacing(local, target.pos, kenshi::ForwardOf(target.rot), slide))
             want = slide;
-            drawn = kc::motion::YawQuat(slide);
-            lastTarget_[h].rot = drawn;
-        }
+        // 0.3.4 (4th farfps run, J2 Admag, a shop guard climbing a ramp): the drawn rotation is the
+        // host's, and the host's pointed back down the ramp now and then (174-177 degrees off the way
+        // it went, 3 backward steps) while the walk itself faced the way it went. Drawn the way it
+        // faces when the host's rotation points more than 90 degrees from it (kc::motion::DrawnRotation).
+        const kc::Quat drawn = fighting ? target.rot : kc::motion::DrawnRotation(target.rot, want);
+        if (!fighting) lastTarget_[h].rot = drawn;   // what hk_moveUpdate draws after the game's update
         const float limit = (!hostMoving || fighting) ? 0.999f : 0.9f;
         if (kenshi::GetFacing(c, mine) && mine.x * want.x + mine.z * want.z < limit) kenshi::FaceDirection(c, want);
         // the drawn rotation too (hk_moveUpdate does it after the game's movement update; this one
