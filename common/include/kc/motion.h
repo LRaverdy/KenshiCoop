@@ -258,6 +258,16 @@ inline Quat YawQuat(const Vec3& dir) {
     return Quat{std::cos(a), 0.0f, std::sin(a), 0.0f};
 }
 
+// The rotation drawn for our copy: the host's, unless its forward points more than 90 degrees away
+// from where ours faces (`want`, from WantFacing / SlideFacing): then that way. 4th farfps run
+// (13/10 17:21, J2 Admag): a guard climbing a ramp was drawn with the host's rotation pointing back
+// down it now and then (174, 177 and 159 degrees from the way it went) while its walk faced up it.
+inline Quat DrawnRotation(const Quat& hostRot, const Vec3& want) {
+    const Vec3 w = Flat(want), f = HostForward(hostRot);
+    if (IsZero2(w) || IsZero2(f) || Dot2(w, f) >= 0.0f) return hostRot;
+    return YawQuat(w);
+}
+
 // ---------------------------------------------------------------- floors
 // 0.3.4 (farfps 13/10, client J4 at Okran's Fist; already on 12/10 at Okran's Shield): two paladins
 // standing upstairs on the host (floor group 10, y 1556) stood 83 units lower on the client, on the

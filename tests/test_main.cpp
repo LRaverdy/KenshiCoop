@@ -6152,6 +6152,11 @@ static void TestMotion() {
         CHECK(SlideFacing(Vec3{0, 0, 7}, Vec3{0, 0, 0}, hostFwd, slide) && slide.z < -0.99f);
         CHECK(!SlideFacing(Vec3{0, 0, 0.5f}, Vec3{0, 0, 0}, hostFwd, slide));   // there: the host's facing
         CHECK(!SlideFacing(Vec3{0, 0, -7}, Vec3{0, 0, 0}, hostFwd, slide));     // sliding the way it faces
+        const float s2r = std::sqrt(0.5f);
+        const Quat back{s2r, 0, -s2r, 0};                                       // facing -x
+        CHECK(HostForward(DrawnRotation(back, Vec3{1, 0, 0})).x > 0.99f);      // 4th run: drawn the way it goes
+        CHECK(DrawnRotation(back, Vec3{-0.8f, 0, 0.6f}).w == back.w);          // within 90 degrees: the host's
+        CHECK(DrawnRotation(back, Vec3{}).w == back.w);
         const Quat q = YawQuat(Vec3{0.6f, 0, -0.8f});
         CHECK(std::fabs(HostForward(q).x - 0.6f) < 1e-4f && std::fabs(HostForward(q).z + 0.8f) < 1e-4f);
     }

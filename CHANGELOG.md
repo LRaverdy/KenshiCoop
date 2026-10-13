@@ -158,6 +158,18 @@ Protocole inchangé (36).
     reste plus d'une unité jusqu'à la place de l'hôte et que le regard de l'hôte pointe à plus de 90°
     de ce chemin, la copie regarde (et est dessinée) dans le sens où elle glisse ; arrivée, elle prend
     le regard de l'hôte (`kc::motion::SlideFacing`, `TestMotion` 4c2).
+  - **Quatrième essai (`farfps --clients 2`, 13/10 17:15-17:21, 29/30)** : marche à reculons chez J2
+    (Admag, `1:58:2260376064:3`, un Garde Magasin qui monte une rampe : y 1513 -> 1575 en 2,5 s).
+    Sa marche regardait le sens où il allait (0,89 ; 0,46), mais à 3,6, 4,21 et 4,31 s sa rotation
+    dessinée pointait vers le bas de la rampe (-0,96 ; -0,28), 159 à 177° du déplacement : la rotation
+    dessinée est toujours celle de l'hôte, qui pointait par moments vers sa destination (relevé de
+    l'hôte 2 s avant : regard -0,84 ; -0,54, destination à l'ouest et plus haut, alors que le chemin
+    montait la rampe vers l'est ; perso hors de la vue de l'hôte). Les grands
+    pas (9,8 unités en 0,1 s, vitesse 0) sont les recalages au-delà de 15 unités sur la pente (la
+    hauteur diffère), qui reprenaient aussi la rotation de l'hôte. Maintenant la rotation dessinée
+    (après la mise à jour du jeu, dans `Apply` et aux recalages) est celle de l'hôte sauf quand elle
+    pointe à plus de 90° du regard voulu pour la copie (`WantFacing` / `SlideFacing`) : alors ce
+    regard-là (`kc::motion::DrawnRotation`). Inchangé en combat.
     **Pas relancé en jeu.**
     le relevé de mouvement. Tests unitaires `TestMotion` (4c, 4d). **Pas relancé en jeu.**
 - **Test `workstations` « au moins un poste a des ouvriers » : cause trouvée, la disposition des
