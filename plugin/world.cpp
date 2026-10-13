@@ -2746,7 +2746,11 @@ KenshiWorld::RemoteDialog& KenshiWorld::Remember(void* dialogue, kenshi::Charact
     RemoteDialog& r = it->second;
     if (pc) { r.pc = pc; kenshi::GetHandle(pc, r.pcH); }
     if (other) {
-        if (other != r.other) r.placed = false;   // someone else takes over (a leader): measured anew
+        if (other != r.other) {   // someone else takes over (a leader): measured anew
+            r.placed = false;
+            r.fightAtStart = false;
+            r.fightSweeps = 0;
+        }
         r.other = other;
         kenshi::GetHandle(other, r.otherH);
         lastDialogNpc_ = r.otherH;
@@ -2986,26 +2990,45 @@ kc::Handle KenshiWorld::LastDialogNpc() {
 }
 
 // A conversation is over for good when its dialogue is gone or ended, a side is dead, knocked out or
-// down, the player's character is no longer another player's, or one of them jumped away (a
-// teleport: more than 20 m between two sweeps 0.5 s apart; nobody runs that fast) or they ended up
-// 100 m further apart than when it started: the game may not close the window itself then. Ended in
-// the game, and closed. (An absolute distance is wrong: a conversation may start from 40 m and more,
-// as the in-game test showed: every conversation the Chef Voleur started was closed at once.)
+// down, the player's character is no longer another player's, one of them jumped away (a teleport:
+// more than 20 m between two sweeps 0.5 s apart; nobody runs that fast), they ended up 100 m further
+// apart than when it started, or a fight started (kc::talk::DecideSweep): the game may not close the
+// window itself then. Ended in the game, and closed. (An absolute distance is wrong: a conversation
+// may start from 40 m and more, as the in-game test showed: every conversation the Chef Voleur
+// started was closed at once.)
+// 0.3.4 (fix, in-game test of 13 October): a new conversation is placed on the first frame it is
+// seen, not at the next sweep (a teleport 0.4 s after it opened came before its first positions and
+// was never seen); and a fight that starts after it opened ends it (nothing did: the conversation
+// stayed open on the client's screen through the whole fight).
 void KenshiWorld::SweepDialogs() {
     const double now = NowSeconds();
-    if (now < nextDialogSweep_) return;
-    nextDialogSweep_ = now + 0.5;
-    struct Gone { void* d; uint32_t id; kc::Handle pc, other; bool end; const char* why; };
+    const bool full = now >= nextDialogSweep_;
+    if (full) nextDialogSweep_ = now + 0.5;
+    struct Gone { void* d; uint32_t id; kc::Handle pc, other; bool end; std::string why; };
     std::vector<Gone> gone;
     auto v = View();
     {
         std::lock_guard<std::mutex> lk(dialogMutex_);
         for (auto& [dl, r] : remoteDialogs_) {
+            if (!full && r.placed) continue;   // between sweeps: only new conversations are placed
             kenshi::Character* pc = r.pcH.valid() ? kenshi::Resolve(r.pcH) : nullptr;
             kenshi::Character* other = r.otherH.valid() ? kenshi::Resolve(r.otherH) : nullptr;
             const bool alive = kenshi::DialogueOwner(dl) != nullptr;
-            const char* why = nullptr;
             kc::Vec3 a, b;
+            kc::Handle foe;
+            const bool fighting = pc && other && (kenshi::ReadCombat(pc, foe) || kenshi::ReadCombat(other, foe));
+            if (!r.placed) {
+                if (alive && pc && pc == r.pc && other && other == r.other && kenshi::GetPosition(pc, a) && kenshi::GetPosition(other, b)) {
+                    r.placed = true;
+                    r.startDist = Dist(a, b);
+                    r.pcAt = a;
+                    r.otherAt = b;
+                    r.fightAtStart = fighting;
+                    r.fightSweeps = 0;
+                }
+                if (!full) continue;
+            }
+            std::string why;
             if (!alive) why = "its character is gone";
             else if (!pc || pc != r.pc || !other || other != r.other) why = "a character in it is gone";
             else if (kenshi::DialogueEnded(dl)) why = "the game ended it";
@@ -3013,23 +3036,36 @@ void KenshiWorld::SweepDialogs() {
                      kenshi::IsUnconscious(other))
                 why = "a character in it is down";
             else if (!v->squadForeign.count(pc)) why = "the character is no longer another player's";
-            else if (kenshi::GetPosition(pc, a) && kenshi::GetPosition(other, b)) {
-                if (!r.placed) {
-                    r.placed = true;
-                    r.startDist = Dist(a, b);
-                } else if (Dist(a, r.pcAt) > 200.0f || Dist(b, r.otherAt) > 200.0f) {
-                    why = "a character in it jumped away (teleport)";
-                } else if (Dist(a, b) > r.startDist + 1000.0f) {
-                    why = "they are far apart";
+            else if (r.placed && kenshi::GetPosition(pc, a) && kenshi::GetPosition(other, b)) {
+                kc::talk::SweepFacts f;
+                f.pcMoved = Dist(a, r.pcAt);
+                f.otherMoved = Dist(b, r.otherAt);
+                f.dist = Dist(a, b);
+                f.startDist = r.startDist;
+                r.fightSweeps = kc::talk::CountFightSweeps(r.fightAtStart, fighting, r.fightSweeps);
+                f.fightSweeps = r.fightSweeps;
+                char line[200];
+                switch (kc::talk::DecideSweep(f)) {
+                case kc::talk::SweepEnd::Jump:
+                    snprintf(line, sizeof(line), "a character in it jumped away (teleport: %.0f and %.0f units since the last sweep)", double(f.pcMoved),
+                             double(f.otherMoved));
+                    why = line;
+                    break;
+                case kc::talk::SweepEnd::Apart:
+                    snprintf(line, sizeof(line), "they are far apart (%.0f units, %.0f when it started)", double(f.dist), double(f.startDist));
+                    why = line;
+                    break;
+                case kc::talk::SweepEnd::Fight: why = "a fight started (a character in it is in combat)"; break;
+                case kc::talk::SweepEnd::None: break;
                 }
                 r.pcAt = a;
                 r.otherAt = b;
             }
-            if (why) gone.push_back({dl, r.id, r.pcH, r.otherH, alive && !kenshi::DialogueEnded(dl), why});
+            if (!why.empty()) gone.push_back({dl, r.id, r.pcH, r.otherH, alive && !kenshi::DialogueEnded(dl), std::move(why)});
         }
     }
     for (const Gone& g : gone) {
-        Log("conversation %u ends: %s", g.id, g.why);
+        Log("conversation %u ends: %s", g.id, g.why.c_str());
         if (g.end) {
             CallScopeGuard scopeRepair("dialogue end");   // the call runs our hooks (kc/call_scopes.h)
             kenshi::CallEndDialogue(g.d);   // closes the window through setInDialog(false) (hook: Close)

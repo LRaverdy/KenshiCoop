@@ -78,4 +78,41 @@ inline bool HoldLine(bool shownToPlayer, size_t replies, double waitingSeconds) 
     return shownToPlayer && replies > 0 && waitingSeconds >= 0 && waitingSeconds < kMaxHold;
 }
 
+// ---------------------------------------------------------------- 3. the host ends it (sweep)
+// A conversation shown on a client's screen that the game does not end by itself: the host's sweep
+// (every 0.5 s) ends it when a character in it jumped away (a teleport), they ended up far apart, or
+// a fight started. In single player the window pauses the game, so none of this happens while it is
+// open; on the host, a line kept waiting (HoldLine) never runs out, so the game would not end it
+// either. In-game test of 13 October (v0.3.4): a teleport 0.4 s after the conversation opened was not
+// seen (the first positions were taken after it), and a fight never ended it (no fight rule).
+constexpr float kJumpUnits = 200.0f;     // more than 20 m between two sweeps 0.5 s apart: nobody runs that fast
+constexpr float kApartUnits = 1000.0f;   // 100 m further apart than when it started
+constexpr int kFightSweeps = 2;          // in a fight on two sweeps in a row (not a flicker of the combat flag)
+
+enum class SweepEnd { None, Jump, Apart, Fight };
+
+struct SweepFacts {
+    float pcMoved = 0, otherMoved = 0;   // since the last sweep (or since the conversation opened)
+    float dist = 0, startDist = 0;       // between the two now, and when it opened
+    int fightSweeps = 0;                 // sweeps in a row with a fight that began after it opened
+};
+
+inline SweepEnd DecideSweep(const SweepFacts& f) {
+    if (f.pcMoved > kJumpUnits || f.otherMoved > kJumpUnits) return SweepEnd::Jump;
+    if (f.dist > f.startDist + kApartUnits) return SweepEnd::Apart;
+    if (f.fightSweeps >= kFightSweeps) return SweepEnd::Fight;
+    return SweepEnd::None;
+}
+
+// A fight already going on when the conversation opened (a talk in the middle of a fight) does not end
+// it; one that starts after it does. Once nobody fights any more, a new fight counts again.
+// Returns the new count of sweeps in a row with a fight that counts.
+inline int CountFightSweeps(bool& fightAtStart, bool fightingNow, int sweeps) {
+    if (!fightingNow) {
+        fightAtStart = false;
+        return 0;
+    }
+    return fightAtStart ? 0 : sweeps + 1;
+}
+
 } // namespace kc::talk

@@ -1227,6 +1227,10 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
 - Hors pause, une conversation commencée par une bulle se ferme ou avance toute seule quand la
   minuterie de la bulle (2 s + 0,12 s par caractère) est écoulée (`Dialogue::update`) : chez l'hôte,
   la conversation d'un client n'a pas cette pause (0.3.4 : le mod garde la minuterie).
+- Une téléportation ou un combat d'un des deux persos ne termine pas la conversation dans le jeu de
+  l'hôte (essai du 13/10 : toujours ouverte 14 s après une TP de 2100 unités, 19 s après le début
+  d'un combat ; la réplique du PNJ, plus de 20 s, n'était pas écoulée). C'est le balayage du mod
+  (`SweepDialogs`) qui la termine (`endDialogue`).
 - « Parler » n'est proposé par le clic droit que si le jeu trouve une réplique « parle-moi » sur la
   copie locale du PNJ (`0x67AC00`) ; sinon le clic ne fait rien du tout.
 - `startConversation` / `startPlayerConversation` sont appelés sur le `Dialogue` de l'un ou l'autre

@@ -1168,27 +1168,32 @@ def exp_npctalk(host, cli):
     log("host spawns an NPC next to the client's character", cmd(host, f"spawnnpc 15 15 {own}"))
     time.sleep(3)
 
-    # 1. a right click as the mouse gives it
+    # 1. a right click as the mouse gives it. The nearest NPCs of kctest_town have nothing to answer
+    #    (13 October: Bandit affame, Citoyen Shinobi, Garde Ninja: "the NPC has nothing to say"; the
+    #    Chirurgien's line has no answers, so no window): their talk order reaching the host is checked,
+    #    then NPCs known to hold a conversation with answers, by name (Chef Voleur, a few houses away:
+    #    longer walk)
     talkable = None
-    for k in range(5):
+    targets = [str(k) for k in range(3)] + ["name:Chef_Voleur", "name:Thief_Leader", "name:Marchand", "name:Trader"]
+    for k in targets:
         mark = len(host_log())
         r = cmd(cli, f"talkclick {own} {k} click")
-        log(f"client: right click on the NPC nearest #{k}", r)
+        log(f"client: right click on the NPC {k if k.startswith('name:') else 'nearest #' + k}", r)
         if not r[0]:
             continue
         time.sleep(1.5)
         hl = host_log()[mark:]
         got = 'order "talk"' in hl
-        check(f"parler : le clic droit sur le PNJ #{k} donne un ordre a l'hote (jeu ou secours)", got,
+        check(f"parler : le clic droit sur le PNJ {k} donne un ordre a l'hote (jeu ou secours)", got,
               [l for l in hl.splitlines() if "talk" in l][-4:])
-        if got and wait_open(True, 15).get("open") == "1":
+        if got and wait_open(True, 30 if k.startswith("name:") else 15).get("open") == "1":
             talkable = k
             break
     check("parler : un clic droit du client ouvre une conversation", talkable is not None, dialog()["raw"])
     leave()
 
     # 2. the game gives no order: our fallback
-    k = talkable if talkable is not None else 0
+    k = talkable if talkable is not None else "0"
     mark = len(host_log())
     r = cmd(cli, f"talkclick {own} {k} nogame")
     log("client: a click the game left without an order", r)
