@@ -3737,6 +3737,24 @@ static void TestNameTags() {
     s.nameFrames.push_back(kcp::NameFrameRect(100, 50, 200, 32, 80, 16, 2));
     kcp::SceneToDisplay(s, 1920, 1080);
     CHECK(near(s.nameFrames[0].x, 2 * (200 - 40 - kcp::kNameFramePadX)) && near(s.nameFrames[0].w, 2 * (80 + 2 * kcp::kNameFramePadX)));
+    // who writes the name: the game's tag only when the game really shows it
+    using kcp::NameBy;
+    using kcp::WhoWritesName;
+    CHECK(WhoWritesName(true, true, true, 100, 100, 101) == NameBy::Game);
+    CHECK(WhoWritesName(false, false, false, 0, 100, 101) == NameBy::NoTag);
+    CHECK(WhoWritesName(true, false, true, 100, 100, 101) == NameBy::NamesOff);
+    // 13 October, client 1: the stand-in of a player who joined later, its tag never updated by the
+    // game while the others are: the overlay writes that name (and frames it for a main character)
+    CHECK(WhoWritesName(true, true, false, 0, 100, 101) == NameBy::NotUpdated);
+    CHECK(WhoWritesName(true, true, true, 50, 100, 101) == NameBy::NotUpdated);   // stopped being updated
+    CHECK(WhoWritesName(true, true, true, 101 - kcp::kNameTagUpdateWindow, 100, 101) == NameBy::Game);
+    // updated, its widget not made yet (first update)
+    CHECK(WhoWritesName(true, true, false, 100, 100, 101) == NameBy::NoWidget);
+    // no tag updated at all lately (none seen yet): staleness proves nothing, the widget decides
+    CHECK(WhoWritesName(true, true, true, 0, 0, 101) == NameBy::Game);
+    CHECK(WhoWritesName(true, true, true, 10, 10, 500) == NameBy::Game);
+    CHECK(WhoWritesName(true, true, false, 0, 0, 101) == NameBy::NoWidget);
+    CHECK(std::string(kcp::NameByLabel(NameBy::NotUpdated)) == "notupdated");
 }
 
 static void TestMap() {

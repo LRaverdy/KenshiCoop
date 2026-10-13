@@ -8,6 +8,27 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 Protocole inchangé (36).
 
+- **Noms au-dessus des têtes : le perso d'un joueur arrivé plus tard (test `map`, 13/10, 48/50)**.
+  Chez le client 1, le nom du perso principal du client 2 (arrivé après lui) n'était ni à sa couleur
+  (`tint=0`) ni encadré, de son arrivée (10:29:54) à la fin du test (10:30:41) : le jeu de ce client
+  ne mettait pas à jour ce nom (aucun widget, donc ni couleur ni cadre possibles ; 2 cadres sur 3
+  pendant tout ce temps, aucune recoloration de plus), alors que l'hôte et le client 2 le montraient
+  bien. Le mod note maintenant chaque nom que le jeu met à jour (détour de
+  `CharacterNameTag::<update>`) : un nom que le jeu ne met pas à jour depuis 30 images alors qu'il
+  met les autres à jour, ou dont le widget n'est pas fait, est écrit par l'overlay (couleur du joueur,
+  cadre pour le perso principal) ; toujours un seul nom. `mapscene tetes` dit pourquoi (`why=`), le
+  journal « names above heads » compte ces noms. La réponse de `mapscene tetes` n'était **pas**
+  coupée (~930 caractères, entière dans le journal du client) : seuls le journal du test (600
+  caractères) et le détail des contrôles (300) la coupaient, cachant l'entrée fautive ; le test écrit
+  maintenant la réponse entière, nomme les noms fautifs et réessaie 3 s. Pourquoi le jeu ne met pas à
+  jour ce nom (perso recréé chez le client à l'arrivée du joueur) reste à voir en jeu.
+- **Test `npctalk` : les étapes 2 et 3 visaient un autre PNJ (13/10, 12/14)**. Le PNJ de l'étape 1
+  était « le 3e plus proche » (Chef Voleur) ; les étapes suivantes redemandaient « le 3e plus
+  proche », recalculé depuis la nouvelle place du perso, à côté du Chef Voleur : Marchand Shinobi
+  (ordre de secours) puis un Voleur (copie non liée ; l'hôte : « the NPC has nothing to say »).
+  Aucune conversation ne s'est ouverte. Le mod a bien fait son travail (ordre envoyé, PNJ retrouvé
+  par type et endroit) ; le test vise maintenant le même PNJ par son nom (`name:Chef_Voleur`).
+
 - **Travaux des persos d'un client : test `clientjobs` corrigé (13/10, 15/17)**. Les deux échecs
   venaient du test, pas du mod. (1) « une place libérée est reprise » (2/3 au bout de 60 s) : le perso
   du client est bien allé **de lui-même** au filon quand le mineur de l'hôte est parti (1904 -> 125

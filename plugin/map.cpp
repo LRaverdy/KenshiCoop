@@ -429,6 +429,11 @@ std::mutex g_tagsMutex;
 std::unordered_map<const void*, TagWant> g_tagWant;
 std::unordered_map<const void*, uint32_t> g_tagApplied;
 unsigned long long g_tagsRecoloured = 0, g_tagsRestored = 0, g_tagsFailed = 0;
+// The scene frame (UpdateMapScene calls) in which the game last updated each name tag, and any tag:
+// a tag the game does not update has no widget and shows nothing, the overlay writes that name.
+uint64_t g_sceneFrame = 0;
+std::unordered_map<const void*, uint64_t> g_tagSeen;
+uint64_t g_anyTagSeen = 0;
 
 // ---- game functions (kFunctions)
 using WorldToMapFn = int* (*)(void* mapScreen, int* out, const float* pos);
@@ -637,6 +642,9 @@ void hk_nameTagUpdate(void* tag, void* a2) {
     o_nameTagUpdate(tag, a2);
     if (!tag) return;
     std::lock_guard<std::mutex> lk(g_tagsMutex);
+    if (g_tagSeen.size() > 4096) g_tagSeen.clear();   // tags of characters long gone
+    g_tagSeen[tag] = g_sceneFrame;
+    g_anyTagSeen = g_sceneFrame;
     auto want = g_tagWant.find(tag);
     auto applied = g_tagApplied.find(tag);
     if (want == g_tagWant.end()) {
@@ -767,9 +775,13 @@ void LogGuiState(const MapScene& s, const GuiStats& st) {
                 st.clipped, st.covered);
     }
     if (s.showHeads) {
-        int game = 0, overlay = 0;
-        for (const auto& c : s.chars)
-            if (c.head) ++(c.gameName ? game : overlay);
+        int game = 0, overlay = 0, notUpdated = 0, noWidget = 0;
+        for (const auto& c : s.chars) {
+            if (!c.head) continue;
+            ++(c.gameName ? game : overlay);
+            notUpdated += c.nameBy == NameBy::NotUpdated;
+            noWidget += c.nameBy == NameBy::NoWidget;
+        }
         size_t tags = 0;
         unsigned long long recoloured = 0, failed = 0;
         {
@@ -778,11 +790,13 @@ void LogGuiState(const MapScene& s, const GuiStats& st) {
             recoloured = g_tagsRecoloured;
             failed = g_tagsFailed;
         }
-        snprintf(b, sizeof(b), "%d/%d/%zu/%zu/%d/%d/%llu", game, overlay, tags, s.nameFrames.size(), st.namesHidden, st.namesCovered, failed);
+        snprintf(b, sizeof(b), "%d/%d/%zu/%zu/%d/%d/%llu/%d/%d", game, overlay, tags, s.nameFrames.size(), st.namesHidden, st.namesCovered, failed,
+                 notUpdated, noWidget);
         if (g_logNames.Due(b, 2.0))
             Log("names above heads: %d by the game's name tags (%zu tag(s) in player colours, %llu recolour(s) so far, %llu failed), %d drawn by the "
-                "overlay; %zu main character frame(s) (%d main names hidden, %d under a game window)",
-                game, tags, recoloured, failed, overlay, s.nameFrames.size(), st.namesHidden, st.namesCovered);
+                "overlay (%d with a tag the game does not update, %d with a tag not made yet); %zu main character frame(s) (%d main names hidden, "
+                "%d under a game window)",
+                game, tags, recoloured, failed, overlay, notUpdated, noWidget, s.nameFrames.size(), st.namesHidden, st.namesCovered);
     }
 }
 } // namespace
@@ -808,6 +822,12 @@ void UpdateMapScene(kc::Session& session, KenshiWorld& world, const Config& cfg,
     // the name tags to colour, handed to the update hook on the way out (none outside a session,
     // with the setting off or without a world: the game's colours come back)
     std::unordered_map<const void*, TagWant> tagWant;
+    uint64_t frame = 0, anyTagSeen = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_tagsMutex);
+        frame = ++g_sceneFrame;
+        anyTagSeen = g_anyTagSeen;
+    }
     struct PublishTags {
         std::unordered_map<const void*, TagWant>& want;
         ~PublishTags() {
@@ -894,14 +914,25 @@ void UpdateMapScene(kc::Session& session, KenshiWorld& world, const Config& cfg,
                 sc.head = !sc.dead;
                 sc.local = h;
                 if (sc.avatar) avatarOwner[local] = c.owner;
-                // its name above its head: the game's own tag when it shows names, recoloured
-                if (s.showHeads)
-                    if (const void* tag = NameTagOf(local)) {
+                // its name above its head: the game's own tag when the game really shows it
+                // (names on, its widget made, updated by the game lately), recoloured; else the
+                // overlay writes it
+                if (s.showHeads) {
+                    const void* tag = NameTagOf(local);
+                    uint8_t shown = 0;
+                    void *root = nullptr, *text = nullptr;
+                    uint64_t seen = 0;
+                    if (tag) {
                         tagWant[tag] = {c.owner, sc.avatar};
-                        uint8_t shown = 0;
-                        sc.gameName = Rd(tag, kTagShown, shown) && shown;
-                        if (sc.gameName && sc.avatar && !sc.dead) s.nameFrameChars.push_back({h, c.owner});
+                        std::lock_guard<std::mutex> lk(g_tagsMutex);
+                        auto it = g_tagSeen.find(tag);
+                        if (it != g_tagSeen.end()) seen = it->second;
                     }
+                    sc.nameBy = WhoWritesName(tag != nullptr, tag && Rd(tag, kTagShown, shown) && shown, tag && NameTagWidgets(tag, root, text), seen,
+                                              anyTagSeen, frame);
+                    sc.gameName = sc.nameBy == NameBy::Game;
+                    if (sc.gameName && sc.avatar && !sc.dead) s.nameFrameChars.push_back({h, c.owner});
+                }
             }
             s.chars.push_back(std::move(sc));
         }
@@ -1080,6 +1111,7 @@ std::string DescribeMapScene(const std::string& what) {
             const bool on = proj && sx >= 0 && sy >= 0 && sx <= w && sy <= h;
             o << ' ' << clean(c.name) << ":owner=" << int(c.owner) << ":col=" << colour(c.owner) << ":main=" << c.avatar
               << ":label=" << (c.gameName ? "jeu" : "overlay");
+            if (!c.gameName) o << ":why=" << NameByLabel(c.nameBy);   // why not the game's tag
             if (c.gameName) {
                 // the colour the game's name has now, against the player's
                 const void* tag = NameTagOf(kenshi::Resolve(c.local));

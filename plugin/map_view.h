@@ -12,6 +12,40 @@
 
 namespace kcp {
 
+// Who writes a player's character's name above its head (0.3.4). The game's own name tag only when
+// the game really shows it: names on (its "shown" flag), its widget made, and updated by the game
+// lately. Otherwise the overlay writes the name (never both, never none).
+enum class NameBy : uint8_t {
+    Game = 0,
+    NoTag,          // no CharacterNameTag on that character
+    NamesOff,       // the game's names turned off (tag's shown flag)
+    NotUpdated,     // the game updates other name tags but not this one (13 October, client 1: the
+                    // stand-in of a player who joined later had a tag the game never updated)
+    NoWidget,       // its CharacterNameTagWidget not made (the game makes it at the tag's first update)
+};
+inline const char* NameByLabel(NameBy b) {
+    switch (b) {
+        case NameBy::Game: return "game";
+        case NameBy::NoTag: return "notag";
+        case NameBy::NamesOff: return "off";
+        case NameBy::NotUpdated: return "notupdated";
+        case NameBy::NoWidget: return "nowidget";
+    }
+    return "?";
+}
+// tagSeen / anySeen: the scene frame in which the game last updated this tag / any name tag (0:
+// never); frame: the current one. When the game updates no tag at all lately (anySeen old or 0),
+// staleness proves nothing: the shown flag and the widget decide.
+constexpr uint64_t kNameTagUpdateWindow = 30;   // scene frames
+inline NameBy WhoWritesName(bool hasTag, bool shown, bool widget, uint64_t tagSeen, uint64_t anySeen, uint64_t frame) {
+    if (!hasTag) return NameBy::NoTag;
+    if (!shown) return NameBy::NamesOff;
+    const auto recent = [&](uint64_t seen) { return seen != 0 && seen <= frame && frame - seen <= kNameTagUpdateWindow; };
+    if (recent(anySeen) && !recent(tagSeen)) return NameBy::NotUpdated;
+    if (!widget) return NameBy::NoWidget;
+    return NameBy::Game;
+}
+
 struct SceneChar {
     uint32_t netId = 0;
     uint8_t owner = 0;
@@ -24,7 +58,8 @@ struct SceneChar {
     // name itself at the head. Never both.
     bool head = false;
     bool gameName = false;
-    kc::Handle local;           // its handle in this machine's world (head only)
+    NameBy nameBy = NameBy::NoTag;   // why (gameName == (nameBy == NameBy::Game))
+    kc::Handle local;          // its handle in this machine's world (head only)
 };
 struct SceneThreat {
     kc::Vec3 pos;

@@ -1226,7 +1226,9 @@ la fenêtre du client.
     autour du texte du nom relu dans l'interface du jeu à chaque image ; pas de cadre quand le nom est
     caché, loin, ou sous une fenêtre du jeu).
   - **Quand le jeu n'affiche pas les noms** (son option « Afficher les noms des persos » éteinte, ou
-    pas de nom pour ce perso) : l'overlay écrit lui-même le **nom du perso** à la couleur du joueur,
+    pas de nom pour ce perso, ou un nom que **le jeu ne met pas à jour** : son widget pas encore fait,
+    ou le jeu met à jour les autres noms mais pas celui-là depuis plus de 30 images — 13/10, chez le
+    client 1, le perso d'un joueur arrivé après lui) : l'overlay écrit lui-même le **nom du perso** à la couleur du joueur,
     juste au-dessus de sa tête (projeté avec la caméra du jeu), encadré pour le perso principal.
   - L'ancien repère (curseur + nom du **joueur**) est retiré : il se superposait au nom du jeu.
   - Chaque machine (hôte et clients) colore les persos de tous les joueurs d'après le flux de carte
@@ -1235,7 +1237,9 @@ la fenêtre du client.
     des têtes ») ; quand le jeu vient de remettre sa couleur (drapeau +0x18), la couleur du joueur est
     remise dans la même image (pas de clignotement), sinon seulement quand elle change.
   - Réglage : « Noms des persos à la couleur de leur joueur » (`head_markers`, section « Affichage »).
-  - Test : `mapscene tetes` ; journal « names above heads: … » à chaque changement (2 s au plus).
+  - Test : `mapscene tetes` (`why=` pour un nom écrit par l'overlay : `off`, `notag`, `notupdated`,
+    `nowidget`) ; journal « names above heads: … » à chaque changement (2 s au plus), avec le nombre
+    de noms que le jeu ne met pas à jour.
 - **Barre d'escouade** : le portrait des persos des joueurs reçoit un cadre à la couleur du joueur
   (dessiné par l'overlay sur la partie visible du portrait, relue dans le jeu à chaque image) ; les
   recrues gardent le cadre normal. Pas de cadre pour une case cachée (cases recyclées par la liste),
