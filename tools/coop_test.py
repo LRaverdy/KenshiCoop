@@ -8129,10 +8129,16 @@ def exp_workstations(host, cli, minutes=2.0):
     # ---- the posts: the host places one row, the client the other (its placements go to the host)
     placed = {}   # label -> (sid, who)
     for row, (label, sids) in enumerate(WORKSTATIONS):
-        for who, pid, idx, dz in (("hote", host, 0, -80), ("client", cli, own, 80)):
+        # Both rows around squad member 0, 300 apart, the posts 90 apart (13/10 16:04: the client's row,
+        # around its own character as its game had it, came 36 units from the host's, the posts 60
+        # apart: two rows of buildings almost touching. The researcher, ordered to the research bench
+        # 87 units away, went into that strip (29585,10466, between the stove and the bench) and stood
+        # there for 2 min at x3 with its task (tasks=1), the bench at 0/1: it could not reach the
+        # bench's place. The posts were never reachable, in every run of this test.)
+        for who, pid, idx, dz in (("hote", host, 0, -150), ("client", cli, 0, 150)):
             got = None
             for sid in sids:
-                ok, t, spot = place_valid(pid, sid, idx, -150 + 60 * row, dz)
+                ok, t, spot = place_valid(pid, sid, idx, -225 + 90 * row, dz)
                 log(f"{who} places {label}", sid, ok, t, spot)
                 if ok:
                     got = sid

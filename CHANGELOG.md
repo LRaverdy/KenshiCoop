@@ -110,6 +110,17 @@ Protocole inchangé (36).
       Retiré quand même : la téléportation à chaque image des copies dont l'étage est refusé.
     **Pas relancé en jeu.**
     le relevé de mouvement. Tests unitaires `TestMotion` (4c, 4d). **Pas relancé en jeu.**
+- **Test `workstations` « au moins un poste a des ouvriers » : cause trouvée, la disposition des
+  postes (13/10 16:04, relevés `charstate` / `machine` ajoutés au passage précédent)**. Le chercheur
+  (membre 3), envoyé au banc de recherche à 87 unités, est resté 2 min à x3 au même endroit
+  (29585,10466) avec sa tâche (`tasks=1`), le banc à 0/1 (`flags=67` : bien au joueur). Les postes
+  formaient deux rangées à **36 unités** l'une de l'autre (z 10460 pour l'hôte, z 10496 pour le
+  client : le client posait autour de son propre perso tel que son jeu le plaçait), espacés de 60
+  (fermes comprises) : une double rangée presque jointive, et le chercheur s'était arrêté dans
+  cette bande, entre la cuisinière et l'établi. Les postes n'étaient pas atteignables, à chaque
+  passage de ce test ; ni le mod ni le jeu (JOBS allumé, banc qui accepte un opérateur) n'étaient en
+  cause. Les deux rangées sont maintenant posées autour du membre 0, à 300 l'une de l'autre, les
+  postes à 90 d'écart. Non revérifié en jeu.
 - **Tests du 13/10 15:05-15:32 sur la v0.3.4 fusionnée (`recruits` 21/21, `clientjobs` 21/21)** :
   - `animalshop` 9/11 : l'animal rejoint maintenant l'escouade (journal de l'hôte : « character
     editor of 1 character(s) (mode 1) not opened here », puis « a new squad character (Chèvre) goes
