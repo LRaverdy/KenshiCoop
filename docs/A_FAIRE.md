@@ -2,6 +2,343 @@
 
 Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a vu.
 
+## 16 octobre 2026, soir : test de la 0.3.5 avec rob1 et Geoffrey (journal de l'hôte `KenshiCoop.log`, 21:20-)
+
+1. **Geoffrey bloqué sur « un écran dans un désert » quand il arrive pendant l'éditeur de rob1.**
+   - 21:23:55 Geoffrey arrive pendant que rob1 est dans l'éditeur de personnage : monde chargé, puis
+     « join queue: position 2/2, waiting for rob1 » (partie en pause). 21:26:19 rob1 ferme l'éditeur,
+     tour de Geoffrey : « character editor opened: ok » chez lui, puis **plus aucune action** pendant
+     2 min 30 ; il quitte à 21:28:55 (« left during their turn »).
+   - Le « désert » est sans doute la scène de l'éditeur : pendant l'éditeur, les persos sont à ~65 654
+     unités de la ville (« sync NEEDS A LOOK … max offset 65658 » chez rob1 pendant son éditeur, pareil
+     chez Geoffrey au 2e essai).
+   - Revenu à 21:29:36 : l'éditeur rouvre tout de suite et marche (renommé « plopette » 21:29:59).
+     Différence : au 1er essai l'éditeur s'ouvre après 2 min d'attente en file, en pause.
+   - À faire : savoir ce qu'il voyait (fenêtre d'éditeur absente ? présente mais muette ?) et lire son
+     `KenshiCoop.log` ; reproduire en jeu : deux clients qui rejoignent ensemble, le 2e passe de la
+     file à l'éditeur.
+2. **Annuler une tâche « suivre » (croix rouge) ne l'arrête pas.**
+   - L'hôte crée une tâche « suivre rob1 » pour A1 (21:31:42 « jobs: A1 now has 1 job(s) »), l'annule
+     avec la croix rouge du panneau des tâches (21:31:48 « A1 now has 0 job(s) », recopié chez les deux
+     clients) : A1 continue de suivre rob1. Un ordre de déplacement ailleurs l'arrête.
+   - À vérifier : même chose en solo sans le mod (comportement du jeu : la croix retire la tâche de la
+     liste sans arrêter l'action en cours ?) ou effet du mod (suivi des tâches / ordres renvoyés).
+     Si c'est le jeu, arrêter l'action en cours quand sa tâche est retirée.
+3. **Vêtements impossibles à placer chez rob1, en boucle.**
+   - « inventory rebuild incomplete: cannot place 543-gamedata.base at shirt » et 1167 pour
+     `1:8:657470720:2` et `1:14:1630126976:1`, toutes les ~2 s dès 21:23:27 : l'emplacement « shirt »
+     refuse l'objet chez le client, il finit dans l'inventaire principal. Pas bloquant, mais journal
+     inondé et tenue différente de l'hôte.
+4. **Achat d'esclaves : la fenêtre s'ouvre chez l'hôte, pas chez le client.**
+   - Geoffrey parle au Chef Esclavagistes (21:33:15, 21:33:21, 21:33:31) : la conversation marche chez
+     lui (« they say: Tu veux faire du commerce ? », il répond « Je voudrais acheter des esclaves »,
+     « conversation N: the player answered 0 (ok) »). Ensuite aucune ligne trade/fenêtre dans le
+     journal : la fenêtre d'achat d'esclaves (action de dialogue, pas la fenêtre de commerce normale)
+     s'affiche sur l'écran de l'hôte et rien chez le client.
+   - À faire : repérer l'action de dialogue « acheter des esclaves » et la fonction qui ouvre sa
+     fenêtre, la renvoyer au client qui a parlé (comme le commerce avec stand-in), fermer celle de
+     l'hôte, et faire passer l'achat (paiement, esclave qui rejoint l'escouade du client) par l'hôte.
+     Vérifier aussi « Je voudrais vendre des esclaves ». Tester en jeu avec l'expérience de dialogue.
+5. **Scier une cage : le client ne voit pas le décompte (barre de progression).**
+   - rob1 « cut lock » (285) sur Cage Prisonnier à 21:47:44, Geoffrey « cut lock » 21:48:21, « pick
+     lock » (76) plusieurs fois 21:48:15-21:48:39, « force lock » (286) 21:48:46 : ordres acceptés par
+     l'hôte (« -> ok »), le travail se fait chez l'hôte, mais la barre/le décompte au-dessus de la
+     serrure n'apparaît pas chez le client. Les clics répétés sur « pick lock » viennent sans doute de
+     là (rien ne montre que ça avance).
+   - À faire : trouver où le jeu garde la progression du crochetage/sciage (sur la porte ou la tâche du
+     perso) et ce qui affiche la barre, envoyer la progression de l'hôte au client qui fait l'action et
+     l'afficher chez lui (barre du jeu ou overlay). Vérifier aussi crochetage et forçage.
+6. **L'hôte charge une sauvegarde rapide, rob1 revient et ne voit plus ses persos dans son escouade.**
+   - 21:50:03 « world unloaded », 21:50:06 nouveau monde (génération 2, horloge 47.5 h au lieu de
+     54.5 h : sauvegarde plus ancienne). rob1 revient à 21:50:35 : « remembered character is not a
+     living member of the squad in this world: a new one for them » puis, dans la même milliseconde,
+     « 2 character(s) they had are theirs again (1 of them their own character) » (messages
+     contradictoires). Ses persos sont dans l'escouade `1:55:2114746112` (« Rob », créée par lui à
+     21:27), `idx 1` et `idx 2` (Taureau de Somme) ; chez lui la vue suit « Taureau de Somme ».
+   - Il ne voyait plus ses persos dans la barre d'escouade. L'hôte a fait `resync 2` à 21:51:21 ;
+     après, la vue suit « rob1 » (à confirmer : la resync a-t-elle réparé ?).
+   - Pistes : barre d'escouade du client qui montre l'escouade 1 (celle de l'hôte) et non la sienne
+     après un rechargement ; le perso mémorisé (`1:1:245483392:3`, son tout premier) n'existe pas dans
+     la sauvegarde rapide, la reprise devrait le dire sans annoncer « a new one ».
+   - Aussi : Geoffrey est resté connecté pendant le chargement de la sauvegarde par l'hôte (barre
+     d'escouade 21:50:28, déconnecté seulement à 21:50:38) : un client reste-t-il dans l'ancien monde
+     quand l'hôte charge une autre partie ? Il faut que tous les clients rechargent le nouveau monde
+     (ou soient renvoyés au menu avec un message).
+   - À reproduire en jeu : session à 2, le client crée son escouade, l'hôte fait une sauvegarde rapide,
+     joue, recharge, le client revient.
+   - **Revu à 22:09:50 avec Geoffrey, sans sauvegarde rapide : simple `resync 3`.** Il libérait des
+     esclaves juste avant (« pick shackles » 22:09:49). Au retour : « 1 character(s) they had are theirs
+     again » seulement, et sa barre d'escouade montre « player portraits 5-6 : 2-3 hidden » : il ne voit
+     pas les persos de l'escouade où il est. Piste forte, commune aux deux cas : au départ, « player
+     cleaned up: N character(s) back to the host » ; au retour, seuls les persos mémorisés lui sont
+     rendus, les autres membres de son escouade (recrutés ou libérés en cours de partie, ou pas
+     encore notés dans `KenshiCoop-players.txt`) restent à l'hôte et la barre les cache car ils
+     « appartiennent à un autre joueur ». À vérifier : `KenshiCoop-players.txt` ne contient pour
+     Geoffrey que `1:1:245483392:4`. Corriger : noter tout perso qui entre dans l'escouade d'un joueur
+     (recrue, esclave libéré, prisonnier) et rendre au retour toute son escouade, pas seulement les
+     persos mémorisés.
+7. **Barre d'entraînement restée sur le perso du client après une resync pendant l'entraînement.**
+   - rob1 s'entraîne sur Mannequin Exerc. MkIII (« order "train" (97) » 21:50:54), l'hôte fait
+     `resync 2` à 21:51:21 pendant l'entraînement : déconnexion, « player gone: … halted where it
+     stands » pour ses 2 persos, sauvegarde envoyée à 21:51:27, rechargement. Après, la barre
+     d'entraînement reste affichée au-dessus de son perso chez lui (il relance « train » à 21:52:07).
+   - Pistes : l'arrêt « halted » ne retire pas le perso du mannequin (opérateur toujours inscrit sur la
+     machine, état d'entraînement gardé dans la sauvegarde envoyée) ; ou la barre du client est
+     recréée au chargement sans être liée à l'état de l'hôte. Regarder ce que fait la sortie normale
+     d'un mannequin (fin de tâche, retrait de l'opérateur) et l'appliquer au nettoyage d'un joueur
+     parti ; vérifier aussi la même chose avec un lit, une chaise, une machine.
+   - À reproduire en jeu : client qui s'entraîne, resync par l'hôte, regarder la barre chez les deux.
+8. **Geoffrey en furtif sans les animations de furtivité.**
+   - « [Geoffrey] mode "stealth" -> ok » (22:01:02, 22:09:08, 22:09:30), « knock out (stealth) »
+     22:01:06 : le mode passe bien chez l'hôte, mais le perso marche/court normalement au lieu de se
+     déplacer accroupi. rob1 aussi passe en furtif (22:04:33-22:04:51).
+   - À préciser : sur quel écran (celui de Geoffrey, de l'hôte, de rob1) l'animation manque.
+   - Pistes : la posture furtive est un état du perso (pas une anim « kind=4 » jouée) que le client
+     ne recopie pas, ou que la copie pilotée par l'hôte perd à chaque mise à jour de mouvement
+     (vitesse/anim de marche imposées). Recopier l'état furtif de l'hôte sur toutes les copies et le
+     garder ; tester en jeu : client en furtif qui marche, vu par l'hôte et par un autre client, aux
+     vitesses 1, 2 et 3.
+9. **Perso de Geoffrey capturé comme esclave → à son retour, nouveau perso (éditeur).**
+   - 22:10:49 « captivity: plopette in Cage Prisonnier now caged slave-state=1 slave-of=1084 (Esclavagistes)
+     sentence=110h », enchaîné à 22:11:00. Geoffrey quitte/revient plusieurs fois (22:11:02, 22:12:45,
+     22:14:18). À 22:13:43 : « Geoffrey's remembered character is not a living member of the squad in
+     this world: a new one for them » → nouveau perso `1:1:245483392:3:1995605504`, éditeur de
+     personnage ; `KenshiCoop-players.txt` ne connaît plus que celui-là (plopette `…:4:3858764544`
+     oublié).
+   - Un perso capturé n'est pas mort : il doit rester celui du joueur (comme en solo, où un perso
+     esclave reste à toi et peut s'évader). Corriger le test « living member of the squad » : un
+     perso du joueur vivant mais prisonnier/esclave/dans une cage (ou dans une autre escouade) reste
+     le sien ; ne faire un nouveau perso que si le sien est vraiment mort ou introuvable, et
+     l'expliquer au joueur. Ne pas écraser l'ancienne ligne de `KenshiCoop-players.txt`.
+   - Lié au point 6 (persos rendus au retour) : même logique de reprise.
+   - À reproduire en jeu : perso d'un client capturé par des esclavagistes, le client quitte et
+     revient.
+10. **Geoffrey KO : au réveil il se voit encore au sol, l'hôte le voit marcher.**
+   - Son perso (`1:1:245483392:2:279541024`, « plopette », le joueur s'appelle maintenant plopette
+     dans le journal) s'évanouit chez l'hôte à 22:41:29 ; « faints as on the host (now down=0
+     unconscious=1) » chez lui et chez rob1. Puis **aucune ligne de réveil** : le journal entier ne
+     contient aucun « wakes / gets up / comes to », alors que l'hôte le fait marcher ensuite. Il quitte
+     à 22:42:47 (« player gone … halted »).
+   - Code (lu le 16/10) : le réveil existe, mais côté posture, pas côté vitals. `ApplyVitals`
+     (`plugin/world.cpp` ~2332) ne rejoue que la chute et la mort ; c'est `Apply` (posture, ~1080) qui
+     relève une copie couchée quand l'hôte a la sienne debout (`kenshi::StandUp`), seulement si
+     `kc::motion::MayStand` : `!held && !hostDown && localDown`. `held` = `PostureHeld` (~620) : porté,
+     captif chez l'hôte, **ou chez le client chained / inSomething / slaveState / kidnapped / sentence
+     > 0**. Le journal n'a **aucune** ligne « still down here … stand-ups » ni « up again » : le
+     relèvement n'a pas été tenté. Piste forte : ce perso a été en cage (« put in its cage »
+     22:23:37, « out of its cage » 22:29:43) et sa copie garde une trace de captivité (esclave,
+     peine) : `held` reste vrai, le code de posture le laisse « au captif » et personne ne le relève.
+   - À faire : quand l'hôte a le perso debout et libre, ne pas le compter `held` sur des restes locaux
+     (se fier à `hostCaptive_`, et effacer esclave/peine/enchaîné de la copie quand l'hôte le libère) ;
+     écrire une ligne quand un perso reste couché alors que l'hôte l'a debout, avec la raison (held,
+     carry, captivité, ragdoll refusé). Vérifier aussi « down » (à terre mais conscient) → debout.
+   - À tester en jeu : perso d'un client assommé (et un PNJ), attendre le réveil, regarder chez
+     l'hôte, le client concerné et un autre client ; aussi aux vitesses 2 et 3.
+11. **Geoffrey ne voit pas les persos de l'autre escouade de rob1 (vers 23:04).**
+   - rob1 a plusieurs escouades (« Rob » + une autre, déplacements de persos entre elles 22:19).
+     Le rapport de Geoffrey dit pourtant « 0 squad members missing, max offset 5 » : le mod ne voit
+     pas d'écart.
+   - Indices : « stream: plopette is sent 81 of 130 characters (around their own) », « host characters
+     155 followed, 82 here: 23 within 3000 of ours, 59 farther (54 dormant, 54 left to the game's far
+     update) ». L'hôte n'envoie que les persos autour de ceux du joueur : si l'autre escouade de rob1
+     est loin de Geoffrey, elle n'est plus envoyée, reste figée (« dormant ») ou est retirée par le jeu
+     chez lui.
+   - À préciser : absents ou figés à un ancien endroit ? Loin de Geoffrey ou à côté ?
+   - Piste de correction : toujours envoyer les persos des joueurs (toutes les escouades de tous les
+     joueurs et de l'hôte), quelle que soit la distance, au moins position et état à basse fréquence ;
+     compter dans « squad members missing » les persos des autres joueurs aussi.
+   - À tester en jeu : client avec deux escouades éloignées, un autre client près d'une seule.
+   - Vu aussi vers 00:21 : un raid en route, loin de la base et des joueurs, dont les PNJ « ne bougent
+     pas ». Chez rob1 au même moment : 52 persos « dormant » (non envoyés, figés), et 10 doublures de
+     l'escouade `1:979:3547973632` détruites par son jeu (« wandered out of zone »), recréées plus tard.
+     Chez l'hôte, un groupe loin de tout perso n'avance que par à-coups (mise à jour lointaine du jeu,
+     voir [[kenshi-engine-facts]]) : vérifier sur quel écran ils étaient figés.
+   - **Précision : figés sur la carte (écran Carte), chez tout le monde, hôte compris.** Ce sont donc
+     les marqueurs « raid » du mod qui ne bougent pas : `KenshiWorld::ReadMapThreats`
+     (`plugin/map.cpp` ~685) fait la moyenne des `GetPosition` des persos de l'escouade. Loin de tout
+     joueur, le jeu ne déplace plus les persos eux-mêmes (zone non chargée) mais le groupe (« platoon »)
+     de façon abstraite : la position des persos reste celle où leur zone s'est déchargée, le marqueur
+     aussi, alors que le raid avance probablement. À faire : pour un groupe hors zone chargée, lire la
+     position du platoon (celle que le jeu utilise pour la simulation lointaine) au lieu de celle des
+     persos ; vérifier en jeu en suivant un raid de loin, puis quand il arrive.
+12. **Bilan désync de la session (journal 21:20-23:05, 30 700 lignes).**
+   - Rapports « sync NEEDS A LOOK » : rob1 56 (contre 83 bons), Geoffrey 37/37, plopette 32/43 ;
+     7 resyncs de zone automatiques, 9 resyncs complètes demandées par l'hôte, 17 déconnexions.
+   - Ce que les clients corrigent en boucle (lignes du journal) :
+     - **Lits : ~2 650** (« put in its bed as on the host » 963+517, « still in its bed here while the
+       host has it free: taken out » 657, « out of its bed first » 520). Le jeu du client remet les PNJ
+       au lit et le mod les en sort : ping-pong permanent. Empêcher l'IA locale de coucher une copie
+       pilotée par l'hôte au lieu de corriger après coup.
+     - **PNJ « dormants » non envoyés : 1 055** (« no longer sent to us … had moved N units here: put
+       back »). Le jeu du client fait bouger des copies que l'hôte n'envoie plus ; même cause que le
+       point 11 (envoi seulement autour des persos du joueur).
+     - **Sols : ~940** (sous/au-dessus du sol de l'hôte, remis ; 57 abandons « left to the game »),
+       surtout dans les bâtiments à étages.
+     - **PNJ locaux en trop non supprimés : 303** (« Vagabond Affamé », « Garde caravane », « Chasseur
+       Esclaves », « Fermier Hors-la-Loi » : persos que l'hôte n'a pas, dans une escouade avec une copie
+       d'un perso de l'hôte, donc laissés). Le jeu du client fait apparaître ses propres PNJ dans des
+       escouades de l'hôte : les retirer sans emporter la copie (sortir la copie de l'escouade
+       d'abord), ou bloquer leur apparition.
+     - Mouvement « gets nowhere » : 891 ; porter un corps : 372 ; 20 ordres refusés (« carry someone »,
+       « pick shackles » : mauvaise cible, copies pas liées).
+   - Les bugs de reprise (points 6, 7, 9, 10) s'ajoutent : persos perdus au retour, KO jamais relevé,
+     barre d'entraînement restée.
+   - Priorité proposée pour le prochain lot : lits (ping-pong), envoi des persos des joueurs et des
+     zones éloignées (dormants), PNJ locaux en trop, puis reprise après resync/retour. Mesurer avant et
+     après sur une longue partie (exp_soak) avec ces compteurs.
+13. **Déguisements : on ne voit pas qu'on est déguisé, et la Nation Sacrée attaque direct (~23:15-23:20).**
+   - Les joueurs (clients) portaient une tenue de déguisement ; aucun indicateur « déguisé » chez eux,
+     et les Nations Sacrées les ont attaqués dès qu'ils sont passés devant.
+   - Précision de l'hôte : ce sont les persos des **clients** qui se font attaquer (pas celui de
+     l'hôte). Pistes (a) et (b) en tête.
+   - Le mod ne gère pas du tout le déguisement (aucune occurrence de « disguise » dans `plugin/`), et
+     le journal n'a rien dessus. L'IA des PNJ tourne chez l'hôte : c'est donc l'état de déguisement de
+     la copie **chez l'hôte** qui compte.
+   - Pistes : (a) l'équipement des persos des clients chez l'hôte n'est pas celui qu'ils voient (cf.
+     les « cannot place … at shirt », 278 lignes ce soir : un vêtement mis dans l'inventaire au lieu
+     d'être porté) ; (b) le jeu calcule le déguisement à l'équipement via un chemin que les demandes
+     d'objets des clients (« client item move ») ne déclenchent pas ; (c) chez le client, l'état
+     déguisé n'est jamais recopié depuis l'hôte, d'où l'indicateur absent.
+   - À faire : trouver où le jeu garde le déguisement d'un perso (champ du Character / faction
+     apparente) et ce qui le recalcule ; vérifier chez l'hôte qu'un perso de client équipé d'une
+     tenue de la Nation Sacrée est bien déguisé ; recopier l'état au client pour l'indicateur.
+   - À tester en jeu : client qui s'habille en tenue de paladin (vrai chemin UI, glisser dans les
+     emplacements), passe devant des paladins ; comparer avec le perso de l'hôte habillé pareil.
+14. **Impossible de glisser-déposer au sol un objet de l'inventaire d'un PNJ (fenêtre de pillage).**
+   - Clients (plopette, ~23:28-23:29 : « loot window opened » x12) : glisser un objet de l'inventaire
+     d'un PNJ à terre vers le sol ne fait rien.
+   - Le journal n'a **aucune** ligne de dépôt : ni « ground: drop of … refused here » (refus du mod,
+     `KenshiWorld::ClientInventoryDrop`, `plugin/ground.cpp` ~258, qui n'autorise que les
+     `dropSources` = persos du joueur), ni toast « Objet non posé ». Donc soit le dépôt depuis la
+     fenêtre de pillage (`ForgottenGUI::showTradeWindow`) passe par une autre fonction que
+     `Inventory::dropItem` (pas accrochée), soit le refus se fait sans log.
+   - À faire : vérifier en solo sans le mod que le jeu permet ce glisser au sol ; trouver la fonction
+     appelée (pillage → sol) ; accepter comme source un PNJ à terre qu'un perso du joueur pille (même
+     règle de portée que le pillage), envoyer la demande à l'hôte, et toujours écrire une ligne et un
+     toast quand un dépôt est refusé. Tester en jeu par le vrai chemin UI (glisser, pas `uidrop`).
+   - Vu en même temps : un objet au sol `100-limbs.mod` (membre de prothèse ?) « announced again »
+     toutes les ~6 s (23:26:48-23:27:18) en changeant de place (1237 → 1312) : recréé à chaque fois chez
+     les clients avec un nouvel id. Objet qui glisse sur une pente : à surveiller (doublons ?).
+15. **Après un TP admin longue distance, rob1 et plopette n'arrivent pas à vendre au marchand.**
+   - 23:37:42-43 `admin tp 2 host` / `admin tp 3 host` (vers (-61727, 324, 16327)), « the host teleports
+     us far: the connection waits while the zone loads ». Puis Marchand Armures Ronin : conversation,
+     « trade window type 1 … sent to that player », « trade window open: 32 shop counters » chez
+     plopette (23:38:00) et rob1 (23:38:44), avec « the merchant here did not sell from the host's 32
+     counter(s) (a stand-in without that shop as its home): given the shop's building ».
+   - Jusqu'à 23:39:02 : **aucune** ligne « sells … » ni « inventory move asked of the host (trade) » :
+     les ventes faites dans la fenêtre ne partent pas chez l'hôte (ni refus écrit).
+   - 23:39:11 les deux sont nettoyés (déconnexion / resync), rob1 revient et vend normalement à
+     23:39:40 (« sells Massue de Mercenaire x1 … for 324 cats ») : un rechargement répare.
+   - Bizarre : l'argent du marchand passe de 25000 (23:38:00) à 22963 (23:38:43) sans aucune vente
+     écrite : quelqu'un a vendu chez l'hôte sans passer par le chemin client ? (l'hôte, ou une vente
+     locale du client appliquée autrement) — à éclaircir, risque de doublon d'argent/objet.
+   - Pistes : après le TP lointain, la zone est rechargée chez le client : ses persos ou le marchand
+     sont recréés (doublure « stand-in » refaite) et les handles/alias ne correspondent plus, donc
+     l'achat/vente du côté joueur n'est plus reconnu comme un inventaire « à nous » ; ou la fenêtre
+     de commerce vise des comptoirs de la doublure. Comparer avec le commerce sans TP au même endroit.
+   - À tester en jeu : `admin tp` lointain d'un client, puis vente/achat chez un marchand ; vérifier
+     l'argent des deux côtés.
+16. **« Geoffrey », perso secondaire de rob1, invisible chez rob1 (vers minuit).**
+   - rob1 contrôle un perso nommé « Geoffrey » (« floor view: follows our 'Geoffrey' » 23:48, 23:52,
+     00:08:39 ; fenêtre de prospection ouverte pour lui 23:49:52) mais ne le voit pas à l'écran.
+   - Piste : c'est très probablement `1:1:245483392:3:1995605504`, le perso créé pour Geoffrey à
+     22:13:43 quand plopette était en cage (point 9). Geoffrey a quitté **pendant l'éditeur de
+     personnage** (22:14:18 « left during their turn (their character is still to make) »), donc ce
+     perso n'a jamais fini l'éditeur. Pendant l'éditeur, le jeu déplace le perso ~65 650 unités plus
+     loin (point 1) et peut le cacher : chez un client qui a chargé le monde à ce moment, la copie
+     peut rester cachée / dans la scène de l'éditeur. `KenshiCoop-players.txt` le donne toujours à
+     Geoffrey (steam id 76561198036086638) : comment est-il devenu le perso de rob1 ?
+   - À vérifier : quel handle exactement (demander une ligne de diagnostic chez rob1), sa position
+     chez rob1 et chez l'hôte, état visible/caché du nœud de scène ; ce que le mod fait d'un perso
+     dont l'éditeur n'a pas été fini (le rendre visible et normal partout, ou le supprimer si le
+     joueur ne revient pas).
+   - Contournement : resync de rob1.
+17. **plopette ne peut pas prendre d'objets sur le Taureau (bête de somme) contrôlé par l'hôte.**
+   - 00:08:52-00:09:39 : « inventory change refused: that character belongs to Coucoudz » (x6) : refus
+     voulu par la règle de propriété (un client ne touche pas aux persos d'un autre joueur, cf. la
+     sécurité « actorsafety »). Puis en essayant de poser au sol depuis le sac du taureau : « ground:
+     drop of 580-gamedata.base x1 refused here … (a backpack's inventory …); **COULD NOT PUT THE ITEM
+     BACK** » (x3) : l'objet n'a pas pu être remis dans le sac chez le client (perdu de son écran
+     jusqu'à la prochaine recopie de l'inventaire ; rien ne bouge chez l'hôte). Dans la foulée l'hôte
+     pose lui-même des 580 au sol (00:10:00-00:10:14).
+   - Question de règle pour l'hôte : un joueur peut-il prendre dans l'inventaire d'un perso/animal
+     d'un autre joueur ? Proposition : oui pour les bêtes de somme et les sacs (partage d'équipe), non
+     pour les persos humains d'un autre joueur, ou un réglage `KenshiCoop.ini`.
+   - Bugs à corriger quoi qu'il arrive : un refus doit **toujours** remettre l'objet où il était
+     (« COULD NOT PUT THE ITEM BACK » ne doit jamais arriver), et le joueur doit voir un message clair
+     (« Ce personnage appartient à Coucoudz »), pas seulement le journal.
+   - **Suite (00:11:27-00:11:41) : pas de commerce non plus.** Une fenêtre de commerce s'ouvre pour
+     plopette (« 1 shop counters … the merchant has 2060 cats » : un perso/animal de l'escouade de
+     l'hôte, pas un marchand), mais chaque prise d'objet est refusée : « trade refused: price 0 does
+     not fit a purchase » + toast « Le prix n'a pas pu être compté : rien n'a changé. » (x5), avec la
+     fenêtre qui se ferme/rouvre à chaque essai. Entre persos de la même faction le jeu met le prix à
+     0 (échange gratuit) et la vérification de prix de l'hôte le prend pour une erreur.
+   - Résultat : aujourd'hui **aucun moyen** pour deux joueurs de se passer un objet sauf le poser au
+     sol. Il faut un chemin d'échange entre joueurs : soit l'échange à prix 0 entre persos du même
+     camp accepté (avec la règle de propriété décidée ci-dessus), soit un glisser direct d'un perso à
+     l'autre quand ils sont côte à côte, demandé à l'hôte. Ne pas laisser la fenêtre clignoter
+     (fermée/rouverte à chaque refus).
+18. **Ferme à légumes : rob1 ne voit ni l'eau ni la récolte (output).**
+   - rob1 travaille sur « Ferme Légumes S » (« operate machine » 00:46-00:49, tâche permanente) et
+     l'ouvre plusieurs fois (« opens Ferme Légumes S » 00:49:41-00:50:15) : la fenêtre ne montre ni le
+     niveau d'eau ni l'inventaire de sortie.
+   - Hôte 00:49:28 : « machine: Ferme Légumes S crops: stage 0 -> 3, harvested 0 -> 0/20, grown -0.19,
+     died 0.00 » : le stade des cultures est recopié, la récolte est vide chez l'hôte aussi (0/20), et
+     la croissance est **négative** (manque d'eau ?).
+   - Le mod ne recopie pas du tout l'eau des fermes (aucune occurrence de « water » hors construction
+     dans `plugin/`). La sortie (récolte) passe-t-elle par la recopie des inventaires de machines
+     (« inventory 7251 (a machine) differs here … with its window closed » 00:50:48) ?
+   - À faire : trouver les champs de la ferme (eau stockée / besoin, fertilité, stock de récolte) et
+     les recopier depuis l'hôte comme le stade des cultures ; vérifier que la récolte apparaît chez le
+     client et qu'il peut la prendre (demande à l'hôte). Vérifier chez l'hôte que la ferme reçoit bien
+     de l'eau (croissance négative). Tester en jeu : ferme arrosée, cycle complet jusqu'à la récolte,
+     vu par l'hôte et un client, vitesses 1-3.
+19. **Clic gauche sur un puits : le perso de rob1 court jusqu'au puits.**
+   - « [rob1] goes to look into Puits » à chaque clic (00:53:57-00:54:24), sans ordre de sa part.
+   - Cause trouvée dans le code : `hk_showInvBuilding` (`plugin/hooks.cpp` ~893) : sur un client,
+     l'ouverture du panneau d'inventaire d'un bâtiment (mine, ferme, puits, machine : un simple clic
+     gauche pour regarder) envoie le perso sélectionné le plus proche **marcher** jusqu'au bâtiment
+     (`QueueContainerRequest` → `ContainerOpen` chez l'hôte), pour que l'hôte envoie le vrai contenu.
+     C'est voulu mais gênant : en solo, regarder ne fait pas bouger.
+   - À faire : demander le contenu à l'hôte **sans déplacer le perso** (message « regarder » à part,
+     ou l'inventaire des machines déjà recopié : « inventory 7251 (a machine) differs here » montre
+     qu'il arrive), et ne faire marcher le perso que quand le joueur prend/pose vraiment un objet
+     (comme le jeu). Lié au point 18 (ferme : eau et récolte invisibles dans ce même panneau).
+20. **Stockage de minerai : rob1 n'arrive pas à reprendre le minerai, il y retourne tout seul.**
+   - 00:56:08-00:56:52 : rob1 tire le minerai (`42158-gamedata.base`, cuivre ?) du stockage, plusieurs
+     fois : « inventory move asked of the host: 42158-gamedata.base x65 backpack_content ->
+     backpack_content 0,0 » et chez l'hôte « client item move done: … x65 backpack_content ->
+     backpack_content 0,0 » (« done », pas de refus), puis l'inventaire recopié le remet dans le
+     stockage chez rob1. Une seule fois ça part ailleurs (« backpack_content -> main 3,0 » x1).
+   - Piste forte : la demande décrit source et destination par **nom de section** ; le stockage de
+     minerai a une section nommée comme celle d'un sac (`backpack_content`), le sac de rob1 aussi :
+     l'hôte exécute « backpack_content → backpack_content 0,0 » **dans le même inventaire** (le stockage),
+     donc rien ne bouge vraiment, et la recopie remet le minerai en place chez rob1. Vérifier dans le
+     code de `MoveInventoryItem` / la demande client comment l'inventaire source et l'inventaire
+     destination sont nommés (handle du perso, du sac, du bâtiment) pour un bâtiment de stockage.
+   - À tester en jeu : stockage de minerai rempli, client qui en tire vers son inventaire principal,
+     vers son sac, et l'inverse ; même chose pour les autres stockages (nourriture, pierre, eau).
+21. **rob1 ne peut pas donner à Voth la tâche « ranger dans le stockage de fruivert » (et sans doute
+    les autres stockages).**
+   - Stock Fruivert posé par l'hôte à 01:01:15 (« built the host's Stock Fruivert » chez les clients).
+     De 01:01:37 à 01:01:52, chaque clic de rob1 sur le stockage ne donne que « goes to look into Stock
+     Fruivert / opens Stock Fruivert » (x9) : **aucune** « client order task … (Shift: a permanent
+     job) » ni refus. Le travail sur le Puits passe bien, lui (01:02:32 « order "operate machine" (87)
+     on Puits -> ok »).
+   - Piste forte : `ClientLootContainer` (`plugin/hooks.cpp` ~494) prend tout clic droit de tâche
+     `kTaskLootTarget` sur un objet qui a un inventaire et le transforme en « aller regarder dedans »
+     (`QueueContainerRequest`) ; le clic droit (avec Maj pour une tâche permanente) sur un stockage,
+     que le jeu traduit sans doute par cette même tâche ou une tâche de rangement proche, n'est donc
+     jamais envoyé comme ordre. À vérifier : quel numéro de tâche le jeu donne pour « ranger dans ce
+     stockage » ; laisser passer comme ordre normal (et tâche permanente avec Maj) tout ce qui n'est
+     pas un simple pillage. Vérifier aussi que le stockage est bien fini chez l'hôte (pas encore un
+     chantier) au moment du clic.
+   - Lié aux points 19 et 20 (panneaux et stockages). Tester en jeu : chaque type de stockage, clic
+     droit et Maj+clic droit d'un client, comparé à l'hôte.
+22. **Autres lignes à regarder** : « Ce personnage appartient à un autre joueur. » chez rob1 (21:26:26,
+   21:26:58, 21:27:15) ; « 1 host squad members are missing in the local world » chez rob1 à
+   l'arrivée de Geoffrey (21:23:56).
+
 ## 12 octobre 2026, soir : partie entre amis en v0.3.3 (journal de l'hôte `KenshiCoop.log`, 21:35-)
 
 1. **Geoffrey n'arrive pas à parler à Barth (marchand), puis ça marche après une resync (22:15:34).**
