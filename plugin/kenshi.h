@@ -324,6 +324,17 @@ enum Fn : int {
     // ---- 0.3.5 lot 4 (night-items): loot window to the ground, worn clothes rebuilt on clients
     FnMouseDropToWorld,         // void ItemOnMouse::<drop to world>()   (our name, 0x7136A0: the item on the mouse released over no window; dropped through Inventory::dropItem only if the source window's InventoryTradeData +9 is set, else back to its source)
     FnSectionIsItemTypeAllowed, // bool InventorySection::isItemTypeAllowed(Item*)   (0x74BC30: the section's whitelist, the owner's race filter, armour-only, the item's slot type; what canItemGoHere asks after +0xD0)
+    // ---- 0.3.5 lot 5 (night-actions): slave shops (dialogue actions 0x2A buy / 0x29 sell), progress bars, disguise
+    FnSlaveBuyCtor,             // SlaveBuyingHandler* <ctor>(this, Character* seller, Character* buyer, lektor<Character*>* slaves, int basePrice)   (our name, 0x6A7970, vtable 0x16FFA60)
+    FnSlaveSellCtor,            // SlaveSellingHandler* <ctor>(this, Character* slaver, Character* seller, lektor<Character*>* chars, int basePrice)   (our name, 0x6A6F50, vtable 0x16FF920)
+    FnSlaveBuyConfirm,          // bool <SlaveBuyingHandler>::confirm()   (vt 0, 0x6ADD20: frees the ticked slaves, they follow the buyer and talk; takes the cats)
+    FnSlaveSellConfirm,         // bool <SlaveSellingHandler>::confirm()   (vt 0, 0x6A7740: the ticked characters chained as the slaver's slaves; the cats paid)
+    FnProgressTaskAdd,          // void ProgressBarTask::<add progress>(Character* who, float amount)   (our name, 0x336E60: +0x80 += amount, then its bar +0x78)
+    FnProgressTaskSet,          // void ProgressBarTask::<set progress>(Character* who, float value)   (our name, 0x3375D0: +0x80 = value, then its bar +0x78)
+    FnFloatBarCreate,           // FloatingProgressBar* ForgottenGUI::<new floating progress bar>()   (our name, 0x73FAB0: 0x58 bytes, registered in the GUI's floating list)
+    FnFloatBarSetProgress,      // void FloatingProgressBar::<set progress>(float 0..1)   (our name, 0x6E3530: +0x48 = clamp(1000 x value))
+    FnFloatBarDestroy,          // void ForgottenGUI::<delete floating thing>(FloatingThing*)   (our name, 0x6E9F10: queued, deleted by the GUI's update)
+    FnAiDisguiseUpdate,         // void AI::<disguise and stealth update>(float)   (vt 0x48, 0x5A51E0: StateBroadcastData +0x100 / +0x108 from the worn uniform)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -1170,6 +1181,27 @@ bool DetachTradingWindowHandler(void* window);          // the window forgets it
 bool TradingWindowVisible(const void* window);
 bool HideTradingWindow(void* window);                   // its widget hidden (nothing freed, the game not unpaused)
 bool PressTradingConfirm(void* window);                 // tests: the window's confirm button
+// 0.3.5 lot 5: the same window made with any of its handlers' constructors (FnAnimalTradeCtor,
+// FnSlaveBuyCtor, FnSlaveSellCtor), each entry's price set to the one given for its character (when
+// `prices` is given, in the order of `chars`); the slave handlers' confirm (through the hooks).
+bool OpenCharTradeWindow(Fn ctor, Character* seller, Character* buyer, const std::vector<Character*>& chars, int32_t basePrice,
+                         const std::vector<int32_t>* prices, void** handlerOut);
+bool CallSlaveConfirm(void* handler, bool sell, bool& done);
+// ---- 0.3.5 lot 5 (plugin/actions.cpp): progress bars, disguise, jobs removed
+// The game's floating progress bar (ProgressBarTask draws one above a player character doing a timed
+// task): made, moved, set (0..1), deleted (queued: the GUI deletes it on its next update).
+void* NewFloatingBar();
+bool SetFloatingBar(void* bar, const kc::Vec3& pos, float progress);
+void DeleteFloatingBar(void* bar);
+// A character's disguise as its StateBroadcastData holds it (+0x100 uniform level, +0x108 faction it
+// passes for, +0x110 seconds left of "disguise blown").
+bool ReadDisguiseState(Character* c, float& level, void*& faction, float& blown);
+bool WriteDisguiseState(Character* c, float level, void* faction, float blown);
+bool RecomputeDisguise(Character* c);                   // AI vt 0x48 (0x5A51E0), what AI::periodicUpdate runs
+// The character's current order (AITaskSystem +0x80, first): its kind and subject (false: none).
+bool CurrentOrder(Character* c, int& type, kc::Handle& subject);
+// A job of its list (Character::getPermajobData): its subject (false: none).
+bool PermajobSubject(Character* c, int slot, kc::Handle& subject);
 // ---- prospecting (plugin/shops.cpp)
 Character* ProspectingCharacter();                      // the selected character the PROSPECT button acts on (the nearest to the camera)
 bool ProspectingWindowVisible();

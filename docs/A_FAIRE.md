@@ -36,6 +36,13 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
    - À vérifier : même chose en solo sans le mod (comportement du jeu : la croix retire la tâche de la
      liste sans arrêter l'action en cours ?) ou effet du mod (suivi des tâches / ordres renvoyés).
      Si c'est le jeu, arrêter l'action en cours quand sa tâche est retirée.
+   - **Fait (branche night-actions, à vérifier en jeu : expérience `followjob`)**. C'est le jeu, en
+     solo aussi (lu au désassemblage) : la croix (`removePermajob` `0x5C9000` → `AITaskSystem`
+     `0x507300`) retire et détruit seulement la tâche de la liste ; l'ordre en cours (`AITaskSystem`
+     +0x80) n'est pas touché et un « suivre » ne finit jamais seul. Chez l'hôte, pour les persos de la
+     faction du joueur (hôte et clients), quand la tâche retirée est celle que fait le perso (même
+     genre, même sujet) et qu'aucune pareille ne reste, il l'abandonne (`reThinkCurrentAIAction`) ;
+     chaque retrait est écrit (`jobs: ... removed ...`).
 3. **Vêtements impossibles à placer chez rob1, en boucle.**
    - « inventory rebuild incomplete: cannot place 543-gamedata.base at shirt » et 1167 pour
      `1:8:657470720:2` et `1:14:1630126976:1`, toutes les ~2 s dès 21:23:27 : l'emplacement « shirt »
@@ -61,6 +68,13 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      fenêtre, la renvoyer au client qui a parlé (comme le commerce avec stand-in), fermer celle de
      l'hôte, et faire passer l'achat (paiement, esclave qui rejoint l'escouade du client) par l'hôte.
      Vérifier aussi « Je voudrais vendre des esclaves ». Tester en jeu avec l'expérience de dialogue.
+   - **Fait (branche night-actions, à vérifier en jeu : expérience `slaveshop`)**. Actions de dialogue
+     0x2A (achat, gestionnaire `0x6A7970`) et 0x29 (vente, `0x6A6F50`) : la même fenêtre que les
+     animaux. L'hôte la cache et envoie l'offre au joueur (`SlaveShop`, prix de l'hôte) ; le client
+     ouvre la fenêtre du jeu, son choix revient (`SlaveTrade`) et le jeu de l'hôte fait l'affaire
+     (argent vérifié, pris à la faction). Achat : comme en solo, l'esclave est libéré, suit l'acheteur
+     et lui parle (pas de recrutement automatique dans le jeu ; s'il est recruté dans cette
+     conversation, il va à ce joueur). Vente : seuls les persos du joueur, jamais son principal.
 5. **Scier une cage : le client ne voit pas le décompte (barre de progression).**
    - rob1 « cut lock » (285) sur Cage Prisonnier à 21:47:44, Geoffrey « cut lock » 21:48:21, « pick
      lock » (76) plusieurs fois 21:48:15-21:48:39, « force lock » (286) 21:48:46 : ordres acceptés par
@@ -70,6 +84,13 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
    - À faire : trouver où le jeu garde la progression du crochetage/sciage (sur la porte ou la tâche du
      perso) et ce qui affiche la barre, envoyer la progression de l'hôte au client qui fait l'action et
      l'afficher chez lui (barre du jeu ou overlay). Vérifier aussi crochetage et forçage.
+   - **Fait (branche night-actions, à vérifier en jeu : expérience `lockprogress`)**. Toutes ces tâches
+     sont des `ProgressBarTask` (progression +0x80 ; serrure crochetée : +0x18 / +0x1C de la
+     serrure) ; la barre flottante n'est faite que chez celui dont le jeu fait la tâche. L'hôte relève
+     la progression des persos des autres joueurs et l'envoie à leur joueur (`ActionProgress`) ; le
+     client dessine la barre du jeu au-dessus de sa copie (ligne d'overlay si elle ne peut pas être
+     faite). Elle n'apparaît que si l'option des chiffres flottants du jeu est active, comme chez
+     l'hôte.
 6. **L'hôte charge une sauvegarde rapide, rob1 revient et ne voit plus ses persos dans son escouade.**
    - 21:50:03 « world unloaded », 21:50:06 nouveau monde (génération 2, horloge 47.5 h au lieu de
      54.5 h : sauvegarde plus ancienne). rob1 revient à 21:50:35 : « remembered character is not a
@@ -349,6 +370,18 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      (corps, `MedicalSystem`, stats d'armure). Aucun champ de déguisement trouvé dans ce chemin. Piste
      (a) : un vêtement qu'une race ne peut pas porter (« shirt » / « head » désactivées) reste dans
      l'inventaire, chez l'hôte aussi ; le journal dit maintenant la raison (point 3).
+   - **Fait (branche night-actions, à vérifier en jeu : expérience `disguise`)**. Le jeu garde le
+     déguisement dans `StateBroadcastData` (+0x100 niveau de l'uniforme, +0x108 faction, +0x110
+     « percé ») et le recalcule dans l'IA (vt 0x48, `0x5A51E0`, voir docs/MOTEUR.md) : chez l'hôte à
+     chaque mise à jour périodique de l'IA, chez un client jamais (pas d'IA) → (c) confirmée pour
+     l'indicateur. L'hôte le recalcule maintenant tout de suite après chaque déplacement d'objet d'un
+     client, écrit chaque changement (`disguise: X now passes for ...` / `no longer ...`, avec le
+     niveau) et l'envoie au joueur (`Disguise`) ; la copie le prend (indicateur du jeu) et l'overlay
+     affiche « Déguisé en ... ». Cause des attaques non confirmée (pas de ligne dans le journal) :
+     (a) tenue différente chez l'hôte (lot 4 ; le 16/10 plusieurs « client item move refused: no
+     room » sur `armour`/`shirt` à 23:19-23:20), (b) délai du recalcul, ou la discrétion basse des
+     persos des clients (règle du jeu : un déguisement est percé selon la discrétion) ; la prochaine
+     partie le dira.
 14. **Impossible de glisser-déposer au sol un objet de l'inventaire d'un PNJ (fenêtre de pillage).**
    - Clients (plopette, ~23:28-23:29 : « loot window opened » x12) : glisser un objet de l'inventaire
      d'un PNJ à terre vers le sol ne fait rien.
@@ -391,6 +424,18 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      de commerce vise des comptoirs de la doublure. Comparer avec le commerce sans TP au même endroit.
    - À tester en jeu : `admin tp` lointain d'un client, puis vente/achat chez un marchand ; vérifier
      l'argent des deux côtés.
+   - **Fait (branche night-actions, à vérifier en jeu : expérience `tradefartp`)**. Cause supposée (pas
+     de ligne pour la confirmer) : le client ne voit une vente que par la différence entre les
+     inventaires de l'hôte et les siens (`ClientInventoryDiff`), et il cesse de suivre un inventaire
+     après 3 reconstructions ratées (`ApplyInventory` faux, sans ligne si l'objet n'est pas trouvé
+     pendant le chargement de la zone) jusqu'au prochain envoi de l'hôte : rien de vendu n'était vu,
+     jusqu'à la reconnexion (inventaires neufs). Le client redemande désormais ses propres
+     inventaires abandonnés (`InvResend`), la fenêtre de commerce attend (6 s au plus) son perso et
+     son sac, et une vente comptée par la fenêtre sans déplacement vu en 4 s est écrite avec l'état
+     de chaque inventaire. Les cats 25000 → 22963 : à 23:38:11 « the host's own conversation », puis
+     23:39:55 « our own window on that merchant » : l'hôte a lui-même acheté chez ce marchand (2037
+     cats), ce que le mod n'écrivait pas ; pas de doublon. Chaque changement des cats d'un marchand
+     pendant le commerce d'un client est maintenant écrit.
 16. **« Geoffrey », perso secondaire de rob1, invisible chez rob1 (vers minuit).**
    - rob1 contrôle un perso nommé « Geoffrey » (« floor view: follows our 'Geoffrey' » 23:48, 23:52,
      00:08:39 ; fenêtre de prospection ouverte pour lui 23:49:52) mais ne le voit pas à l'écran.

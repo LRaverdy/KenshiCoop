@@ -2881,6 +2881,100 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         return (ok ? "ok " : "err ") + std::string("cats ") + std::to_string(before) + "->" + std::to_string(after) + " window=" +
                std::to_string(kenshi::TradingWindow() && kenshi::TradingWindowVisible(kenshi::TradingWindow()) ? 1 : 0);
     }
+    // ---- 0.3.5 lot 5 (night-actions): slave shops, progress bars, disguise, current order
+    if (cmd == "slaveshop") {
+        // slaveshop <squadIndex> <buy|sell> [radius] [price]: (tests, when no slaver's dialogue is at hand)
+        // what the slaver's dialogue actions do: the game's slave window between that member and the
+        // nearest NPC; buy: the slaves of no squad within radius (any NPC of no squad when none is a
+        // slave); sell: that member's squad mates within radius. On the host, for another player's
+        // character, it opens on that player's screen.
+        size_t sel = 0;
+        std::string kind = "buy";
+        float radius = 600.0f;
+        int price = 0;
+        in >> sel >> kind;
+        if (!(in >> radius)) radius = 600.0f;
+        if (!(in >> price)) price = 0;
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size()) return "err no such squad member";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kc::Vec3 mp, p;
+        if (!kenshi::GetPosition(me, mp)) return "err";
+        const bool sell = kind == "sell";
+        std::vector<kenshi::Character*> all, offered, anyNpc;
+        kenshi::ActiveCharacters(all);
+        kenshi::Character* seller = nullptr;
+        float bestD = 1e30f;
+        for (kenshi::Character* c : all) {
+            kc::Handle h;
+            if (c == me || !kenshi::GetHandle(c, h) || kenshi::IsDead(c) || kenshi::IsAnimal(c) || !kenshi::GetPosition(c, p)) continue;
+            const float d = (p.x - mp.x) * (p.x - mp.x) + (p.z - mp.z) * (p.z - mp.z);
+            const bool ours = w.FindSquad(h) || kenshi::InPlayerSquad(c);
+            if (sell) {
+                if (ours && d <= radius * radius) offered.push_back(c);
+            } else if (!ours && !kenshi::IsDown(c)) {
+                kenshi::Captivity cap;
+                if (d <= radius * radius) (kenshi::ReadCaptivity(c, cap) && cap.slaveState == 1 ? offered : anyNpc).push_back(c);
+            }
+            if (!ours && !kenshi::IsDown(c) && d < bestD) {
+                kenshi::Captivity cap;
+                if (!(kenshi::ReadCaptivity(c, cap) && cap.slaveState == 1)) { bestD = d; seller = c; }
+            }
+        }
+        if (!sell && offered.empty()) {
+            for (kenshi::Character* c : anyNpc) if (c != seller) offered.push_back(c);
+        }
+        if (!seller) return "err no NPC around to deal with";
+        if (offered.empty()) return std::string("err nobody to ") + (sell ? "sell" : "buy") + " within " + std::to_string(int(radius));
+        std::string name;
+        kenshi::CharacterName(seller, name);
+        return kenshi::OpenCharTradeWindow(sell ? kenshi::FnSlaveSellCtor : kenshi::FnSlaveBuyCtor, seller, me, offered, price, nullptr, nullptr)
+                   ? "ok seller=" + name + " offered=" + std::to_string(offered.size())
+                   : "err the game's window could not be made";
+    }
+    if (cmd == "slaveshopstate") {   // slaveshopstate: the slave window here (entries price:ticked), offers kept / characters traded (host), offer open (client)
+        void* win = kenshi::TradingWindow();
+        void* h = win ? kenshi::TradingWindowHandler(win) : nullptr;
+        std::vector<kenshi::ShopEntry> entries;
+        if (h) kenshi::AnimalShopEntries(h, entries);
+        std::string list;
+        for (const auto& e : entries) list += " " + Key(e.animal) + ":" + std::to_string(e.price) + (e.ticked ? ":x" : "");
+        return "ok window=" + std::to_string(win ? 1 : 0) + " visible=" + std::to_string(win && kenshi::TradingWindowVisible(win) ? 1 : 0) + " entries=" +
+               std::to_string(entries.size()) + " offers=" + std::to_string(s.slaveOffers()) + " traded=" + std::to_string(s.slavesTraded()) + " offer=" +
+               std::to_string(s.slaveShopOpen()) + " |" + list;
+    }
+    if (cmd == "progressstate") {   // progressstate: client: the bars shown (netId:permille); host: progress updates sent; the overlay's lines
+        std::string out = "ok shown=" + std::to_string(s.progressShown().size()) + " sent=" + std::to_string(s.progressSent());
+        for (const auto& [id, v] : s.progressShown()) out += " " + std::to_string(id) + ":" + std::to_string(int(v * 1000.0f + 0.5f));
+        for (const auto& l : s.actionLines()) out += " | " + l;
+        return out;
+    }
+    if (cmd == "disguisestate") {   // disguisestate <squadIndex>: that member's disguise here (uniform level, faction, blown seconds) and the session's
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        kc::DisguiseInfo d;
+        if (!w.ReadDisguise(squad[idx], d)) return "err unreadable";
+        std::string fac = d.factionSid.empty() ? "none" : d.factionSid;
+        std::replace(fac.begin(), fac.end(), ' ', '_');
+        char b[256];
+        snprintf(b, sizeof(b), "ok level=%.2f faction=%s blown=%.0f disguised=%d known=%zu", double(d.level), fac.c_str(), double(d.blown),
+                 kc::actions::Disguised(d) ? 1 : 0, s.disguises().size());
+        return b;
+    }
+    if (cmd == "currentorder") {   // currentorder <squadIndex>: the order it is carrying out (AITaskSystem +0x80): its kind and subject; its jobs
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        kenshi::Character* c = w.FindSquad(squad[idx]);
+        int type = -1;
+        kc::Handle subj;
+        const bool has = kenshi::CurrentOrder(c, type, subj);
+        return "ok order=" + std::to_string(has ? type : -1) + " subject=" + (subj.valid() ? Key(subj) : std::string("none")) + " jobs=" +
+               std::to_string(kenshi::PermajobCount(c)) + " moving=" + std::to_string(kenshi::IsMoving(c) ? 1 : 0);
+    }
     if (cmd == "prospect") {   // prospect <squadIndex>: select that member alone and press the orders bar's PROSPECT button (as a click)
         size_t sel = 0;
         in >> sel;

@@ -122,6 +122,12 @@ enum class Msg : uint8_t {
     // ---- 0.3.5 lot 4 (night-items), no protocol change: a peer that does not know them ignores them
     ContainerPeek = 130,  // C->S  the player opened a building's inventory panel (a click on a mine, a farm, a storage): its items, no walk
     FarmInputs = 131,     // S->C  what the players' farms hold of their inputs (water): the farm window's "Eau" bar
+    // ---- 0.3.5 lot 5, night-actions (kc/actions.h; no protocol change: older peers ignore these types)
+    SlaveShop = 135,      // S->C  a slaver's slaves for sale, or our characters it would buy: open the game's slave window
+    SlaveTrade = 136,     // C->S  the characters ticked in that window (none: closed without a deal)
+    ActionProgress = 137, // S->C  the progress bar of our characters' timed tasks (lock picking, cutting, forcing...)
+    Disguise = 138,       // S->C  the faction our characters pass for (their uniform), as the host's game works it out
+    InvResend = 139,      // C->S  send these inventories of ours again (we gave up rebuilding them)
 };
 
 // World transfer limits (a Kenshi save is a few MB).

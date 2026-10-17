@@ -460,6 +460,11 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | 66 | PlayerStats | H→C | 0.3.5 : statistiques de tous les joueurs du monde (`kc/player_stats.h`), à l'arrivée d'un joueur puis toutes les 10 s si elles changent ; ignoré par un client 0.3.4 (type inconnu), sans changement de version du protocole |
 | 130 | ContainerPeek | C→H | 0.3.5 (lot 4, `session_items.cpp`) : panneau d'un bâtiment ouvert par un clic ; l'hôte note le joueur (`Entity::peekBy`, 120 s) et lui envoie le contenu sans marche (`ContainerOpened`, `looterNetId` 0) ; une prise ou une pose dans ce panneau attend que le perso soit arrivé (`HoldMovesForWalk` → `ContainerOpen`) ; acteur vérifié comme `ContainerOpen` |
 | 131 | FarmInputs | H→C | 0.3.5 (lot 4) : réserve de chaque entrée des fermes (eau), avec chaque tour de `Machines` (changées ou toutes au tour complet), imposée par le client toutes les 2 s (`IWorld::ApplyFarmInputs`) |
+| 135 | SlaveShop | H→C | 0.3.5 lot 5 (`kc/actions.h`) : la fenêtre des esclaves d'une conversation du joueur : genre (0 achat : esclaves du marchand ; 1 vente : persos du joueur), marchand, perso du joueur, prix de base, netIds et prix de l'hôte de chaque perso proposé ; ou une note. Ignoré par un client qui ne le connaît pas |
+| 136 | SlaveTrade | C→H | 0.3.5 lot 5 : les persos cochés dans cette fenêtre (aucun : fermée sans affaire) ; acteur = le perso de la conversation (`OwnCharacter`) |
+| 137 | ActionProgress | H→C | 0.3.5 lot 5 : progression (0-1000, ou « fini ») des tâches minutées (`ProgressBarTask` : crocheter, scier, forcer une serrure...) des persos du joueur, 4 fois par seconde au plus |
+| 138 | Disguise | H→C | 0.3.5 lot 5 : déguisement des persos du joueur tel que le jeu de l'hôte le calcule (faction, niveau de l'uniforme, secondes de « percé »), à chaque changement |
+| 139 | InvResend | C→H | 0.3.5 lot 5 : redemande des inventaires de ses propres persos (et de leurs sacs) que le client a renoncé à reconstruire ; l'hôte les renvoie à lui seul |
 | 90 | Result | H→C | sécurité des acteurs (protocole 33) : réponse à une demande (type, `seq` du `Command`, acteur) : rejetée (raison, texte français) ou faite ; le client annule ce qu'il avait prédit (tâche ajoutée au panneau) |
 
 ## Les flux, système par système
@@ -871,6 +876,16 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
    rejoint la faction (`RecruitJoined`) et va dans l'escouade de son perso (`AnimalFollowsOwner`).
    L'argent, l'escouade et la position suivent par la synchro habituelle.
 
+### Esclaves, barres de progression, déguisement, inventaires redemandés (0.3.5, lot 5)
+
+`common/src/session_actions.cpp`, `plugin/shops.cpp`, `plugin/actions.cpp` ; messages 135-139 (pas de changement de protocole).
+
+1. Esclaves : même chemin que la boutique d'animaux. Les constructeurs des gestionnaires d'achat (`0x6A7970`) et de vente (`0x6A6F50`) d'esclaves sont détournés (`hk_slaveBuyCtor` / `hk_slaveSellCtor` → `NoteForeignHandler`) ; `hk_tradeWindowShow` garde leur fenêtre cachée et range l'offre (genre, persos, prix du jeu) pour `TakeSlaveOffers`. `HostSlaveShops` l'envoie (`SlaveShop`) au joueur du perso : achat, les esclaves hors escouade qu'il suit ; vente, ses propres persos seulement, jamais son perso principal. Le client ouvre la fenêtre du jeu avec ses copies et les prix de l'hôte (`OpenCharTradeWindow`) ; sa validation (`hk_slaveBuyConfirm` / `hk_slaveSellConfirm`) n'échange rien sur place, le choix part en `SlaveTrade`. L'hôte vérifie l'offre et, pour une vente, que chaque perso est encore au joueur, puis `TradeSlaves` coche les entrées et appelle le `confirm()` du jeu (argent vérifié avant un achat).
+2. Barres de progression : `hk_progressAdd` / `hk_progressSet` (chez l'hôte) relèvent `ProgressBarTask`+0x80 pour les persos des autres joueurs ; `HostActionProgress` suit chaque perso (`actions::ProgressToSend` : 4 envois par seconde au plus, « fini » après 1 s sans mouvement) et envoie `ActionProgress` à son joueur. Le client garde la valeur (oubliée après 3 s sans nouvelle) et redessine la barre flottante du jeu à chaque image (`ShowActionProgress`), sinon une ligne d'overlay (`actionLines`).
+3. Déguisement : `HostDisguises` lit chaque seconde le déguisement des persos des joueurs clients (`ReadDisguise`) et envoie `Disguise` au propriétaire quand il change (`actions::DisguiseChanged`) ; l'hôte écrit chaque passage déguisé / plus déguisé. `ExecuteInvOp` / `ExecuteInvSwap` recalculent aussitôt le déguisement (`AfterClientItemMove`). Le client écrit l'état dans sa copie (`ApplyDisguise`, toutes les 2 s) et l'overlay l'affiche.
+4. Inventaires redemandés : `ClientInvResend` redemande (`InvResend`, une fois par 10 s et par inventaire) les inventaires de ses persos et sacs abandonnés après 3 reconstructions ratées ; une fenêtre de commerce attend (`TradeSideFollowed`, 6 s au plus) que le perso et son sac soient suivis ; une vente comptée par la fenêtre sans déplacement vu en 4 s est écrite avec l'état de chaque inventaire. `HostInvResendPacket` ne renvoie que les inventaires des persos (et sacs) de ce joueur.
+5. Tâches retirées : `hk_removePermajob` / `hk_removeJob` appellent `JobRemoved` (chez l'hôte, persos de la faction du joueur) : si l'ordre en cours est celui de la tâche retirée (`actions::EndsCurrentTask`), `reThinkCurrentAIAction`.
+
 ### Prospection
 Le bouton PROSPECT donne la tâche 150 par `Character::addOrder`, sans passer par les fonctions
 d'ordres détournées, et la fenêtre ne s'ouvre qu'à la fin de la tâche, qui ne tourne pas chez un
@@ -1135,7 +1150,9 @@ les mêmes partout) ; rien ne part vers l'hôte. Chez l'hôte, le bouton refuse 
 | `common/src/protocol_workshop.cpp`, `src/session_workshop.cpp` | atelier : messages et session de la recherche, des établis, des machines et de l'énergie ; noms français des compétences |
 | `plugin/workshop.cpp` | atelier : lecture et imposition de la recherche, des machines et de l'énergie ; crochets ; commandes de test |
 | `common/src/session_animals.cpp` | boutique d'animaux : offres de l'hôte, réponses des joueurs, fenêtre du client |
-| `plugin/shops.cpp` | boutique d'animaux (gestionnaire et fenêtre du jeu, crochets) et bouton PROSPECT |
+| `plugin/shops.cpp` | boutique d'animaux et, 0.3.5, d'esclaves (gestionnaires et fenêtre du jeu, crochets) et bouton PROSPECT |
+| `plugin/actions.cpp` | 0.3.5 lot 5 : barres de progression (crochets de `ProgressBarTask`, barre flottante du jeu), déguisement (lecture, recalcul, écriture), fin de l'ordre d'une tâche retirée |
+| `common/src/session_actions.cpp`, `kc/actions.h` | 0.3.5 lot 5 : esclaves, progression, déguisement, inventaires redemandés (messages 135-139) |
 | `plugin/map.cpp`, `map.h`, `map_view.h` | carte : escouades hostiles (hôte), scène de chaque image, projections, hooks des portraits |
 | `plugin/overlay_map.cpp`, `overlay_map.h` | dessin de la carte, de la minicarte, des repères, des cadres et des pings ; souris |
 | `plugin/host_console.cpp`, `host_console.h` | console Windows hors du jeu |

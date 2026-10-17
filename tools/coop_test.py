@@ -7335,6 +7335,219 @@ def exp_animalshop(host, cli):
     summary()
 
 
+# ---- 0.3.5 lot 5 (branch night-actions): A_FAIRE 16/10 points 4, 5, 13, 15 and 2
+def _dialog_state(cli):
+    t = cmd(cli, "dialog")[1]
+    d = {"raw": t}
+    for kv in t.split(" | ")[0].split()[1:]:
+        if "=" in kv:
+            k, v = kv.split("=", 1)
+            d[k] = v
+    return d
+
+
+def exp_slaveshop(host, cli, slaver="Esclavagiste"):
+    """Point 4: the client talks to a slaver (real path: right click on him, talkclick ... click), answers
+    "Je voudrais acheter des esclaves" in its conversation window: the game's slave window opens on the
+    client only (the host keeps its own hidden), the client ticks a slave and presses the window's
+    confirm (animalbuy: the window's own button); the host's game buys it (cats taken from the shared
+    money), the slave is freed and follows the buyer. Then "vendre des esclaves": only the client's own
+    characters (not its main one) are offered. Needs a slaver camp next to the squad (--save; default
+    kctest_slavers: a save at a slaver camp, Chef Esclavagistes and caged slaves). Without a slaver in
+    reach, the window is made by the host's slaveshop command (routing checked, not the dialogue)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    log("cats for the test:", cmd(host, "givemoney 30000"))
+    via_dialog = False
+    r = cmd(cli, f"talkclick {own} name:{slaver} click")
+    log("client right-clicks the slaver:", r)
+    if r[0]:
+        d = _dialog_state(cli)
+        for _ in range(60):
+            if d.get("open") == "1":
+                break
+            time.sleep(0.5)
+            d = _dialog_state(cli)
+        log("conversation:", d["raw"][:300])
+        replies = d["raw"].split(" | ")[1:]
+        pick = next((i for i, a in enumerate(replies) if "acheter des esclaves" in a or "buy slaves" in a.lower()), None)
+        if pick is not None:
+            log("client answers", pick, replies[pick], cmd(cli, f"answer {pick}"))
+            via_dialog = True
+    if not via_dialog:
+        log("no slaver conversation here: the host makes the game's slave window (fallback)", cmd(host, f"slaveshop {own} buy"))
+    state_c = "?"
+    for _ in range(20):
+        time.sleep(0.5)
+        state_c = cmd(cli, "slaveshopstate")[1]
+        if "visible=1" in state_c:
+            break
+    state_h = cmd(host, "slaveshopstate")[1]
+    log("client:", state_c, "| host:", state_h)
+    check("esclaves (achat) : la fenetre s'ouvre chez le client" + ("" if via_dialog else " (fenetre faite par la commande)"),
+          "visible=1" in state_c and "entries=0" not in state_c, state_c)
+    check("esclaves (achat) : rien ne s'affiche chez l'hote, l'offre est gardee", "visible=0" in state_h and "offers=1" in state_h, state_h)
+    shot(cli, os.path.abspath(os.path.join(OUT_DIR, "slaveshop_client.png")))
+    cats0_h = cmd(host, "money")[1]
+    bought = cmd(cli, "animalbuy 0")
+    log("client ticks the first slave and confirms:", bought)
+    time.sleep(5)
+    state_h2 = cmd(host, "slaveshopstate")[1]
+    cats1_h, cats1_c = cmd(host, "money")[1], cmd(cli, "money")[1]
+    check("esclaves (achat) : l'hote achete (traded=1, offre liberee)", "traded=1" in state_h2 and "offers=0" in state_h2, state_h2)
+    check("esclaves (achat) : paye chez l'hote, meme argent partout", cats1_h != cats0_h and cats1_h == cats1_c, f"{cats0_h} -> {cats1_h} / client {cats1_c}")
+    log("host log:", [l for l in host_log().splitlines() if "slave" in l][-6:])
+    # selling: the host gives the client a second character first (the main one is never offered)
+    if True:   # the dialogue's 0x29 is not looked for: its answer differs by slaver
+        log("sell window (host command, the dialogue's 0x29):", cmd(host, f"slaveshop {own} sell 2000"))
+        time.sleep(3)
+        st = cmd(cli, "slaveshopstate")[1]
+        mine = cmd(cli, "ownidx")[1].split()[1:]
+        log("client sell window:", st, "| client's characters:", mine)
+        n = int(re.search(r"entries=(\d+)", st).group(1)) if "entries=" in st else 0
+        check("esclaves (vente) : seuls les persos du client, pas le principal", n <= max(0, len(mine) - 1),
+              f"{st} | persos du client {mine}")
+        cmd(cli, "closewindows")
+    summary()
+
+
+def exp_lockprogress(host, cli):
+    """Point 5: the client's character picks (76), cuts (285) then forces (286) the lock of the nearest
+    locked furniture (a cage: --save with a cage near the squad, default kctest_town's locked chests),
+    through the order a right click gives (doororder). The host's game does the work; the client must
+    show the game's progress bar above its character while it goes, and lose it when it stops."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    log("locks around (host):", cmd(host, "doors 0 lock")[1][:400])
+    for task, what in ((76, "crocheter"), (285, "scier"), (286, "forcer")):
+        cmd(host, "doorset 0 lock lock")
+        time.sleep(2)
+        log(f"client orders {what} ({task}):", cmd(cli, f"doororder {own} {task} lock"))
+        seen = ""
+        for _ in range(40):
+            time.sleep(0.5)
+            st = cmd(cli, "progressstate")[1]
+            if re.search(r"shown=[1-9]", st):
+                seen = st
+                break
+        check(f"serrure ({what}) : la barre de progression s'affiche chez le client", bool(seen), seen or cmd(cli, "progressstate")[1])
+        if seen:
+            shot(cli, os.path.abspath(os.path.join(OUT_DIR, f"lockprogress_{task}.png")))
+        log("host:", cmd(host, "progressstate")[1], [l for l in host_log().splitlines() if "action progress" in l][-2:])
+        cmd(cli, f"moverel {own} 60 0")   # another order: the task stops
+        gone = False
+        for _ in range(20):
+            time.sleep(0.5)
+            if "shown=0" in cmd(cli, "progressstate")[1]:
+                gone = True
+                break
+        check(f"serrure ({what}) : la barre disparait quand l'action s'arrete", gone, cmd(cli, "progressstate")[1])
+    summary()
+
+
+def exp_disguise(host, cli, armour="Paladin"):
+    """Point 13: the host gives the client's character a Holy Nation uniform (helmet, body armour, legs:
+    giveitem, names with --armour), the client puts each piece on through the inventory drag & drop
+    (invmove, the inventory window's path); the host's game must say the character is disguised at once
+    (disguisestate on the host), the client's copy too (its stealth panel's "In Disguise"; overlay line),
+    then the character walks past paladins (--save near a Holy Nation town, default kctest_holy): nobody
+    attacks it. The host's own character dressed the same is compared."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    for part in (f"{armour}_Helmet", f"{armour}_Armour", f"{armour}_Leggings", "Casque_de_Paladin", "Armure_de_Paladin", "Pantalon_de_Paladin"):
+        log("give", part, cmd(host, f"giveitem {part} 1 {own}"))
+    time.sleep(3)
+    items = cmd(cli, f"invitems squad{own}")[1]
+    log("client inventory:", items[:400])
+    for sec in ("head", "body", "legs"):
+        log("client puts on", sec, cmd(cli, f"invmove squad{own} squad{own} main 1 0 0 {sec}"))
+        time.sleep(1.5)
+    time.sleep(2)
+    dh, dc = cmd(host, f"disguisestate {own}")[1], cmd(cli, f"disguisestate {own}")[1]
+    log("host:", dh, "| client:", dc)
+    check("deguisement : l'hote voit le perso du client deguise", "disguised=1" in dh, dh)
+    check("deguisement : le client voit son perso deguise (indicateur)", "disguised=1" in dc and "Déguisé" in cmd(cli, "progressstate")[1], dc)
+    log("host log:", [l for l in host_log().splitlines() if "disguise" in l][-6:])
+    shot(cli, os.path.abspath(os.path.join(OUT_DIR, "disguise_client.png")))
+    t0 = time.time()
+    fights = 0
+    while time.time() - t0 < 60:
+        cmd(cli, f"move {own} 400 0") if (int(time.time() - t0) // 15) % 2 == 0 else cmd(cli, f"move {own} -400 0")
+        time.sleep(5)
+        if "fight" in cmd(host, f"combat {own}")[1]:
+            fights += 1
+    check("deguisement : les paladins n'attaquent pas le perso deguise du client", fights == 0, f"{fights} releves en combat")
+    summary()
+
+
+def exp_tradefartp(host, cli, merchant="Marchand"):
+    """Point 15: the host takes the client's character far away (another zone), then brings it back with
+    the admin teleport (admin tp 2 host: the client loads the zone, "the host teleports us far"), and the
+    client sells to a merchant there (the game's right click in the trade window, tradesell): the sale
+    must reach the host (money, inventories), without a rejoin. Default kctest_town."""
+    time.sleep(45)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    log("far:", teleport_dry(host, own, (0, -300, 0), [(30000, 30000), (34000, 30000), (30000, 34000)], settle=4))
+    time.sleep(20)
+    log("admin tp back:", cmd(host, "admin tp 2 host"))
+    time.sleep(40)
+    log("give something to sell:", cmd(host, f"giveitem Massue 1 {own}"))
+    time.sleep(3)
+    opened = cmd(host, f"tradeopen {own} {merchant} near")
+    log("trade window asked:", opened)
+    state = "?"
+    for _ in range(40):
+        time.sleep(0.5)
+        state = cmd(cli, "tradestate")[1]
+        if "open=1" in state:
+            break
+    check("TP lointain puis commerce : la fenetre s'ouvre chez le client", "open=1" in state, state)
+    cats0 = cmd(host, "money")[1]
+    sold = cmd(cli, "tradesell 0")
+    log("client sells:", sold)
+    time.sleep(4)
+    cats1_h, cats1_c = cmd(host, "money")[1], cmd(cli, "money")[1]
+    check("TP lointain puis commerce : la vente arrive chez l'hote", sold[0] and cats1_h != cats0, f"{sold[1]} | {cats0} -> {cats1_h}")
+    check("TP lointain puis commerce : meme argent partout", cats1_h == cats1_c, f"hote {cats1_h} / client {cats1_c}")
+    rep = compare(dump(host, "h_tradefartp"), dump(cli, "c_tradefartp"), "tradefartp")
+    check("TP lointain puis commerce : inventaires identiques", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    log("host log:", [l for l in host_log().splitlines() if "again" in l or "cats " in l][-8:])
+    cmd(cli, "closewindows")
+    summary()
+
+
+def exp_followjob(host, cli):
+    """Point 2: the host gives one of its characters a "follow" job on the client's character (jobreq ...
+    31, the Tâches panel's job), then removes it with the panel's cross (jobremove: removePermajob, what
+    the cross calls): the follow must end at once (currentorder: no more order 31), on the host's
+    character and on a client's character (the client removes its own job through its panel)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    mine = 0 if own != 0 else 1
+    for who, pid, idx, tgt in (("hote", host, mine, own), ("client", cli, own, mine)):
+        log(f"{who}: follow job", cmd(pid, f"jobreq {idx} 31 {tgt}"))
+        time.sleep(4)
+        o0 = cmd(host, f"currentorder {idx}")[1]
+        log("current order on the host:", o0, "| jobs", cmd(host, f"jobs {idx}")[1])
+        log(f"{who}: the cross on job 0:", cmd(pid, f"jobremove {idx} 0"))
+        time.sleep(3)
+        o1 = cmd(host, f"currentorder {idx}")[1]
+        log("current order on the host after:", o1)
+        check(f"taches ({who}) : 'suivre' retire, le perso arrete de suivre", "order=31" not in o1, f"{o0} -> {o1}")
+    log("host log:", [l for l in host_log().splitlines() if "jobs:" in l][-6:])
+    summary()
+
+
 def exp_prospect(host, cli):
     """A_FAIRE 3p: the orders bar's PROSPECT button. On the client it opens the prospecting window at
     once for its own character (the place's fertility, water and ores, read from the game data) and
@@ -10379,6 +10592,21 @@ def main():
         sp_ = sub.add_parser(name_, help=hlp_)
         sp_.add_argument("--save", default="kctest_town")
         sp_.add_argument("--keep", action="store_true")
+    # 0.3.5 lot 5 (night-actions)
+    for name_, hlp_, save_ in (("slaveshop", "point 4: a client buys a slave from a slaver (dialogue, window on the client only, bought by the host), sells only its own", "kctest_slavers"),
+                               ("lockprogress", "point 5: a client picks, cuts, forces a lock: the host's progress bar shown on the client", "kctest_town"),
+                               ("disguise", "point 13: a client in Holy Nation armour (put on by drag & drop) is disguised on the host and its indicator; paladins", "kctest_holy"),
+                               ("tradefartp", "point 15: admin TP from far away, then a client sells to a merchant: the sale reaches the host", "kctest_town"),
+                               ("followjob", "point 2: a follow job removed with the cross stops the follow (host and client characters)", "kctest_base")):
+        sp_ = sub.add_parser(name_, help=hlp_)
+        sp_.add_argument("--save", default=save_)
+        sp_.add_argument("--keep", action="store_true")
+        if name_ == "slaveshop":
+            sp_.add_argument("--slaver", default="Esclavagiste", help="part of the slaver's name ('_' for spaces)")
+        if name_ == "disguise":
+            sp_.add_argument("--armour", default="Paladin", help="part of the uniform pieces' names")
+        if name_ == "tradefartp":
+            sp_.add_argument("--merchant", default="Marchand")
     td = sub.add_parser("trade", help="a client trades with a merchant: purchase, sale, stock everywhere")
     td.add_argument("--save", default="kctest_town")
     td.add_argument("--keep", action="store_true")
@@ -10774,6 +11002,16 @@ def main():
             exp_pets(host, cli)
         elif a.what == "animalshop":
             exp_animalshop(host, cli)
+        elif a.what == "slaveshop":   # 0.3.5 lot 5
+            exp_slaveshop(host, cli, a.slaver)
+        elif a.what == "lockprogress":
+            exp_lockprogress(host, cli)
+        elif a.what == "disguise":
+            exp_disguise(host, cli, a.armour)
+        elif a.what == "tradefartp":
+            exp_tradefartp(host, cli, a.merchant)
+        elif a.what == "followjob":
+            exp_followjob(host, cli)
         elif a.what == "prospect":
             exp_prospect(host, cli)
         elif a.what == "trade":

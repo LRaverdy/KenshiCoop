@@ -21,6 +21,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "kc/actions.h"
 #include "kc/bug_report.h"
 #include "kc/clock.h"
 #include "kc/loot.h"
@@ -325,6 +326,46 @@ public:
         int32_t price = 0;
     };
     virtual void TakeAnimalChoices(std::vector<AnimalChoice>& out) { out.clear(); }
+    // ---- 0.3.5 lot 5 (session_actions.cpp, kc/actions.h; plugin/shops.cpp and plugin/actions.cpp)
+    // Slave shops (a slaver's "buy slaves" 0x2A / "sell slaves" 0x29), as the animal shops. Host: the
+    // offers the game made for another player's character (window kept hidden here), with the game's
+    // price of each character offered; buy or sell some of them the game's own way (false: why, in
+    // French); forget an offer. Client: open the game's slave window with our copies and the host's
+    // prices; the player's choices in it.
+    struct SlaveOffer {
+        uint64_t key = 0;
+        uint8_t kind = 0;                   // kc::kSlaveBuy / kSlaveSell
+        Handle seller, buyer;
+        int32_t basePrice = 0;
+        std::vector<Handle> slaves;
+        std::vector<int32_t> prices;        // same order
+    };
+    virtual void TakeSlaveOffers(std::vector<SlaveOffer>& out) { out.clear(); }
+    // price: cats the player faction paid (buy, > 0) or got (sell, < 0)
+    virtual bool TradeSlaves(uint64_t key, const std::vector<Handle>& slaves, int32_t& price, std::string& why) {
+        (void)key; (void)slaves; price = 0; why = "indisponible"; return false;
+    }
+    virtual void DropSlaveOffer(uint64_t key) { (void)key; }
+    virtual bool OpenSlaveShop(uint8_t kind, const Handle& seller, const Handle& buyer, const std::vector<Handle>& slaves,
+                               const std::vector<int32_t>& prices, int32_t basePrice) {
+        (void)kind; (void)seller; (void)buyer; (void)slaves; (void)prices; (void)basePrice; return false;
+    }
+    struct SlaveChoice {
+        uint8_t kind = 0;
+        std::vector<Handle> slaves;         // none: the window closed without a deal
+        int32_t price = 0;
+    };
+    virtual void TakeSlaveChoices(std::vector<SlaveChoice>& out) { out.clear(); }
+    // Action progress. Host: the timed tasks (ProgressBarTask) its game moved on since the last call,
+    // for other players' characters: who, and how far (0..1). Client: draw that bar above our copy
+    // (progress < 0: take it away); false when the game's bar could not be made (the overlay says it).
+    struct ActionProgress { Handle who; float progress = 0; };
+    virtual void TakeActionProgress(std::vector<ActionProgress>& out) { out.clear(); }
+    virtual bool ShowActionProgress(const Handle& who, float progress) { (void)who; (void)progress; return false; }
+    // Disguise. Host: what the game worked out for that character (false: unreadable). Client: our
+    // copy takes it (the game's stealth panel then shows it).
+    virtual bool ReadDisguise(const Handle& h, DisguiseInfo& out) { (void)h; out = DisguiseInfo{}; return false; }
+    virtual bool ApplyDisguise(const Handle& h, const DisguiseInfo& d) { (void)h; (void)d; return false; }
     // ---- lot B: factions. Host: the player faction's relations with every faction (both ways) and
     // a character's bounties and crime state. Client: impose the host's (the local game may not
     // change them itself). Apply returns how many values had to change here.
@@ -727,6 +768,20 @@ public:
     size_t animalOffers() const { return animalOffers_.size(); }
     size_t animalsSold() const { return animalsSold_; }
     uint32_t animalShopOpen() const { return animalShop_.offerId; }
+    // ---- 0.3.5 lot 5 (session_actions.cpp). Slave shops (tests): offers waiting (host), slaves bought or
+    // sold through the host (host), the offer open here (client, 0: none). Action progress: the bars
+    // shown here (client: netId -> 0..1) and progress messages sent (host). Disguise: what this side
+    // knows (host: last sent; client: received), and the overlay's lines (client, French). Inventories
+    // asked again (client: asked; host: sent again).
+    size_t slaveOffers() const { return slaveOffers_.size(); }
+    size_t slavesTraded() const { return slavesTraded_; }
+    uint32_t slaveShopOpen() const { return slaveShop_.offerId; }
+    const std::map<uint32_t, float>& progressShown() const { return progressShown_; }
+    size_t progressSent() const { return progressSent_; }
+    const std::map<uint32_t, DisguiseInfo>& disguises() const { return disguises_; }
+    std::vector<std::string> actionLines() const;
+    size_t invResendAsked() const { return invResendAsked_; }
+    size_t invResendSent() const { return invResendSent_; }
     // ---- lot B: factions (tests): messages received / values corrected here (client), sent (host)
     struct FactionsView { size_t received = 0, bountiesReceived = 0, corrected = 0, sent = 0; };
     FactionsView factionsView() const { return factionsView_; }
@@ -1233,6 +1288,60 @@ private:
     void ResetAnimalShops();
     // An animal of the player faction goes into the squad of its owner's own character.
     void AnimalFollowsOwner(const Handle& h, uint8_t playerId);
+    // ---- 0.3.5 lot 5 (session_actions.cpp, kc/actions.h)
+    // Slave shops. Host: the game's offer for each player (one at a time) and their answers. Client:
+    // the offer whose window is open.
+    struct HostSlaveOffer {
+        uint64_t key = 0;
+        uint32_t id = 0;
+        uint8_t kind = 0;
+        uint32_t buyer = 0;                      // netId of the player's character in the conversation
+        Handle seller;                           // the slaver
+        std::map<uint32_t, Handle> slaves;       // netId -> the host's handle when offered
+        double since = 0;
+    };
+    std::map<uint8_t, HostSlaveOffer> slaveOffers_;
+    uint32_t nextSlaveOffer_ = 1;
+    size_t slavesTraded_ = 0;
+    std::vector<IWorld::SlaveOffer> scratchSlaveOffers_;
+    std::vector<std::pair<uint8_t, SlaveTradeMsg>> pendingSlaveTrades_;
+    struct ClientSlaveShop { uint32_t offerId = 0; uint8_t kind = 0; uint32_t buyer = 0; };
+    ClientSlaveShop slaveShop_;
+    std::vector<IWorld::SlaveChoice> scratchSlaveChoices_;
+    void HostSlaveShops(double now);
+    void ClientSlaveShops();
+    void HostSlaveTradePacket(uint8_t from, Reader& r);
+    void ClientSlaveShopPacket(Reader& r);
+    void EndSlaveOffer(uint8_t player, const char* why);
+    // Action progress. Host: per character (netId) its timed task as last told to its player. Client:
+    // the bars shown (netId -> 0..1) and when the host last spoke of each.
+    std::unordered_map<uint32_t, actions::ProgressTrack> progressTracks_;
+    std::vector<IWorld::ActionProgress> scratchProgress_;
+    size_t progressSent_ = 0;
+    std::map<uint32_t, float> progressShown_;
+    std::map<uint32_t, double> progressHeardAt_;
+    bool progressNoBar_ = false;             // client: the game's bar could not be made (overlay lines instead)
+    void HostActionProgress(double now);
+    void ClientActionProgressPacket(Reader& r);
+    void ClientActionProgress(double now);
+    // Disguise. Host: what each other player's character was last sent as (netId) and when they were
+    // read. Client: the host's (netId), imposed on our copies now and then.
+    std::map<uint32_t, DisguiseInfo> disguises_;
+    double nextDisguise_ = 0, nextDisguiseApply_ = 0;
+    void HostDisguises(double now);
+    void ClientDisguisePacket(Reader& r);
+    void ClientDisguises(double now);
+    // Inventories asked again (point 15). Client: when each of ours was last asked for; host: sent again.
+    std::map<uint32_t, double> invResendAt_;
+    size_t invResendAsked_ = 0, invResendSent_ = 0;
+    double nextInvResendCheck_ = 0;
+    bool AskInventoriesAgain(const std::vector<uint32_t>& ids, double now, const char* why);   // client
+    void ClientInvResend(double now);                                                        // client: own ones given up
+    void HostInvResendPacket(uint8_t from, Reader& r);
+    bool TradeSideFollowed(double now);      // client: our trading character and its backpack have the host's inventories here
+    bool tradeSideWarned_ = false;           // client: said once per window that our side is still not followed
+    double tradeSpendSince_ = -1;          // client: our trade window counted cats no item move has carried yet, since
+    void ResetActions();
     // Worn backpacks (travelling merchants sell from their squad's): host: each followed character's
     // worn backpack is an entity of its own (bag), bound on every client to the same backpack of its
     // copy of that character; its items are synced like a character's.

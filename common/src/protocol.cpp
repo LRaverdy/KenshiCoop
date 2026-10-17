@@ -968,6 +968,12 @@ const MessageRule kMessageRules[] = {
     {Msg::PlayerStats, AuthRole::HostOnly, AuthSubject::None, "player stats"},
     {Msg::ContainerPeek, AuthRole::InGame, AuthSubject::OwnCharacter, "look at a building's inventory"},
     {Msg::FarmInputs, AuthRole::HostOnly, AuthSubject::None, "farm inputs"},
+    // 0.3.5 lot 5 (kc/actions.h)
+    {Msg::SlaveShop, AuthRole::HostOnly, AuthSubject::None, "slave shop"},
+    {Msg::SlaveTrade, AuthRole::InGame, AuthSubject::OwnCharacter, "trade slaves"},
+    {Msg::ActionProgress, AuthRole::HostOnly, AuthSubject::None, "action progress"},
+    {Msg::Disguise, AuthRole::HostOnly, AuthSubject::None, "disguise"},
+    {Msg::InvResend, AuthRole::InGame, AuthSubject::None, "inventories again"},
 };
 } // namespace
 const char* MsgName(Msg type) {
@@ -1048,6 +1054,11 @@ const char* MsgName(Msg type) {
     case Msg::PlayerStats: return "PlayerStats";
     case Msg::ContainerPeek: return "ContainerPeek";
     case Msg::FarmInputs: return "FarmInputs";
+    case Msg::SlaveShop: return "SlaveShop";
+    case Msg::SlaveTrade: return "SlaveTrade";
+    case Msg::ActionProgress: return "ActionProgress";
+    case Msg::Disguise: return "Disguise";
+    case Msg::InvResend: return "InvResend";
     }
 #pragma warning(pop)
     return nullptr;

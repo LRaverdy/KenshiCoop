@@ -451,14 +451,26 @@ bool ClientJobChange(void* chr, kc::TaskVia via, int task, int a, int b) {
 }
 void hk_removePermajob(void* c, int slot) {
     const int task = kenshi::PermajobType(static_cast<kenshi::Character*>(c), slot);
-    if (ClientJobChange(c, kc::TaskVia::RemovePermajob, task, slot, 0)) o_removePermajob(c, slot);
+    kc::actions::JobRef removed;   // 0.3.5 lot 5 (A_FAIRE 16/10 point 2): what it may be doing for that job ends with it (host)
+    removed.type = task;
+    kc::Vec3 at;
+    kenshi::PermajobTarget(static_cast<kenshi::Character*>(c), slot, removed.subject, at);
+    if (ClientJobChange(c, kc::TaskVia::RemovePermajob, task, slot, 0)) {
+        o_removePermajob(c, slot);
+        JobRemoved(c, removed.type, removed.subject, "removed from its job list");
+    }
 }
 void hk_movePermajob(void* c, int from, int to) {
     const int task = kenshi::PermajobType(static_cast<kenshi::Character*>(c), from);
     if (ClientJobChange(c, kc::TaskVia::MovePermajob, task, from, to)) o_movePermajob(c, from, to);
 }
 void hk_removeJob(void* c, int task) {
-    if (ClientJobChange(c, kc::TaskVia::RemoveJob, task, 0, 0)) o_removeJob(c, task);
+    if (ClientJobChange(c, kc::TaskVia::RemoveJob, task, 0, 0)) {
+        o_removeJob(c, task);
+        kc::actions::JobRef removed;   // 0.3.5 lot 5: every job of that kind
+        removed.type = task;
+        JobRemoved(c, removed.type, removed.subject, "every job of that kind removed");
+    }
 }
 
 // Looting a knocked-out or dead character from a client: the looter walks there through the host
@@ -2041,7 +2053,22 @@ extern void* (*o_animalCtor)(void*, kenshi::Character*, kenshi::Character*, void
 extern bool (*o_animalConfirm)(void*);
 extern void (*o_tradeWindowShow)(void*, bool);
 extern void (*o_prospectButton)(void*, void*);
+void* hk_slaveBuyCtor(void*, kenshi::Character*, kenshi::Character*, void*, int);   // 0.3.5 lot 5: slave shops
+void* hk_slaveSellCtor(void*, kenshi::Character*, kenshi::Character*, void*, int);
+bool hk_slaveBuyConfirm(void*);
+bool hk_slaveSellConfirm(void*);
+extern void* (*o_slaveBuyCtor)(void*, kenshi::Character*, kenshi::Character*, void*, int);
+extern void* (*o_slaveSellCtor)(void*, kenshi::Character*, kenshi::Character*, void*, int);
+extern bool (*o_slaveBuyConfirm)(void*);
+extern bool (*o_slaveSellConfirm)(void*);
 } // namespace shophooks
+// ---- 0.3.5 lot 5: progress bars of timed tasks, jobs removed (plugin/actions.cpp)
+namespace actionhooks {
+void hk_progressAdd(void*, void*, float);
+void hk_progressSet(void*, void*, float);
+extern void (*o_progressAdd)(void*, void*, float);
+extern void (*o_progressSet)(void*, void*, float);
+} // namespace actionhooks
 // ---- workshop (plugin/workshop.cpp)
 namespace workshophooks {
 bool hk_start(void*, void*);
@@ -2216,6 +2243,13 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnAnimalTradeConfirm, reinterpret_cast<void*>(&shophooks::hk_animalConfirm), reinterpret_cast<void**>(&shophooks::o_animalConfirm)},
         {kenshi::FnCharTradeWindowShow, reinterpret_cast<void*>(&shophooks::hk_tradeWindowShow), reinterpret_cast<void**>(&shophooks::o_tradeWindowShow)},
         {kenshi::FnProspectButton, reinterpret_cast<void*>(&shophooks::hk_prospectButton), reinterpret_cast<void**>(&shophooks::o_prospectButton)},
+        // ---- 0.3.5 lot 5: slave shops, progress bars
+        {kenshi::FnSlaveBuyCtor, reinterpret_cast<void*>(&shophooks::hk_slaveBuyCtor), reinterpret_cast<void**>(&shophooks::o_slaveBuyCtor)},
+        {kenshi::FnSlaveSellCtor, reinterpret_cast<void*>(&shophooks::hk_slaveSellCtor), reinterpret_cast<void**>(&shophooks::o_slaveSellCtor)},
+        {kenshi::FnSlaveBuyConfirm, reinterpret_cast<void*>(&shophooks::hk_slaveBuyConfirm), reinterpret_cast<void**>(&shophooks::o_slaveBuyConfirm)},
+        {kenshi::FnSlaveSellConfirm, reinterpret_cast<void*>(&shophooks::hk_slaveSellConfirm), reinterpret_cast<void**>(&shophooks::o_slaveSellConfirm)},
+        {kenshi::FnProgressTaskAdd, reinterpret_cast<void*>(&actionhooks::hk_progressAdd), reinterpret_cast<void**>(&actionhooks::o_progressAdd)},
+        {kenshi::FnProgressTaskSet, reinterpret_cast<void*>(&actionhooks::hk_progressSet), reinterpret_cast<void**>(&actionhooks::o_progressSet)},
         // ---- crash report
         {kenshi::FnWriteCrashDump, reinterpret_cast<void*>(&hk_writeCrashDump), reinterpret_cast<void**>(&o_writeCrashDump)},
         // ---- 0.3.5 night-posture: beds and stealth of host-driven copies
