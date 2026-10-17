@@ -5303,6 +5303,26 @@ def _lying(pid, key):
     return kv.get("ragdoll") == 1 or kv.get("unconscious") == 1, kv
 
 
+def exp_animclock(host, cli):
+    """The suite's part 6 alone (17/10, a regression hunt): squad members 2 and 3 walk back and forth at
+    speeds 1 and 3; the client's animation master clock corrections over its checks (< 2%)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    for speed in (1, 3):
+        cmd(host, f"speed {speed}")
+        time.sleep(1)
+        cmd(cli, "animstats")
+        for r in range(6):
+            cmd(host, f"moverel {2 + r % 2} {300 * (1 if r % 2 == 0 else -1)} 250")
+            time.sleep(2.5)
+        st = cmd(cli, "animstats")[1].split()
+        corr, checks = int(st[1]), max(1, int(st[2]))
+        check(f"vitesse {speed} : horloge d'animation sans saut (< 2% des images)", corr / checks < 0.02, f"{corr}/{checks}")
+    cmd(host, "speed 1")
+    summary()
+
+
 def exp_kowake(host, cli):
     """0.3.5 (A_FAIRE 16/10 point 10): the client's character knocked out on the host falls on the client,
     and gets up there when the host's wakes: free, then as an escaped slave (plopette at 22:41 was
@@ -6150,7 +6170,8 @@ def exp_suite(host, cli):
     cmd(cli, "join")
     wait_for(cli, lambda s: s.get("state") == "connected" and s.get("ready") == "1", 240, "rejoin")
     time.sleep(3)
-    check("reconnexion : le joueur retrouve son personnage", "is back with their character" in host_log())
+    hl_ = host_log()   # 0.3.5 (roster): "<name> is back: their own character <name>; ..."
+    check("reconnexion : le joueur retrouve son personnage", "is back with their character" in hl_ or "is back: their own character" in hl_)
     summary()
 
 
@@ -10715,6 +10736,9 @@ def main():
     ji = sub.add_parser("jitter")
     ji.add_argument("--save", default="kctest_town")
     ji.add_argument("--keep", action="store_true")
+    ac_ = sub.add_parser("animclock", help="the suite's animation clock check alone (walkers at x1 and x3): corrections per frame")
+    ac_.add_argument("--save", default="kctest_base")
+    ac_.add_argument("--keep", action="store_true")
     su = sub.add_parser("suite", help="every feature, PASS / FAIL per point")
     su.add_argument("--save", default="kctest_base")
     su.add_argument("--keep", action="store_true")
@@ -10979,6 +11003,8 @@ def main():
             exp_tpstop(host, cli)
         elif a.what == "bedfree":   # 0.3.4
             exp_bedfree(host, cli)
+        elif a.what == "animclock":
+            exp_animclock(host, cli)
         elif a.what == "kowake":   # 0.3.5 night-posture
             exp_kowake(host, cli)
         elif a.what == "trainresync":   # 0.3.5 night-posture
