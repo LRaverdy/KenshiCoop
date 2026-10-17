@@ -41,7 +41,7 @@ add_library(kc_common STATIC common/src/protocol.cpp common/src/net.cpp common/s
     common/src/protocol_workshop.cpp common/src/session_workshop.cpp
     common/src/protocol_squads.cpp common/src/session_squads.cpp common/src/pack.cpp
     common/src/session_streaming.cpp common/src/session_animals.cpp common/src/work_orders.cpp
-    common/src/player_stats.cpp common/src/session_stats.cpp
+    common/src/player_stats.cpp common/src/session_stats.cpp common/src/session_items.cpp
     common/src/roster.cpp common/src/session_roster.cpp)
 target_include_directories(kc_common PUBLIC common/include)
 # cabinet: Windows' compression API (the world sent to a joining player is packed)

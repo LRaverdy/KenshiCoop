@@ -930,7 +930,17 @@ struct FakeWorld : IWorld {
     int researchApplies = 0, researchPays = 0;
     std::vector<LocalResearchAsk> researchAsks;
     std::vector<LocalMachineAsk> machineAsks;
-    struct FakeMachine { MachineState s; uint32_t box = 0; std::vector<Handle> ops; };
+    struct FakeMachine { MachineState s; uint32_t box = 0; std::vector<Handle> ops; std::vector<float> inputs; };   // inputs: a farm's water (0.3.5)
+    int farmInputApplies = 0;
+    bool ApplyFarmInputs(const FarmInput& f, const Handle&) override {
+        auto it = machines.find(f.sid);
+        if (it == machines.end()) return false;
+        it->second.inputs = f.stored;
+        ++farmInputApplies;
+        return true;
+    }
+    std::vector<ContainerRequest> containerPeeks;   // client (0.3.5): building panels opened by a click
+    void TakeContainerPeeks(std::vector<ContainerRequest>& out) override { out.swap(containerPeeks); containerPeeks.clear(); }
     std::map<std::string, FakeMachine> machines;
     std::vector<TownPower> townPower;
     int machineApplies = 0;
@@ -1002,6 +1012,7 @@ struct FakeWorld : IWorld {
                     w.state.operatorCount = uint8_t(m.ops.size());
                     w.handle = m.box ? B(m.box) : Handle{};
                     w.operators = m.ops;
+                    w.inputs = m.inputs;
                     out.push_back(w);
                     break;
                 }
@@ -7760,11 +7771,293 @@ static void TestNightJoin() {
     }
 }
 
+// ---- 0.3.5 lot 4 (night-items): the 16 October session's item bugs
+namespace night {
+ItemState It(const char* sid, int q, const char* sec, int x, int y) {
+    ItemState i; i.templateSid = sid; i.quantity = q; i.section = sec; i.x = int16_t(x); i.y = int16_t(y); return i;
+}
+bool Has(const std::vector<ItemState>& v, const char* sid, int q = -1) {
+    return std::any_of(v.begin(), v.end(), [&](const ItemState& i) { return i.templateSid == sid && (q < 0 || i.quantity == q); });
+}
+void Erase(std::vector<ItemState>& v, const char* sid) {
+    v.erase(std::remove_if(v.begin(), v.end(), [&](const ItemState& i) { return i.templateSid == sid; }), v.end());
+}
+bool Said(const Session& s, const char* what) {
+    return std::any_of(s.chatLog().begin(), s.chatLog().end(), [&](const std::string& l) { return l.find(what) != std::string::npos; });
+}
+bool Logged(const std::vector<std::string>& log, const char* what) {
+    return std::any_of(log.begin(), log.end(), [&](const std::string& l) { return l.find(what) != std::string::npos; });
+}
+uint32_t NetOf(const Session& s, const Handle& h) {
+    uint32_t id = 0;
+    s.ForEachEntity([&](uint32_t n, const Handle& eh, uint8_t, bool, bool) { if (eh == h) id = n; });
+    return id;
+}
+} // namespace night
+
+// Point 17 (rule A, decided 17 October): any player may take from and put into the team's pack animals
+// and backpacks, never another player's (or the host's) human character's own inventory. plopette could
+// not take anything from the host's pack bull ("that character belongs to Coucoudz"), and a drop from its
+// backpack left "COULD NOT PUT THE ITEM BACK".
+static void TestTeamSharedInventories() {
+    using namespace night;
+    std::printf("session (0.3.5, rule A): the team's pack animals and backpacks are anyone's; a player's human character is not\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);   // squad at x = 100, 200, 300
+    hw.chars[1].items = {It("bread", 2, "main", 0, 0)};
+    hw.chars[2].items = {It("sword", 1, "main", 0, 0)};
+    FakeChar bull; bull.squad = true; bull.animal = true; bull.pos = {205, 0, 0}; bull.dest = bull.pos;
+    bull.items = {It("ore", 5, "main", 0, 0)};
+    hw.chars[62] = bull;
+    AtMenu(cw);
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    std::vector<std::string> hostLog;
+    Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 4));
+    host.Assign(FakeWorld::H(2), cli.localId());   // the bull and character 1 stay the host's
+    cw.chars[62].animal = true;                    // (the fake save does not carry it)
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}};
+    // the backpacks (another local handle on the client), after the join
+    hw.chars[1].bagSid = "small-pack"; hw.chars[1].bagSerial = 7001; hw.chars[1].bag = {It("rope", 1, "backpack_content", 0, 0)};
+    cw.chars[1].bagSid = "small-pack"; cw.chars[1].bagSerial = 9001;
+    hw.chars[62].bagSid = "bull-pack"; hw.chars[62].bagSerial = 7062; hw.chars[62].bag = {It("materials", 3, "backpack_content", 0, 0)};
+    cw.chars[62].bagSid = "bull-pack"; cw.chars[62].bagSerial = 9062;
+    Run(all, 5.0, [&] { return cw.chars[1].bag == hw.chars[1].bag && cw.chars[62].bag == hw.chars[62].bag && cw.chars[62].items == hw.chars[62].items; });
+    CHECK(cw.chars[1].bag == hw.chars[1].bag && cw.chars[62].bag == hw.chars[62].bag && cw.chars[62].items == hw.chars[62].items);
+    // 1. ore out of the host's pack bull (its own inventory) into our character
+    Erase(cw.chars[62].items, "ore");
+    cw.chars[2].items.push_back(It("ore", 5, "main", 2, 0));
+    Run(all, 4.0, [&] { return hw.chars[62].items.empty() && Has(hw.chars[2].items, "ore", 5); });
+    CHECK(hw.chars[62].items.empty() && Has(hw.chars[2].items, "ore", 5));
+    // 2. our sword into the bull's backpack
+    Erase(cw.chars[2].items, "sword");
+    cw.chars[62].bag.push_back(It("sword", 1, "backpack_content", 2, 0));
+    Run(all, 4.0, [&] { return Has(hw.chars[62].bag, "sword") && !Has(hw.chars[2].items, "sword"); });
+    CHECK(Has(hw.chars[62].bag, "sword") && !Has(hw.chars[2].items, "sword"));
+    // 3. the rope out of the host's (human) character's backpack: a backpack is the team's too
+    cw.chars[1].bag.clear();
+    cw.chars[2].items.push_back(It("rope", 1, "main", 4, 0));
+    Run(all, 4.0, [&] { return hw.chars[1].bag.empty() && Has(hw.chars[2].items, "rope"); });
+    CHECK(hw.chars[1].bag.empty() && Has(hw.chars[2].items, "rope"));
+    // 4. the bread out of the host's character's own inventory: refused, put back here, said in French
+    cw.chars[1].items.clear();
+    cw.chars[2].items.push_back(It("bread", 2, "main", 6, 0));
+    Run(all, 5.0, [&] { return cw.chars[1].items == hw.chars[1].items && cw.chars[2].items == hw.chars[2].items; });
+    CHECK(Has(hw.chars[1].items, "bread", 2) && !Has(hw.chars[2].items, "bread"));
+    CHECK(cw.chars[1].items == hw.chars[1].items && cw.chars[2].items == hw.chars[2].items);
+    CHECK(Said(cli, "appartient") && Said(cli, "sacs et les bêtes de somme"));
+    // 5. the bull's backpack and the bull are places our drops may be asked from (our character by them);
+    //    a drop from the backpack is done by the host, the bull dropping it
+    Run(all, 2.0, [&] { return cw.DropSource(FakeWorld::Pk(9062)) && cw.DropSource(FakeWorld::H(62)); });
+    CHECK(cw.DropSource(FakeWorld::Pk(9062)) && cw.DropSource(FakeWorld::H(62)) && !cw.DropSource(FakeWorld::H(1)));
+    Erase(cw.chars[62].bag, "materials");
+    cw.localDrops.push_back({FakeWorld::Pk(9062), It("materials", 3, "backpack_content", 0, 0)});
+    Run(all, 3.0, [&] { return !Has(hw.chars[62].bag, "materials"); });
+    CHECK(!Has(hw.chars[62].bag, "materials") && hw.drops == 1 && hw.lastDropper == FakeWorld::Pk(7062));
+    // 6. a forged drop from the host's character's own inventory, naming ours: refused
+    InvOp op;
+    op.kind = InvOpKind::Drop;
+    op.fromNetId = NetOf(host, FakeWorld::H(1));
+    op.toNetId = NetOf(host, FakeWorld::H(2));
+    op.item = It("bread", 2, "main", 0, 0);
+    Writer w;
+    Encode(w, op);
+    CHECK(host.InjectForTest(cli.localId(), w));
+    Run(all, 0.5);
+    CHECK(hw.drops == 1 && Has(hw.chars[1].items, "bread", 2));
+    // 7. a trade window the host's game opens between our character and a character of the player
+    //    faction (the "loot" order on a team mate, TW_AUTO): no merchant window (it showed the player
+    //    base's counters and refused every move at price 0); the player is told what to do
+    hw.tradeReqs.push_back({FakeWorld::H(2), FakeWorld::H(1)});
+    Run(all, 2.0, [&] { return Said(cli, "Échange entre joueurs"); });
+    CHECK(host.hostTrades() == 0 && !cli.tradeView().open && !cli.tradeView().pending && Said(cli, "Échange entre joueurs"));
+    CHECK(Logged(hostLog, "a character of the player faction) not opened"));
+}
+
+// Point 19: a click on a building (its inventory panel) asks the host for its items without walking;
+// taking something out walks our character there first, then the move runs.
+static void TestBuildingPeek() {
+    using namespace night;
+    std::printf("session (0.3.5): a building panel shows the host's items without walking; a take walks there first\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);   // squad at x = 100, 200, 300
+    hw.boxes[810] = {"stock", {600, 0, 0}, {It("ore", 65, "backpack_content", 0, 0)}};
+    AtMenu(cw);
+    cw.boxes = hw.boxes;
+    cw.boxes[810].items.clear();   // our copy knows nothing the host's miners brought
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    std::vector<std::string> hostLog, cliLog;
+    Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
+    Session cli(cw, cc, Now, [&](const std::string& l) { cliLog.push_back(l); });
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    host.Assign(FakeWorld::H(2), cli.localId());
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}};
+    Run(all, 1.0);
+    hw.orderedSerials.clear();
+    // the panel opens (the hook fires twice a click): one look, the host's items, nobody walks
+    cw.containerPeeks.push_back({FakeWorld::H(2), "stock", {600, 0, 0}, FakeWorld::B(810)});
+    cw.containerPeeks.push_back({FakeWorld::H(2), "stock", {600, 0, 0}, FakeWorld::B(810)});
+    Run(all, 3.0, [&] { return cw.boxes[810].items == hw.boxes[810].items; });
+    CHECK(cw.boxes[810].items == hw.boxes[810].items);
+    CHECK(hw.orderedSerials.empty() && hw.chars[2].dest.x == 200.0f);
+    CHECK(std::count_if(hostLog.begin(), hostLog.end(), [](const std::string& l) { return l.find("looks at stock") != std::string::npos; }) == 1);
+    // the host's stock changes while the panel is open: we see it
+    hw.boxes[810].items[0].quantity = 70;
+    Run(all, 3.0, [&] { return cw.boxes[810].items == hw.boxes[810].items; });
+    CHECK(cw.boxes[810].items == hw.boxes[810].items);
+    // the player drags the ore into our character: it walks to the storage, then the host moves it
+    cw.boxes[810].items.clear();
+    cw.chars[2].items.push_back(It("ore", 70, "main", 0, 0));
+    Run(all, 20.0, [&] { return hw.boxes[810].items.empty() && Has(hw.chars[2].items, "ore", 70); });
+    CHECK(hw.boxes[810].items.empty() && Has(hw.chars[2].items, "ore", 70));
+    CHECK(std::count(hw.orderedSerials.begin(), hw.orderedSerials.end(), 2u) >= 1 && Dist(hw.chars[2].pos, {600, 0, 0}) <= 80.0f);
+    CHECK(Logged(cliLog, "wait for our character to get there") && Said(cli, "va jusqu'à"));
+    Run(all, 2.0, [&] { return cw.chars[2].items == hw.chars[2].items && cw.boxes[810].items == hw.boxes[810].items; });
+    CHECK(cw.chars[2].items == hw.chars[2].items && cw.boxes[810].items == hw.boxes[810].items);
+    // a forged look naming the host's character: refused
+    ContainerPeek forged;
+    forged.looterNetId = NetOf(host, FakeWorld::H(1));
+    forged.sid = "stock";
+    forged.pos = {600, 0, 0};
+    Writer w;
+    Encode(w, forged);
+    const uint32_t refusals = host.actorRefusals();
+    CHECK(host.InjectForTest(cli.localId(), w));
+    Run(all, 0.5);
+    CHECK(host.actorRefusals() == refusals + 1);
+}
+
+// Point 20: rob1's ore taken out of Stock Cuivre went back into it: the host's game (his characters were
+// the copper mine's workers) puts what a worker carries into the storage. The player is told.
+static void TestTakenBack() {
+    using namespace night;
+    std::printf("session (0.3.5): an item the host's game puts back into a storage right after a take is explained to the player\n");
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    hw.boxes[820] = {"stock", {205, 0, 0}, {It("ore", 65, "backpack_content", 0, 0)}};
+    AtMenu(cw);
+    cw.boxes = hw.boxes;
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    std::vector<std::string> hostLog;
+    Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    host.Assign(FakeWorld::H(2), cli.localId());
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}};
+    Run(all, 1.0);
+    cw.containerReqs.push_back({FakeWorld::H(2), "stock", {205, 0, 0}});
+    Run(all, 3.0, [&] { return cli.entityCount() == 4; });
+    CHECK(cli.entityCount() == 4);
+    Run(all, 1.0);   // its items arrive
+    cw.boxes[820].items.clear();
+    cw.chars[2].items.push_back(It("ore", 65, "main", 0, 0));
+    Run(all, 4.0, [&] { return Has(hw.chars[2].items, "ore", 65) && hw.boxes[820].items.empty(); });
+    CHECK(Has(hw.chars[2].items, "ore", 65) && hw.boxes[820].items.empty());
+    CHECK(Logged(hostLog, "item move done: ore x65 from stock"));
+    CHECK(!Said(cli, "Le jeu a remis"));
+    // the host's game puts it back (a worker's job): said to the player, and in the host's log
+    hw.chars[2].items.clear();
+    hw.boxes[820].items = {It("ore", 65, "backpack_content", 0, 0)};
+    Run(all, 3.0, [&] { return Said(cli, "Le jeu a remis"); });
+    CHECK(Said(cli, "Le jeu a remis") && Logged(hostLog, "went back into it on the host"));
+}
+
+// Point 18: the farm's water (its "Eau" bar) is the host's; our game's own farm update drinks it.
+static void TestFarmInputs() {
+    using namespace night;
+    std::printf("session (0.3.5): a farm's water follows the host's; FarmInputs and ContainerPeek on the wire\n");
+    {   // wire
+        FarmInputsMsg m;
+        m.full = true;
+        m.farms.push_back({"farm", {1, 2, 3}, {0.25f, 1.0f}});
+        Writer w;
+        Encode(w, m);
+        Reader r(w.data(), w.size());
+        CHECK(PeekType(r) == Msg::FarmInputs);
+        FarmInputsMsg back;
+        CHECK(Decode(r, back) && back.full && back.farms.size() == 1 && back.farms[0] == m.farms[0] && back.farms[0].pos.z == 3.0f);
+        auto forged = [](int inputs, float v) {
+            Writer f;
+            f.u8(uint8_t(Msg::FarmInputs));
+            f.boolean(false);
+            f.varint(1);
+            f.str("farm");
+            f.f32(0); f.f32(0); f.f32(0);
+            f.varint(uint64_t(inputs));
+            for (int i = 0; i < inputs; ++i) f.f32(v);
+            Reader fr(f.data(), f.size());
+            FarmInputsMsg x;
+            return PeekType(fr) == Msg::FarmInputs && Decode(fr, x);
+        };
+        CHECK(forged(1, 0.5f) && !forged(int(kMaxFarmInputs) + 1, 0.5f) && !forged(1, -1.0f) && !forged(1, std::numeric_limits<float>::quiet_NaN()));
+        ContainerPeek p;
+        p.looterNetId = 7;
+        p.sid = "stock";
+        p.pos = {4, 5, 6};
+        Writer pw;
+        Encode(pw, p);
+        Reader pr(pw.data(), pw.size());
+        CHECK(PeekType(pr) == Msg::ContainerPeek);
+        ContainerPeek p2;
+        CHECK(Decode(pr, p2) && p2.looterNetId == 7 && p2.sid == "stock" && p2.pos.y == 5.0f);
+        p.looterNetId = 0;   // a look names its actor
+        Writer pw0;
+        Encode(pw0, p);
+        Reader pr0(pw0.data(), pw0.size());
+        CHECK(PeekType(pr0) == Msg::ContainerPeek && !Decode(pr0, p2));
+        CHECK(MessageRuleFor(Msg::ContainerPeek) && MessageRuleFor(Msg::ContainerPeek)->subject == AuthSubject::OwnCharacter);
+        CHECK(MessageRuleFor(Msg::FarmInputs) && MessageRuleFor(Msg::FarmInputs)->role == AuthRole::HostOnly);
+    }
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    FakeWorld::FakeMachine farm;
+    farm.s.sid = "farm"; farm.s.pos = {250, 0, 0}; farm.s.flags = kMachFarm | kMachOurs; farm.s.maxOperators = 4;
+    farm.s.crop.stage = 3; farm.s.crop.plants = 24; farm.s.crop.grown = 0.3f;
+    farm.inputs = {0.5f};
+    hw.machines["farm"] = farm;
+    AtMenu(cw);
+    cw.machines["farm"].s.sid = "farm";
+    SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}};
+    const std::vector<float> half{0.5f};
+    Run(all, 4.0, [&] { return cw.machines["farm"].inputs == half; });
+    CHECK(cw.machines["farm"].inputs == half);
+    // our own farm update drank it: the host's water again (every machine round)
+    cw.machines["farm"].inputs = {0.1f};
+    Run(all, 4.0, [&] { return cw.machines["farm"].inputs == half; });
+    CHECK(cw.machines["farm"].inputs == half);
+    // the host's farm dries out (no water delivered, no rain): so does ours
+    hw.machines["farm"].inputs = {0.0f};
+    const std::vector<float> dry{0.0f};
+    Run(all, 4.0, [&] { return cw.machines["farm"].inputs == dry; });
+    CHECK(cw.machines["farm"].inputs == dry && cw.farmInputApplies > 0);
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);   // every line out before a crash
     if (std::getenv("KC_ONLY_NIGHTJOIN")) {   // night-join tests alone
         TestRosterFile();
         TestNightJoin();
+        std::printf("%d checks, %d failed\n", g_checks, g_failed);
+        return g_failed ? 1 : 0;
+    }
+    if (std::getenv("KC_ONLY_NIGHTITEMS")) {   // 0.3.5 lot 4 (night-items) alone
+        TestTeamSharedInventories();
+        TestBuildingPeek();
+        TestTakenBack();
+        TestFarmInputs();
         std::printf("%d checks, %d failed\n", g_checks, g_failed);
         return g_failed ? 1 : 0;
     }
@@ -7858,6 +8151,10 @@ int main() {
     TestTalkRules();   // 0.3.4: talk clicks without an order, NPC by kind and place, lines kept waiting
     TestPlayerStats();   // 0.3.5: player statistics (book, file, filter, message)
     TestPlayerStatsSession();
+    TestTeamSharedInventories();   // 0.3.5 lot 4: rule A, team mate's trade window
+    TestBuildingPeek();            // 0.3.5 lot 4: building panels without walking
+    TestTakenBack();               // 0.3.5 lot 4: the host's game putting a take back
+    TestFarmInputs();              // 0.3.5 lot 4: a farm's water
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

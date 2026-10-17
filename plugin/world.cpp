@@ -1736,6 +1736,19 @@ void KenshiWorld::TakeContainerRequests(std::vector<ContainerRequest>& out) {
     containerReqs_.clear();
 }
 
+void KenshiWorld::QueueContainerPeek(kenshi::Character* looter, void* building) {
+    ContainerRequest r;
+    if (!kenshi::ObjectTemplate(building, r.sid) || !kenshi::ObjectPosition(building, r.pos)) return;
+    kenshi::ObjectHandle(building, r.object);
+    if (looter && kenshi::GetHandle(looter, r.looter)) r.looter = HostHandleOf(r.looter);
+    if (containerPeeks_.size() < 8) containerPeeks_.push_back(r);
+}
+
+void KenshiWorld::TakeContainerPeeks(std::vector<ContainerRequest>& out) {
+    out.swap(containerPeeks_);
+    containerPeeks_.clear();
+}
+
 void KenshiWorld::QueueTradeRequest(const kc::Handle& looter, const kc::Handle& trader) {
     std::lock_guard<std::mutex> lk(tradeMutex_);
     if (tradeReqs_.size() < 8) tradeReqs_.push_back({looter, trader});
@@ -3747,7 +3760,7 @@ bool KenshiWorld::HostBodyPos(const kc::Handle& local, kc::Vec3& out) const {
     return true;
 }
 
-void KenshiWorld::RequestLoot(const kc::Handle& looter, kenshi::Character* target) {
+void KenshiWorld::RequestLoot(const kc::Handle& looter, kenshi::Character* target, bool team) {
     kc::Handle t;
     kc::Vec3 tp, lp;
     kenshi::Character* me = FindSquad(looter);
@@ -3773,7 +3786,7 @@ void KenshiWorld::RequestLoot(const kc::Handle& looter, kenshi::Character* targe
     c.kind = kc::CommandKind::MoveTo;
     c.pos = kc::loot::ApproachPoint(lp, haveHost ? hp : tp, body);   // the host's looter walks to the host's body
     QueueLocalOrder(looter, c);
-    pendingLoot_.push_back({looter, t, body, race, kc::loot::StartOrder(NowSeconds(), dist)});
+    pendingLoot_.push_back({looter, t, body, race, kc::loot::StartOrder(NowSeconds(), dist), team});
 }
 
 void KenshiWorld::UpdatePendingLoot() {
@@ -3782,7 +3795,7 @@ void KenshiWorld::UpdatePendingLoot() {
         kenshi::Character* me = FindSquad(it->looter);
         kenshi::Character* target = kenshi::Resolve(it->target);
         kc::Vec3 lp, tp;
-        const bool lootable = target && (kenshi::IsDown(target) || kenshi::IsDead(target) || kenshi::IsRagdoll(target) || kenshi::IsAnimal(target));
+        const bool lootable = target && (it->team || kenshi::IsDown(target) || kenshi::IsDead(target) || kenshi::IsRagdoll(target) || kenshi::IsAnimal(target));
         const bool havePos = me && lootable && kenshi::GetPosition(me, lp) && kenshi::GetPosition(target, tp);
         if (!me || !lootable) {
             Log("loot order dropped: %s", !me ? "the looter is gone" : !target ? "the body is gone here" : "it got up");
@@ -4502,7 +4515,22 @@ bool KenshiWorld::ApplyInventory(const kc::Handle& h, const std::vector<kc::Item
     if (kenshi::ReadInventory(c, local) && local == items) return true;
     std::string err;
     HostCallScope scope;
-    if (!kenshi::RebuildInventory(c, items, &err)) Log("inventory rebuild incomplete: %s", err.c_str());
+    if (!kenshi::RebuildInventory(c, items, &err)) {
+        // 0.3.5 (lot 4, point 3): the same reason for the same inventory once a minute (278 identical lines
+        // on 16 October, one every ~2 s), with how many were not written
+        static std::unordered_map<std::string, std::pair<double, int>> said;
+        if (said.size() > 512) said.clear();
+        auto& [at, held] = said[KeyOf(h) + "|" + err];
+        const double now = NowSeconds();
+        if (at == 0 || now - at > 60.0) {
+            Log("inventory rebuild incomplete for %s: %s%s", KeyOf(h).c_str(), err.c_str(),
+                held ? (" [" + std::to_string(held) + " more such lines not written]").c_str() : "");
+            at = now;
+            held = 0;
+        } else {
+            ++held;
+        }
+    }
     // success means: the game now shows exactly the host's layout
     local.clear();
     if (kenshi::ReadInventory(c, local) && local == items) return true;
@@ -4511,6 +4539,11 @@ bool KenshiWorld::ApplyInventory(const kc::Handle& h, const std::vector<kc::Item
     for (const kc::ItemState& s : items) {
         if (std::find(local.begin(), local.end(), s) != local.end()) continue;
         auto same = std::find_if(local.begin(), local.end(), [&](const kc::ItemState& l) { return l.sameKind(s); });
+        static std::unordered_map<std::string, double> told;   // 0.3.5: once a minute per inventory and item
+        if (told.size() > 512) told.clear();
+        double& at = told[KeyOf(h) + "|" + s.templateSid + "|" + s.section];
+        if (at != 0 && NowSeconds() - at < 60.0) break;
+        at = NowSeconds();
         Log("inventory of %s not as on the host: %s x%d at %s %d,%d here %s", KeyOf(h).c_str(), s.templateSid.c_str(), s.quantity,
             s.section.c_str(), s.x, s.y,
             same == local.end() ? "missing" : ("at " + same->section + " " + std::to_string(same->x) + "," + std::to_string(same->y)).c_str());

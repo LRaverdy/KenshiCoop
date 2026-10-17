@@ -9853,9 +9853,394 @@ def exp_playerstats(host, cli):
     summary()
 
 
+# ---------------------------------------------------------------- 0.3.5 lot 4 (night-items): the 16 October item bugs
+# Each experiment runs on its own (python tools/coop_test.py <name>) or all in a row (nightitems). They
+# use the game's own UI paths through debug commands: a right click with or without Shift (storagejob),
+# a building's panel opened like a click (peekbuilding), drags in open windows (contake / conput / invmove,
+# the window's own move, which the client's inventory check turns into a request), a drag released over
+# the ground from a loot window (mousedrop, ItemOnMouse::<drop to world>) and a real mouse drag when
+# tools/ui.ps1 is there.
+
+def _night_setup(host, cli, label):
+    """Common start: the client's character made, everyone healed and in god mode, the squad out of town."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    SANDBOX["home"] = None
+    cmd(host, "console heal all")
+    cmd(host, "console god all")
+    time.sleep(3)
+    out = move_squad_out_of_town(host)
+    check(f"{label} : escouade en plein desert", out, "")
+    return own if out else None
+
+
+def _storage_total(pid, sid):
+    t = cmd(pid, f"storage {sid}")[1]
+    for part in t.split():
+        if part.startswith("total="):
+            return int(part.split("=")[1])
+    return -1
+
+
+def exp_storagetake(host, cli):
+    """Point 20: the client takes from and puts into a storage (Coffre Stock Général); the host does the
+    move between the right inventories (its log names them: "item move done: <item> from <storage> to
+    <character>"), nothing goes back by itself, the same everywhere. A take the host's game undoes (a
+    character whose job stores what it carries) is said to the player ("Le jeu a remis")."""
+    own = _night_setup(host, cli, "stockage")
+    if own is None:
+        summary()
+        return
+    if not sandbox_building(host, STORAGE, 0, 90, "stockage"):
+        check("stockage : coffre de stockage pose", False, "")
+        summary()
+        return
+    log("sandbox fabrics:", cmd(host, f"giveitem {FABRICS} 12 0"))
+    log("host fills the storage:", cmd(host, f"conput 0 {STORAGE} {FABRICS}"))
+    time.sleep(3)
+    for t in ("item_move_done", "went_back_into_it", "Le_jeu_a_remis", "differs_here_from_the_host's"):
+        cmd(host, f"logcount {t}")
+        cmd(cli, f"logcount {t}")
+    log("client opens the storage (right click):", cmd(cli, f"containerreq {own} {STORAGE}"))
+    time.sleep(8)
+    h0, c0 = _storage_total(host, STORAGE), _storage_total(cli, STORAGE)
+    check("stockage : meme contenu chez l'hote et le client a l'ouverture", h0 == c0 and h0 > 0, f"{h0} / {c0}")
+    took = cmd(cli, f"contake {own} {STORAGE}")
+    log("client takes out of it (the window's drag):", took)
+    time.sleep(5)
+    h1, c1 = _storage_total(host, STORAGE), _storage_total(cli, STORAGE)
+    check("stockage : pris chez l'hote (le coffre a moins)", took[0] and h1 < h0, f"{h0} -> {h1}")
+    check("stockage : meme coffre partout apres la prise", h1 == c1, f"{h1} / {c1}")
+    check("stockage : le deplacement nomme le coffre et le perso (journal de l'hote)", cmd(host, "logcount item_move_done")[1] not in ("ok 0", "0"), "")
+    time.sleep(8)
+    h2 = _storage_total(host, STORAGE)
+    back = cmd(host, "logcount went_back_into_it")[1]
+    check("stockage : rien n'y retourne tout seul (perso sans travail)", h2 == h1 and back in ("ok 0", "0"), f"{h1} -> {h2}, {back}")
+    put = cmd(cli, f"conput {own} {STORAGE} {FABRICS}")
+    log("client puts it back (the window's drag):", put)
+    time.sleep(5)
+    h3, c3 = _storage_total(host, STORAGE), _storage_total(cli, STORAGE)
+    check("stockage : pose chez l'hote", put[0] and h3 > h2, f"{h2} -> {h3}")
+    check("stockage : meme coffre partout apres la pose", h3 == c3, f"{h3} / {c3}")
+    rep = compare(dump(host, "h_storage"), dump(cli, "c_storage"), "storage")
+    check("stockage : memes inventaires partout", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    cmd(cli, "closewindows")
+    summary()
+
+
+def exp_storagejob(host, cli):
+    """Point 21: a plain right click on a storage looks inside (the client's character goes there); Shift +
+    right click gives the game's permanent job on it, sent to the host as an order (16 October: every
+    Shift + right click on Stock Fruivert gave "goes to look into", never the job)."""
+    own = _night_setup(host, cli, "tache stockage")
+    if own is None:
+        summary()
+        return
+    if not sandbox_building(host, STORAGE, 0, 90, "tache stockage"):
+        check("tache stockage : coffre de stockage pose", False, "")
+        summary()
+        return
+    for t in ("goes_to_look_into", "Shift:_a_permanent_job", "Shift_+_right_click_on_a_container"):
+        cmd(host, f"logcount {t}")
+        cmd(cli, f"logcount {t}")
+    jobs0 = cmd(host, f"jobs {own}")[1].split()[2:]
+    r = cmd(cli, f"storagejob {own} {STORAGE}")
+    log("client right click (no Shift):", r)
+    time.sleep(4)
+    check("tache stockage : clic droit simple = regarder dedans", cmd(host, "logcount goes_to_look_into")[1] not in ("ok 0", "0"), "")
+    r = cmd(cli, f"storagejob {own} {STORAGE} shift")
+    log("client Shift + right click:", r)
+    time.sleep(5)
+    sent = cmd(cli, "logcount Shift:_a_permanent_job")[1]
+    jobs1 = cmd(host, f"jobs {own}")[1].split()[2:]
+    log("jobs of the client's character on the host:", jobs0, "->", jobs1)
+    check("tache stockage : Maj + clic droit envoye comme ordre (tache permanente)", sent not in ("ok 0", "0"), sent)
+    check("tache stockage : la tache permanente est chez l'hote", len(jobs1) > len(jobs0), f"{jobs0} -> {jobs1}")
+    check("tache stockage : meme liste de taches chez le client", cmd(cli, f"jobs {own}")[1] == cmd(host, f"jobs {own}")[1], "")
+    summary()
+
+
+def exp_buildingpeek(host, cli):
+    """Point 19: a left click on a building (its inventory panel) shows the host's items without moving the
+    client's character; taking an item out of it walks the character there first, then the move lands."""
+    own = _night_setup(host, cli, "panneau")
+    if own is None:
+        summary()
+        return
+    if not sandbox_building(host, STORAGE, 0, 450, "panneau"):
+        check("panneau : coffre de stockage pose loin du perso du client", False, "")
+        summary()
+        return
+    log("sandbox fabrics:", cmd(host, f"giveitem {FABRICS} 10 0"))
+    log("host fills it:", cmd(host, f"conput 0 {STORAGE} {FABRICS}"))
+    for t in ("looks_at", "goes_to_look_into", "wait_for_our_character", "building_panel"):
+        cmd(host, f"logcount {t}")
+        cmd(cli, f"logcount {t}")
+    p0 = pos_xz(cli, own)
+    r = cmd(cli, f"peekbuilding {own} {STORAGE}")
+    log("client clicks the storage (its panel):", r)
+    time.sleep(6)
+    p1 = pos_xz(cli, own)
+    moved = math.hypot(p1[0] - p0[0], p1[1] - p0[1]) if p0 and p1 else -1
+    check("panneau : le perso du client ne bouge pas pour regarder", 0 <= moved < 10, f"{moved:.1f} unites")
+    check("panneau : l'hote envoie le contenu sans marche (looks at)", cmd(host, "logcount looks_at")[1] not in ("ok 0", "0") and
+          cmd(host, "logcount goes_to_look_into")[1] in ("ok 0", "0"), "")
+    h, c = _storage_total(host, STORAGE), _storage_total(cli, STORAGE)
+    check("panneau : meme contenu chez le client", h == c and h > 0, f"{h} / {c}")
+    took = cmd(cli, f"contake {own} {STORAGE}")
+    log("client takes from the panel:", took)
+    for _ in range(30):
+        time.sleep(1)
+        if _storage_total(host, STORAGE) < h:
+            break
+    p2 = pos_xz(cli, own)
+    walked = math.hypot(p2[0] - p0[0], p2[1] - p0[1]) if p0 and p2 else -1
+    check("panneau : prendre fait marcher le perso jusqu'au batiment", walked > 100, f"{walked:.1f} unites")
+    check("panneau : l'objet arrive chez l'hote une fois le perso la", _storage_total(host, STORAGE) < h, f"{h} -> {_storage_total(host, STORAGE)}")
+    time.sleep(3)
+    rep = compare(dump(host, "h_peek"), dump(cli, "c_peek"), "building panel")
+    check("panneau : memes inventaires partout", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    # a machine (a well) is kept in step everywhere: nothing to ask, nobody walks
+    if sandbox_building(host, WELL, 300, 450, "panneau (puits)"):
+        p3 = pos_xz(cli, own)
+        log("client clicks the well:", cmd(cli, f"peekbuilding {own} {WELL}"))
+        time.sleep(5)
+        p4 = pos_xz(cli, own)
+        moved = math.hypot(p4[0] - p3[0], p4[1] - p3[1]) if p3 and p4 else -1
+        check("panneau (puits) : le perso ne bouge pas", 0 <= moved < 10, f"{moved:.1f}")
+    summary()
+
+
+def exp_farmwater(host, cli, seconds=90):
+    """Point 18: a farm's water (its "Eau" bar) and its output are the host's on the client, at speed 1 and
+    3; the client's own farm update drinking it is undone every machine round."""
+    own = _night_setup(host, cli, "ferme")
+    if own is None:
+        summary()
+        return
+    farm = None
+    for sid in (SMALL_FARM, HEMP_FARM):
+        if sandbox_building(host, sid, 0, 150, "ferme"):
+            farm = sid
+            break
+    check("ferme : ferme posee", farm is not None, "")
+    if not farm:
+        summary()
+        return
+    for what in ("Eau", "Water"):
+        log("sandbox: water into the farm", what, cmd(host, f"machinegive {farm} {what} 10"))
+    log("client's character works the farm:", cmd(cli, f"workreq {own} {farm}"))
+
+    def water(pid):
+        f = cmd(pid, f"crops {farm}")[1]
+        for part in f.split():
+            if part.startswith("water="):
+                v = part.split("=")[1].split(",")[0]
+                return None if v == "none" else float(v)
+        return None
+    worst = 0.0
+    for speed in (1, 3):
+        cmd(host, f"speed {speed}")
+        end = time.time() + seconds / 2
+        while time.time() < end:
+            time.sleep(10)
+            keep_anchor_home(host)
+            wh, wc = water(host), water(cli)
+            log(f"x{speed} water host {wh} client {wc} | host {cmd(host, f'crops {farm}')[1][:160]}")
+            if wh is not None and wc is not None:
+                worst = max(worst, abs(wh - wc))
+    cmd(host, "speed 1")
+    check("ferme : niveau d'eau chez le client = celui de l'hote (a 0.05 pres)", water(host) is not None and worst <= 0.05, f"ecart max {worst:.3f}")
+    sh, sc = cmd(host, f"storage {farm}")[1], cmd(cli, f"storage {farm}")[1]
+    check("ferme : meme sortie (recolte) chez l'hote et le client", sh == sc, f"{sh[:160]} / {sc[:160]}")
+    summary()
+
+
+def exp_teampack(host, cli):
+    """Point 17 (rule A): the client takes from and puts into the host's pack animal and the backpacks of
+    the host's characters; the host's human character's own inventory stays refused (said in French); a
+    drop from the animal's backpack goes to the host. Needs a pack animal in the squad (kctest_base has one
+    or buy one first)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    ah = cmd(host, "squadanimals")
+    log("squad animals:", ah)
+    if not ah[0] or ah[1].split()[1] == "0":
+        log("NOT TESTED: no pack animal in the squad (buy or tame one on the save first)")
+        summary()
+        return
+    beast = int(ah[1].split()[2].split(":")[0])
+    host_human = next(i for i in range(squad_size(host)) if i not in (own, beast))
+    for t in ("inventory_change_refused", "COULD_NOT_PUT", "item_move_done", "client_item_drop_done"):
+        cmd(host, f"logcount {t}")
+        cmd(cli, f"logcount {t}")
+    log("client and animal side by side:", cmd(host, f"teleport {beast} " + " ".join(cmd(host, f"pos {own}")[1].split()[1].split(","))))
+    log("host's character wears a backpack:", cmd(host, f"wearbag {host_human}"))
+    log("sandbox: fabrics in the animal:", cmd(host, f"giveitem {FABRICS} 6 {beast}"))
+    time.sleep(6)
+    r = cmd(cli, f"invmove squad{beast} squad{own} main")
+    log("client takes from the host's animal:", r)
+    time.sleep(4)
+    rep = compare(dump(host, "h_team1"), dump(cli, "c_team1"), "team animal")
+    check("equipe : prendre dans la bete de somme d'un autre joueur", r[0] and rep["inventory_mismatch"] == 0 and
+          cmd(cli, "logcount inventory_change_refused")[1] in ("ok 0", "0"), f"{r[1]} {rep['inventory_mismatch_sample']}")
+    r = cmd(cli, f"invmove squad{own} bag:squad{host_human} main")
+    log("client puts into the host's character's backpack:", r)
+    time.sleep(4)
+    rep = compare(dump(host, "h_team2"), dump(cli, "c_team2"), "team backpack")
+    check("equipe : poser dans le sac d'un autre joueur", r[0] and rep["inventory_mismatch"] == 0, f"{r[1]} {rep['inventory_mismatch_sample']}")
+    r = cmd(cli, f"invmove squad{host_human} squad{own} main")
+    log("client takes from the host's human character (refused):", r)
+    time.sleep(5)
+    rep = compare(dump(host, "h_team3"), dump(cli, "c_team3"), "team human refused")
+    check("equipe : l'inventaire d'un perso humain d'un autre joueur reste refuse, et remis en place",
+          cmd(cli, "logcount inventory_change_refused")[1] not in ("ok 0", "0") and rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    if cmd(host, f"bag squad{beast}")[0]:
+        r = cmd(cli, f"uidrop bag:{beast} item")
+        log("client drops from the animal's backpack:", r)
+        time.sleep(5)
+        check("equipe : lache depuis le sac de la bete : fait par l'hote", cmd(host, "logcount client_item_drop_done")[1] not in ("ok 0", "0"), r[1])
+    check("equipe : jamais 'COULD NOT PUT THE ITEM BACK'", cmd(cli, "logcount COULD_NOT_PUT")[1] in ("ok 0", "0"), "")
+    summary()
+
+
+def exp_teamtrade(host, cli):
+    """Point 17: the right click "loot" on a team mate (the host's character) opens its inventory on the
+    client's own screen (no merchant window with the player base's counters, no "price 0" refusals, no
+    window closing and opening); its backpack takes and gives items, its own inventory does not."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    mate = next(i for i in range(squad_size(host)) if i != own)
+    log("mate wears a backpack:", cmd(host, f"wearbag {mate}"))
+    log("mate beside the client's character:", cmd(host, f"teleport {mate} " + " ".join(cmd(host, f"pos {own}")[1].split()[1].split(","))))
+    for t in ("trade_refused", "trades_with", "team_mate's_inventory", "a_character_of_the_player_faction", "trade_window_closed_for_a_moment"):
+        cmd(host, f"logcount {t}")
+        cmd(cli, f"logcount {t}")
+    time.sleep(6)
+    r = cmd(cli, f"teamloot {own} {mate}")
+    log("client right-clicks 'loot' on the host's character:", r)
+    time.sleep(6)
+    check("echange : fenetre de l'equipier ouverte chez le client", cmd(cli, "logcount team_mate's_inventory")[1] not in ("ok 0", "0"), cmd(cli, "tradestate")[1])
+    check("echange : aucune fenetre de marchand chez l'hote", cmd(host, "logcount trades_with")[1] in ("ok 0", "0"), "")
+    r = cmd(cli, f"invmove squad{own} bag:squad{mate} main")
+    log("client gives into the mate's backpack:", r)
+    time.sleep(4)
+    r2 = cmd(cli, f"invmove bag:squad{mate} squad{own} 0")
+    log("client takes it back:", r2)
+    time.sleep(4)
+    rep = compare(dump(host, "h_tt"), dump(cli, "c_tt"), "team trade")
+    check("echange : objets passes par le sac, memes inventaires partout", r[0] and r2[0] and rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    check("echange : aucun refus 'price 0', pas de fenetre qui clignote", cmd(host, "logcount trade_refused")[1] in ("ok 0", "0") and
+          cmd(cli, "logcount trade_window_closed_for_a_moment")[1] in ("ok 0", "0"), "")
+    cmd(cli, "closewindows")
+    summary()
+
+
+def exp_lootground(host, cli):
+    """Point 14: from the loot window of a knocked-out NPC, an item released over the ground is dropped by
+    the host (the client's character standing by the body), logged, and everyone sees it; refused, it is
+    said and stays in the body. A real mouse drag when tools/ui.ps1 is there, then the game's own release
+    (mousedrop, ItemOnMouse::<drop to world>)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    ok, text = cmd(host, f"spawnnpc 25 15 {own}")
+    log("spawn:", text)
+    if not ok:
+        summary()
+        return
+    key = text.split()[1]
+    time.sleep(5)
+    log("ko:", cmd(host, f"ko {key}"))
+    time.sleep(4)
+    for t in ("client_item_drop_done", "let_through_to_the_inventory_drop", "drop_of", "loot_window_opened"):
+        cmd(host, f"logcount {t}")
+        cmd(cli, f"logcount {t}")
+    log("client loots it:", cmd(cli, f"loot {key} {own}"))
+    for _ in range(20):
+        time.sleep(1)
+        if cmd(cli, "logcount loot_window_opened")[1] not in ("ok 0", "0"):
+            break
+    check("pillage au sol : fenetre de pillage ouverte chez le client", cmd(cli, "logcount loot_window_opened")[1] not in ("ok 0", "0"), "")
+    gb = cmd(host, f"groundall 300 {own}")[1].split()[2:]
+    if os.path.exists(UI_PS1):   # a real drag: the body's first slot to an empty spot of the ground
+        r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", UI_PS1, "drag", str(cli), "372", "180", "900", "620"],
+                           capture_output=True, timeout=30, text=True)
+        log("real drag to the ground:", r.stdout.strip(), r.stderr.strip()[:200])
+        time.sleep(5)
+    r = cmd(cli, f"mousedrop {key} item")
+    log("the game's release over the ground (mousedrop):", r)
+    time.sleep(6)
+    ga = cmd(host, f"groundall 300 {own}")[1].split()[2:]
+    fresh = [g for g in ga if g not in gb]
+    check("pillage au sol : la sortie de la fenetre passe au depot (journal du client)",
+          cmd(cli, "logcount let_through_to_the_inventory_drop")[1] not in ("ok 0", "0"), r[1])
+    check("pillage au sol : objet pose au sol chez l'hote", bool(fresh) and cmd(host, "logcount client_item_drop_done")[1] not in ("ok 0", "0"), fresh)
+    rep = compare(dump(host, "h_lootground", 300), dump(cli, "c_lootground", 300), "loot window to the ground")
+    check("pillage au sol : memes inventaires partout", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    cmd(cli, "closewindows")
+    summary()
+
+
+def exp_wornrebuild(host, cli, minutes=2):
+    """Point 3: clothes the host's NPCs (and the players' characters) wear are worn on the client too; when
+    the client's copy cannot wear one, one line a minute says why (race, slot, section), never 278 lines."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    for t in ("inventory_rebuild_incomplete", "not_as_on_the_host", "cannot_place"):
+        cmd(cli, f"logcount {t}")
+    for k in range(4):
+        log("spawn an NPC near the client:", cmd(host, f"spawnnpc {30 + 20 * k} {10 * k} {own_index(host)}"))
+    time.sleep(10)
+    end = time.time() + 60 * minutes
+    while time.time() < end:
+        time.sleep(20)
+        log("rebuild lines so far:", cmd(cli, "logcount inventory_rebuild_incomplete")[1], "| cannot place:", cmd(cli, "logcount cannot_place")[1])
+    rep = compare(dump(host, "h_worn"), dump(cli, "c_worn"), "worn clothes")
+    log("inventory mismatches:", rep["inventory_mismatch"], rep["inventory_mismatch_sample"])
+    n = cmd(cli, "logcount inventory_rebuild_incomplete")[1].split()[-1]
+    check("vetements : au plus une ligne par minute et par perso (pas de journal inonde)", int(n) <= 8 * minutes + 8, n)
+    lines = [l for l in host_log().splitlines() if "cannot place" in l][-5:]
+    for l in lines:
+        log("  ", l.strip())
+    check("vetements : chaque refus dit pourquoi (race, emplacement, section)", all("(" in l for l in lines), lines)
+    summary()
+
+
+def exp_nightitems(host, cli):
+    """Every lot 4 experiment in a row (one host, one client): storage take/put, storage job, building
+    panel, farm water, team pack animal, team mate's window, loot window to the ground, worn clothes."""
+    for fn in (exp_storagetake, exp_storagejob, exp_buildingpeek, exp_farmwater, exp_teampack, exp_teamtrade, exp_lootground, exp_wornrebuild):
+        log("==== ", fn.__name__)
+        try:
+            fn(host, cli)
+        except Exception as e:   # one failing part does not stop the others
+            check(f"{fn.__name__} : s'est deroule sans exception", False, repr(e))
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="what", required=True)
+    for name, helptext in (("storagetake", "0.3.5 lot 4 (point 20): take from and put into a storage, the right inventories, nothing goes back"),
+                           ("storagejob", "0.3.5 lot 4 (point 21): right click looks inside, Shift + right click gives the permanent job"),
+                           ("buildingpeek", "0.3.5 lot 4 (point 19): a building's panel without walking; a take walks there first"),
+                           ("farmwater", "0.3.5 lot 4 (point 18): a farm's water and output the same on the client, x1 and x3"),
+                           ("teampack", "0.3.5 lot 4 (point 17): rule A, another player's pack animal and backpacks shared, human refused"),
+                           ("teamtrade", "0.3.5 lot 4 (point 17): the 'loot' on a team mate opens its inventory here, no price-0 refusals"),
+                           ("lootground", "0.3.5 lot 4 (point 14): an item from a downed NPC's loot window released over the ground"),
+                           ("wornrebuild", "0.3.5 lot 4 (point 3): worn clothes rebuilt on the client, one reasoned line a minute at most"),
+                           ("nightitems", "0.3.5 lot 4: every experiment above in a row")):
+        np_ = sub.add_parser(name, help=helptext)
+        np_.add_argument("--save", default="kctest_base")
+        np_.add_argument("--keep", action="store_true")
     r = sub.add_parser("run")
     r.add_argument("--save", default="kctest_base")
     r.add_argument("--keep", action="store_true", help="leave the instances running")
@@ -10425,6 +10810,8 @@ def main():
             exp_trace(host, cli)
         elif a.what == "playerstats":   # 0.3.5
             exp_playerstats(host, cli)
+        elif a.what in ("storagetake", "storagejob", "buildingpeek", "farmwater", "teampack", "teamtrade", "lootground", "wornrebuild", "nightitems"):
+            globals()["exp_" + a.what](host, cli)   # 0.3.5 lot 4 (night-items)
         elif a.what == "walk":
             exp_walk(host, cli)
         elif a.what == "soak":

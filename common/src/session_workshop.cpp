@@ -95,6 +95,8 @@ void Session::ResetWorkshop() {
     researchReapplyAt_ = 0;
     clientMachines_.clear();
     clientTowns_.clear();
+    farmInputsSent_.clear();   // 0.3.5
+    farmInputs_.clear();
     machinesReapplyAt_ = 0;
     workshop_ = WorkshopView{};
 }
@@ -226,11 +228,13 @@ void Session::HostMachines(double now) {
     m.full = full;
     std::unordered_set<std::string> seen;
     std::vector<uint32_t> newInventories;
+    std::vector<FarmInput> farms;   // 0.3.5: the farms' water (FarmInputs)
     int logged = 0;
     for (auto& wm : scratchMachines_) {
         MachineState s = std::move(wm.state);
         const std::string key = MachineKey(s.sid, s.pos);
         if (!seen.insert(key).second) continue;
+        if (!wm.inputs.empty() && farms.size() < 512) farms.push_back({s.sid, s.pos, wm.inputs});
         // its inventory: an entity every player keeps in step with the host's
         uint32_t id = 0;
         if (wm.handle.valid()) {
@@ -295,7 +299,7 @@ void Session::HostMachines(double now) {
         if (seen.count(it->first)) { ++it; continue; }
         if (auto e = entities_.find(it->second); e != entities_.end() && e->second.machine) {
             e->second.machine = false;
-            if (e->second.openBy.empty()) {
+            if (e->second.openBy.empty() && e->second.peekBy.empty()) {
                 // 0.3.4: every client keeps a machine's inventory: it is told to forget it. Without
                 // this a campfire no longer worked by a player stayed on every client with its last
                 // items, and each client's inventory check asked the host, every 3 s for 90 minutes
@@ -327,6 +331,7 @@ void Session::HostMachines(double now) {
         }
         ++workshop_.machinesSent;
     }
+    SendFarmInputs(farms, full);   // 0.3.5 (lot 4): the farms' water, after their Machines
     // the inventories of new machines (and every machine's, for a player who just arrived) follow
     for (uint32_t id : newInventories) entities_[id].invHash = 0;
     if (!fresh.empty())
@@ -462,6 +467,9 @@ void Session::ClientWorkshop(double now) {
         machinesReapplyAt_ = now + kMachinesReapply;
         for (auto& [key, c] : clientMachines_) c.dirty = true;
         for (auto& [key, t] : clientTowns_) world_.ApplyTownPower(t);
+        ApplyFarmInputs(true);   // 0.3.5: our farm's own update drinks its water: the host's again
+    } else {
+        ApplyFarmInputs(false);   // just received
     }
     // 0.3.4: a machine's inventory the host has not named for a while (it sends every machine it
     // follows every 5 s) is no longer followed there: forgotten here unless its window is open (a host
@@ -471,7 +479,7 @@ void Session::ClientWorkshop(double now) {
         machinesStaleCheckAt_ = now + 5.0;
         for (auto it = entities_.begin(); it != entities_.end();) {
             const Entity& e = it->second;
-            if (e.machine && e.container && !e.bag && e.looter == 0 && !IsTradeCounter(it->first) && e.machineSeenAt > 0 &&
+            if (e.machine && e.container && !e.bag && e.looter == 0 && !IsTradeCounter(it->first) && !Peeked(e, now) && e.machineSeenAt > 0 &&
                 machinesFullSeenAt_ - e.machineSeenAt > kMachineForgotten) {
                 log_("machine: inventory " + std::to_string(it->first) + " no longer named in the host's machine list for " +
                      std::to_string(int(machinesFullSeenAt_ - e.machineSeenAt)) + " s: forgotten here");

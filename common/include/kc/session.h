@@ -247,8 +247,12 @@ public:
     virtual float DistanceTo(const Handle& who, const Vec3& pos) { (void)who; (void)pos; return 1e9f; }
     virtual bool ContainerKind(const Handle& container, std::string& sid) { (void)container; sid.clear(); return false; }
     virtual int TheftCheck(const Handle& thief, const Handle& container, const ItemState& item) { (void)thief; (void)container; (void)item; return 0; }
-    struct ContainerRequest { Handle looter; std::string sid; Vec3 pos; };
+    struct ContainerRequest { Handle looter; std::string sid; Vec3 pos; Handle object; };   // object (0.3.5): our handle of it, when known
     virtual void TakeContainerRequests(std::vector<ContainerRequest>& out) { out.clear(); }
+    // Client (0.3.5, lot 4): building inventory panels the player opened by a click (a mine, a farm, a
+    // well, a storage): the host is asked for their items without anyone walking (looter: our character
+    // nearest to it, the one a later take or put walks there).
+    virtual void TakeContainerPeeks(std::vector<ContainerRequest>& out) { out.clear(); }
     virtual bool OpenContainerWindow(const Handle& looter, const Handle& container) { (void)looter; (void)container; return false; }
     virtual bool ContainerWindowOpen() { return false; }
     virtual void CloseContainerWindows() {}
@@ -476,7 +480,8 @@ public:
     // netId 0) and the power panels of their towns; run a client's machine request. Client: impose a
     // machine's state (`operators`: host handles of the replicated characters working it) and a town's
     // power totals (its own game then stops computing that town's power).
-    struct WorldMachine { MachineState state; Handle handle; std::vector<Handle> operators; };
+    // inputs (0.3.5, lot 4): a farm's stored amount of each input, water first (FarmInput); empty: none
+    struct WorldMachine { MachineState state; Handle handle; std::vector<Handle> operators; std::vector<float> inputs; };
     virtual void ReadMachines(const std::vector<Vec3>& centers, float radius, std::vector<WorldMachine>& out, std::vector<TownPower>& towns) {
         (void)centers; (void)radius; out.clear(); towns.clear();
     }
@@ -489,6 +494,9 @@ public:
         (void)s; (void)operators; (void)local; return false;
     }
     virtual bool ApplyTownPower(const TownPower& t) { (void)t; return false; }
+    // Client (0.3.5, lot 4): impose a farm's input amounts (water) as the host has them. `local`: as for
+    // ApplyMachine. False: that farm is not here.
+    virtual bool ApplyFarmInputs(const FarmInput& f, const Handle& local) { (void)f; (void)local; return false; }
     // Client: what the local player asked in the research, crafting and building windows (never done
     // locally). actor: our character concerned (host handle; invalid: the session picks the player's own).
     struct LocalResearchAsk { ResearchRequest req; Handle actor; };
@@ -865,6 +873,11 @@ private:
         Vec3 containerPos;                   // where it is
         uint32_t looter = 0;                 // client: our character looking into it
         uint64_t identity = 0;               // IWorld::Identity when bound
+        // 0.3.5 (lot 4): a building's inventory panel opened by a click, nobody walking. Host: players
+        // looking at it that way, until (its items go to them too; they may not take or put: that walks
+        // first). Client: our panel shows it since (-1: not); a take or put walks our character there.
+        std::map<uint8_t, double> peekBy;
+        double peekedAt = -1;
     };
     struct Sent {                            // host: what a player last received for an entity
         EntityState state;
@@ -1084,6 +1097,57 @@ private:
     std::vector<IWorld::ContainerRequest> scratchContainerReqs_;
     void HostContainers(double now);
     void ClientContainers(double now);
+    // ---- 0.3.5 lot 4 (night-items, 16 October points 17-21): inventories shared in the team, building
+    // panels looked at without walking, farm inputs, items the host's game put back where they came from.
+    // Rule A (decided by the host on 17 October): any player may take from and put into a squad's pack
+    // animal (its own inventory) and any backpack worn in the player faction; never the own inventory of
+    // another player's (or the host's) human character.
+    bool TeamShared(const Entity& e) const;
+    bool HostDown(const Entity& e);                        // host: knocked out or dead now
+    bool HostMayTouch(uint8_t from, const Entity& e);      // host: may that player take from / put into it now
+    std::vector<std::pair<uint8_t, ContainerPeek>> peekAsks_;   // host: run on the next live tick
+    void HostContainerPeeks(double now);
+    static constexpr double kPeekLife = 120.0;             // a look lasts this long without being renewed
+    std::vector<IWorld::ContainerRequest> scratchPeeks_;   // client
+    bool Peeked(const Entity& e, double now) const;        // client: our panel shows it (no walk) now
+    // client: moves in or out of a building looked at without walking: sent once our character got there
+    // (the host's ContainerOpened naming it as the looter), else dropped and undone
+    struct HeldMoves {
+        uint32_t container = 0, looter = 0;
+        std::vector<InvOp> ops;
+        std::vector<uint32_t> involved;
+        double until = 0;
+    };
+    std::vector<HeldMoves> heldMoves_;
+    void HoldMovesForWalk(uint32_t container, std::vector<InvOp>& ops, const std::vector<uint32_t>& involved, double now);
+    void ReleaseHeldMoves(uint32_t container, uint32_t looter);   // client: our character is there now
+    void ExpireHeldMoves(double now);
+    // host: an item a player took out of a container (a storage) into their character; watched a few
+    // seconds: the host's game putting it back (a job of that character stores what it carries) is said
+    struct TakenWatch {
+        uint8_t player = 0;
+        uint32_t container = 0, taker = 0;
+        ItemState kind;
+        int qty = 0;
+        int containerHad = 0;   // the container's count of that kind right after the move
+        int takerHad = 0;       // the character's (and its backpack's) right after the move
+        double until = 0;
+    };
+    std::vector<TakenWatch> takenWatch_;
+    double nextTakenWatch_ = 0;
+    void NoteTaken(uint8_t from, const InvOp& op, uint32_t taker);
+    void HostTakenWatch(double now);
+    int CountKind(uint32_t netId, const ItemState& kind, bool withPartner);   // host: that inventory's count of a kind (a wearer's and its backpack's together)
+    void ClientContainerPeeks(double now);
+    std::string lastPeekKey_;            // client: the last building panel asked about, and when (the hook fires twice a click)
+    double lastPeekAt_ = -1e9;
+    void SendFarmInputs(std::vector<FarmInput>& farms, bool full);
+    // farm inputs (water): host, last sent per farm (kind and place); client, the host's, imposed
+    std::unordered_map<std::string, std::vector<float>> farmInputsSent_;
+    struct ClientFarm { FarmInput f; bool dirty = true; bool found = false; };
+    std::unordered_map<std::string, ClientFarm> farmInputs_;
+    void ClientFarmInputsPacket(Reader& r);
+    void ApplyFarmInputs(bool all);
     // ---- lot E: buildings
     struct BuildingRec {
         Handle handle;                       // in this world (client: found by kind and place)
@@ -1186,8 +1250,11 @@ private:
     // A drop to the ground names the character that drops it (actor safety). From a squad character or
     // the backpack one wears (SelfDrop): that character (DropActor). From anything else (a chest one has
     // open, a body, an NPC's backpack): InvOp::toNetId, a character of that player standing by it.
-    bool SelfDrop(uint32_t netId) const;
-    uint32_t DropRequestActor(const InvOp& op) const { return SelfDrop(op.fromNetId) ? DropActor(op.fromNetId) : op.toNetId; }
+    // 0.3.5 (lot 4): from that player's own character or the backpack it wears; another player's pack
+    // animal or backpack (shared in the team, TeamShared) is dropped like a chest's, by a character of
+    // the asking player standing by it.
+    bool SelfDrop(uint32_t netId, uint8_t player) const;
+    uint32_t DropRequestActor(const InvOp& op, uint8_t player) const { return SelfDrop(op.fromNetId, player) ? DropActor(op.fromNetId) : op.toNetId; }
     bool DropSourcePos(const Entity& e, Vec3& out);   // where that inventory is (a chest's place, a character's or a wearer's position)
     std::map<uint8_t, double> lastDialogAnswer_;   // host: when each player last answered a conversation
     bool squadKnown_ = false;                      // host: the squad was listed once (later arrivals are newcomers)

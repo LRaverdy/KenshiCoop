@@ -458,6 +458,8 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | 83 | MapPing | ⇄ | ping sur la carte (client : demande à l'hôte, au plus un toutes les 0,5 s ; hôte : à tous, avec son id et son joueur) |
 | 85 | Diplomacy | H→C | diplomatie, une partie par message : paires de factions (hors joueur) changées depuis le début, personnages uniques (mort, vivant, emprisonné, par les joueurs), villes (faction, variante) |
 | 66 | PlayerStats | H→C | 0.3.5 : statistiques de tous les joueurs du monde (`kc/player_stats.h`), à l'arrivée d'un joueur puis toutes les 10 s si elles changent ; ignoré par un client 0.3.4 (type inconnu), sans changement de version du protocole |
+| 130 | ContainerPeek | C→H | 0.3.5 (lot 4, `session_items.cpp`) : panneau d'un bâtiment ouvert par un clic ; l'hôte note le joueur (`Entity::peekBy`, 120 s) et lui envoie le contenu sans marche (`ContainerOpened`, `looterNetId` 0) ; une prise ou une pose dans ce panneau attend que le perso soit arrivé (`HoldMovesForWalk` → `ContainerOpen`) ; acteur vérifié comme `ContainerOpen` |
+| 131 | FarmInputs | H→C | 0.3.5 (lot 4) : réserve de chaque entrée des fermes (eau), avec chaque tour de `Machines` (changées ou toutes au tour complet), imposée par le client toutes les 2 s (`IWorld::ApplyFarmInputs`) |
 | 90 | Result | H→C | sécurité des acteurs (protocole 33) : réponse à une demande (type, `seq` du `Command`, acteur) : rejetée (raison, texte français) ou faite ; le client annule ce qu'il avait prédit (tâche ajoutée au panneau) |
 
 ## Les flux, système par système

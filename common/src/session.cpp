@@ -212,6 +212,7 @@ void Session::Leave() {
     logDropped_ = 0;
     walkingToContainers_.clear();
     containerAsks_.clear();
+    peekAsks_.clear(); heldMoves_.clear(); takenWatch_.clear(); nextTakenWatch_ = 0;   // 0.3.5 lot 4
     pendingWindow_ = 0;
     windowOpenedAt_ = -1;
     trades_.clear();
@@ -342,6 +343,8 @@ void Session::HostTick(double now, bool live) {
     for (uint32_t id : pendingDialogEnds_) world_.EndDialog(id);   // walked away, or their player left
     pendingDialogEnds_.clear();
     HostContainers(now);
+    HostContainerPeeks(now);   // 0.3.5: building panels looked at without walking
+    HostTakenWatch(now);       // 0.3.5: items the host's game put back where a player took them from
     HostBags(now);
     HostTrades(now);
     HostAnimalShops(now);   // animal shops of other players' conversations
@@ -1087,7 +1090,7 @@ void Session::UpdateInterest() {
         if (it->second.keep) { ++it; continue; }
         if (it->second.container) {   // only the players who have it open know it
             const bool walking = std::any_of(walkingToContainers_.begin(), walkingToContainers_.end(), [&](const PendingContainer& p) { return p.netId == it->first; });
-            if (!it->second.openBy.empty() || walking || it->second.machine) { ++it; continue; }   // a machine: HostMachines decides
+            if (!it->second.openBy.empty() || !it->second.peekBy.empty() || walking || it->second.machine) { ++it; continue; }   // a machine: HostMachines decides
             // 0.3.4: the clients are told (a machine's inventory, kept by every client, stayed there
             // with a frozen copy of its items once the host forgot it; a chest's is already gone there)
             if (!it->second.bag) {
@@ -1475,11 +1478,46 @@ uint32_t Session::DropActor(uint32_t netId) const {
     return it != entities_.end() && it->second.bag ? it->second.bagOwner : netId;
 }
 
-bool Session::SelfDrop(uint32_t netId) const {
+bool Session::SelfDrop(uint32_t netId, uint8_t player) const {
     auto it = entities_.find(netId);
     if (it == entities_.end()) return false;
     const Entity* w = Wearer(it->second);
-    return w && w->squad && !w->container;
+    return w && w->squad && !w->container && w->owner == player;
+}
+
+// Rule A (0.3.5, 16 October point 17): the team's shared inventories. A pack animal of the player
+// faction (its own inventory) and every backpack worn by a character of the player faction (a human's
+// too: the backpack is an inventory of its own) may be used by any player; the own inventory of another
+// player's human character never (it uses its gear).
+bool Session::TeamShared(const Entity& e) const {
+    const Entity* w = Wearer(e);
+    if (!w || w->container || !w->squad) return false;
+    return e.bag || world_.IsAnimal(e.handle);
+}
+
+bool Session::HostDown(const Entity& e) {
+    EntityState st;
+    EntityVitals v;
+    return (world_.Read(e.handle, st) && (st.flags & (kFlagDown | kFlagDead)) != 0) ||
+           (world_.ReadVitals(e.handle, v) && (v.flags & (kVitUnconscious | kVitDead)) != 0);
+}
+
+// What a player may take from and put into: its own characters (and the backpacks they wear), the
+// team's shared inventories (rule A), a container it opened, an NPC knocked out or dead (the game lets
+// one strip a body and also put things on it, its backpack too), and, by stealing, an NPC's pack animal
+// (or the backpack it carries). A merchant's counters go through HostTradeOp.
+bool Session::HostMayTouch(uint8_t from, const Entity& e) {
+    auto beastToRob = [&](const Entity& x) {
+        const Entity* w = Wearer(x);
+        return w && !w->squad && !w->container && !HostDown(*w) && world_.IsAnimal(w->handle);
+    };
+    if (TeamShared(e)) return true;
+    if (e.bag) {
+        const Entity* w = Wearer(e);
+        if (!w) return false;
+        return (w->squad && w->owner == from) || (!w->squad && HostDown(*w)) || beastToRob(e);
+    }
+    return (e.squad && e.owner == from) || (e.container && e.openBy.count(from)) || (!e.squad && !e.container && HostDown(e)) || beastToRob(e);
 }
 
 // A drop from a body is made by a character standing by it: by a leviathan, a beak thing or a
@@ -1584,6 +1622,19 @@ void Session::HostTrades(double now) {
         TradeOpen m;
         m.looterNetId = looter->netId;
         m.traderNetId = trader ? trader->netId : 0;
+        if (trader && trader->squad && !trader->container) {
+            // 0.3.5 (lot 4, point 17): a character of the player faction is no merchant. Its "shop" was the
+            // player base's own counters (16 October: plopette's moves "price 0 does not fit a purchase",
+            // the window closing and opening at each one). A client opens a team mate's inventory in its own
+            // game (hooks: ClientLoot); rule A says what moves (its pack animal and backpacks, never a
+            // human's own inventory). Only an older client still asks the host for such a window.
+            log_("[" + who + "] trade window with " + merchant + " (a character of the player faction) not opened: their own game shows a team mate's inventory");
+            m.note = "Échange entre joueurs : ouvre l'inventaire de sa bête de somme ou de son sac et fais glisser les objets (ils sont partagés) ; l'inventaire d'un personnage d'un autre joueur reste le sien.";
+            Writer w;
+            Encode(w, m);
+            SendReliable(pl->second.peer, w);
+            continue;
+        }
         std::vector<IWorld::ShopCounter> counters;
         std::vector<uint32_t> bags;   // a travelling merchant: the worn backpacks of its squad
         if (trader && !world_.ShopCounters(req.trader, counters)) {
@@ -1751,6 +1802,8 @@ void Session::ClientBags(double now) {
 }
 
 void Session::ClientContainers(double now) {
+    ClientContainerPeeks(now);   // 0.3.5: building panels opened by a click (no walk)
+    ExpireHeldMoves(now);
     world_.TakeContainerRequests(scratchContainerReqs_);
     for (const auto& r : scratchContainerReqs_) {
         Entity* e = entityByHandle(r.looter);
@@ -1889,7 +1942,7 @@ void Session::ClientContainers(double now) {
             Writer w;
             Encode(w, ContainerClose{it->first, {}});
             SendReliable(net_.serverPeer(), w);
-            if (it->second.machine) {   // a machine's inventory stays synced (closed: no longer ours to touch)
+            if (it->second.machine || Peeked(it->second, now)) {   // a machine's inventory stays synced (closed: no longer ours to touch); so does a building panel's (0.3.5)
                 it->second.looter = 0;
                 ++it;
                 continue;
@@ -2356,12 +2409,19 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         if (containerAsks_.size() < 16) containerAsks_.emplace_back(pl->id, std::move(m));
         break;
     }
+    case Msg::ContainerPeek: {   // 0.3.5 (lot 4): a building panel opened by a click: its items, nobody walks
+        ContainerPeek m;
+        if (!pl->inGame || !Decode(r, m)) break;
+        if (peekAsks_.size() < 16) peekAsks_.emplace_back(pl->id, std::move(m));
+        break;
+    }
     case Msg::ContainerClose: {
         ContainerClose m;
         if (!Decode(r, m)) break;
         if (auto it = entities_.find(m.netId); it != entities_.end() && it->second.container) {
-            it->second.openBy.erase(pl->id);
-            log_("[" + pl->name + "] closes the container");
+            // 0.3.5: written only when it was open for them (a client closing its windows names every
+            // container it knows: 8 lines a click on 16 October)
+            if (it->second.openBy.erase(pl->id)) log_("[" + pl->name + "] closes the container");
         }
         break;
     }
@@ -2475,7 +2535,7 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
 void Session::SendInventories(double now, bool force, PeerId onlyTo) {
     (void)now;
     for (auto& [id, e] : entities_) {
-        if (e.container && !e.bag && !e.machine && e.openBy.empty()) continue;
+        if (e.container && !e.bag && !e.machine && e.openBy.empty() && e.peekBy.empty()) continue;
         std::vector<ItemState> items;
         if (!world_.ReadInventory(e.handle, items)) continue;
         const uint64_t h = InventoryHash(items);
@@ -2491,10 +2551,12 @@ void Session::SendInventories(double now, bool force, PeerId onlyTo) {
             BroadcastReliable(w, true);
             continue;
         }
-        if (e.container && !e.bag) {   // only to the players who have it open
+        if (e.container && !e.bag) {   // only to the players who have it open (or look at it in a building panel, 0.3.5)
             e.invHash = h;
             for (uint8_t pid : e.openBy)
                 if (auto pl = players_.find(pid); pl != players_.end()) SendReliable(pl->second.peer, w);
+            for (const auto& [pid, until] : e.peekBy)
+                if (auto pl = players_.find(pid); pl != players_.end() && !e.openBy.count(pid)) SendReliable(pl->second.peer, w);
             continue;
         }
         if (onlyTo != kNoPeer) {
@@ -2574,28 +2636,12 @@ void Session::HostInvOp(uint8_t from, const InvOp& op, const InvOp* swapWith) {
                  (held ? " [" + std::to_string(held) + " more such lines not written]" : std::string()));
         return;
     }
-    auto isDown = [&](const Entity& e) {
-        EntityState st;
-        EntityVitals v;
-        return (world_.Read(e.handle, st) && (st.flags & (kFlagDown | kFlagDead)) != 0) ||
-               (world_.ReadVitals(e.handle, v) && (v.flags & (kVitUnconscious | kVitDead)) != 0);
-    };
-    // what this player may take from and put into: its own characters (and the backpacks they
-    // wear), a container it opened, an NPC knocked out or dead (the game lets one strip a body and
-    // also put things on it, its backpack too), and, by stealing, an NPC's pack animal (or the
-    // backpack it carries)
+    auto isDown = [&](const Entity& e) { return HostDown(e); };
     auto beastToRob = [&](const Entity& e) {
         const Entity* w = Wearer(e);
         return w && !w->squad && !w->container && !isDown(*w) && world_.IsAnimal(w->handle);
     };
-    auto mayTouch = [&](const Entity& e) {
-        if (e.bag) {
-            const Entity* w = Wearer(e);
-            if (!w) return false;
-            return (w->squad && w->owner == from) || (!w->squad && isDown(*w)) || beastToRob(e);   // a merchant's: HostTradeOp
-        }
-        return (e.squad && e.owner == from) || (e.container && e.openBy.count(from)) || (!e.squad && !e.container && isDown(e)) || beastToRob(e);
-    };
+    auto mayTouch = [&](const Entity& e) { return HostMayTouch(from, e); };   // rule A included (0.3.5)
     const bool srcOk = mayTouch(src->second);
     if (op.kind == InvOpKind::Drop) {
         // From its own character (or pack animal) or the backpack one of them wears: that character
@@ -2603,8 +2649,8 @@ void Session::HostInvOp(uint8_t from, const InvOp& op, const InvOp* swapWith) {
         // the player's character that drops it (op.toNetId), standing by it; a chest's item is dropped
         // by that character (where the game drops it), the others by their inventory. Either way the
         // actor is checked like every other request's (actor safety).
-        const bool self = SelfDrop(op.fromNetId);
-        const uint32_t actor = DropRequestActor(op);
+        const bool self = SelfDrop(op.fromNetId, from);
+        const uint32_t actor = DropRequestActor(op, from);
         if (!AdmitActor(from, actor, "drop an item", Msg::InvOp)) { src->second.invHash = 0; return; }
         Handle dropper = src->second.handle;
         if (!self) {
@@ -2670,8 +2716,29 @@ void Session::HostInvOp(uint8_t from, const InvOp& op, const InvOp* swapWith) {
     const bool moved = world_.ExecuteInvOp(src->second.handle, dst->second.handle, op);
     // player statistics: an item taken from a chest, a body or an animal into their own inventory
     auto ours = [&](const Entity& e) { const Entity* w = Wearer(e); return w && !w->container && w->squad && w->owner == from; };
-    if (moved && ours(dst->second) && !ours(src->second))
+    if (moved && ours(dst->second) && !ours(src->second) && !TeamShared(src->second))   // (a team mate's bag is no loot)
         if (PlayerStats* st = StatsOf(from)) st->itemsLooted += uint32_t(std::max(1, op.item.quantity));
+    // 0.3.5 (lot 4, point 20): out of a chest or a storage into their character: watched a few seconds,
+    // in case the host's game puts it back (a job of that character stores what it carries)
+    if (moved && ours(dst->second) && src->second.container && !src->second.bag) NoteTaken(from, op, dst->first);
+    // 0.3.5: which inventories a move with a chest or a building was between (16 October: "backpack_content
+    // -> backpack_content 0,0" said neither; a storage's section has a backpack's name)
+    if ((src->second.container && !src->second.bag) || (dst->second.container && !dst->second.bag)) {
+        auto what = [&](uint32_t id, const Entity& e) {
+            std::string sid;
+            if (e.bag) {
+                const Entity* w = Wearer(e);
+                return "the backpack of " + (w ? world_.CharacterNameOf(w->handle) : std::string("?")) + " (" + std::to_string(id) + ")";
+            }
+            if (e.container) return (world_.ContainerKind(e.handle, sid) ? world_.TemplateName(sid) : std::string("a container")) + " (" + std::to_string(id) + ")";
+            return world_.CharacterNameOf(e.handle) + " (" + std::to_string(id) + ")";
+        };
+        uint32_t held = 0;
+        if (invOpLog_.Allow(clock_(), &held))
+            log_("[" + (players_.count(from) ? players_[from].name : "player " + std::to_string(from)) + "] item move " + (moved ? "done" : "NOT done") + ": " +
+                 world_.TemplateName(op.item.templateSid) + " x" + std::to_string(op.item.quantity) + " from " + what(src->first, src->second) + " to " +
+                 what(dst->first, dst->second) + (held ? " [" + std::to_string(held) + " more such lines not written]" : std::string()));
+    }
     // Whatever happened, everyone (the requester first) gets the real state of both inventories.
     src->second.invHash = 0;
     dst->second.invHash = 0;
@@ -2774,14 +2841,15 @@ void Session::ClientInventoryDiff(double now) {
     }
     if (gone.empty() && added.empty()) return;
     // Only one's own characters' inventories (and bodies to loot) can be handled: anything touching
-    // another player's character goes straight back, with the reason.
+    // another player's character goes straight back, with the reason. 0.3.5 (rule A): the team's pack
+    // animals and backpacks are anyone's (TeamShared); only another player's human character is not.
     std::string foreignOwner;
     auto foreign = [&](uint32_t netId) {
         auto it = entities_.find(netId);
         const Entity* w = it != entities_.end() ? Wearer(it->second) : nullptr;   // a backpack: its wearer's
-        if (!w || !w->squad || w->owner == localId_) return false;
+        if (!w || !w->squad || w->owner == localId_ || TeamShared(it->second)) return false;
         auto pl = players_.find(w->owner);
-        foreignOwner = pl != players_.end() ? pl->second.name : (w->owner == 1 ? "l'hote" : "un autre joueur");
+        foreignOwner = pl != players_.end() ? pl->second.name : (w->owner == 1 ? "l'hôte" : "un autre joueur");
         return true;
     };
     bool refused = false;
@@ -2792,7 +2860,8 @@ void Session::ClientInventoryDiff(double now) {
             if (auto it = entities_.find(id); it != entities_.end()) { it->second.invDirty = true; it->second.invUnmatchedSince = 0; }
         if (now >= nextForeignNote_) {
             nextForeignNote_ = now + 3.0;
-            AddChat("* Ce personnage appartient à " + foreignOwner + " : tu ne peux pas gérer son inventaire.",
+            AddChat("* Ce personnage appartient à " + foreignOwner +
+                        " : tu ne peux pas gérer son inventaire (seuls les sacs et les bêtes de somme sont partagés). L'objet reprend sa place.",
                     "inventory change refused: that character belongs to " + foreignOwner);
         }
         return;
@@ -2886,7 +2955,7 @@ void Session::ClientInventoryDiff(double now) {
         auto it = entities_.find(netId);
         if (it == entities_.end()) return false;
         const Entity& e = it->second;
-        return e.container && !e.bag && e.looter == 0 && !IsTradeCounter(netId);
+        return e.container && !e.bag && e.looter == 0 && !IsTradeCounter(netId) && !Peeked(e, now);   // 0.3.5: a panel open here counts
     };
     auto touchable = [&](uint32_t netId) {
         auto it = entities_.find(netId);
@@ -2926,6 +2995,20 @@ void Session::ClientInventoryDiff(double now) {
         std::vector<InvOp> sorted;
         for (size_t i : idx) sorted.push_back(ops[i]);
         ops.swap(sorted);
+    }
+    // 0.3.5 (lot 4, point 19): a building looked at in its panel, nobody of ours there yet: as in the game,
+    // taking or putting something walks our character there first; the moves go once it arrived.
+    {
+        uint32_t walkTo = 0;
+        for (const auto& op : ops)
+            for (uint32_t id : {op.fromNetId, op.toNetId})
+                if (auto it = entities_.find(id); !walkTo && it != entities_.end() && it->second.container && !it->second.bag && it->second.looter == 0 &&
+                                                   !IsTradeCounter(id) && Peeked(it->second, now))
+                    walkTo = id;
+        if (walkTo) {
+            HoldMovesForWalk(walkTo, ops, involved, now);
+            return;
+        }
     }
     // The price our trade window counted goes with the first purchase or sale of this round.
     bool priced = false;
@@ -2968,7 +3051,7 @@ Session::DropPlan Session::PlanClientDrop(uint32_t netId, Entity& e, InvOp& op) 
     // a chest we have open, a body, an NPC's backpack: our character nearest to it drops the item
     // (named, the host checks it is ours and standing by it); our characters and their bags: themselves
     Vec3 at;
-    if (!SelfDrop(netId) && DropSourcePos(e, at)) {
+    if (!SelfDrop(netId, localId_) && DropSourcePos(e, at)) {
         float best = DropReachOf(e);
         for (const auto& [oid, o] : entities_) {
             if (!o.squad || o.container || o.owner != localId_) continue;
@@ -2976,7 +3059,7 @@ Session::DropPlan Session::PlanClientDrop(uint32_t netId, Entity& e, InvOp& op) 
             if (d <= best) { best = d; op.toNetId = oid; }
         }
     }
-    const uint32_t actor = DropRequestActor(op);
+    const uint32_t actor = DropRequestActor(op, localId_);
     if (!actor) return DropPlan::NoActor;   // nobody of ours by that chest or body: the host would refuse it
     return CheckActor(localId_, actor) == ActorVerdict::Ok ? DropPlan::Ok : DropPlan::NotOurs;
 }
@@ -2993,7 +3076,7 @@ void Session::PublishDropSources(double now) {
         if (!e.handle.valid()) continue;
         bool candidate = false;
         if (e.bag || e.container) candidate = e.present;
-        else if (e.squad) candidate = e.owner == localId_;
+        else if (e.squad) candidate = e.owner == localId_ || TeamShared(e);   // 0.3.5: a team mate's pack animal (rule A)
         else candidate = (!e.buf.empty() && (e.buf.back().s.flags & (kFlagDown | kFlagDead))) ||
                          (e.haveVitals && (e.vitals.flags & (kVitUnconscious | kVitDead)));   // a body one may strip
         if (!candidate) continue;
@@ -3035,7 +3118,7 @@ void Session::SendLocalDrops() {
                         "Objet non posé : aucun de tes persos n'est à côté.");
             continue;
         }
-        if (!ClientMaySend(Msg::InvOp, DropRequestActor(op), "item drop")) {   // only our own characters drop things (said by ClientMaySend)
+        if (!ClientMaySend(Msg::InvOp, DropRequestActor(op, localId_), "item drop")) {   // only our own characters drop things (said by ClientMaySend)
             if (src->haveInv) { src->invDirty = true; src->invRetry = 0; src->invUnmatchedSince = 0; }
             continue;
         }
@@ -3940,8 +4023,22 @@ void Session::ClientPacket(Msg type, Reader& r) {
     case Msg::ContainerOpened: {
         ContainerOpened m;
         if (state_ != SessionState::Connected || !Decode(r, m)) break;
+        // 0.3.5 (lot 4, point 20): which building it is here. The one we already know under that netId (a
+        // machine, a building panel looked at), else the host's placement built here (its netId: ours may
+        // stand a little off the host's spot, and two storages of one kind side by side were told apart
+        // only by the nearest one), else the nearest of that kind.
+        auto old = entities_.find(m.netId);
         Handle local;
-        if (!world_.FindContainer(m.sid, m.pos, local)) { AddChat("* Ce contenant est introuvable ici.", "container " + world_.TemplateName(m.sid) + " not found here"); break; }
+        std::string kind;
+        if (old != entities_.end() && old->second.container && !old->second.bag && old->second.present) local = old->second.handle;
+        if (!local.valid())
+            if (Handle placed = LocalBuildingOf(m.sid, m.pos); placed.valid() && world_.ContainerKind(placed, kind) && kind == m.sid) local = placed;
+        if (!local.valid() && !world_.FindContainer(m.sid, m.pos, local)) {
+            AddChat("* Ce contenant est introuvable ici.", "container " + world_.TemplateName(m.sid) + " not found here");
+            break;
+        }
+        const double now = clock_();
+        const bool peek = m.looterNetId == 0;   // 0.3.5: the answer to a building panel opened by a click (no walk)
         Entity e;
         e.netId = m.netId;
         e.handle = local;
@@ -3950,13 +4047,30 @@ void Session::ClientPacket(Msg type, Reader& r) {
         e.checked = true;
         e.containerPos = m.pos;
         e.looter = m.looterNetId;
-        if (auto old = entities_.find(m.netId); old != entities_.end() && old->second.machine) {   // a machine: its items stay as they are
-            e.machine = true;
-            e.machineSeenAt = old->second.machineSeenAt;
-            e.inv = old->second.inv;
-            e.haveInv = old->second.haveInv;
+        if (old != entities_.end() && old->second.container && !old->second.bag) {
+            if (old->second.machine) {   // a machine: its items stay as they are
+                e.machine = true;
+                e.machineSeenAt = old->second.machineSeenAt;
+            }
+            if (old->second.handle == local) {   // the same inventory: what we have of it stays until the host's comes
+                e.inv = old->second.inv;
+                e.haveInv = old->second.haveInv;
+            }
+            e.peekedAt = old->second.peekedAt;
+            if (peek) e.looter = old->second.looter;   // a look does not close a window opened by walking there
         }
+        if (peek) e.peekedAt = now;
         entities_[m.netId] = std::move(e);
+        if (peek) {
+            log_("building panel: the host sends " + world_.TemplateName(m.sid) + "'s items (nobody walks)");
+            break;
+        }
+        // moves held until our character got there (a take or put in a building panel): they go now,
+        // and the panel the player is using stays (no loot window on top of it)
+        if (std::any_of(heldMoves_.begin(), heldMoves_.end(), [&](const HeldMoves& h) { return h.container == m.netId; })) {
+            ReleaseHeldMoves(m.netId, m.looterNetId);
+            break;
+        }
         pendingWindow_ = m.netId;
         break;
     }
@@ -4158,6 +4272,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
     case Msg::AnimalShop: ClientAnimalShopPacket(r); break;
     case Msg::Research: ClientResearchPacket(r); break;   // workshop
     case Msg::Machines: ClientMachinesPacket(r); break;
+    case Msg::FarmInputs: ClientFarmInputsPacket(r); break;   // 0.3.5: a farm's water
     case Msg::JobList: ClientJobsPacket(r); break;   // fix G5
     case Msg::JobState: ClientJobStatePacket(r); break;
     case Msg::SquadState: ClientSquadStatePacket(r); break;

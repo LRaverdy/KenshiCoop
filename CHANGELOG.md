@@ -157,6 +157,26 @@ Protocole inchangé (36) : le nouveau message des stats est ignoré par un clien
   - Tests : `TestStreamingTools` (cadence du palier lointain, `DormantStep`, `PickThreatPosition`),
     `TestPerPlayerStreaming` (palier lointain, persos des joueurs partout, copie suivie à faible
     cadence, jamais recréée ni manquante).
+- **Objets : les bugs du 16 octobre (branche `night-items`, lot 4)**. Rien de vérifié en jeu encore
+  (expériences `storagetake`, `storagejob`, `buildingpeek`, `farmwater`, `teampack`, `teamtrade`,
+  `lootground`, `wornrebuild`, ou `nightitems` pour toutes) ; tests `TestTeamSharedInventories`,
+  `TestBuildingPeek`, `TestTakenBack`, `TestFarmInputs` (`KC_ONLY_NIGHTITEMS=1`).
+  - **Inventaires partagés (règle A, point 17)** : les bêtes de somme de la faction et tous les sacs
+    portés sont à tout joueur ; l'inventaire propre d'un perso humain d'un autre joueur jamais (refus
+    remis en place, dit en français). « Piller » un coéquipier ouvre son inventaire chez soi : plus de
+    fenêtre de commerce avec les comptoirs de la base ni de refus « price 0 ». Un objet refusé se remet
+    toujours (section lue sur la souris, `ItemOnMouse`+0x40), plus de « COULD NOT PUT THE ITEM BACK ».
+  - **Panneau d'un bâtiment sans marcher (point 19)** : nouveau message `ContainerPeek` (130,
+    client → hôte, ignoré par un hôte 0.3.4) ; prendre ou poser y fait marcher le perso d'abord.
+  - **Stockages (points 20, 21)** : Maj + clic droit sur un stockage = sa tâche permanente (envoyée
+    comme ordre) ; un objet que le jeu de l'hôte remet dans un stockage juste après une prise (travail
+    d'un mineur) est expliqué au joueur ; le journal de l'hôte nomme les deux inventaires.
+  - **Eau des fermes (point 18)** : nouveau message `FarmInputs` (131, hôte → client) : la barre
+    « Eau » de l'hôte imposée au client.
+  - **Pillage vers le sol (point 14)** : hook de `ItemOnMouse::<drop to world>` (`0x7136A0`) ; le jeu
+    ne lâchait jamais rien depuis le côté du corps d'une fenêtre de pillage, sans rien dire.
+  - **Vêtements portés (point 3)** : jamais forcés dans « shirt » / « head » que la race désactive ;
+    chaque refus dit pourquoi, une ligne par minute au plus (278 lignes identiques le 16/10).
 
 - **Rapport de bug en une commande (branche `bugreport`)**. Quand un ami tombait sur un bug, il
   fallait lui demander son `KenshiCoop.log` après coup. Désormais, n'importe quel joueur tape

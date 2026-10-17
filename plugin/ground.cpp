@@ -265,15 +265,23 @@ void KenshiWorld::ClientInventoryDrop(void* inv, void* holder, void* item) {
         return;
     }
     // The host would never get it: nothing moves here. The drag may already have taken the item out
-    // of its inventory (it is on the mouse): it goes back where it was.
+    // of its inventory (it is on the mouse): it goes back where it was (0.3.5: the section's name read
+    // from the mouse, any section of that inventory, then the game's add that neither drops nor destroys).
     const bool back = kenshi::KeepInInventory(inv, item);
-    Log("ground: drop of %s x%d refused here: the host cannot be asked for it (%s inventory, not one of ours or unknown to the host)%s",
-        s.templateSid.c_str(), s.quantity, kenshi::IsCharacter(holder) ? "a character's" : kenshi::IsItemObject(holder) ? "a backpack's" : "a building's",
-        back ? "; the item stays in it" : "; COULD NOT PUT THE ITEM BACK");
+    // whose it is: another player's character (or the backpack one wears) says so (0.3.5, point 17)
+    void* owner = kenshi::IsCharacter(holder) ? holder : static_cast<void*>(kenshi::BackpackWearer(holder));
+    const bool foreign = owner && v->squadForeign.count(owner);
+    Log("ground: drop of %s x%d refused here: the host cannot be asked for it (%s inventory, %s)%s", s.templateSid.c_str(), s.quantity,
+        kenshi::IsCharacter(holder) ? "a character's" : kenshi::IsItemObject(holder) ? "a backpack's" : "a building's",
+        foreign ? "another player's character" : "not one of ours, nobody of ours by it, or unknown to the host",
+        back ? "; the item stays in it" : "; COULD NOT PUT THE ITEM BACK (the host's inventory comes back with the next sync)");
     const double now = NowSeconds();
     if (now - dropRefusedToastAt_ > 2.0) {
         dropRefusedToastAt_ = now;
-        Toast("Objet non posé : cette action ne peut pas partir chez l'hôte (inventaire qu'il ne connaît pas, ou aucun de tes persos à côté). Rien n'a bougé.");
+        if (foreign)
+            Toast("Objet non posé : ce personnage appartient à un autre joueur (seuls les sacs et les bêtes de somme sont partagés). L'objet reste à sa place.");
+        else
+            Toast("Objet non posé : aucun de tes persos n'est à côté, ou l'hôte ne connaît pas cet inventaire. L'objet reste à sa place.");
     }
 }
 

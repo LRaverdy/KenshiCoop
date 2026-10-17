@@ -27,6 +27,10 @@ protocole 33, environ 25 500 lignes). L'état de chaque fonctionnalité au sens 
 | Ordres d'un client | hooks AddOrderSelected, AddTaskNearest, AddJobSelected, NewPlayerTaskSelected, SetOrderSelected, StopCharactersMovement, PlayerMoveOrderDefault ; Command | vérifié en jeu (suppression de tâche non gérée) |
 | Objets au sol | hooks PickupItem, GiveItem, DropItemHuman ; Ground | vérifié en jeu |
 | Inventaires, fouille | Inventory/InvOp, `world.cpp` | vérifié en jeu, bug d'ordre des échanges |
+| Inventaires partagés de l'équipe (règle A, 0.3.5) | `Session::TeamShared` / `HostMayTouch` (`session.cpp`) : bêtes de somme et sacs de la faction du joueur à tout joueur, jamais l'inventaire propre d'un perso humain d'un autre joueur ; « piller » un coéquipier ouvre sa fenêtre chez soi (`ClientLoot`, `hooks.cpp`) | testé unitairement (`TestTeamSharedInventories`), jamais testé en partie |
+| Panneau d'un bâtiment sans marcher (0.3.5) | `hk_showInvBuilding` → `QueueContainerPeek` ; `ContainerPeek` ; `Session::HoldMovesForWalk` (`session_items.cpp`) | testé unitairement (`TestBuildingPeek`), jamais testé en partie |
+| Eau des fermes (0.3.5) | `ReadFarmInputs` / `ApplyFarmInputs` (`workshop.cpp`), `FarmInputs` | testé unitairement (`TestFarmInputs`), jamais testé en partie |
+| Pillage vers le sol (0.3.5) | hook `MouseDropToWorld` (`hk_mouseDrop`), `KeepInInventory` (section lue sur la souris) | jamais testé en partie |
 | Contenants, vol | ContainerOpen/Opened/Close, `kenshi.cpp` (ImStealin, notifyTheftFrom) | vérifié en jeu, vol 🟡 |
 | Atelier : recherche, établis, machines et mines, énergie | `common/src/session_workshop.cpp` (Research/ResearchRequest, Machines/MachineRequest, entités `machine`), `plugin/workshop.cpp` (hooks startResearch, stopResearch, payCosts, progressResearch, learnResearch, _addCraft, _removeCraft, CraftingQueue, updatePowerGrid, togglePowerButton, toggleBattButton) | testé unitairement, jamais testé en partie |
 | Panneau d'inventaire d'un bâtiment (mine) | hook ShowInventoryBuilding (`hooks.cpp`) ; le jeu ne l'ouvre que pour un bâtiment du joueur : propriétaire de l'hôte imposé au client (`kMachOurs`, `SetBuildingOurs`, 11/10) | harnais `mine` seulement ; correction du 11/10 non vérifiée en jeu |
@@ -85,8 +89,11 @@ Traités dans `session.cpp` sauf mention contraire. S→C : hôte vers client ; 
 | 46 / 47 | Shots / Ranged | S→C | tirs, visée (`ClientRangedPacket` :2453) |
 | 49 | Captives | S→C | prisonniers (`OnCaptives` :2303) |
 | 52–55 | BuildPlace / BuildState / BuildRemove / BuildAction | ↔ / S→C / S→C / ↔ | construction (`session_buildings.cpp`, aiguillage :1407 et :2304) |
+| 130 | ContainerPeek | C→S | (0.3.5, lot 4) panneau d'inventaire d'un bâtiment ouvert par un clic : son contenu, sans marcher ; réponse `ContainerOpened` avec `looterNetId` 0 (`session_items.cpp`) |
+| 131 | FarmInputs | S→C | (0.3.5, lot 4) réserve de chaque entrée des fermes (l'eau d'abord : la barre « Eau »), imposée au client à chaque tour de machines |
 
-Valeurs libres : 42, 45, 48, 50, 51.
+Valeurs libres : 42, 45, 48, 50, 51. 120-134 : messages ajoutés sans changer de protocole (un pair qui
+ne les connaît pas les ignore) ; le lot 4 a pris 130 et 131.
 
 ## 3. Hooks (`plugin/hooks.cpp`, table `defs[]` ligne 1194)
 
@@ -100,7 +107,8 @@ chez l'hôte, il observe et diffuse.
   AIPeriodicUpdate : IA des persos de l'hôte coupée chez le client.
 - **Santé** : MedApplyDamage, MedKnockout (refusés chez le client ; mode dieu chez l'hôte),
   DeclareDead, ReassessCollapse, RagdollMode.
-- **Objets et progression** : PickupItem, GiveItem, DropItemHuman, IncreaseStat.
+- **Objets et progression** : PickupItem, GiveItem, DropItemHuman, IncreaseStat ; MouseDropToWorld
+  (0.3.5 : un objet de la fenêtre de pillage d'un corps relâché au-dessus du sol passe au dépôt).
 - **Escouade, éditeur** : SquadAddCharacterAt, CloseCharacterEditor, SetStandingOrder, PickupCharacter.
 - **Fenêtres** : ShowTradeWindow (commerce passé par l'hôte), ShowInventoryBuilding (demande le
   contenu réel à l'hôte).
@@ -173,6 +181,7 @@ chez l'hôte, il observe et diffuse.
 | 162–166 | SquadSwapCharacters, ChangePlatoonIndex, DestroyPlatoon, SquadSetName, CharGetPermajobData | 0x792E60, 0x7F3440, 0x6BA9D0, 0x4BE480, 0x5C8F10 | fenêtre Escouade (`squads.cpp`) ; SquadSwapCharacters : hook |
 | fin | TerrainHeight, TerrainWithWaterHeight, IsIndoors, GetNearestTown, WithinBordersRange, GetNearestWithinItsRadius | 0x9B3710, 0x9B3720, 0x9B2BA0, 0x927F10, 0x926D50, 0x928890 | validité d'une pose (`buildings.cpp`) |
 | 188 | ClockSetHourOfDay | 0x66CF30 | recaler l'horloge d'un client (`kenshi::SetGameHours`) |
+| fin (0.3.5) | MouseDropToWorld (`ItemOnMouse::<drop to world>`), SectionIsItemTypeAllowed (`InventorySection::isItemTypeAllowed`) | 0x7136A0, 0x74BC30 | hook ; appelée (raison d'un vêtement non porté) |
 
 ### Adresses écrites en dur hors de la table (non vérifiées au démarrage)
 
@@ -230,7 +239,8 @@ hk_medKnockout) ; `ReadOperatorCount` +0x3E0 ; CharBody +0x648 / Tasker +0x68 / 
   insomething.
 - **Animations** : anims, animstats.
 - **Objets et contenants** : give, drop, pickup, pickupreq, ground, groundnear, objnear, objreq,
-  invmove, loot, lootorder, containerreq, contake, contcount, minereq.
+  invmove, loot, lootorder, containerreq, contake, contcount, minereq ; 0.3.5 : storagejob,
+  peekbuilding, mousedrop, teamloot.
 - **Commerce** : merchants, shopcounters, tradegui, tradelist, tradeopen, tradebuy, tradesell,
   tradestate, closewindows.
 - **Dialogues** : say, says, dialog, convo, answer (dont `answer leave`), talkreq, talkto, npcevent, dialogs.
@@ -249,8 +259,10 @@ hk_medKnockout) ; `ReadOperatorCount` +0x3E0 ; CharBody +0x648 / Tasker +0x68 / 
 
 run, dead, items, lootui, lootorder, lootclick, soak, walk, trace, bodies, clientpickup, doors,
 prison, build, construct, buyhouse, farlong, mine, admin, trade, factions, talk, ranged, jitter, suite, squads, far, kosquad, facing,
-menu, four, progress, ground, animframe, anim, gait, fxlive, fx, up, cmd. Chacune lance un hôte et des
-clients locaux, rejoue un scénario par les commandes de debug et vérifie les journaux.
+menu, four, progress, ground, animframe, anim, gait, fxlive, fx, up, cmd ; 0.3.5 (lot 4) : storagetake,
+storagejob, buildingpeek, farmwater, teampack, teamtrade, lootground, wornrebuild, nightitems. Chacune
+lance un hôte et des clients locaux, rejoue un scénario par les commandes de debug et vérifie les
+journaux.
 
 ## 6. Configuration et fichiers écrits
 

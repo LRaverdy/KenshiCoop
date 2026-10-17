@@ -41,6 +41,16 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      `1:8:657470720:2` et `1:14:1630126976:1`, toutes les ~2 s dès 21:23:27 : l'emplacement « shirt »
      refuse l'objet chez le client, il finit dans l'inventaire principal. Pas bloquant, mais journal
      inondé et tenue différente de l'hôte.
+   - **Fait (branche night-items, à vérifier en jeu : expérience `wornrebuild`).** Lu au désassemblage
+     (MOTEUR.md « Objets : la souris… ») : la pose du mod (`_addItem`) est déjà le chemin d'équipement
+     du jeu (`CharacterHuman::itemAdded`) ; « shirt » / « head » sont désactivées par la **race** du
+     perso (RaceData +0x7F / +0x7E, `Character` vt 0x410), qui détruit ce qu'elles contiennent. Cause
+     supposée (non vérifiée en jeu) : la copie du client n'a pas la race du perso de l'hôte (doublure).
+     Corrigé : jamais forcé dans « shirt » / « head » désactivées, le reste comme avant ; les objets
+     portés posés avant l'inventaire principal ; chaque refus dit pourquoi (section désactivée, refus
+     de `isItemTypeAllowed`, objet qui l'occupe, race ici) et toutes les raisons sont gardées ; une
+     ligne par minute et par perso (« not as on the host » aussi). Si la race diffère : la recopier
+     (lot 2, doublures).
 4. **Achat d'esclaves : la fenêtre s'ouvre chez l'hôte, pas chez le client.**
    - Geoffrey parle au Chef Esclavagistes (21:33:15, 21:33:21, 21:33:31) : la conversation marche chez
      lui (« they say: Tu veux faire du commerce ? », il répond « Je voudrais acheter des esclaves »,
@@ -333,6 +343,12 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      tenue de la Nation Sacrée est bien déguisé ; recopier l'état au client pour l'indicateur.
    - À tester en jeu : client qui s'habille en tenue de paladin (vrai chemin UI, glisser dans les
      emplacements), passe devant des paladins ; comparer avec le perso de l'hôte habillé pareil.
+   - **Note du lot 4 (night-items) pour le lot 5** : piste (b) écartée par le code du jeu. Chez l'hôte,
+     un vêtement que le client met passe par `MoveInventoryItem` → `PlaceItem` → `InventorySection::
+     _addItem` (`0x749720`), qui appelle `CharacterHuman::itemAdded` (`0x5DBD80`) comme l'UI du jeu
+     (corps, `MedicalSystem`, stats d'armure). Aucun champ de déguisement trouvé dans ce chemin. Piste
+     (a) : un vêtement qu'une race ne peut pas porter (« shirt » / « head » désactivées) reste dans
+     l'inventaire, chez l'hôte aussi ; le journal dit maintenant la raison (point 3).
 14. **Impossible de glisser-déposer au sol un objet de l'inventaire d'un PNJ (fenêtre de pillage).**
    - Clients (plopette, ~23:28-23:29 : « loot window opened » x12) : glisser un objet de l'inventaire
      d'un PNJ à terre vers le sol ne fait rien.
@@ -345,6 +361,14 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      appelée (pillage → sol) ; accepter comme source un PNJ à terre qu'un perso du joueur pille (même
      règle de portée que le pillage), envoyer la demande à l'hôte, et toujours écrire une ligne et un
      toast quand un dépôt est refusé. Tester en jeu par le vrai chemin UI (glisser, pas `uidrop`).
+   - **Fait (branche night-items, à vérifier en jeu : expérience `lootground`).** Cause trouvée au
+     désassemblage : le relâcher au-dessus du monde est `ItemOnMouse::<drop to world>` (`0x7136A0`),
+     qui ne lâche que si la fenêtre d'origine peut lâcher (données d'échange +9, vrai seulement pour un
+     côté de la faction du joueur) ; le côté du corps d'une fenêtre de pillage ne le peut jamais :
+     l'objet revenait au corps sans rien appeler d'accroché (comportement du jeu, en solo aussi). Chez
+     un client, le mod l'autorise le temps de l'appel pour un corps (`hk_mouseDrop`) : le dépôt suit le
+     chemin ordinaire (demandé à l'hôte si un perso du joueur est à côté, sinon refusé, avec ligne et
+     toast). Pas vérifié en solo sans le mod.
    - Vu en même temps : un objet au sol `100-limbs.mod` (membre de prothèse ?) « announced again »
      toutes les ~6 s (23:26:48-23:27:18) en changeant de place (1237 → 1312) : recréé à chaque fois chez
      les clients avec un nouvel id. Objet qui glisse sur une pente : à surveiller (doublons ?).
@@ -422,6 +446,21 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      camp accepté (avec la règle de propriété décidée ci-dessus), soit un glisser direct d'un perso à
      l'autre quand ils sont côte à côte, demandé à l'hôte. Ne pas laisser la fenêtre clignoter
      (fermée/rouverte à chaque refus).
+   - **Règle décidée (17/10) : option A.** **Fait (branche night-items, à vérifier en jeu :
+     expériences `teampack` et `teamtrade`).** Tout joueur prend et pose dans les bêtes de somme de la
+     faction du joueur et dans tous les sacs portés (même par un perso humain d'un autre joueur) ;
+     jamais dans l'inventaire propre d'un perso humain d'un autre joueur ou de l'hôte
+     (`Session::TeamShared` / `HostMayTouch`, côté client et côté hôte ; dépôt au sol depuis une bête ou
+     un sac d'un autre : fait par un perso du joueur à côté, comme pour un coffre). Refus : remis en
+     place, « Ce personnage appartient à X : … (seuls les sacs et les bêtes de somme sont partagés) ».
+     Commerce : la fenêtre « marchand » venait du jeu de l'hôte (« piller » sur A1 → `TW_AUTO`) et
+     vendait les **comptoirs de la base du joueur** (`ShopCounters` de A1), d'où les refus à prix 0.
+     Maintenant « piller » un coéquipier ouvre son inventaire chez le client lui-même (`ClientLoot`,
+     sans prix ni fenêtre de commerce) et la règle A décide ; l'hôte n'ouvre plus de fenêtre de
+     commerce sur un perso de la faction (message « Échange entre joueurs … » à un ancien client).
+     « COULD NOT PUT THE ITEM BACK » : le nom de section de l'objet tenu par la souris est vide
+     (il est sur `ItemOnMouse`+0x40) ; `KeepInInventory` le lit là, puis essaie toute section non
+     équipement, puis l'ajout du jeu sans perte ni lâcher.
 18. **Ferme à légumes : rob1 ne voit ni l'eau ni la récolte (output).**
    - rob1 travaille sur « Ferme Légumes S » (« operate machine » 00:46-00:49, tâche permanente) et
      l'ouvre plusieurs fois (« opens Ferme Légumes S » 00:49:41-00:50:15) : la fenêtre ne montre ni le
@@ -437,6 +476,12 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      client et qu'il peut la prendre (demande à l'hôte). Vérifier chez l'hôte que la ferme reçoit bien
      de l'eau (croissance négative). Tester en jeu : ferme arrosée, cycle complet jusqu'à la récolte,
      vu par l'hôte et un client, vitesses 1-3.
+   - **Fait (branche night-items, à vérifier en jeu : expérience `farmwater`).** Eau trouvée au
+     désassemblage (MOTEUR.md « Fermes ») : réserve par entrée (+0x488), bue par la mise à jour de la
+     ferme sur **chaque** machine ; l'hôte l'envoie (`FarmInputs`, 131) et le client l'impose à chaque
+     tour de machines. La récolte va dans la section « out » de l'inventaire du bâtiment, déjà suivi.
+     Croissance négative : règle du jeu sans eau ni pluie (× facteur de sécheresse), pas le mod (sauf
+     si des livraisons d'eau à la ferme de l'hôte étaient bloquées : non vu dans le code).
 19. **Clic gauche sur un puits : le perso de rob1 court jusqu'au puits.**
    - « [rob1] goes to look into Puits » à chaque clic (00:53:57-00:54:24), sans ordre de sa part.
    - Cause trouvée dans le code : `hk_showInvBuilding` (`plugin/hooks.cpp` ~893) : sur un client,
@@ -448,6 +493,11 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      ou l'inventaire des machines déjà recopié : « inventory 7251 (a machine) differs here » montre
      qu'il arrive), et ne faire marcher le perso que quand le joueur prend/pose vraiment un objet
      (comme le jeu). Lié au point 18 (ferme : eau et récolte invisibles dans ce même panneau).
+   - **Fait (branche night-items, à vérifier en jeu : expérience `buildingpeek`).** Le clic ne fait
+     plus marcher personne : une machine (puits, mine, ferme) est déjà tenue à jour partout ; un autre
+     bâtiment (stockage) est demandé à l'hôte par `ContainerPeek` (130), qui envoie son contenu sans
+     marche. Prendre ou poser un objet dans ce panneau envoie d'abord le perso du joueur au bâtiment
+     (`ContainerOpen`), puis le déplacement part une fois arrivé (30 s au plus, sinon défait et dit).
 20. **Stockage de minerai : rob1 n'arrive pas à reprendre le minerai, il y retourne tout seul.**
    - 00:56:08-00:56:52 : rob1 tire le minerai (`42158-gamedata.base`, cuivre ?) du stockage, plusieurs
      fois : « inventory move asked of the host: 42158-gamedata.base x65 backpack_content ->
@@ -462,6 +512,16 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      destination sont nommés (handle du perso, du sac, du bâtiment) pour un bâtiment de stockage.
    - À tester en jeu : stockage de minerai rempli, client qui en tire vers son inventaire principal,
      vers son sac, et l'inverse ; même chose pour les autres stockages (nourriture, pierre, eau).
+   - **Fait (branche night-items, à vérifier en jeu : expérience `storagetake`).** Piste du nom de
+     section **écartée par le code** : chaque demande nomme ses deux inventaires par netId, et l'hôte
+     cherche la section dans l'inventaire de destination seulement. Cause probable (supposée) : les
+     persos de rob1 étaient les mineurs de Minerai Cuivre (« operate machine » 00:55:17) ; le travail de
+     mine du jeu range dans le stockage le minerai qu'un ouvrier porte (comme en solo), juste à côté :
+     « done » puis remis au tour suivant. Ajouts : l'hôte surveille 8 s ce qu'un joueur sort d'un
+     coffre ou d'un stockage, et si son jeu le remet il le dit au joueur (« Le jeu a remis … : X a un
+     travail … qui y range ce qu'il porte ») ; le journal de l'hôte nomme les deux inventaires de tout
+     déplacement avec un coffre ou un bâtiment ; le client retrouve le bâtiment d'un placement de
+     l'hôte par son netId avant « le plus proche du même modèle ».
 21. **rob1 ne peut pas donner à Voth la tâche « ranger dans le stockage de fruivert » (et sans doute
     les autres stockages).**
    - Stock Fruivert posé par l'hôte à 01:01:15 (« built the host's Stock Fruivert » chez les clients).
@@ -479,6 +539,12 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      chantier) au moment du clic.
    - Lié aux points 19 et 20 (panneaux et stockages). Tester en jeu : chaque type de stockage, clic
      droit et Maj+clic droit d'un client, comparé à l'hôte.
+   - **Fait (branche night-items, à vérifier en jeu : expérience `storagejob`).** `ClientLootContainer`
+     ne prend plus un clic avec Maj (tous les chemins d'ordre : `addOrder`, `addTaskNearest`,
+     `newPlayerTask`) : il part comme ordre (tâche 26 avec Maj, que le `newPlayerTask` de l'hôte fait
+     tâche permanente 124). Le clic droit simple reste « regarder dedans » et le client écrit
+     maintenant une ligne qui le dit. Supposé : rob1 cliquait sans que Maj soit vue (le journal n'a ni
+     ordre ni refus) ; à confirmer en jeu.
 22. **Autres lignes à regarder** : « Ce personnage appartient à un autre joueur. » chez rob1 (21:26:26,
    21:26:58, 21:27:15) ; « 1 host squad members are missing in the local world » chez rob1 à
    l'arrivée de Geoffrey (21:23:56).

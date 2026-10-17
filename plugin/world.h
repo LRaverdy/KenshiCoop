@@ -125,6 +125,9 @@ public:
     bool ContainerWindowOpen() override { return kenshi::OpenInventoryWindows() > 0; }
     void CloseContainerWindows() override { kenshi::CloseInventoryWindows(); }
     void QueueContainerRequest(kenshi::Character* looter, void* container);   // hooks: a right click on a container
+    // hooks (0.3.5): a building's inventory panel opened by a click: its items asked of the host, nobody walks
+    void QueueContainerPeek(kenshi::Character* looter, void* building);
+    void TakeContainerPeeks(std::vector<ContainerRequest>& out) override;
     void TakeTradeRequests(std::vector<TradeRequest>& out) override;
     bool ShopCounters(const kc::Handle& trader, std::vector<ShopCounter>& out) override;
     bool MoneyOf(const kc::Handle& who, int32_t& money) override;
@@ -167,6 +170,7 @@ public:
     // growing, nothing queued) or no free place: what to tell the player (French), else empty
     bool FillMachineFacts(void* building, kenshi::Character* actor, kc::WorkOrderFacts& f);
     bool ApplyTownPower(const kc::TownPower& t) override;
+    bool ApplyFarmInputs(const kc::FarmInput& f, const kc::Handle& local) override;   // 0.3.5: a farm's water
     void TakeWorkshopAsks(std::vector<LocalResearchAsk>& research, std::vector<LocalMachineAsk>& machines) override;
     // hooks (client): a research window button, a blueprint read, a crafting window / building panel
     // button the local player used (never run here); host: a crafting order the game made (what the
@@ -489,7 +493,8 @@ public:
     static bool DropSourceAllowed(const HookView& v, void* holder);
     // Client: the local player wants `looter` (one of its characters) to loot `target`, a knocked-out
     // or dead character. It walks there through the host; the loot window opens once it is close.
-    void RequestLoot(const kc::Handle& looter, kenshi::Character* target);
+    // team (0.3.5): a team mate (another player's character, standing): its inventory window, rule A decides
+    void RequestLoot(const kc::Handle& looter, kenshi::Character* target, bool team = false);
     size_t PendingLootCount() const { return pendingLoot_.size(); }
     int lootOpened = 0, lootDropped = 0;   // client loot orders: windows opened, orders that expired or lost their body (debug: lootstats)
     void Toast(const std::string& msg);
@@ -637,7 +642,9 @@ private:
         kc::loot::BodySize body;   // the body's size: how close the looter must get (kc::loot::Reach)
         std::string race;
         kc::loot::OrderClock clock;   // expiry (paused time not counted), walked, stopped
+        bool team = false;            // 0.3.5: a team mate standing (another player's character): its inventory, not a body
     };
+    std::vector<ContainerRequest> containerPeeks_;   // client (0.3.5): building panels opened by a click
     std::vector<PendingLoot> pendingLoot_;   // client, game thread only
     void UpdatePendingLoot();
     std::vector<kenshi::Character*> scratch_;

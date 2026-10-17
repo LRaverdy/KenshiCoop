@@ -119,6 +119,9 @@ enum class Msg : uint8_t {
     AnimalBuy = 92,       // C->S  the animals the player chose in that window (none: closed without buying)
     // ---- player statistics (0.3.5, no protocol change: older clients ignore an unknown type)
     PlayerStats = 66,     // S->C  every player's statistics in this world (kc/player_stats.h), on join and every 10 s when they change
+    // ---- 0.3.5 lot 4 (night-items), no protocol change: a peer that does not know them ignores them
+    ContainerPeek = 130,  // C->S  the player opened a building's inventory panel (a click on a mine, a farm, a storage): its items, no walk
+    FarmInputs = 131,     // S->C  what the players' farms hold of their inputs (water): the farm window's "Eau" bar
 };
 
 // World transfer limits (a Kenshi save is a few MB).
@@ -800,6 +803,14 @@ struct ContainerOpen {
     std::string sid;
     Vec3 pos;
 };
+// 0.3.5 (lot 4): a building's inventory panel opened by a click (no walk). Answered by a ContainerOpened
+// with looterNetId 0 (its items then follow as an Inventory, like an open container's); moving an item
+// in or out walks the player's character there first (ContainerOpen), as the game does.
+struct ContainerPeek {
+    uint32_t looterNetId = 0;   // the player's character a later walk would use (the request's actor)
+    std::string sid;
+    Vec3 pos;
+};
 struct ContainerOpened {
     uint32_t netId = 0;
     uint32_t looterNetId = 0;
@@ -1016,6 +1027,8 @@ void Encode(Writer& w, const CaptivesMsg& m);
 bool Decode(Reader& r, CaptivesMsg& m);
 void Encode(Writer& w, const ContainerOpen& m);
 bool Decode(Reader& r, ContainerOpen& m);
+void Encode(Writer& w, const ContainerPeek& m);
+bool Decode(Reader& r, ContainerPeek& m);
 void Encode(Writer& w, const ContainerOpened& m);
 bool Decode(Reader& r, ContainerOpened& m);
 void Encode(Writer& w, const ContainerClose& m);
@@ -1404,6 +1417,23 @@ struct MachinesMsg {
 constexpr uint32_t kMaxMachinesPerMsg = 128, kMaxMachineOperators = 16, kMaxCraftOrders = 32, kMaxTownPower = 32, kMaxFarmPlants = 4096;
 void Encode(Writer& w, const MachinesMsg& m);
 bool Decode(Reader& r, MachinesMsg& m);
+// 0.3.5 (lot 4, 16 October point 18): a farm's inputs as the host's game has them. FarmBuilding keeps one
+// stored amount per input (list at +0x480/+0x488, 0x20 bytes each, the amount a float at +0): water
+// first, what the farm window's "Eau" bar shows (about 0..1). The client's own farm update consumes it
+// (FarmBuilding::_updateInputs), so the host's is imposed with every machine round.
+struct FarmInput {
+    std::string sid;             // kind and place, like MachineState
+    Vec3 pos;
+    std::vector<float> stored;   // each input's stored amount, in the game's order
+    bool operator==(const FarmInput& o) const { return sid == o.sid && stored == o.stored; }
+};
+struct FarmInputsMsg {
+    bool full = false;
+    std::vector<FarmInput> farms;
+};
+constexpr uint32_t kMaxFarmInputs = 8, kMaxFarmInputFarms = 128;
+void Encode(Writer& w, const FarmInputsMsg& m);
+bool Decode(Reader& r, FarmInputsMsg& m);
 
 enum class MachineAction : uint8_t { AddCraft = 1, RemoveCraft = 2, SetRepeat = 3, SetPower = 4, SetBattery = 5 };
 struct MachineRequest {

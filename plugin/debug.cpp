@@ -2023,6 +2023,85 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         kenshi::WithSelection(me, [&] { ok = kenshi::CallNewPlayerTaskOn(bed ? 258 : 87, best, op, dest); });   // USE_BED_ORDER / OPERATE_MACHINERY
         return (ok ? "ok " : "err ") + bestName + " at " + std::to_string(int(std::sqrt(bestD)));
     }
+    // ---- 0.3.5 lot 4 (night-items): the real UI paths of the 16 October item bugs
+    if (cmd == "storagejob" || cmd == "peekbuilding") {
+        // storagejob <selectIndex> <name part|sid> [shift]: a right click (newPlayerTaskSelectedCharacters, task 26)
+        //   on the nearest object with that name, Shift held if "shift" (the game's permanent storage job)
+        // peekbuilding <selectIndex> <name part|sid>: that building's inventory panel, as a left click opens it
+        size_t sel = 0;
+        std::string part, flag;
+        in >> sel >> part >> flag;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size() || part.empty()) return "err usage: " + cmd + " <selectIndex> <name part|sid> [shift]";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kc::Vec3 p, op;
+        if (!kenshi::GetPosition(me, p)) return "err";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(p, 3000, objs);
+        void* best = nullptr;
+        float bestD = 1e30f;
+        std::string bestName;
+        for (void* o : objs) {
+            std::string sid, name;
+            std::vector<kc::ItemState> items;
+            if (kenshi::IsCharacter(o) || !kenshi::ObjectTemplate(o, sid) || !kenshi::TemplateDisplayName(sid, name) ||
+                (sid != part && name.find(part) == std::string::npos) || !kenshi::ObjectPosition(o, op) || !kenshi::ReadInventory(o, items))
+                continue;
+            const float d = (op.x - p.x) * (op.x - p.x) + (op.z - p.z) * (op.z - p.z);
+            if (d < bestD) { bestD = d; best = o; bestName = name; }
+        }
+        if (!best) return "err no building with an inventory called " + part;
+        kenshi::ObjectPosition(best, op);
+        bool ok = false;
+        if (cmd == "peekbuilding") {
+            kenshi::WithSelection(me, [&] { ok = kenshi::DebugShowBuildingPanel(best); });
+        } else {
+            kenshi::ScopedShift shift(flag == "shift");
+            void* dest = kenshi::FurnitureParent(best);
+            kenshi::WithSelection(me, [&] { ok = kenshi::CallNewPlayerTaskOn(26, best, op, dest); });
+        }
+        return (ok ? "ok " : "err ") + bestName + " at " + std::to_string(int(std::sqrt(bestD)));
+    }
+    if (cmd == "mousedrop") {
+        // mousedrop <squadIndex|bag:squadIndex|hostCharacterKey> <weapon|armour|item|sid|name_part>: a drag from the
+        // open window showing that inventory (a loot window on a body: its key), released over the world
+        std::string who, kind;
+        in >> who >> kind;
+        if (kind.empty()) return "err usage: mousedrop <squadIndex|bag:squadIndex|key> <kind>";
+        void* holder = nullptr;
+        const bool fromBag = who.rfind("bag:", 0) == 0;
+        if (fromBag) who = who.substr(4);
+        if (who.find(':') != std::string::npos) {   // a character's key (a body)
+            kc::Handle h;
+            sscanf(who.c_str(), "%u:%u:%u:%u:%u", &h.type, &h.container, &h.containerSerial, &h.index, &h.serial);
+            holder = w.Find(h);
+        } else {
+            if (who.rfind("squad", 0) == 0) who = who.substr(5);
+            const size_t idx = std::strtoul(who.c_str(), nullptr, 10);
+            auto squad = SortedSquad(w);
+            if (idx < squad.size()) holder = w.FindSquad(squad[idx]);
+        }
+        if (holder && fromBag) holder = kenshi::WornBackpack(static_cast<kenshi::Character*>(holder));
+        if (!holder) return "err no such inventory";
+        void* item = kenshi::FindItemOfKind(holder, kind);
+        if (!item) return "err no " + kind + " there";
+        kc::ItemState st;
+        kenshi::DescribeInventoryItem(item, st);
+        return kenshi::DebugMouseDrop(holder, item) + " " + st.templateSid + " x" + std::to_string(st.quantity);
+    }
+    if (cmd == "teamloot") {   // teamloot <selectIndex> <squadIndex>: that member right-clicks "loot" on a team mate (another player's character)
+        size_t sel = 0, mate = 0;
+        in >> sel >> mate;
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size() || mate >= squad.size() || sel == mate) return "err usage: teamloot <selectIndex> <squadIndex>";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kenshi::Character* t = w.FindSquad(squad[mate]);
+        if (!me || !t) return "err not here";
+        bool ok = false;
+        kenshi::WithSelection(me, [&] { ok = kenshi::CallAddTaskNearest(26, t); });
+        return ok ? "ok" : "err call failed";
+    }
     if (cmd == "localbed") {   // localbed <squadIndex>: (client, 0.3.4 test) our copy alone goes into the nearest free bed here (a stale bed: the host has it free)
         if (!s.isClient()) return "err client only";
         size_t idx = 0;

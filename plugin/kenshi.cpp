@@ -275,6 +275,9 @@ const FunctionSig kFunctions[FnCount] = {
     // ---- 0.3.5 (night-stream): squads of the host's characters filled by a client's own game
     {"RootObjectFactory::create", 0x583400, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
     {"ActivePlatoon::setSquadLeader", 0x7917A0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B}},
+    // ---- 0.3.5 lot 4 (read by disassembly, 17 October 2026, docs/MOTEUR.md "Fenêtre de pillage vers le sol")
+    {"ItemOnMouse::<drop to world>", 0x7136A0, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x83, 0x79, 0x30, 0x00, 0x48}},
+    {"InventorySection::isItemTypeAllowed", 0x74BC30, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48}},
 };
 
 namespace {
@@ -2619,7 +2622,10 @@ bool PlaceItem(void* inv, void* item, const std::string& section, int x, int y, 
         uint8_t enabled = 1;
         Rd(sec, SEC_width, w); Rd(sec, SEC_height, h); Rd(item, IT_width, iw); Rd(item, IT_height, ih); Rd(sec, SEC_enabled, enabled);
         const uint8_t one = 1;
-        const bool unlock = !enabled && hostLayout;   // enabled for the checks too, put back right after
+        // enabled for the checks too, put back right after. 0.3.5 (lot 4, point 3): never "shirt" nor "head":
+        // the game disables those for a race that cannot wear them (RaceData +0x7F / +0x7E) and Character
+        // vt 0x410 (0x6218F0) destroys whatever lies in them ("clearAllItems") the next time it runs.
+        const bool unlock = !enabled && hostLayout && section != "shirt" && section != "head";
         auto canGo = [&](int px, int py) {
             if (unlock) Wr(sec, SEC_enabled, one);
             const bool ok = CallSectionCanGo(sec, item, px, py);
@@ -2916,9 +2922,52 @@ bool SectionRemoveSeh(void* sec, void* item) {
 }
 } // namespace
 
+namespace {
+using FnTypeAllowed = bool (*)(void* sec, void* item);
+bool TypeAllowedSeh(void* sec, void* item, bool& allowed) {
+    __try { allowed = reinterpret_cast<FnTypeAllowed>(FnAddr(FnSectionIsItemTypeAllowed))(sec, item); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+constexpr uintptr_t CH_race = 0x2E0;   // Character: RaceData* (its GameData at +0x40)
+constexpr uintptr_t RD_data = 0x40, RD_noHead = 0x7E, RD_noShirt = 0x7F;   // RaceData: what Character vt 0x410 (0x6218F0) reads to disable "head" / "shirt"
+// 0.3.5 (lot 4, point 3): why a worn item of the host cannot be worn here, for the log ("cannot place 543 at
+// shirt", 278 lines on 16 October, with no reason). Read, never changed.
+std::string WhyNotWorn(void* holder, void* inv, void* item, const std::string& section) {
+    void* sec = FindSection(inv, section);
+    if (!sec) return "no section '" + section + "' here";
+    std::string why;
+    auto add = [&](const std::string& s) { why += (why.empty() ? "" : ", ") + s; };
+    uint8_t enabled = 1;
+    Rd(sec, SEC_enabled, enabled);
+    if (!enabled) add("the section is disabled here");
+    bool allowed = true;
+    if (TypeAllowedSeh(sec, item, allowed) && !allowed) add("the section refuses that item (its slot, or the race of the character here)");
+    for (void* other : ItemsOfSection(sec))
+        if (other && other != item) { add("it holds " + ItemTemplate(other)); break; }
+    if (IsCharacter(holder)) {
+        void* race = nullptr;
+        void* gd = nullptr;
+        std::string sid;
+        uint8_t noHead = 0, noShirt = 0;
+        if (Rd(holder, CH_race, race) && race && Rd(race, RD_data, gd) && GameDataSid(gd, sid)) {
+            Rd(race, RD_noHead, noHead);
+            Rd(race, RD_noShirt, noShirt);
+            add("race here " + sid + (noShirt ? " (wears no shirt)" : "") + (noHead ? " (wears nothing on the head)" : ""));
+        }
+    }
+    return why.empty() ? "no room at its cell" : why;
+}
+} // namespace
+
 bool RebuildInventory(void* c, const std::vector<kc::ItemState>& items, std::string* err) {
     void* inv = InventoryOf(c);
     if (!inv) { if (err) *err = "no inventory"; return false; }
+    // 0.3.5: every reason kept (a later "cannot place" overwrote an earlier "cannot remove")
+    auto fail = [&](const std::string& s) {
+        if (!err) return;
+        if (!err->empty() && err->size() < 600) *err += "; ";
+        if (err->size() < 600) *err += s;
+    };
+    if (err) err->clear();
     // Keep every local item that already is exactly what the host has; only the rest changes.
     std::vector<kc::ItemState> missing = items;
     std::vector<void*> extra;
@@ -2944,24 +2993,46 @@ bool RebuildInventory(void* c, const std::vector<kc::ItemState>& items, std::str
             DisposeTaken(taken, {home.inv, inv});
         } else {
             ok = false;
-            if (err) *err = "cannot remove " + ItemTemplate(it) + ": " + why;
+            fail("cannot remove " + ItemTemplate(it) + ": " + why);
         }
     }
+    // the main inventory last: a worn item of the host goes to its slot before anything could take
+    // the cell it would fall back to (the host's list is sorted by section name: "main" before "shirt")
+    std::stable_sort(missing.begin(), missing.end(), [](const kc::ItemState& a, const kc::ItemState& b) { return a.section != "main" && b.section == "main"; });
     for (const auto& s : missing) {
         std::string why;
         void* item = CreateItemFromState(s, &why);
-        if (!item) { ok = false; if (err) *err = why; continue; }
+        if (!item) { ok = false; fail(why); continue; }
         // where the host has it; else anywhere in the bag; only then the game's own add, which destroys
         // what it cannot store: an item the host has must not simply vanish here (v0.3.0 session:
         // "cannot place 42243-rebirth.mod", the item then "missing" on two clients)
         if (PlaceItem(inv, item, s.section, s.x, s.y, s.quantity, false, true)) continue;
         ok = false;
-        if (err) *err = "cannot place " + s.templateSid + " at " + s.section;
-        if (s.section != "main" && PlaceItem(inv, item, "main", 0, 0, s.quantity, false)) continue;
-        if (!CallAddItem(VSlot(inv, INVV_addItem), inv, item, s.quantity) && err) *err += " (nowhere: lost here)";
+        const std::string reason = s.section == "main" ? std::string("no room") : WhyNotWorn(c, inv, item, s.section);
+        if (s.section != "main" && PlaceItem(inv, item, "main", 0, 0, s.quantity, false)) {
+            fail("cannot place " + s.templateSid + " at " + s.section + " (" + reason + "): put in the main inventory here");
+            continue;
+        }
+        if (!CallAddItem(VSlot(inv, INVV_addItem), inv, item, s.quantity)) fail("cannot place " + s.templateSid + " at " + s.section + " (" + reason + "): nowhere, lost here");
+        else fail("cannot place " + s.templateSid + " at " + s.section + " (" + reason + "): wherever the game put it");
     }
     return ok;
 }
+
+namespace {
+// The section an item on the mouse came from: the mouse keeps its name while the item is dragged
+// (ItemOnMouse +0x30 the item, +0x40 the source section's name; read by disassembly, 0x7136A0 / 0x70D860).
+bool MouseSourceSection(void* item, std::string& sec) {
+    void* mouse = nullptr;
+    void* held = nullptr;
+    if (!Rd(reinterpret_cast<void*>(Addr(rva::MouseInventory)), 0, mouse) || !mouse || !Rd(mouse, 0x30, held) || held != item) return false;
+    return ReadGameString(static_cast<uint8_t*>(mouse) + 0x40, sec) && !sec.empty();
+}
+using FnAddItemKeep = bool (*)(void* inv, void* item, int qty, bool dropOnFail, bool destroyOnFail);
+bool AddItemKeepSeh(void* fn, void* inv, void* item, int qty) {
+    __try { return reinterpret_cast<FnAddItemKeep>(fn)(inv, item, qty, false, false); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
 
 bool KeepInInventory(void* inventory, void* item) {
     if (!inventory || !item) return false;
@@ -2971,8 +3042,29 @@ bool KeepInInventory(void* inventory, void* item) {
     int x = 0, y = 0, q = 1;
     ItemPlace(item, sec, x, y);
     Rd(item, IT_quantity, q);
+    if (sec.empty()) MouseSourceSection(item, sec);   // dragged: its section's name is on the mouse
     if (!sec.empty() && PlaceItem(inventory, item, sec, x, y, q, false)) return true;
-    return sec != "main" && PlaceItem(inventory, item, "main", 0, 0, q, false);
+    if (sec != "main" && PlaceItem(inventory, item, "main", 0, 0, q, false)) return true;
+    // any other section of that inventory that is not an equipment slot (a backpack: "backpack_content")
+    const auto* map = reinterpret_cast<const uint8_t*>(inventory) + INV_sections;
+    uint64_t size = 0, bucketCount = 0;
+    void** buckets = nullptr;
+    void* node = nullptr;
+    if (Rd(map, off::US_size, size) && size > 0 && size <= 256 && Rd(map, off::US_bucketCount, bucketCount) && Rd(map, off::US_buckets, buckets) && buckets &&
+        Rd(buckets, bucketCount * sizeof(void*), node)) {
+        std::string key;
+        for (uint64_t i = 0; node && i < size; ++i) {
+            void* s = nullptr;
+            uint8_t equip = 0;
+            if (ReadGameString(reinterpret_cast<uint8_t*>(node) + off::MapNode_key, key) && key != sec && key != "main" && Rd(node, off::MapNode_mapped, s) && s &&
+                Rd(s, SEC_equipSection, equip) && !equip && PlaceItem(inventory, item, key, 0, 0, q, false))
+                return true;
+            if (!Rd(node, off::USNode_next, node)) break;
+        }
+    }
+    // last: the game's own add, told neither to drop it nor to destroy it when it finds no room
+    uint8_t in = 0;
+    return AddItemKeepSeh(VSlot(inventory, INVV_addItem), inventory, item, q) && Rd(item, IT_inInventory, in) && in != 0;
 }
 
 bool InventoryHolds(void* holder, void* item) {
@@ -3549,6 +3641,117 @@ bool InventoryWindowShows(const void* obj) {
         if (Rd(n, TP_right, r)) todo.push_back(r);
     }
     return false;
+}
+
+uint8_t* TradeDataDropFlag(void* gui) {
+    void* head = nullptr;
+    uint64_t size = 0;
+    if (!gui || !Rd(reinterpret_cast<void*>(Addr(rva::TradePartnersHead)), 0, head) || !head ||
+        !Rd(reinterpret_cast<void*>(Addr(rva::TradePartnersSize)), 0, size) || size == 0 || size > 16)
+        return nullptr;
+    void* root = nullptr;
+    if (!Rd(head, 0x8, root) || !root) return nullptr;
+    std::vector<void*> todo{root};
+    for (int guard = 0; !todo.empty() && guard < 64; ++guard) {
+        void* n = todo.back();
+        todo.pop_back();
+        uint8_t nil = 1;
+        if (!n || n == head || !Rd(n, TP_isNil, nil) || nil) continue;
+        void* window = nullptr;
+        if (Rd(n, TP_key, window) && window == gui) return static_cast<uint8_t*>(n) + TP_data + 9;   // InventoryTradeData +9: may drop to the world
+        void* l = nullptr;
+        void* r = nullptr;
+        if (Rd(n, TP_left, l)) todo.push_back(l);
+        if (Rd(n, TP_right, r)) todo.push_back(r);
+    }
+    return nullptr;
+}
+
+bool ReadMouseDrop(void* mouse, MouseDrop& out) {
+    out = MouseDrop{};
+    if (!mouse || !Rd(mouse, 0x30, out.item) || !out.item || !Rd(mouse, 0x68, out.gui) || !out.gui) return false;
+    void* fn = VSlot(out.gui, GUIV_getInventory);
+    out.inventory = fn ? CallNoArgPtrOn(fn, out.gui) : nullptr;
+    out.holder = out.inventory ? InventoryCallback(out.inventory) : nullptr;
+    out.mayDrop = TradeDataDropFlag(out.gui);
+    return true;
+}
+
+namespace {
+using FnMouseGet = void* (*)();
+void* MouseGetSeh() {
+    __try { return reinterpret_cast<FnMouseGet>(Addr(0x6EF0E0))(); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+using FnMouseDropCall = void (*)(void*);
+bool MouseDropSeh(void* mouse) {
+    __try { reinterpret_cast<FnMouseDropCall>(FnAddr(FnMouseDropToWorld))(mouse); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+using FnShowInvBuildingCall = void* (*)(void* gui, const void* owner);
+bool ShowInvBuildingSeh(const void* hand) {
+    __try { reinterpret_cast<FnShowInvBuildingCall>(FnAddr(FnShowInventoryBuilding))(reinterpret_cast<void*>(Addr(rva::TradeGui)), hand); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+// Tests (debug "mousedrop", 0.3.5): a drag from the open window that shows the holder's inventory,
+// released over the world. The mouse takes the item out of its window's inventory and keeps its section's
+// name, as a drag does; then the game's own release (ItemOnMouse::<drop to world>, hooked).
+std::string DebugMouseDrop(void* holder, void* item) {
+    void* inv = InventoryOf(holder);
+    if (!inv || !item) return "err no inventory or no item";
+    // the open window showing that inventory (a loot window: the body's side)
+    void* gui = nullptr;
+    void* head = nullptr;
+    uint64_t size = 0;
+    if (Rd(reinterpret_cast<void*>(Addr(rva::TradePartnersHead)), 0, head) && head && Rd(reinterpret_cast<void*>(Addr(rva::TradePartnersSize)), 0, size) && size &&
+        size <= 16) {
+        void* root = nullptr;
+        std::vector<void*> todo;
+        if (Rd(head, 0x8, root) && root) todo.push_back(root);
+        for (int guard = 0; !todo.empty() && guard < 64 && !gui; ++guard) {
+            void* n = todo.back();
+            todo.pop_back();
+            uint8_t nil = 1;
+            if (!n || n == head || !Rd(n, TP_isNil, nil) || nil) continue;
+            void* window = nullptr;
+            if (Rd(n, TP_key, window) && window)
+                if (void* fn = VSlot(window, GUIV_getInventory); fn && CallNoArgPtrOn(fn, window) == inv) gui = window;
+            void* l = nullptr;
+            void* r = nullptr;
+            if (Rd(n, TP_left, l)) todo.push_back(l);
+            if (Rd(n, TP_right, r)) todo.push_back(r);
+        }
+    }
+    if (!gui) return "err no open window shows that inventory";
+    static const uint8_t kGetter[] = {0x48, 0x83, 0xEC, 0x38, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF};
+    uint8_t live[sizeof(kGetter)];
+    if (!SafeCopy(live, reinterpret_cast<void*>(Addr(0x6EF0E0)), sizeof(live)) || std::memcmp(live, kGetter, sizeof(live)) != 0) return "err unexpected code at the mouse's getter";
+    void* mouse = MouseGetSeh();
+    void* held = nullptr;
+    if (!mouse || !Rd(mouse, 0x30, held)) return "err no mouse";
+    if (held) return "err the mouse already holds an item";
+    std::string sec;
+    int x = 0, y = 0;
+    ItemPlace(item, sec, x, y);
+    if (!InventoryRemove(inv, item)) return "err the window's inventory would not let it go";
+    Wr(mouse, 0x30, item);
+    AssignGameString(static_cast<uint8_t*>(mouse) + 0x40, sec);
+    Wr(mouse, 0x68, gui);
+    const bool called = MouseDropSeh(mouse);
+    void* after = nullptr;
+    Rd(mouse, 0x30, after);
+    const bool back = InventoryHolds(holder, item);
+    return std::string(called ? "ok" : "err exception") + (back ? " back-in-its-inventory" : " left-its-inventory") + (after ? " still-on-the-mouse" : "");
+}
+
+// Tests (debug "peekbuilding", 0.3.5): the building's inventory panel, as a click opens it
+// (ForgottenGUI::showInventoryBuilding with its hand, hooked).
+bool DebugShowBuildingPanel(void* building) {
+    kc::Handle h;
+    if (!building || !ObjectHandle(building, h)) return false;
+    uint8_t hand[off::HandSize];
+    MakeHand(h, hand);
+    return ShowInvBuildingSeh(hand);
 }
 
 // What the open trade window holds of its merchant (read by disassembly, 13 October 2026):
