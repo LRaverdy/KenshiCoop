@@ -83,6 +83,14 @@ constexpr uintptr_t FB_grown = 0x518;           // float: 0..1 the youngest grow
 constexpr uintptr_t FB_died = 0x51C;            // float
 constexpr uintptr_t FB_cleared = 0x520;         // float
 constexpr uintptr_t FB_harvested = 0x528;       // int
+// 0.3.5 (lot 4, point 18): the farm's inputs, water first (what its window's "Eau" bar shows). A lektor
+// of 0x20-byte entries: +0 the stored amount (float, about 0..1), +4 per-unit multiplier, +0x10 the
+// resource's GameData, +0x18 the InventorySection its delivered items wait in. ProductionBuilding::
+// _updateInputs (0xDF4C0, called by FarmBuilding::update at 0xE56BE) drinks it every frame on every
+// machine (rain on an outdoor farm fills input 0: 0xE5622-0xE56A5); without water, growth is multiplied
+// by the drought factor (+0x550): the host's "grown -0.19" of 16 October (no water delivered, no rain).
+constexpr uintptr_t PB_inputCount = 0x480, PB_inputData = 0x488, PB_inputSize = 0x20;
+constexpr uint32_t kMaxFarmInputsHere = 16;
 // vtables
 constexpr uintptr_t kVtCraftingBuilding = 0x16B5A58;
 constexpr uintptr_t kVtResearchBuilding = 0x16B28C8;
@@ -290,6 +298,18 @@ bool ReadCrop(void* b, kc::CropState& c) {
     c.grown = Quantize(grown);
     c.died = Quantize(died);
     c.cleared = Quantize(cleared);
+    return true;
+}
+bool ReadFarmInputs(void* b, std::vector<float>& out) {
+    out.clear();
+    uint32_t n = 0;
+    void* data = nullptr;
+    if (!Rd(b, PB_inputCount, n) || n == 0 || n > kMaxFarmInputsHere || !Rd(b, PB_inputData, data) || !data) return false;
+    for (uint32_t i = 0; i < n && i < kc::kMaxFarmInputs; ++i) {
+        float v = 0;
+        if (!Rd(data, i * PB_inputSize, v)) return false;
+        out.push_back(std::isfinite(v) ? std::max(0.0f, v) : 0.0f);
+    }
     return true;
 }
 void* TownOf(void* b) {
@@ -556,6 +576,7 @@ void KenshiWorld::ReadMachines(const std::vector<kc::Vec3>& centers, float radiu
                                      (m.state.flags & (kc::kMachGenerator | kc::kMachBattery | kc::kMachCrafting)) || VtOf(o) == kenshi::Addr(kVtResearchBuilding);
             if (!interesting) continue;
             kenshi::ObjectHandle(o, m.handle);
+            if (IsFarm(o)) ReadFarmInputs(o, m.inputs);   // 0.3.5: its water (FarmInputs)
             if (void* t = TownOf(o); t && towns.size() < kc::kMaxTownPower && seenTowns.insert(t).second) {
                 kc::TownPower tp;
                 tp.sid = m.state.sid;
@@ -746,6 +767,25 @@ bool KenshiWorld::FillMachineFacts(void* b, kenshi::Character* actor, kc::WorkOr
     bool idle = false;
     f.noWorkNow = CallDontNeedWork(b, idle) && idle;
     f.farm = IsFarm(b);
+    return true;
+}
+
+// 0.3.5 (lot 4, point 18): the host's water in our farm (our own farm update drinks it, rain fills it with
+// our weather, which is the host's: the session imposes the host's amounts every machine round).
+bool KenshiWorld::ApplyFarmInputs(const kc::FarmInput& f, const kc::Handle& here) {
+    void* b = here.valid() ? kenshi::ResolveObject(here) : nullptr;
+    std::string sid;
+    if (b && (!IsFarm(b) || !kenshi::ObjectTemplate(b, sid) || sid != f.sid)) b = nullptr;
+    if (!b) b = BuildingAt(f.sid, f.pos);
+    if (!b || !IsFarm(b)) return false;
+    uint32_t n = 0;
+    void* data = nullptr;
+    if (!Rd(b, PB_inputCount, n) || n == 0 || n > kMaxFarmInputsHere || !Rd(b, PB_inputData, data) || !data) return false;
+    for (uint32_t i = 0; i < n && i < f.stored.size(); ++i) {
+        const float v = std::isfinite(f.stored[i]) ? std::max(0.0f, f.stored[i]) : 0.0f;
+        float cur = 0;
+        if (Rd(data, i * PB_inputSize, cur) && cur != v) Wr(data, i * PB_inputSize, v);
+    }
     return true;
 }
 
@@ -1022,6 +1062,12 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
         o << "ok " << key << " stage=" << int(st.crop.stage) << " plants=" << st.crop.plants << " harvested=" << st.crop.harvested << " grown=" << st.crop.grown
           << " died=" << st.crop.died << " cleared=" << st.crop.cleared << " hydro=" << int(hydro != 0) << " idle=" << int(idle) << " ops=" << int(st.operatorCount)
           << "/" << int(st.maxOperators) << " prod=" << st.production;
+        std::vector<float> water;   // 0.3.5: its inputs (water first), what the "Eau" bar shows
+        o << " water=";
+        if (ReadFarmInputs(best, water) && !water.empty())
+            for (size_t i = 0; i < water.size(); ++i) o << (i ? "," : "") << water[i];
+        else
+            o << "none";
         if (const kc::MachineState* known = s.knownMachine(key); known && !s.isHost()) o << " host=" << CropText(known->crop);
         return o.str();
     }

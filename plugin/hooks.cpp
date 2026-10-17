@@ -286,6 +286,8 @@ bool RouteOrder(kc::TaskVia via, int task, void* subject, const kc::Handle* subj
     }
     KenshiWorld* w = TheWorld();
     if (!w) return false;
+    // (0.3.5: a Shift + right click on a storage is sent as task 26 with Shift, which the host's
+    // newPlayerTask makes its permanent job 124 itself; 124 never comes from a client: see ClientLootContainer)
     if (OpensWindow(task)) {
         Log("client order refused (task %d opens a window)", task);
         w->Toast("Cette action n'est pas encore disponible en multijoueur.");
@@ -469,7 +471,12 @@ bool ClientLoot(int task, kenshi::Character* target) {
     // decides the crime, see Session::HostInvOp)
     kc::Handle th;
     const bool beast = kenshi::IsAnimal(target) && kenshi::GetHandle(target, th) && TheWorld() && !TheWorld()->FindSquad(th);
-    if (!beast && !kenshi::IsDown(target) && !kenshi::IsDead(target) && !kenshi::IsRagdoll(target)) return false;
+    // 0.3.5 (lot 4, point 17): a team mate, another player's (or the host's) character of the player
+    // faction: its inventory window opens here, like the game's for one's own squad. Rule A (the session)
+    // decides what moves: its pack animal and its backpack are the team's, its own inventory is not. The
+    // host's game used to make it a merchant (the player base's counters), refusing every move at price 0.
+    const bool team = !beast && v->squadForeign.count(target) && !kenshi::IsDead(target);
+    if (!team && !beast && !kenshi::IsDown(target) && !kenshi::IsDead(target) && !kenshi::IsRagdoll(target)) return false;
     KenshiWorld* w = TheWorld();
     if (!w) return false;
     const SelectionInfo s = ClassifySelection(*v);
@@ -477,6 +484,7 @@ bool ClientLoot(int task, kenshi::Character* target) {
         if (s.foreign) ToastForeign();
         return true;
     }
+    if (team) Log("team mate's inventory: opened here (rule A: its pack animal and backpack are shared, its own inventory is its player's)");
     kc::Handle looter = s.mine.front();
     kc::Vec3 tp, p;
     float best = -1;
@@ -486,15 +494,22 @@ bool ClientLoot(int task, kenshi::Character* target) {
                 const float d = (p.x - tp.x) * (p.x - tp.x) + (p.z - tp.z) * (p.z - tp.z);
                 if (best < 0 || d < best) { best = d; looter = h; }
             }
-    w->RequestLoot(looter, target);
+    w->RequestLoot(looter, target, team);
     return true;
 }
 
 // A right click on a container (chest, shelf, safe) on a client: the nearest of our selected
 // characters goes there through the host, and the game's loot window opens here once it arrived.
-bool ClientLootContainer(int task, void* subject) {
+// 0.3.5 (lot 4, point 21): only a plain right click. With Shift it is the game's permanent job on that
+// container ("store in this storage": newPlayerTask makes task 26 the job 124), an order like any other:
+// every Shift + right click on Stock Fruivert gave "goes to look into" on 16 October, never the job.
+bool ClientLootContainer(int task, void* subject, bool shift) {
     auto v = KenshiWorld::View();
     if (g_hostCall || !v->active || !v->client || task != kTaskLootTarget || !subject || kenshi::IsCharacter(subject)) return false;
+    if (shift) {
+        Log("Shift + right click on a container: the game's permanent job, sent as an order (not a look inside)");
+        return false;
+    }
     std::vector<kc::ItemState> items;
     if (!kenshi::ReadInventory(subject, items)) return false;   // not a container
     KenshiWorld* w = TheWorld();
@@ -511,13 +526,16 @@ bool ClientLootContainer(int task, void* subject) {
             if (d < bestD) { bestD = d; best = c; }
         }
     if (best) w->QueueContainerRequest(best, subject);
+    std::string sid;
+    kenshi::ObjectTemplate(subject, sid);
+    Log("right click on %s without Shift: a look inside (task 26; Shift + right click gives its permanent job)", w->TemplateName(sid).c_str());
     return true;
 }
 
 void hk_addOrder(void* pi, void* building, int task, void* subject, bool shift, bool addDontClear, const float* loc) {
     ++t_orderHooks;
     if (ClientLoot(task, kenshi::IsCharacter(subject) ? static_cast<kenshi::Character*>(subject) : nullptr)) return;
-    if (ClientLootContainer(task, subject)) return;
+    if (ClientLootContainer(task, subject, shift || (!g_hostCall && kenshi::ShiftHeld()))) return;
     if (RouteOrder(kc::TaskVia::AddOrder, task, subject, nullptr, building, loc, shift, addDontClear))
         o_addOrder(pi, building, task, subject, shift, addDontClear, loc);
 }
@@ -536,7 +554,7 @@ void hk_newTask(void* pi, int task, const void* targetHand, void* building, cons
     const bool storageJob = shift && task == kTaskLootTarget && haveTarget && th.type == 0;
     if (!storageJob) {
         if (ClientLoot(task, haveTarget ? kenshi::Resolve(th) : nullptr)) return;
-        if (haveTarget && ClientLootContainer(task, kenshi::ResolveObject(th))) return;
+        if (haveTarget && ClientLootContainer(task, kenshi::ResolveObject(th), shift)) return;
     }
     if (RouteOrder(kc::TaskVia::NewTask, task, nullptr, haveTarget ? &th : nullptr, building, clickPos, shift, addDontClear))
         o_newTask(pi, task, targetHand, building, clickPos, addDontClear);
@@ -545,7 +563,7 @@ void hk_newTask(void* pi, int task, const void* targetHand, void* building, cons
 void hk_addTaskNearest(void* pi, void* building, int task, void* subject, bool shift, const float* loc, bool noAnimals) {
     ++t_orderHooks;
     if (ClientLoot(task, kenshi::IsCharacter(subject) ? static_cast<kenshi::Character*>(subject) : nullptr)) return;
-    if (ClientLootContainer(task, subject)) return;
+    if (ClientLootContainer(task, subject, shift || (!g_hostCall && kenshi::ShiftHeld()))) return;
     if (RouteOrder(kc::TaskVia::TaskNearest, task, subject, nullptr, building, loc, shift, noAnimals))
         o_addTaskNearest(pi, building, task, subject, shift, loc, noAnimals);
 }
@@ -894,8 +912,11 @@ void hk_slaveState(void* sbd, int state) {
 }
 
 // A building's own inventory panel (click on a mine, a farm, a machine): on a client its local copy
-// holds nothing the host produced. The panel still opens, and the player's nearest character goes to
-// it through the host, which then sends the real contents (the container path).
+// holds nothing the host produced. The panel still opens, and the host is asked for the real contents.
+// 0.3.5 (lot 4, point 19): nobody walks for a look (16 October: each left click on a well made rob1's
+// character run there). A machine's inventory is already kept in step on every client; another building
+// (a storage) is asked of the host (ContainerPeek). Taking or putting an item walks our character there
+// first, as the game does (Session::HoldMovesForWalk).
 using ShowInvBuildingFn = void* (*)(void* gui, const void* owner);
 ShowInvBuildingFn o_showInvBuilding = nullptr;
 void* hk_showInvBuilding(void* gui, const void* owner) {
@@ -917,7 +938,7 @@ void* hk_showInvBuilding(void* gui, const void* owner) {
             const float d = (p.x - at.x) * (p.x - at.x) + (p.z - at.z) * (p.z - at.z);
             if (d < bestD) { bestD = d; best = c; }
         }
-    if (best) w->QueueContainerRequest(best, obj);
+    if (w) w->QueueContainerPeek(best, obj);   // best may be null: the session names our nearest character
     return r;
 }
 
@@ -1081,6 +1102,33 @@ void hk_invDrop(void* inv, void* item) {
     o_invDrop(inv, item);
     if (!KenshiWorld::ClientActive() && item)
         if (KenshiWorld* w = TheWorld()) w->NoteItemDropped(item);
+}
+// 0.3.5 (lot 4, point 14): an item released over the world from the mouse (ItemOnMouse::<drop to world>).
+// The game drops it through Inventory::dropItem (hk_invDrop above) only when its window's trade data says
+// that side may drop: never the body's side of a loot window, whose item went back to the body with no
+// line anywhere (16 October, plopette: a dozen loot windows, nothing dropped, nothing logged). On a client,
+// a body (knocked out or dead) lets the item through for the length of the call: hk_invDrop then asks
+// the host when one of our characters stands by it (drop sources), or refuses it, logged and said.
+using MouseDropFn = void (*)(void* mouse);
+MouseDropFn o_mouseDrop = nullptr;
+void hk_mouseDrop(void* mouse) {
+    if (!g_hostCall && KenshiWorld::ClientActive()) {
+        kenshi::MouseDrop d;
+        if (kenshi::ReadMouseDrop(mouse, d) && d.mayDrop && *d.mayDrop == 0 && kenshi::IsCharacter(d.holder)) {
+            auto* body = static_cast<kenshi::Character*>(d.holder);
+            if (kenshi::IsDown(body) || kenshi::IsDead(body) || kenshi::IsRagdoll(body) || kenshi::IsUnconscious(body)) {
+                kc::ItemState s;
+                kenshi::DescribeInventoryItem(d.item, s);
+                Log("loot window: %s x%d released over the ground from a body's side: let through to the inventory drop (the game alone puts it back silently)",
+                    s.templateSid.c_str(), s.quantity);
+                *d.mayDrop = 1;
+                o_mouseDrop(mouse);
+                if (uint8_t* again = kenshi::TradeDataDropFlag(d.gui)) *again = 0;   // the window may have closed meanwhile
+                return;
+            }
+        }
+    }
+    o_mouseDrop(mouse);
 }
 std::string ColourHex(const float* c) {
     char b[16];
@@ -1989,6 +2037,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnDropItemHuman, reinterpret_cast<void*>(&hk_dropItem), reinterpret_cast<void**>(&o_dropItem)},
         {kenshi::FnDropItemAnimal, reinterpret_cast<void*>(&hk_dropItemAnimal), reinterpret_cast<void**>(&o_dropItemAnimal)},
         {kenshi::FnInventoryDropItem, reinterpret_cast<void*>(&hk_invDrop), reinterpret_cast<void**>(&o_invDrop)},
+        {kenshi::FnMouseDropToWorld, reinterpret_cast<void*>(&hk_mouseDrop), reinterpret_cast<void**>(&o_mouseDrop)},   // 0.3.5 lot 4
         {kenshi::FnCreateScreenLabel, reinterpret_cast<void*>(&hk_createLabel), reinterpret_cast<void**>(&o_createLabel)},
         {kenshi::FnMedAddWound, reinterpret_cast<void*>(&hk_addWound), reinterpret_cast<void**>(&o_addWound)},
         {kenshi::FnCharUpdateView, reinterpret_cast<void*>(&hk_charUpdateView), reinterpret_cast<void**>(&o_charUpdateView)},

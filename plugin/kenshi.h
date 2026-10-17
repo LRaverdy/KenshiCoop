@@ -316,6 +316,9 @@ enum Fn : int {
     FnAnimSetPosition,          // void AnimationClass::<set position and direction>(const Vector3& pos, const Vector3& dir)   (our name, 0x5B18F0: +0x258 = pos lowered by +0x2C8 - +0x2CC, the anchor the animation update 0x5B5590 puts the scene node back on; called by CharMovement's update 0x65FFA0; a zero dir leaves the orientation)
     // ---- 0.3.4: the Tâches panel rebuilt when a job list changes from elsewhere (kenshi::RefreshJobsPanel)
     FnGuiRefreshJobs,           // void ForgottenGUI::<refresh jobs panel>()   (our name, 0x6E2050 on TheGui 0x21337B0: MainBarGUI (+0x10)'s job list rebuilt for the GUI's hand +0x2C0, the character shown; what newPlayerTaskSelectedCharacters calls at its end)
+    // ---- 0.3.5 lot 4 (night-items): loot window to the ground, worn clothes rebuilt on clients
+    FnMouseDropToWorld,         // void ItemOnMouse::<drop to world>()   (our name, 0x7136A0: the item on the mouse released over no window; dropped through Inventory::dropItem only if the source window's InventoryTradeData +9 is set, else back to its source)
+    FnSectionIsItemTypeAllowed, // bool InventorySection::isItemTypeAllowed(Item*)   (0x74BC30: the section's whitelist, the owner's race filter, armour-only, the item's slot type; what canItemGoHere asks after +0xD0)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -966,7 +969,21 @@ bool InventoryRemove(void* inventory, void* item);   // Inventory::removeItemDon
 // Client: a drop refused here: the item stays in that inventory. Still listed: nothing to do; taken out
 // already (held by the mouse): put back where it was (its section and cell), else anywhere in the bag
 // ("main"). Never the game's addItem, which destroys what it cannot store. False: not put back.
+// 0.3.5 (lot 4, point 17): an item on the mouse has lost its section name (the mouse keeps it,
+// ItemOnMouse +0x40): read from there; then any section of that inventory, then the game's addItem told
+// neither to drop nor to destroy (16 October: "COULD NOT PUT THE ITEM BACK" from a pack bull's backpack,
+// which has no "main").
 bool KeepInInventory(void* inventory, void* item);
+// 0.3.5 (lot 4, point 14): an item released over the world by the mouse (ItemOnMouse::<drop to world>,
+// 0x7136A0). The game drops it only when the source window's trade data says that side may drop
+// (InventoryTradeData +9, set by addTradePartner 0x70F2A0 for a side of the player faction): the body's
+// side of a loot window never may, and the item went back to it silently. What the mouse holds: the
+// item, the source window's inventory, its callback object, and that flag (null: no trade data).
+struct MouseDrop { void* item = nullptr; void* inventory = nullptr; void* holder = nullptr; uint8_t* mayDrop = nullptr; void* gui = nullptr; };
+bool ReadMouseDrop(void* itemOnMouse, MouseDrop& out);
+uint8_t* TradeDataDropFlag(void* gui);   // that window's +9 flag again (the map may have changed)
+std::string DebugMouseDrop(void* holder, void* item);   // tests: a drag from its open window released over the world
+bool DebugShowBuildingPanel(void* building);             // tests: its inventory panel, as a click opens it
 bool InventoryHolds(void* holder, void* item);       // that item object is in the holder's inventory (worn or not)
 // Host: an item of a building's inventory (a chest) dropped by a character standing by it: out of
 // the chest, then that character's dropItem (what the game's Building::dropItem does with its user).

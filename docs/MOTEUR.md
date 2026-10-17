@@ -298,6 +298,59 @@ Trouvées depuis KenshiLib (décalage +0x40 dans la zone `0xD0000`-`0xF8000` : `
   `+0x550` sécheresse) et appelle `resetFarm` quand tous les plants sont récoltés ou que `+0x51C` ≥ 1 ;
   `FarmBuilding::operate` (`0xE59E0`, le fermier) remplit la production `+0x448`, met les objets dans
   l'inventaire et appelle `destroyAPlant` : seulement chez l'hôte.
+- **Eau (0.3.5, lot 4, lu au désassemblage le 17/10)** : les entrées du bâtiment sont un `lektor` à
+  `+0x478` (nombre `+0x480`, données `+0x488`), 0x20 octets chacune : `+0x0` réserve (float, ~0..1,
+  ce que montre la barre « Eau »), `+0x4` multiplicateur (1,0 pour une ferme, `0xE8B90`), `+0x10`
+  `GameData` de la ressource, `+0x18` la `InventorySection` où attendent les objets livrés.
+  `ProductionBuilding::_updateInputs` (`0xDF4C0`, appelée par `update` en `0xE56BE` avec le débit
+  `+0x534` × un facteur global) : si la réserve est sous le débit, prend un objet de la section
+  `+0x18` (quantité `+0x12C` décrémentée ou objet retiré) et ajoute sa valeur (1,0 pour une ferme, vt
+  0x5A0) ; retire toujours le débit ; rend faux (réserve mise à 0) quand il manque de l'eau et que la
+  section est vide. La pluie remplit l'entrée 0 d'une ferme dehors (`0xE5622`-`0xE56A5` : pluie de la
+  région `+0x94` × débit × 3, plafonnée à 1). Pousse par mise à jour : dt × fertilité `+0x554` (calculée
+  à la pose) ÷ durée `+0x53C` ; sans eau, × facteur de sécheresse `+0x550` : la croissance **négative**
+  de la ferme de l'hôte le 16/10 (« grown -0.19 ») est la règle du jeu sans eau ni pluie, pas le mod.
+  La fenêtre (vt 0x598, `0x298810`) relit la réserve à chaque mise à jour. La récolte va dans
+  l'inventaire du bâtiment, section « out » (`0xE5B27`-`0xE5C22`), comme une mine : déjà suivie par les
+  inventaires de machines. Le client boit sa propre réserve : l'hôte l'impose (`FarmInputs`).
+
+### Objets : la souris, la fenêtre de pillage, les vêtements (0.3.5, lot 4) [D]
+
+Lu au désassemblage le 17/10 (capstone, `kenshi_x64.exe` 1.0.68).
+
+- **Objet relâché au-dessus du monde** : `ItemOnMouse::<drop to world>` (`0x7136A0`, notre nom,
+  appelé par les gestionnaires de relâcher `0x716800` / `0x7169A0`). `ItemOnMouse` est un singleton de
+  0xC0 octets en `0x2132B58` (créé par `0x6EF0E0`) : `+0x30` l'objet, `+0x40` le nom de la section
+  d'où il vient (`std::string` : l'objet lui-même n'a plus le sien pendant le glisser), `+0x68` la
+  fenêtre d'origine (`InventoryGUI`, vt 0x70 `getInventory`, vt 0x78 son propriétaire). Sans fenêtre
+  sous le curseur, la fonction lit les données d'échange de cette fenêtre (`std::map` en `0x2132BE0`,
+  `operator[]` `0x6F57A0`) : si `+9` est nul, l'objet **retourne silencieusement** à sa source
+  (`0x70D860`) ; sinon `Inventory::dropItem` (vt 0x38) de la fenêtre. `+9` (et `+0xA`, « joueur ») est
+  écrit par `addTradePartner` (`0x70F2A0`, appelé par le constructeur de fenêtre `0x7918A0`) : vrai pour
+  un côté de la faction du joueur. Le côté du corps d'une fenêtre de pillage (`TW_LOOTING`) ne l'est
+  jamais : en solo comme avec le mod, rien ne tombe au sol de là (point 14 du 16/10). Le mod met `+9`
+  le temps de l'appel pour un corps chez un client (`hk_mouseDrop`), puis le dépôt suit le chemin
+  ordinaire (`hk_invDrop`, demandé à l'hôte ou refusé avec une ligne et un toast).
+- **Remettre un objet refusé** : le nom de section de l'objet est vide pendant le glisser (« COULD NOT
+  PUT THE ITEM BACK » : `KeepInInventory` retombait sur « main », qu'un sac n'a pas) ; il se lit sur
+  la souris (`+0x40`), la case sur l'objet (`+0xDC`).
+- **`InventorySection::canItemGoHere`** (`0x74BE40`) : section active (`+0xD0`), puis
+  `isItemTypeAllowed` (`0x74BC30`) : liste blanche de la section (`+0x98` / `+0xA0`), sinon pour une
+  section autre que « main » (type `+0xB8` ≠ 7) avec un propriétaire (`+0xC0`) le filtre de race
+  (singleton `0x594050`, `0x75D720` puis `0x593F00` : restrictions par objet et par race, race =
+  `Character`+0x2E0) ; section « armures seulement » (`+0x38`) ; sinon type de la section = type de
+  l'objet (`+0x110`) ; enfin la taille. Pas de règle entre deux emplacements.
+- **Équiper** : toute pose finit dans `InventorySection::_addItem` (`0x749720`, vt 0x18 : le
+  `SECV_addAt` du mod), qui appelle `owner->vt[0x198]` = `CharacterHuman::itemAdded` (`0x5DBD80`) :
+  accroche au corps, armure ajoutée au `MedicalSystem`, porteur d'un sac, `+0x129` équipé, stats
+  d'armure recalculées. `PlaceItem` passe donc déjà par le vrai chemin d'équipement ; aucun champ de
+  déguisement trouvé (point 13 : voir A_FAIRE).
+- **Sections qu'une race désactive** : `Character` vt 0x410 (`0x6218F0`) active tout, puis si
+  `RaceData`+0x7F désactive « shirt » et **détruit** ce qu'il contient (`removeAllItems`, raison
+  « clearAllItems »), si `+0x7E` pareil pour « head », si `+0x80` n'est pas mis et qu'il manque les
+  jambes, « boots » (le perso lâche ses bottes). D'où le mod ne force jamais « shirt » ni « head »
+  quand le jeu les a désactivées (les « cannot place 543 at shirt » du 16/10 : le journal dit
+  maintenant la raison et la race de la copie).
 ### Boutique d'animaux et prospection (`plugin/shops.cpp`, A_FAIRE 3i et 3p)
 
 | Groupe | Enum | Fonction | RVA | Hook | Rôle |

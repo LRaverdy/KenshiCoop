@@ -206,6 +206,39 @@ bool Decode(Reader& r, MachinesMsg& m) {
     return End(r);
 }
 
+void Encode(Writer& w, const FarmInputsMsg& m) {
+    w.u8(uint8_t(Msg::FarmInputs));
+    w.boolean(m.full);
+    const size_t n = std::min<size_t>(m.farms.size(), kMaxFarmInputFarms);
+    w.varint(n);
+    for (size_t i = 0; i < n; ++i) {
+        const FarmInput& f = m.farms[i];
+        w.str(f.sid.substr(0, kMaxSidLen));
+        PutV(w, f.pos);
+        const size_t k = std::min<size_t>(f.stored.size(), kMaxFarmInputs);
+        w.varint(k);
+        for (size_t j = 0; j < k; ++j) w.f32(std::clamp(Fin(f.stored[j]), 0.0f, 1000.0f));
+    }
+}
+bool Decode(Reader& r, FarmInputsMsg& m) {
+    m = FarmInputsMsg{};
+    m.full = r.boolean();
+    const uint32_t n = r.count(kMaxFarmInputFarms, 14);
+    m.farms.resize(n);
+    for (auto& f : m.farms) {
+        f.sid = r.str(kMaxSidLen);
+        f.pos = GetV(r);
+        const uint32_t k = r.count(kMaxFarmInputs, 4);
+        f.stored.resize(k);
+        for (float& v : f.stored) {
+            v = r.f32();
+            if (!std::isfinite(v) || v < 0.0f || v > 1000.0f) return false;
+        }
+        if (f.sid.empty() || !FiniteV(f.pos)) return false;
+    }
+    return End(r);
+}
+
 void Encode(Writer& w, const MachineRequest& m) {
     w.u8(uint8_t(Msg::MachineRequest));
     w.varint(m.seq);

@@ -153,6 +153,10 @@ bool Session::Authorize(RemotePlayer& pl, Msg type, Reader r) {
             AnimalBuyMsg m;
             if (!Decode(r, m)) return malformed();
             actor = m.buyerNetId;
+        } else if (type == Msg::ContainerPeek) {   // 0.3.5: the character a later take or put walks there
+            ContainerPeek m;
+            if (!Decode(r, m)) return malformed();
+            actor = m.looterNetId;
         }
         return AdmitActor(pl.id, actor, rule->name, type, seq);
     }
@@ -176,7 +180,7 @@ bool Session::Authorize(RemotePlayer& pl, Msg type, Reader r) {
         if (op.kind != InvOpKind::Drop) return true;   // moves: HostInvOp's rules (own, opened, bodies)
         // the character that drops it: the source itself (or a worn backpack's wearer), else the one the
         // request names (a chest it has open, a body: HostInvOp also checks it stands by it)
-        return AdmitActor(pl.id, DropRequestActor(op), "drop an item", type, 0);
+        return AdmitActor(pl.id, DropRequestActor(op, pl.id), "drop an item", type, 0);
     }
     }
     return false;

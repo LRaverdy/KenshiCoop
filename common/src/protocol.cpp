@@ -966,6 +966,8 @@ const MessageRule kMessageRules[] = {
     {Msg::JobState, AuthRole::HostOnly, AuthSubject::None, "job state"},
     {Msg::AnimalShop, AuthRole::HostOnly, AuthSubject::None, "animal shop"},
     {Msg::PlayerStats, AuthRole::HostOnly, AuthSubject::None, "player stats"},
+    {Msg::ContainerPeek, AuthRole::InGame, AuthSubject::OwnCharacter, "look at a building's inventory"},
+    {Msg::FarmInputs, AuthRole::HostOnly, AuthSubject::None, "farm inputs"},
 };
 } // namespace
 const char* MsgName(Msg type) {
@@ -1044,6 +1046,8 @@ const char* MsgName(Msg type) {
     case Msg::AnimalShop: return "AnimalShop";
     case Msg::AnimalBuy: return "AnimalBuy";
     case Msg::PlayerStats: return "PlayerStats";
+    case Msg::ContainerPeek: return "ContainerPeek";
+    case Msg::FarmInputs: return "FarmInputs";
     }
 #pragma warning(pop)
     return nullptr;
@@ -1200,6 +1204,18 @@ bool Decode(Reader& r, ContainerOpen& m) {
     m.sid = r.str(kMaxSidLen);
     m.pos = GetVec(r);
     return Done(r) && m.looterNetId != 0 && !m.sid.empty();
+}
+void Encode(Writer& w, const ContainerPeek& m) {
+    w.u8(uint8_t(Msg::ContainerPeek));
+    w.varint(m.looterNetId);
+    w.str(m.sid);
+    PutVec(w, m.pos);
+}
+bool Decode(Reader& r, ContainerPeek& m) {
+    m.looterNetId = GetU32Var(r);
+    m.sid = r.str(kMaxSidLen);
+    m.pos = GetVec(r);
+    return Done(r) && m.looterNetId != 0 && !m.sid.empty() && std::isfinite(m.pos.x) && std::isfinite(m.pos.y) && std::isfinite(m.pos.z);
 }
 void Encode(Writer& w, const ContainerOpened& m) {
     w.u8(uint8_t(Msg::ContainerOpened));
