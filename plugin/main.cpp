@@ -110,9 +110,18 @@ void GiveSelectedToNextPlayer() {
     size_t idx = 0;
     for (size_t i = 0; i < order.size(); ++i) if (order[i] == cur) idx = i;
     const uint8_t next = order[(idx + 1) % order.size()];
-    for (auto& h : mine) g_session->Assign(h, next);
+    // night-join (16/10 point 16): never a player's own character, nor the one made for their character
+    // editor, to someone else (Geoffrey's unfinished one ended up rob1's, invisible to him)
+    size_t given = 0;
+    std::string refused;
+    for (auto& h : mine) {
+        std::string why;
+        if (g_session->HostGive(h, next, &why)) ++given;
+        else if (refused.empty()) refused = why;
+    }
     const std::string who = next == g_session->localId() ? "you" : g_session->players().at(next).name;
-    Toast(std::to_string(mine.size()) + " character(s) now controlled by " + who + ".");
+    if (given) Toast(std::to_string(given) + " character(s) now controlled by " + who + ".");
+    if (!refused.empty()) Toast(refused);
 }
 
 // Writes everything KenshiCoop reads from the game to the log, to validate the memory layout.
@@ -360,9 +369,16 @@ void ConsoleCommand(const std::string& line) {
         std::vector<kc::Handle> sel;
         kenshi::SelectedHandles(sel);
         size_t n = 0;
-        for (auto& h : sel)
-            if (g_world->FindSquad(h)) { g_session->Assign(h, uint8_t(id)); ++n; }
-        out(n ? std::to_string(n) + " personnage(s) donné(s) au joueur " + std::to_string(id) : "sélectionne d'abord des membres de ton escouade");
+        std::string refused;
+        for (auto& h : sel) {
+            if (!g_world->FindSquad(h)) continue;
+            std::string why;
+            if (g_session->HostGive(h, uint8_t(id), &why)) ++n;   // night-join: never another player's own character
+            else if (refused.empty()) refused = why;
+        }
+        if (!refused.empty()) out(refused);
+        out(n ? std::to_string(n) + " personnage(s) donné(s) au joueur " + std::to_string(id)
+              : refused.empty() ? "sélectionne d'abord des membres de ton escouade" : "aucun personnage donné");
         return;
     }
     if (!g_world->Ready()) { out("aucune partie chargée"); return; }
@@ -572,6 +588,16 @@ void PublishOverlay() {
     m.title = std::string("KenshiCoop ") + kVersion + "  -  " + FrenchState(g_session->state());
     const auto st = g_session->state();
     m.queueLines = QueueLines();
+    // night-join (16/10 point 1): a player waiting in the join queue sees, mid-screen, why the game
+    // stands still and that their character editor opens by itself
+    if (const kc::JoinQueueMsg* q = g_session->queueStatus(); q && !m.queueLines.empty()) {
+        m.banner.push_back(m.queueLines.front());
+        if (st == kc::SessionState::Connected)
+            m.banner.push_back("La partie est en pause pour tout le monde pendant que " + q->current +
+                               " crée son personnage. Ton éditeur de personnage s'ouvrira tout seul à ton tour.");
+        else
+            m.banner.push_back("Patiente : le monde de l'hôte arrive dès que " + q->current + " a fini.");
+    }
     if (st == kc::SessionState::Downloading && g_session->queueStatus()) {
         m.lines.insert(m.lines.end(), m.queueLines.begin(), m.queueLines.end());
     } else if (st == kc::SessionState::Downloading) {

@@ -180,6 +180,18 @@ void DrawStatus(const OverlayModel& m, float w, float h) {
         }
         ImGui::End();
     }
+    if (!m.banner.empty()) {   // night-join: waiting in the join queue (the game paused): said in the middle of the screen
+        ImGui::SetNextWindowPos(ImVec2(w * 0.5f, h * 0.38f), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+        ImGui::SetNextWindowBgAlpha(0.8f);
+        ImGui::Begin("KenshiCoopBanner", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs);
+        for (size_t i = 0; i < m.banner.size(); ++i) {
+            if (i == 0) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s", m.banner[i].c_str());
+            else ImGui::TextUnformatted(m.banner[i].c_str());
+        }
+        ImGui::End();
+    }
     if (!m.toasts.empty()) {
         ImGui::SetNextWindowPos(ImVec2(w * 0.5f, h * 0.12f), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
         ImGui::SetNextWindowBgAlpha(0.75f);
@@ -869,7 +881,7 @@ void Render(IDXGISwapChain* swap) {
         scene = g_scene;
     }
     const bool interactive = Interactive();
-    if (!m.visible && m.toasts.empty() && !interactive && !scene.live) {
+    if (!m.visible && m.toasts.empty() && m.banner.empty() && !interactive && !scene.live) {
         g_wantKeyboard = false;
         g_wantMouse = false;
         return;

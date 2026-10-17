@@ -326,7 +326,14 @@ void KenshiWorld::EndFrame() {
         constexpr double kSettleBeforePause = 0.8;
         constexpr float kCrawl = 0.05f;
         const double now = NowSeconds();
-        if (hostTime_.paused && !kenshi::GetPaused()) {
+        WatchEditor(now);   // night-join: the character editor's scene set up?
+        if (now < editorWarmupUntil_) {
+            // night-join: the character editor sets up its scene: the game runs at a crawl meanwhile, then
+            // settles into the host's pause as after any unpause
+            if (kenshi::GetPaused()) kenshi::CallUserPause(false);
+            if (std::fabs(kenshi::GetFrameSpeed() - 0.05f) > 1e-3f) kenshi::CallSetFrameSpeed(0.05f);
+            pauseSeenAt_ = -1;
+        } else if (hostTime_.paused && !kenshi::GetPaused()) {
             if (pauseSeenAt_ < 0) {
                 pauseSeenAt_ = now;
                 kenshi::CallSetFrameSpeed(kCrawl);
@@ -1491,9 +1498,61 @@ bool KenshiWorld::OpenCharacterEditor(const kc::Handle& h) {
     kenshi::Character* c = Find(h);
     if (!c || !live_) return false;
     HostCallScope scope;
+    // night-join (16/10 point 1): Geoffrey's editor opened after 2 min in the join queue, his game
+    // paused by the host's hold: "editor opened: ok", 465 fps, but our characters never left their
+    // spot ("0 off" in his reports) and he saw only the editor's empty stage. rob1's, and Geoffrey's
+    // second try, opened within a second of loading, before this game had paused: the editor moved the
+    // characters to its stage ("3 off, max offset 65658"). So the editor gets a running game (a crawl)
+    // for its first frames, whatever the host's pause.
+    const bool paused = kenshi::GetPaused();
+    if (client_ && active_) {
+        editorWarmupUntil_ = NowSeconds() + 2.0;
+        if (paused) {
+            kenshi::CallUserPause(false);
+            ++editorWarmups;
+        }
+        kenshi::CallSetFrameSpeed(0.05f);
+    }
+    kc::Vec3 before;
+    const bool havePos = kenshi::GetPosition(c, before);
     const bool ok = kenshi::OpenCharacterEditor(c);
-    Log("character editor opened: %s", ok ? "ok" : "failed");
+    Log("character editor opened: %s%s", ok ? "ok" : "failed",
+        client_ && paused ? " (this game was paused by the host's hold: it runs at a crawl while the editor sets up its scene)" : "");
+    editorStaged = false;
+    if (ok && client_ && havePos) editorWatch_ = EditorWatch{h, before, NowSeconds(), 0};
     return ok;
+}
+
+// Client: did the editor move our character to its stage (tens of thousands of units away)? Written
+// once; not yet after 3 s: the game runs at a crawl again for 2 s (twice at most).
+void KenshiWorld::WatchEditor(double now) {
+    if (editorWatch_.at < 0 || now - editorWatch_.at < 3.0) return;
+    if (!kenshi::CharacterEditorOpen()) { editorWatch_.at = -1; return; }
+    kenshi::Character* c = Find(editorWatch_.h);
+    kc::Vec3 p;
+    if (!c || !kenshi::GetPosition(c, p)) { editorWatch_.at = -1; return; }
+    const float moved = std::sqrt((p.x - editorWatch_.pos.x) * (p.x - editorWatch_.pos.x) + (p.z - editorWatch_.pos.z) * (p.z - editorWatch_.pos.z));
+    if (moved > 1000.0f) {
+        editorStaged = true;
+        Log("character editor: its scene is set up (our character moved %.0f units to the editor's stage, after %d retr%s)", moved, editorWatch_.tries,
+            editorWatch_.tries == 1 ? "y" : "ies");
+        editorWatch_.at = -1;
+        return;
+    }
+    if (editorWatch_.tries >= 2) {
+        Log("character editor: STILL NO SCENE after 3 tries (our character %.0f units from its spot, paused=%d speed=%.2f): the player may see an empty "
+            "stage (a resync opens the editor again)",
+            moved, int(kenshi::GetPaused()), kenshi::GetFrameSpeed());
+        editorWatch_.at = -1;
+        return;
+    }
+    ++editorWatch_.tries;
+    Log("character editor: no scene yet after 3 s (our character %.0f units from its spot, paused=%d speed=%.2f): the game runs at a crawl again for 2 s",
+        moved, int(kenshi::GetPaused()), kenshi::GetFrameSpeed());
+    if (kenshi::GetPaused()) kenshi::CallUserPause(false);
+    kenshi::CallSetFrameSpeed(0.05f);
+    editorWarmupUntil_ = now + 2.0;
+    editorWatch_.at = now;
 }
 
 void KenshiWorld::TakeSyncStats(float& maxErr, uint16_t& farOff) {
@@ -4398,76 +4457,46 @@ bool KenshiWorld::BeginWorldImport(const std::vector<kc::WorldFile>& files, std:
 }
 
 namespace {
-// Which character each Steam account plays, kept next to the game (one line per account:
-// "<steamId> <character handle> <name>"). Handles are the save's own object ids: the same
-// character keeps its handle from one save to the next.
+// Which characters each Steam account had, kept next to the game (night-join: kc::Roster writes and
+// reads it, see common/include/kc/roster.h). Handles are the save's own object ids.
 std::filesystem::path PlayersLedger() { return std::filesystem::path(GameDir()) / L"KenshiCoop-players.txt"; }
-struct LedgerEntry { uint64_t steamId = 0; kc::Handle handle; std::string name; };
-std::vector<LedgerEntry> ReadLedger() {
-    std::vector<LedgerEntry> out;
-    std::ifstream f(PlayersLedger());
-    std::string line;
-    while (std::getline(f, line)) {
-        LedgerEntry e;
-        char key[96] = {}, name[64] = {};
-        unsigned long long id = 0;
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (sscanf(line.c_str(), "%llu %95s %63[^\n]", &id, key, name) < 2) continue;
-        if (sscanf(key, "%u:%u:%u:%u:%u", &e.handle.type, &e.handle.container, &e.handle.containerSerial, &e.handle.index, &e.handle.serial) != 5) continue;
-        e.steamId = id;
-        e.name = name;
-        out.push_back(e);
-    }
-    return out;
-}
-void WriteLedger(const std::vector<LedgerEntry>& entries) {
-    std::ofstream f(PlayersLedger(), std::ios::trunc);
-    for (const auto& e : entries)
-        f << e.steamId << ' ' << e.handle.type << ':' << e.handle.container << ':' << e.handle.containerSerial << ':' << e.handle.index << ':'
-          << e.handle.serial << ' ' << e.name << '\n';
-}
 } // namespace
 
+bool KenshiWorld::LoadRoster(std::string& text) {
+    std::ifstream f(PlayersLedger(), std::ios::binary);
+    if (!f) return false;
+    text.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    return true;
+}
+
+bool KenshiWorld::SaveRoster(const std::string& text) {
+    // written next to it, then put in its place: a crash while writing never loses the roster
+    const std::filesystem::path path = PlayersLedger();
+    std::filesystem::path tmp = path;
+    tmp += L".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        if (!f) { Log("players' roster: cannot write %s", ToUtf8(tmp).c_str()); return false; }
+        f << text;
+        if (!f) { Log("players' roster: cannot write %s", ToUtf8(tmp).c_str()); return false; }
+    }
+    std::error_code ec;
+    std::filesystem::rename(tmp, path, ec);
+    if (ec) { Log("players' roster: cannot replace %s (%s)", ToUtf8(path).c_str(), ec.message().c_str()); return false; }
+    return true;
+}
+
+// night-join: the session has already looked for the player's own character (kc::Roster: every
+// character recorded for that Steam account, captives and other squads included, then a squad
+// member with the player's name nobody else has a record of). Here: a new one.
 bool KenshiWorld::EnsurePlayerCharacter(const std::string& playerName, uint64_t steamId, kc::Handle& out, bool& created) {
+    (void)steamId;
     created = false;
     std::string name = playerName.substr(0, 15);   // what fits a character name here
     std::vector<kenshi::Character*> squad;
     kenshi::PlayerCharacters(squad);
     if (squad.empty()) return false;
-    auto ledger = ReadLedger();
-    // a living member of the squad (a remembered character that died, or is not in this world,
-    // is not theirs to come back to: they get a new one, made in the character editor)
-    auto inSquad = [&](const kc::Handle& h) {
-        for (kenshi::Character* c : squad) { kc::Handle sh; if (kenshi::GetHandle(c, sh) && sh == h && !kenshi::IsDead(c)) return c; }
-        return static_cast<kenshi::Character*>(nullptr);
-    };
-    // 1. the character this Steam account played last time (whatever name the player uses now)
-    bool remembered = false;
-    if (steamId)
-        for (const auto& e : ledger) {
-            if (e.steamId != steamId) continue;
-            remembered = true;
-            if (!inSquad(e.handle)) continue;
-            out = e.handle;
-            Log("%s is back with their character", name.c_str());
-            return true;
-        }
-    if (remembered) Log("%s's remembered character is not a living member of the squad in this world: a new one for them", name.c_str());
-    // 2. a squad member with the player's name that no other account owns
-    auto ownedByOther = [&](const kc::Handle& h) {
-        for (const auto& e : ledger) if (e.handle == h && e.steamId != steamId) return true;
-        return false;
-    };
-    for (kenshi::Character* c : squad) {
-        std::string n;
-        kc::Handle h;
-        if (kenshi::CharacterName(c, n) && n == name && !kenshi::IsDead(c) && kenshi::GetHandle(c, h) && !(steamId && ownedByOther(h))) {
-            out = h;
-            if (steamId) { ledger.push_back({steamId, h, name}); WriteLedger(ledger); }
-            return true;
-        }
-    }
-    // 3. a new one (its name made unique in the squad)
+    // a new one (its name made unique in the squad)
     for (int n = 2; n < 100; ++n) {
         bool clash = false;
         for (kenshi::Character* c : squad) { std::string cn; clash |= kenshi::CharacterName(c, cn) && cn == name; }
@@ -4485,12 +4514,7 @@ bool KenshiWorld::EnsurePlayerCharacter(const std::string& playerName, uint64_t 
         Log("cannot create %s's character: %s", name.c_str(), err.c_str());
         return false;
     }
-    created = true;
-    if (steamId) {
-        ledger.erase(std::remove_if(ledger.begin(), ledger.end(), [&](const LedgerEntry& e) { return e.steamId == steamId; }), ledger.end());
-        ledger.push_back({steamId, out, name});
-        WriteLedger(ledger);
-    }
+    created = true;   // (recorded by the session's roster: the player's earlier lines are kept)
     Log("created %s's own character", name.c_str());
     Toast(name + " joins with a character of their own.");
     return true;
@@ -4501,6 +4525,8 @@ void KenshiWorld::SetRole(bool client, bool active) {
     active_ = active;
     haveHostTime_ = false;
     pauseSeenAt_ = -1;
+    editorWarmupUntil_ = -1;
+    editorWatch_ = EditorWatch{};
     lastDest_.clear();
     hostBounties_.clear();
     postureSince_.clear();

@@ -7137,6 +7137,317 @@ def exp_crashrejoin(host, cli, only=None):
     summary()
     return state["cli"]
 # ---------------------------------------------------------------------------------------------
+# night-join (A_FAIRE 16/10, points 6, 9, 1, 16): a player back gets their whole squads, a captive
+# character stays theirs, the host loading another save sends everyone into it, the character editor
+# after a long wait in the join queue, the character of an editor left unfinished
+# ---------------------------------------------------------------------------------------------
+
+def nj_roster(host, steam_id):
+    """The host's roster entries of that Steam account: [(kind, handle, name)] (debug command 'roster')."""
+    ok, t = cmd(host, "roster")
+    out = []
+    for tok in (t.split()[2:] if ok else []):
+        if "=" not in tok:
+            continue
+        key, val = tok.split("=", 1)
+        if key != f"steam:{steam_id}":
+            continue
+        for e in val.split(";"):
+            parts = e.split(":")
+            if len(parts) >= 7:
+                out.append((parts[0], ":".join(parts[1:6]), ":".join(parts[6:])))
+    return out
+
+
+def nj_created(text):
+    """Lines of a log part where the host made a new character for a player."""
+    return [ln for ln in text.splitlines() if re.search(r"created .+'s own character", ln)][:3]
+
+
+def nj_kill(pid):
+    subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+    deadline = time.time() + 20
+    while alive(pid) and time.time() < deadline:
+        time.sleep(0.2)
+    log(f"client {pid} killed hard")
+
+
+def nj_join(c, label, timeout=300):
+    log(f"{label} join:", join_one(c, 0))
+    wait_for(c, lambda s: s.get("state") == "connected" and s.get("ready") == "1", timeout, f"{label} in the host's world")
+
+
+def nj_relaunch(host, steam_id, name=None, label="client"):
+    """The same player starts the game again (same fake Steam id) and joins from the menu."""
+    c = launch(fake_steam_id=steam_id, name=name)
+    log(f"{label} relaunched, pid", c)
+    wait_for(c, lambda s: s.get("state") == "idle", 240, f"{label} menu")
+    time.sleep(3)
+    nj_join(c, label)
+    return c
+
+
+def nj_host(save):
+    """A hosting game on that save (as setup_multi)."""
+    kill_all()
+    host = launch(name="Hote")
+    log("host pid", host)
+    tile([host])
+    wait_for(host, lambda s: s.get("state") == "idle", 180, "host menu")
+    time.sleep(3)
+    log("load", cmd(host, f"load {save}"))
+    wait_for(host, lambda s: s.get("ready") == "1", 240, "host world")
+    for _ in range(20):
+        ok, t = cmd(host, "host")
+        if ok:
+            break
+        time.sleep(1)
+    log("host", ok, t)
+    return host
+
+
+def nj_owned_keys(host, player):
+    d = dump(host, f"h_nj_owned_{player}")
+    return sorted(keys_of_owner(d, player))
+
+
+def exp_nj_squadback(host, cli):
+    """A_FAIRE 16/10 point 6: the client gets a recruit (the host's give, as Ctrl+Shift+G), makes a new
+    squad with the squad window and drops its character and the recruit in it (Kenshi gives both new
+    handles); killed hard and relaunched, then again after the host restarts its session: every time
+    it gets both back (no new character, no editor, no 'a new one' in the log), its squad bar shows them."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    me = client_char_name()
+    pid = player_id(cli)
+    sid = 76561190000000002
+    own_h = own_indices(host, pid)[0] if own_indices(host, pid) else 0
+    made = cmd(host, f"spawnnpc 20 0 {own_h}")
+    log("host spawnnpc", made)
+    time.sleep(4)
+    r = cmd(host, "recruitnpc")
+    log("host recruitnpc", r)
+    if not r[0]:
+        check("retour : la recrue est creee", False, r[1])
+        return
+    recruit = r[1].split(" ", 1)[1].replace(" ", "_")
+    time.sleep(3)
+    hi = cmd(host, f"squadidx {recruit}")
+    log("host gives the recruit to the client (Ctrl+Shift+G's function):", cmd(host, f"hostgive {pid} {hi[1].split()[1]}") if hi[0] else hi)
+    time.sleep(3)
+    # the squad window: a new squad, the client's character and the recruit dropped in it
+    log("client: its character into a new squad", cmd(cli, f"squadmove {me} new"))
+    time.sleep(3)
+    log("client: the recruit with it", cmd(cli, f"squadmove {recruit} {me}"))
+    time.sleep(5)
+    before = nj_owned_keys(host, pid)
+    roster = nj_roster(host, sid)
+    log("host's roster for the client:", roster)
+    check("retour : la recrue est notee comme perso du client", any(k == "squad" for k, _, _ in roster), roster)
+    check("retour : le client a 2 persos chez l'hote", len(before) == 2, before)
+    for label, restart in (("crash", False), ("hote relance sa session", True)):
+        logged = len(host_log())
+        if restart:
+            log("host leaves and hosts again:", cmd(host, "leave"), cmd(host, "host"))
+            time.sleep(4)
+            wait_for(cli, lambda s: s.get("state") in ("failed", "idle"), 60, "client sees the host gone")
+            nj_join(cli, "client")
+        else:
+            nj_kill(cli)
+            time.sleep(8)
+            cli = nj_relaunch(host, sid, label="client")
+        arrange(host, cli)
+        time.sleep(6)
+        new = host_log()[logged:]
+        pid = player_id(cli)
+        after = nj_owned_keys(host, pid)
+        check(f"retour ({label}) : les 2 persos rendus (perso + recrue)", len(after) == 2, (before, after))
+        check(f"retour ({label}) : aucun nouveau perso cree", not nj_created(new), nj_created(new))
+        check(f"retour ({label}) : journal coherent (pas de 'a new one')", "a new one" not in new and "is back: their own character" in new,
+              [ln for ln in new.splitlines() if "is back" in ln][:3])
+        st = cmd(cli, "editorstate")[1]
+        check(f"retour ({label}) : pas d'editeur de perso", "open=0" in st, st)
+        bar = cmd(cli, "squadbar")[1]
+        log(f"client squad bar ({label}):", bar, "| squads:", cmd(cli, "squads")[1])
+        check(f"retour ({label}) : la barre d'escouade du client montre ses persos", int(bar.split()[1]) >= 1 if bar.startswith("ok") else False, bar)
+    summary()
+    return cli
+
+
+def exp_nj_quickload(host, cli):
+    """A_FAIRE 16/10 point 6 (21:50): the host saves (as Escape > Save), the client moves its character
+    to a new squad and gets a recruit after that save, the host loads its save (as Escape > Load): the
+    client is sent the host's new world within seconds (never left in the old one), comes back by itself
+    with its character (under the handle that save has), the recruit made after the save is reported as
+    not in this world, no new character."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    me = client_char_name()
+    pid = player_id(cli)
+    log("host saves:", cmd(host, "savegame kctest_nj_quick"))
+    wait_for(host, lambda s: s.get("busy") == "0", 60, "host save done")
+    time.sleep(2)
+    log("client: its character into a new squad", cmd(cli, f"squadmove {me} new"))
+    time.sleep(5)
+    logged = len(host_log())
+    t0 = time.time()
+    log("host loads its save:", cmd(host, "load kctest_nj_quick"))
+    sent = None
+    while time.time() - t0 < 60:
+        tail = host_log()[logged:]
+        if "the host asks for a resync" in tail or "reloads the host's world" in tail:
+            sent = round(time.time() - t0, 1)
+            break
+        time.sleep(0.5)
+    check("partie rechargee : le client est renvoye dans le nouveau monde en quelques secondes", sent is not None and sent < 20, sent)
+    wait_for(cli, lambda s: s.get("state") == "connected" and s.get("ready") == "1", 300, "client back in the host's new world")
+    time.sleep(8)
+    new = host_log()[logged:]
+    check("partie rechargee : l'hote l'ecrit", "the host's world changed (generation" in new, new[-400:])
+    check("partie rechargee : le client retrouve son perso", len(nj_owned_keys(host, player_id(cli))) >= 1)
+    check("partie rechargee : aucun nouveau perso cree", not nj_created(new), nj_created(new))
+    check("partie rechargee : pas de message contradictoire", "a new one" not in new, [ln for ln in new.splitlines() if "is back" in ln][:3])
+    cmd(host, "pause 1")
+    time.sleep(3)
+    rep = compare(dump(host, "h_nj_quick"), dump(cli, "c_nj_quick"), "nj quickload", pos_tol=0.5)
+    print_report(rep)
+    check("partie rechargee : mondes identiques", rep["missing_on_client"] == 0 and rep["extra_on_client"] == 0,
+          (rep["missing_on_client"], rep["extra_on_client"]))
+    cmd(host, "pause 0")
+    summary()
+
+
+def exp_nj_captive(host, cli):
+    """A_FAIRE 16/10 point 9 (22:10-22:13): the client's character is caged, chained and made a slave by
+    the game's own functions on the host; the client is killed hard and relaunched: the same character
+    is its own again (no new character, no editor), it is told it is a prisoner; the roster keeps it."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    pid = player_id(cli)
+    sid = 76561190000000002
+    own = own_indices(host, pid)
+    if not own:
+        check("captif : le client a un perso", False)
+        return
+    i = own[0]
+    keys_before = nj_owned_keys(host, pid)
+    log("cage", cmd(host, f"cage {i}"), "chain", cmd(host, f"chain {i}"), "enslave", cmd(host, f"enslave {i} 1"))
+    time.sleep(4)
+    cap = cmd(host, f"captive {i}")[1]
+    log("captive:", cap)
+    check("captif : le perso du client est captif chez l'hote", "chained=1" in cap or "in=2" in cap or "slave=1" in cap, cap)
+    time.sleep(3)
+    nj_kill(cli)
+    time.sleep(8)
+    logged = len(host_log())
+    cli = nj_relaunch(host, sid, label="client")
+    arrange(host, cli)
+    time.sleep(6)
+    new = host_log()[logged:]
+    keys_after = nj_owned_keys(host, player_id(cli))
+    log("client's characters before / after:", keys_before, keys_after)
+    check("captif : le meme perso lui revient", bool(keys_after) and len(keys_after) == len(keys_before), (keys_before, keys_after))
+    check("captif : aucun nouveau perso cree", not nj_created(new), nj_created(new))
+    check("captif : il est dit au joueur que son perso est prisonnier", "prisonnier" in new, [ln for ln in new.splitlines() if "told " in ln][:3])
+    check("captif : pas d'editeur de perso", "open=0" in cmd(cli, "editorstate")[1])
+    check("captif : le registre garde son perso", any(k == "own" for k, _, _ in nj_roster(host, sid)), nj_roster(host, sid))
+    log("free again:", cmd(host, f"cage {own_indices(host, player_id(cli))[0]} off"), cmd(host, f"chain {own_indices(host, player_id(cli))[0]} off"),
+        cmd(host, f"enslave {own_indices(host, player_id(cli))[0]} 0"))
+    summary()
+    return cli
+
+
+def exp_nj_editorqueue(save, wait=90):
+    """A_FAIRE 16/10 point 1 (21:23-21:28): two players join one after the other; the second waits in the
+    join queue (the game paused) for `wait` seconds while the first is in the character editor; when its
+    turn comes its editor must set up its scene (our character moved to the editor's stage: 'staged=1'),
+    though its game was paused all that time; then it closes it and the game resumes."""
+    host = nj_host(save)
+    a = launch(fake_steam_id=FAKE_STEAM_BASE, name="Joueur2")
+    b = launch(fake_steam_id=FAKE_STEAM_BASE + 1, name="Joueur3")
+    for c, n in ((a, "Joueur2"), (b, "Joueur3")):
+        wait_for(c, lambda s: s.get("state") == "idle", 240, f"{n} menu")
+    arrange_grid([host, a, b])
+    time.sleep(3)
+    nj_join(a, "Joueur2")
+    wait_for(host, lambda s: "Joueur2:editor" in s.get("queue", ""), 60, "Joueur2's character editor")
+    nj_join(b, "Joueur3")
+    st = wait_for(b, lambda s: s.get("queue", "-") != "-", 60, "Joueur3 in the join queue")
+    check("file : le 2e joueur attend son tour (position affichee)", st.get("queue", "").startswith("2/"), st)
+    log(f"Joueur3 waits {wait} s in the queue, the game paused")
+    time.sleep(wait)
+    check("file : apres une longue attente le 2e joueur est toujours la", status(b).get("state") == "connected")
+    log("Joueur2 confirms its editor:", cmd(a, "editdone"))
+    wait_for(host, lambda s: "Joueur3:editor" in s.get("queue", ""), 60, "Joueur3's turn")
+    staged, es = False, ""
+    deadline = time.time() + 20
+    while time.time() < deadline and not staged:
+        es = cmd(b, "editorstate")[1]
+        staged = "staged=1" in es
+        time.sleep(1)
+    log("Joueur3 editorstate:", es)
+    check("file : l'editeur du 2e joueur s'ouvre", "open=1" in es, es)
+    check("file : l'editeur met en place sa scene (perso deplace vers la scene de l'editeur)", staged, es)
+    hl = host_log()
+    check("file : jamais 'STILL NO SCENE'", "STILL NO SCENE" not in hl)
+    log("Joueur3 confirms its editor:", cmd(b, "editdone"))
+    time.sleep(5)
+    paused = cmd(host, "paused")[1].split()
+    check("file : la partie reprend ensuite", len(paused) >= 2 and paused[1] == "0", paused)
+    summary()
+
+
+def exp_nj_editorleft(save):
+    """A_FAIRE 16/10 point 16 (22:14-00:08): Joueur3 leaves (game killed) during its character editor:
+    its character stays in the squad, reserved for it: the host's give (Ctrl+Shift+G's function) to
+    Joueur2 is refused; Joueur2 sees it normally; the host restarts its session; Joueur3 back: the same
+    character and its editor again; once confirmed, it is its own (roster 'own')."""
+    host = nj_host(save)
+    a = launch(fake_steam_id=FAKE_STEAM_BASE, name="Joueur2")
+    wait_for(a, lambda s: s.get("state") == "idle", 240, "Joueur2 menu")
+    nj_join(a, "Joueur2")
+    close_join_editor(host, a, "Joueur2", 0)
+    b = launch(fake_steam_id=FAKE_STEAM_BASE + 1, name="Joueur3")
+    wait_for(b, lambda s: s.get("state") == "idle", 240, "Joueur3 menu")
+    arrange_grid([host, a, b])
+    nj_join(b, "Joueur3")
+    wait_for(host, lambda s: "Joueur3:editor" in s.get("queue", ""), 60, "Joueur3's character editor")
+    time.sleep(3)
+    nj_kill(b)
+    time.sleep(8)
+    idx = cmd(host, "squadidx Joueur3")
+    log("host squadidx Joueur3:", idx)
+    if idx[0]:
+        give = cmd(host, f"hostgive {player_id(a)} {idx[1].split()[1]}")
+        log("host gives Joueur3's character to Joueur2:", give)
+        check("editeur abandonne : jamais donne a un autre joueur", "refused" in give[1], give)
+    roster = nj_roster(host, FAKE_STEAM_BASE + 1)
+    check("editeur abandonne : note 'editor' pour Joueur3", any(k == "editor" for k, _, _ in roster), roster)
+    sc = cmd(a, "squadcheck")[1]
+    log("Joueur2 squadcheck:", sc)
+    check("editeur abandonne : Joueur2 le voit dans la faction du joueur", "Joueur3" in sc, sc)
+    log("host leaves and hosts again:", cmd(host, "leave"), cmd(host, "host"))
+    time.sleep(4)
+    wait_for(a, lambda s: s.get("state") in ("failed", "idle"), 60, "Joueur2 sees the host gone")
+    nj_join(a, "Joueur2")
+    logged = len(host_log())
+    b = nj_relaunch(host, FAKE_STEAM_BASE + 1, name="Joueur3", label="Joueur3")
+    arrange_grid([host, a, b])
+    wait_for(host, lambda s: "Joueur3:editor" in s.get("queue", ""), 60, "Joueur3's character editor again")
+    new = host_log()[logged:]
+    check("editeur abandonne : au retour, l'editeur rouvre sur le meme perso", "never finished making their character" in new and not nj_created(new),
+          [ln for ln in new.splitlines() if "Joueur3" in ln][:5])
+    time.sleep(3)
+    log("Joueur3 confirms:", cmd(b, "editdone"))
+    time.sleep(5)
+    check("editeur abandonne : ensuite son perso ('own')", any(k == "own" for k, _, _ in nj_roster(host, FAKE_STEAM_BASE + 1)), nj_roster(host, FAKE_STEAM_BASE + 1))
+    summary()
+
+
+# ---------------------------------------------------------------------------------------------
 # Several players on one PC: host + N clients (setup_multi), the stress4 and join4 experiments
 # ---------------------------------------------------------------------------------------------
 
@@ -9138,6 +9449,17 @@ def main():
                         "editor, quick relaunch), relaunched with the same fake Steam id and joined again")
     cr.add_argument("--save", default="kctest_base")
     cr.add_argument("--only", default=None, help="letters of the scenarios to run, e.g. 'ag'")
+    # night-join (A_FAIRE 16/10 points 6, 9, 1, 16)
+    for name, hlp in (("nj_squadback", "point 6: recruit + new squad (new handles), crash and host session restart: both characters back"),
+                      ("nj_quickload", "point 6: the host saves, the client changes squad, the host loads its save: the client reloads, its character back"),
+                      ("nj_captive", "point 9: the client's character caged, chained, enslaved; crash: the same character back, told it is a prisoner"),
+                      ("nj_editorqueue", "point 1: the 2nd joiner waits 90 s in the join queue, then its editor sets up its scene"),
+                      ("nj_editorleft", "point 16: a player leaves during its editor: never given away, editor again after a host session restart")):
+        njp = sub.add_parser(name, help=hlp)
+        njp.add_argument("--save", default="kctest_base")
+        njp.add_argument("--keep", action="store_true")
+        if name == "nj_editorqueue":
+            njp.add_argument("--wait", type=int, default=90, help="seconds the 2nd player waits in the queue")
     cr.add_argument("--keep", action="store_true")
     cp = sub.add_parser("clientpickup")
     cp.add_argument("--save", default="kctest_base")
@@ -9442,6 +9764,16 @@ def main():
             if not a.keep:
                 kill_launched()
         return
+    if a.what in ("nj_editorqueue", "nj_editorleft"):   # night-join: their own host and two clients
+        try:
+            if a.what == "nj_editorqueue":
+                exp_nj_editorqueue(a.save, a.wait)
+            else:
+                exp_nj_editorleft(a.save)
+        finally:
+            if not a.keep:
+                kill_launched()
+        return
     if a.what == "four":
         host, clis = setup_many(a.save, a.clients)
         arrange_grid([host] + clis)
@@ -9606,6 +9938,12 @@ def main():
             exp_items(host, cli)
         elif a.what == "crashrejoin":
             exp_crashrejoin(host, cli, a.only)
+        elif a.what == "nj_squadback":
+            exp_nj_squadback(host, cli)
+        elif a.what == "nj_quickload":
+            exp_nj_quickload(host, cli)
+        elif a.what == "nj_captive":
+            exp_nj_captive(host, cli)
         elif a.what == "carry":
             exp_carry(host, cli)
         elif a.what == "dead":

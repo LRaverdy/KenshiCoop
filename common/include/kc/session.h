@@ -28,6 +28,7 @@
 #include "kc/net.h"
 #include "kc/player_stats.h"
 #include "kc/protocol.h"
+#include "kc/roster.h"
 #include "kc/streaming.h"
 #include "kc/work_orders.h"
 
@@ -517,7 +518,12 @@ public:
     // created and recruited into the squad). It is then in the save the player receives.
     // The joining player's own character: the one recorded for that Steam account (or, without
     // one, the squad member with the player's name), created if there is none. created: it is new.
+    // (night-join: the session looks in its roster, kc::Roster, first; the plugin then only makes one)
     virtual bool EnsurePlayerCharacter(const std::string& playerName, uint64_t steamId, Handle& out, bool& created) = 0;
+    // Host (night-join): the players' roster file (KenshiCoop-players.txt next to the game), as
+    // kc::Roster reads and writes it. False: no such file / not supported (the roster lives in memory).
+    virtual bool LoadRoster(std::string& text) { (void)text; return false; }
+    virtual bool SaveRoster(const std::string& text) { (void)text; return false; }
     // Host: save the current world for transfer; poll until Done (files filled) or Failed.
     virtual bool BeginWorldExport(std::string* err) = 0;
     virtual ExportStatus PollWorldExport(std::vector<WorldFile>& files, std::string* err) = 0;
@@ -592,6 +598,13 @@ public:
 
     // Host: hand a squad member to a player (host id = back to the host).
     void Assign(const Handle& h, uint8_t playerId);
+    // Host (night-join): the host's own give (Ctrl+Shift+G, the console's "give"): as Assign, written in
+    // the log, but a character reserved for another player (their own character, or the one made for
+    // their character editor: kc::Roster) is never handed to someone else. False: refused (`why`, French).
+    bool HostGive(const Handle& h, uint8_t playerId, std::string* why = nullptr);
+    // Host: the player a character is reserved for (their own, or made for their editor), else empty.
+    std::string ReservedFor(const Handle& h) const;
+    const Roster& roster() const { return roster_; }   // host: who had which characters (tests, debug)
     // Host: remove a player from the session (false: no such player, or not hosting).
     bool KickPlayer(uint8_t playerId);
     // Host: that player's game is about to freeze (a far teleport): the link survives it. fix G6
@@ -879,6 +892,8 @@ private:
         Handle own;                          // the player's own character (characterPerPlayer)
         bool ownChecked = false;
         bool ownCreated = false;             // made for this join (the player has never had one)
+        std::string returnNote;              // night-join: what they are told once in (French; their characters)
+        bool staleWorld = false;             // night-join: their save is of a world the host has left (another save loaded)
         size_t streamed = 0;                 // characters streamed to them (UpdateStreams)
         double statsAt = -1;                 // their stream report: last time, bytes sent then
         uint64_t bytesAt = 0;
@@ -1453,6 +1468,17 @@ private:
     const EditorChar* EditorCharOf(const Entity& e, std::string* key = nullptr) const;
     void RetireEditorChar(const std::string& key, const std::string& why, bool leaving = false);
     std::vector<std::pair<std::string, std::string>> retireQueue_;   // host: (PlayerKey, why), on the next live tick
+    // host (night-join, session_roster.cpp): every character of every player, kept in
+    // KenshiCoop-players.txt (IWorld::LoadRoster / SaveRoster); a player back gets all of them again
+    Roster roster_;
+    double rosterAt_ = 0, rosterSaveAt_ = 0;
+    std::unordered_map<uint32_t, Handle> rosterHandles_;   // netId -> the handle the roster has for it
+    uint32_t hostGen_ = 0;                                 // the host's world generation the session follows
+    void LoadRosterFile();
+    void HostRoster(double now, bool force, bool touchWorld = true);
+    void SaveRosterFile(double now, bool force);
+    void ReturnPlayer(RemotePlayer& p, PlayerSync& s);     // HostSaves: their own character and all the others
+    void HostWorldChanged(uint32_t from, uint32_t to);     // the host loaded another save
     std::unordered_map<uint32_t, double> looksAt_;   // host: when a squad character's looks last changed (netId)
     std::unordered_map<uint32_t, AppearanceMsg> looksWaiting_;   // client: looks for a character not here yet (netId)
     std::string queueSig_;            // what the waiting players were last told

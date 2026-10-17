@@ -82,6 +82,12 @@ Raccourcis (Kenshi au premier plan) :
    personnage retrouve l'éditeur à son retour.
 4. Quand il revient plus tard, même sous un autre nom, il **retrouve le même personnage** : il est
    reconnu par son compte Steam. L'hôte peut lui confier d'autres membres avec Ctrl+Shift+G.
+   Depuis la 0.3.5, il retrouve **toutes ses escouades** (recrues, esclaves libérés, persos
+   confiés), même après un redémarrage de la session ou une sauvegarde rechargée par l'hôte, et son
+   personnage capturé reste le sien ; un nouveau n'est fait que s'il est mort ou absent du monde
+   (le joueur lit pourquoi). Le personnage d'un ami, ou celui de son éditeur pas fini, n'est jamais
+   donné à un autre par Ctrl+Shift+G. Si l'hôte charge une autre sauvegarde, tout le monde recharge
+   son nouveau monde.
 
 Chacun ne peut commander que ses personnages. Côté client, **tous les ordres** sont transmis à
 l'hôte, qui les fait exécuter par le personnage concerné : déplacement, fouille, premiers soins,

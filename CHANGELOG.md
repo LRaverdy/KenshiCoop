@@ -8,6 +8,65 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 Protocole inchangé (36) : le nouveau message des stats est ignoré par un client 0.3.4.
 
+- **Retour des joueurs : toutes leurs escouades, captifs gardés, sauvegarde rechargée, éditeur
+  après la file d'attente (branche `night-join`, A_FAIRE 16/10 points 6, 9, 1, 16)**. Aucun nouveau
+  message (`Resync` et `Chat` existants) ; le fichier `KenshiCoop-players.txt` reste lisible par un
+  hôte 0.3.4 (il saute les nouvelles lignes).
+  - **Causes trouvées dans le journal du 16/10** :
+    - Kenshi donne un **nouveau handle** à un perso qui change d'escouade ou est capturé : rob1
+      `1:1:245483392:3:3754638592` → `1:55:2114746112:1:3664672768` (escouade « Rob », 21:27) ;
+      plopette `…:4:3858764544` → `…:2:279541024` après sa capture (22:10-22:13). Le fichier gardait
+      l'ancien : « remembered character is not a living member… : a new one for them ». Pour rob1
+      (21:50:35) le perso au nom du joueur a été pris sans le dire (d'où les deux lignes
+      contradictoires) ; pour Geoffrey (22:13:43) un perso neuf et l'éditeur, et la ligne de plopette
+      **effacée** du fichier ;
+    - au retour, seuls les persos de la même session (`leftOwned_`, en mémoire) étaient rendus : les
+      autres membres des escouades (recrues, esclaves libérés) restaient à l'hôte, cachés de la
+      barre (« player portraits 5-6 : 2-3 hidden ») ;
+    - l'hôte a **relancé sa session** à 22:15:51 : le perso fait pour l'éditeur de Geoffrey (jamais
+      fini) n'était plus marqué ; plopette (Geoffrey) l'a reçu comme son perso à 22:16:04, puis
+      l'hôte l'a passé à rob1 avec Ctrl+Shift+G (toasts « now controlled by rob1 » 22:18:28-36 ;
+      god mode de rob1 : 3 persos dès 22:31) ; rob1 l'a rangé dans « Rob » (22:18:52). Pourquoi il
+      était invisible chez rob1 : non prouvé (pas de ligne de rob1 sur son état) ;
+    - la sauvegarde rapide de l'hôte (21:50:03) a été chargée en 2,6 s : la session a continué sur
+      l'ancien monde, sans rien dire aux clients (Geoffrey resté 35 s) ; les identités d'objets
+      (adresses) de l'ancien monde servaient encore à relier les persos ;
+    - l'éditeur de Geoffrey (21:26:19) s'est ouvert sur un jeu **en pause depuis 2 min** (file
+      d'attente) : « opened: ok », 465 img/s, mais aucun perso déplacé vers la scène de l'éditeur
+      (« 0 off »), alors que ceux de rob1 et du 2ᵉ essai de Geoffrey, ouverts avant que le jeu ne se
+      mette en pause, l'ont été (« max offset 65658 ») : cause déduite, à confirmer en jeu.
+  - **Registre des joueurs** (`kc::Roster`, `common/include/kc/roster.h`, `common/src/roster.cpp`,
+    `common/src/session_roster.cpp`) : chaque perso commandé par un joueur est noté (`own`, `squad`,
+    `editor`) toutes les secondes ; un nouveau handle est suivi (l'ancien gardé juste avant, pour une
+    sauvegarde plus ancienne) ; écrit au plus 2 s après un changement (fichier temporaire puis
+    renommage, `KenshiWorld::SaveRoster`), au départ d'un joueur et en fin de session.
+  - **Retour** (`Session::ReturnPlayer`, remplace la recherche de `EnsurePlayerCharacter`, qui ne fait
+    plus que créer) : son perso = le plus récent encore vivant, où qu'il soit (captif, enchaîné, en
+    cage, esclave, dans une autre escouade, hors de la faction) ; retrouvé par handle, sinon par son
+    nom ; un perso neuf seulement s'il est mort ou absent, avec « Ton personnage X est mort / n'existe
+    pas dans ce monde (sauvegarde plus ancienne ?) : un nouveau personnage est créé pour toi. » ;
+    captif : « Ton personnage X est prisonnier : il reste à toi… » ; l'ancienne ligne n'est jamais
+    effacée. Tous ses autres persos notés qui sont à l'hôte lui sont rendus. Une seule ligne de
+    journal (« X is back: their own character …; N other character(s) of theirs given back … »).
+  - **Perso d'un éditeur abandonné** : noté `editor`, il reste à son joueur (l'éditeur rouvre à son
+    retour, aussi après un redémarrage de la session) ; son apparence de l'hôte est renvoyée à tous à
+    son départ ; Ctrl+Shift+G et `give` passent par `Session::HostGive`, qui refuse le perso d'un
+    joueur ou de son éditeur pour un autre (« X est le personnage de Y : il lui reste réservé. ») et
+    écrit chaque don au journal.
+  - **L'hôte charge une autre sauvegarde** (`Session::HostWorldChanged`, sur changement de génération
+    du monde) : identités refaites, « L'hôte a chargé une autre partie : rechargement de son
+    monde... » et `Resync` pour chaque joueur dans le monde ; sauvegarde en cours pour un arrivant
+    refaite ; un arrivant qui charge l'ancienne reçoit `Resync` une fois dedans au lieu d'un refus.
+    Monde de l'hôte perdu plus de 5 s (menu) : « L'hôte a quitté sa partie… » à tous avant la fin.
+  - **Éditeur après la file d'attente** (client, `KenshiWorld::OpenCharacterEditor`, `WatchEditor`) :
+    jeu remis en marche au ralenti (0,05) 2 s à l'ouverture, puis la pause de l'hôte ; scène vérifiée
+    après 3 s (perso à plus de 1 000 unités), deux nouveaux essais sinon. Bandeau au milieu de l'écran
+    pendant l'attente (place, qui crée son perso, partie en pause, éditeur qui s'ouvrira tout seul),
+    même panneau caché.
+  - Commandes de test `roster`, `editorstate`, `hostgive`, `savegame` ; tests `TestRosterFile`,
+    `TestNightJoin` (`KC_ONLY_NIGHTJOIN=1`) ; expériences `nj_squadback`, `nj_quickload`,
+    `nj_captive`, `nj_editorqueue`, `nj_editorleft`. **Non vérifié en jeu.**
+
 - **Rapport de bug en une commande (branche `bugreport`)**. Quand un ami tombait sur un bug, il
   fallait lui demander son `KenshiCoop.log` après coup. Désormais, n'importe quel joueur tape
   `/bug <phrase>` dans la console du jeu (Ctrl+Shift+K) ou dans la console de l'hôte, et l'hôte

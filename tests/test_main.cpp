@@ -249,12 +249,20 @@ struct FakeWorld : IWorld {
     }
     std::map<uint32_t, uint8_t> spawnFlags;   // the host state each stand-in was recreated from
     std::map<std::string, uint32_t> named;   // player characters by name
+    int ensureCalls = 0;                     // night-join: the session asked for a character (a new one, on the plugin)
+    std::string rosterFile;                  // night-join: KenshiCoop-players.txt (kept across host sessions)
+    bool LoadRoster(std::string& text) override { text = rosterFile; return true; }
+    bool SaveRoster(const std::string& text) override { rosterFile = text; return true; }
+    int madeCount = 0;
     bool EnsurePlayerCharacter(const std::string& name, uint64_t steamId, Handle& out, bool& created) override {
         (void)steamId;
+        ++ensureCalls;
         auto it = named.find(name);
+        // the one made before is dead or gone: a new one (as the plugin always makes one)
+        if (it != named.end() && (!chars.count(it->second) || (chars[it->second].vit.flags & kVitDead))) { named.erase(it); it = named.end(); }
         created = it == named.end();
         if (it == named.end()) {
-            const uint32_t s = 5000 + uint32_t(named.size());
+            const uint32_t s = 5000 + uint32_t(madeCount++);
             FakeChar c;
             c.squad = true;
             c.pos = {10.0f * float(named.size()), 0, -20};
@@ -7186,8 +7194,339 @@ static void TestPlayerStatsSession() {
     for (const auto& p : view) if (p.host) CHECK(p.sessions == 2);
 }
 
+// ---------------------------------------------------------------- night-join (16/10, points 6, 9, 16, 1)
+using LogLines = std::shared_ptr<std::vector<std::string>>;
+static Session::LogFn Keep(LogLines out, const char* tag) {
+    const bool verbose = std::getenv("KC_VERBOSE") != nullptr;
+    return [out, tag, verbose](const std::string& s) {
+        out->push_back(s);
+        if (verbose) std::printf("    [%s] %s\n", tag, s.c_str());
+    };
+}
+static bool Said(const LogLines& l, const std::string& what) {
+    return std::any_of(l->begin(), l->end(), [&](const std::string& s) { return s.find(what) != std::string::npos; });
+}
+static bool InChat(const Session& s, const std::string& what) {
+    return std::any_of(s.chatLog().begin(), s.chatLog().end(), [&](const std::string& c) { return c.find(what) != std::string::npos; });
+}
+static bool Controls(const FakeWorld& w, uint32_t serial) {
+    return std::any_of(w.controllable.begin(), w.controllable.end(), [&](const Handle& h) { return h.serial == serial; });
+}
+static bool Recorded(const Session& host, const std::string& key, const Handle& h, RosterKind* kind = nullptr) {
+    const RosterPlayer* p = host.roster().Find(key);
+    if (!p) return false;
+    for (const auto& c : p->chars)
+        if (c.handle == h) { if (kind) *kind = c.kind; return true; }
+    return false;
+}
+
+static void TestRosterFile() {
+    std::printf("roster: KenshiCoop-players.txt of 0.3.4 read, own/squad/editor lines, handles followed, Members change hands\n");
+    Roster r;
+    // the 16/10 file: several lines per account, all "own" in the old format
+    r.Parse("76561198017697545 1:1:245483392:3:3754638592 rob1\r\n76561198017697545 1:55:2114746112:1:3664672768 rob1\n"
+            "76561198036086638 1:1:245483392:3:1995605504 Geoffrey\n76561198036086638 1:1:245483392:2:279541024 plopette\nbroken line\n");
+    CHECK(r.players().size() == 2);
+    const RosterPlayer* g = r.Find("steam:76561198036086638");
+    CHECK(g && g->chars.size() == 2 && g->LatestOwn() && g->LatestOwn()->name == "plopette");
+    Handle a, b;
+    CHECK(ParseRosterHandle("1:55:2114746112:1:3664672768", a) && !ParseRosterHandle("squad", b) && !ParseRosterHandle("1:2:3:4", b));
+    // a recruit of rob1, then Kenshi moves it to another squad (a new handle)
+    Handle recruit = FakeWorld::H(60), moved = FakeWorld::H(60);
+    moved.container = 55;
+    CHECK(r.Note("steam:76561198017697545", 76561198017697545ull, "rob1", recruit, "Voth", RosterKind::Member));
+    CHECK(r.Rehandle(recruit, moved, "Voth"));
+    // the new handle recorded, the old one kept just before it (an older save has it under that one)
+    CHECK(r.AnyRecordOf(moved) == "steam:76561198017697545" && r.AnyRecordOf(recruit) == "steam:76561198017697545");
+    {
+        const auto& v = r.Find("steam:76561198017697545")->chars;
+        CHECK(v.size() == 4 && v[2].handle == recruit && v[3].handle == moved && v[3].name == "Voth");
+    }
+    // given to Geoffrey: no longer rob1's
+    CHECK(r.Note("steam:76561198036086638", 76561198036086638ull, "Geoffrey", moved, "Voth", RosterKind::Member));
+    CHECK(r.AnyRecordOf(moved) == "steam:76561198036086638");
+    // an own character is never downgraded, nor taken from its player's record by another's Member
+    Handle own;
+    ParseRosterHandle("1:1:245483392:2:279541024", own);
+    CHECK(!r.Note("steam:76561198036086638", 0, "", own, "plopette", RosterKind::Member));
+    r.Note("steam:76561198017697545", 0, "", own, "plopette", RosterKind::Member);
+    RosterKind k = RosterKind::Member;
+    CHECK(r.ReservedFor(own, &k) == "steam:76561198036086638" && k == RosterKind::Own);
+    // an editor character, then finished
+    Handle ed = FakeWorld::H(70);
+    r.Note("steam:5", 5, "Nouveau", ed, "Nouveau", RosterKind::Editor);
+    CHECK(r.Find("steam:5")->LatestOwn()->kind == RosterKind::Editor);
+    // written and read back the same (0.3.4 readers skip the new lines: not a handle after the id)
+    Roster back;
+    back.Parse(r.Serialize());
+    CHECK(back.Serialize() == r.Serialize());
+    CHECK(back.Find("steam:5") && back.Find("steam:5")->LatestOwn()->kind == RosterKind::Editor);
+    CHECK(r.Serialize().find("76561198036086638 squad 3:55:0:60:60 Voth") != std::string::npos);
+    CHECK(r.Serialize().find("5 editor 3:0:0:70:70 Nouveau") != std::string::npos);
+    CHECK(r.EditorDone("steam:5", ed) && r.Find("steam:5")->LatestOwn()->kind == RosterKind::Own);
+    // recorded again every second as it is: nothing to write (a recruit after it changes nothing)
+    r.Note("steam:5", 5, "Nouveau", FakeWorld::H(71), "Recrue", RosterKind::Member);
+    r.Saved();
+    CHECK(!r.Note("steam:5", 5, "Nouveau", ed, "Nouveau", RosterKind::Own) && !r.Note("steam:5", 5, "Nouveau", FakeWorld::H(71), "Recrue", RosterKind::Member));
+    CHECK(!r.dirty());
+    // the own history stays bounded, the newest kept
+    for (uint32_t i = 0; i < 10; ++i) r.Note("steam:6", 6, "", FakeWorld::H(100 + i), "o", RosterKind::Own);
+    CHECK(r.Find("steam:6")->chars.size() == Roster::kMaxOwnHistory && r.Find("steam:6")->LatestOwn()->handle == FakeWorld::H(109));
+}
+
+static void TestNightJoin() {
+    std::printf("night-join: a player back gets their whole squads (recruits, freed slaves), even after a restart of the host's session\n");
+    {
+        FakeWorld hw;
+        SetupHost(hw);
+        SessionConfig hc; hc.name = "Host"; hc.port = ++g_port; hc.steamId = 1;
+        auto hlog = std::make_shared<std::vector<std::string>>();
+        auto host = std::make_unique<Session>(hw, hc, Now, Keep(hlog, "host"));
+        std::string err;
+        CHECK(host->Host(&err));
+        SessionConfig rc; rc.name = "rob1"; rc.port = hc.port; rc.steamId = 76561198017697545ull;
+        const std::string key = "steam:76561198017697545";
+        uint32_t mine = 0;
+        {
+            FakeWorld rw;
+            AtMenu(rw);
+            rw.editorSupported = true;
+            Session r(rw, rc, Now, Quiet("rob1"));
+            CHECK(r.Join("127.0.0.1", hc.port, &err));
+            Run({{host.get(), &hw}, {&r, &rw}}, 10.0, [&] { return rw.editorOpen; });
+            rw.editorOpen = false;   // made
+            Run({{host.get(), &hw}, {&r, &rw}}, 5.0, [&] { return !hw.holding; });
+            mine = hw.named.count("rob1") ? hw.named["rob1"] : 0;
+            // a recruit and a freed slave join the player faction: rob1's (the host gives them, as the
+            // recruit hook would)
+            for (uint32_t s : {60u, 61u}) { FakeChar c; c.pos = {30, 0, -20}; c.dest = c.pos; hw.chars[s] = c; }
+            Run({{host.get(), &hw}, {&r, &rw}}, 1.5);
+            host->Assign(FakeWorld::H(60), r.localId());
+            host->Assign(FakeWorld::H(61), r.localId());
+            Run({{host.get(), &hw}, {&r, &rw}}, 5.0, [&] { return rw.controllable.size() == 3; });
+            CHECK(rw.controllable.size() == 3);
+            // Kenshi moves the recruit to rob1's own squad: a new handle, recorded under it
+            hw.container[60] = 55;
+            Run({{host.get(), &hw}, {&r, &rw}}, 3.0, [&] { return Recorded(*host, key, hw.Hc(60)); });
+            CHECK(Recorded(*host, key, hw.Hc(60)) && Recorded(*host, key, FakeWorld::H(60)));   // (the old handle kept for older saves)
+            RosterKind k = RosterKind::Member;
+            CHECK(Recorded(*host, key, FakeWorld::H(mine), &k) && k == RosterKind::Own);
+            r.Leave();
+            Run({{host.get(), &hw}, {&r, &rw}}, 2.0, [&] { return host->players().empty(); });
+        }
+        Run({{host.get(), &hw}}, 3.0, [&] { return hw.rosterFile.find("squad 3:55:0:60:60") != std::string::npos; });
+        CHECK(hw.rosterFile.find("76561198017697545 squad 3:55:0:60:60") != std::string::npos);   // written next to the game within 2 s
+        // the host restarts its session (16/10 22:15:51): what was in memory is gone, the file is not
+        host.reset();
+        host = std::make_unique<Session>(hw, hc, Now, Keep(hlog, "host2"));
+        CHECK(host->Host(&err));
+        Run({{host.get(), &hw}}, 1.5);
+        hw.container[61] = 56;   // the freed slave changes squad while rob1 is away: followed by the new session
+        Run({{host.get(), &hw}}, 2.0, [&] { return Recorded(*host, key, hw.Hc(61)); });
+        CHECK(Recorded(*host, key, hw.Hc(61)));
+        const int ensures = hw.ensureCalls;
+        hlog->clear();
+        FakeWorld rw;
+        AtMenu(rw);
+        rw.editorSupported = true;
+        Session r(rw, rc, Now, Quiet("rob1b"));
+        CHECK(r.Join("127.0.0.1", hc.port, &err));
+        Run({{host.get(), &hw}, {&r, &rw}}, 10.0, [&] { return r.state() == SessionState::Connected && rw.controllable.size() == 3; });
+        CHECK(rw.controllable.size() == 3 && Controls(rw, mine) && Controls(rw, 60) && Controls(rw, 61));
+        CHECK(hw.ensureCalls == ensures && rw.editorOpened == 0);   // no new character, no editor
+        CHECK(Said(hlog, "rob1 is back: their own character") && Said(hlog, "2 other character(s) of theirs given back"));
+        CHECK(!Said(hlog, "a new one") && !Said(hlog, "new character made"));   // no contradiction (21:50:35)
+        // the host loads a quick save made before Kenshi moved the recruit (16/10 21:50): rob1 is told to
+        // reload, and back in that world he gets the recruit under its old handle
+        hw.container.erase(60);
+        ++hw.gen;
+        hw.fp ^= 0x77;
+        bool resync = false;
+        Run({{host.get(), &hw}, {&r, &rw}}, 5.0, [&] { resync |= r.TakeResyncRequest(); return resync; });
+        CHECK(resync && InChat(r, "autre partie"));
+        r.Leave();
+        Run({{host.get(), &hw}, {&r, &rw}}, 2.0, [&] { return host->players().empty(); });
+        FakeWorld rw2;
+        AtMenu(rw2);
+        rw2.editorSupported = true;
+        Session r2(rw2, rc, Now, Quiet("rob1c"));
+        CHECK(r2.Join("127.0.0.1", hc.port, &err));
+        Run({{host.get(), &hw}, {&r2, &rw2}}, 10.0, [&] { return r2.state() == SessionState::Connected && rw2.controllable.size() == 3; });
+        CHECK(rw2.controllable.size() == 3 && Controls(rw2, 60) && Controls(rw2, mine) && rw2.editorOpened == 0 && hw.ensureCalls == ensures);
+    }
+    std::printf("night-join: a captive character (caged, chained, a slave, a new handle) stays its player's; dead: a new one, told why, the old record kept\n");
+    {
+        FakeWorld hw;
+        SetupHost(hw);
+        SessionConfig hc; hc.name = "Host"; hc.port = ++g_port; hc.steamId = 1;
+        auto hlog = std::make_shared<std::vector<std::string>>();
+        auto host = std::make_unique<Session>(hw, hc, Now, Keep(hlog, "host"));
+        std::string err;
+        CHECK(host->Host(&err));
+        SessionConfig gc; gc.name = "plopette"; gc.port = hc.port; gc.steamId = 76561198036086638ull;
+        const std::string key = "steam:76561198036086638";
+        auto visit = [&](const std::function<void(Session&, FakeWorld&)>& meanwhile) {
+            FakeWorld gw;
+            AtMenu(gw);
+            gw.editorSupported = true;
+            Session g(gw, gc, Now, Quiet("plop"));
+            CHECK(g.Join("127.0.0.1", hc.port, &err));
+            Run({{host.get(), &hw}, {&g, &gw}}, 10.0, [&] { return g.state() == SessionState::Connected && !gw.controllable.empty() && (gw.editorOpen || !hw.holding); });
+            if (gw.editorOpen) { gw.editorOpen = false; Run({{host.get(), &hw}, {&g, &gw}}, 5.0, [&] { return !hw.holding; }); }
+            Run({{host.get(), &hw}, {&g, &gw}}, 1.5);
+            meanwhile(g, gw);
+            g.Leave();
+            Run({{host.get(), &hw}, {&g, &gw}}, 2.0, [&] { return host->players().empty(); });
+        };
+        uint32_t plop = 0;
+        visit([&](Session&, FakeWorld&) { plop = hw.named.count("plopette") ? hw.named["plopette"] : 0; });
+        CHECK(plop && hw.ensureCalls == 1);
+        // caught by slavers: caged, chained, a slave with a sentence; Kenshi gives it a new handle
+        CaptiveState cap; cap.caged = true; cap.chained = true; cap.slaveState = 1; cap.slaveOf = "1084-gamedata.base"; cap.sentence = 110;
+        hw.chars[plop].cap = cap;
+        hw.container[plop] = 55;
+        Run({{host.get(), &hw}}, 2.0, [&] { return Recorded(*host, key, hw.Hc(plop)); });
+        // back: the same character, no editor, told it is a prisoner
+        visit([&](Session& g, FakeWorld& gw) {
+            CHECK(Controls(gw, plop) && gw.editorOpened == 0);
+            Run({{host.get(), &hw}, {&g, &gw}}, 2.0, [&] { return InChat(g, "prisonnier"); });
+            CHECK(InChat(g, "prisonnier"));
+        });
+        CHECK(hw.ensureCalls == 1);
+        // the host's session restarts and Kenshi moves it again while nobody follows: found by its name
+        host.reset();
+        hw.container[plop] = 77;
+        host = std::make_unique<Session>(hw, hc, Now, Keep(hlog, "host2"));
+        CHECK(host->Host(&err));
+        visit([&](Session&, FakeWorld& gw) { CHECK(Controls(gw, plop) && gw.editorOpened == 0); });
+        CHECK(hw.ensureCalls == 1);
+        CHECK(Recorded(*host, key, hw.Hc(plop)));
+        // dead: a new character (the editor), the player told why, the dead one still in the file
+        hw.chars[plop].vit.flags = kVitDead;
+        visit([&](Session& g, FakeWorld& gw) {
+            CHECK(!Controls(gw, plop) && gw.editorOpened == 1);
+            Run({{host.get(), &hw}, {&g, &gw}}, 2.0, [&] { return InChat(g, "est mort"); });
+            CHECK(InChat(g, "est mort"));
+        });
+        CHECK(hw.ensureCalls == 2);
+        CHECK(Recorded(*host, key, hw.Hc(plop)));   // never overwritten
+        const RosterPlayer* rp = host->roster().Find(key);
+        CHECK(rp && rp->LatestOwn() && rp->LatestOwn()->handle.serial != plop);
+    }
+    std::printf("night-join: the host loads another save: players in the world reload it, one loading the old one is sent the new one\n");
+    {
+        FakeWorld hw, aw, bw;
+        SetupHost(hw);
+        AtMenu(aw);
+        AtMenu(bw);
+        bw.importFrames = 120;   // Bravo is still loading when the host loads its quick save
+        SessionConfig hc; hc.name = "Host"; hc.port = ++g_port; hc.characterPerPlayer = false;
+        SessionConfig ac; ac.name = "Alpha"; ac.port = hc.port;
+        SessionConfig bc; bc.name = "Bravo"; bc.port = hc.port;
+        auto hlog = std::make_shared<std::vector<std::string>>();
+        Session host(hw, hc, Now, Keep(hlog, "host"));
+        Session a(aw, ac, Now, Quiet("a")), b(bw, bc, Now, Quiet("b"));
+        std::string err;
+        CHECK(host.Host(&err));
+        CHECK(JoinAndWait(host, hw, a, aw, hc.port, 3));
+        CHECK(b.Join("127.0.0.1", hc.port, &err));
+        auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&a, &aw}, {&b, &bw}};
+        Run(all, 10.0, [&] { return b.state() == SessionState::Loading; });
+        CHECK(b.state() == SessionState::Loading);
+        // the quick load: another world (generation), other characters' places
+        ++hw.gen;
+        hw.fp ^= 0xABCDEF;
+        hw.chars[2].pos = {500, 0, 500};
+        hw.chars[2].dest = hw.chars[2].pos;
+        bool aResync = false, bResync = false;
+        Run(all, 15.0, [&] {
+            aResync |= a.TakeResyncRequest();
+            bResync |= b.TakeResyncRequest();
+            return aResync && bResync;
+        });
+        CHECK(aResync);   // Alpha reloads the new world
+        CHECK(bResync);   // Bravo, once in with the old one, too (not removed: no "world mismatch")
+        CHECK(InChat(a, "autre partie"));
+        CHECK(b.lastError().empty() && b.state() == SessionState::Connected);
+        CHECK(Said(hlog, "the host's world changed (generation 1 -> 2"));
+        CHECK(Said(hlog, "Bravo has loaded the host's previous world"));
+    }
+    std::printf("night-join: two joiners through the editor queue; one leaves during their editor: their character stays theirs, never given away, editor again\n");
+    {
+        FakeWorld hw, aw, bw;
+        SetupHost(hw);
+        AtMenu(aw);
+        AtMenu(bw);
+        aw.editorSupported = bw.editorSupported = true;
+        SessionConfig hc; hc.name = "Host"; hc.port = ++g_port; hc.steamId = 1;
+        SessionConfig ac; ac.name = "rob1"; ac.port = hc.port; ac.steamId = 501;
+        SessionConfig bc; bc.name = "Geoffrey"; bc.port = hc.port; bc.steamId = 502;
+        auto hlog = std::make_shared<std::vector<std::string>>();
+        auto host = std::make_unique<Session>(hw, hc, Now, Keep(hlog, "host"));
+        Session a(aw, ac, Now, Quiet("a"));
+        auto b = std::make_unique<Session>(bw, bc, Now, Quiet("b"));
+        std::string err;
+        CHECK(host->Host(&err));
+        auto all = [&] {
+            std::vector<std::pair<Session*, FakeWorld*>> v{{host.get(), &hw}, {&a, &aw}};
+            if (b) v.push_back({b.get(), &bw});
+            return v;
+        };
+        CHECK(a.Join("127.0.0.1", hc.port, &err));
+        Run(all(), 2.0, [&] { return host->joinQueue().size() == 1; });
+        CHECK(b->Join("127.0.0.1", hc.port, &err));   // at once: rob1's save is being made
+        // rob1 in the editor, Geoffrey in the world, queued (the game paused for everyone)
+        Run(all(), 15.0, [&] { return aw.editorOpen && b->state() == SessionState::Connected && b->queueStatus(); });
+        CHECK(aw.editorOpen && b->queueStatus() && b->queueStatus()->current == "rob1" && !bw.editorOpen && hw.holding);
+        Run(all(), 3.0);   // a long wait in the queue
+        CHECK(b->state() == SessionState::Connected && b->queueStatus());
+        aw.editorOpen = false;
+        Run(all(), 10.0, [&] { return bw.editorOpen; });
+        CHECK(bw.editorOpen && bw.editorOpened == 1 && !b->queueStatus());
+        const uint32_t geo = hw.named.count("Geoffrey") ? hw.named["Geoffrey"] : 0;
+        // Geoffrey leaves during his editor (22:14:18)
+        b.reset();
+        Run(all(), 3.0, [&] { return host->players().size() == 1 && !hw.holding; });
+        CHECK(host->players().size() == 1 && !hw.holding);
+        CHECK(host->ReservedFor(FakeWorld::H(geo)) == "Geoffrey");
+        RosterKind k = RosterKind::Own;
+        CHECK(Recorded(*host, "steam:502", FakeWorld::H(geo), &k) && k == RosterKind::Editor);
+        // the host's give (Ctrl+Shift+G) never hands it to rob1 (16/10 22:18:28)
+        std::string why;
+        CHECK(!host->HostGive(FakeWorld::H(geo), a.localId(), &why) && why.find("Geoffrey") != std::string::npos);
+        CHECK(host->ownerOf(FakeWorld::H(geo)) == 1);
+        CHECK(host->HostGive(FakeWorld::H(2), a.localId(), &why));   // one of the host's: given
+        // the host restarts its session, rob1 back in, Geoffrey back: the same character, the editor again
+        a.Leave();
+        Run(all(), 2.0, [&] { return host->players().empty(); });
+        host.reset();
+        host = std::make_unique<Session>(hw, hc, Now, Keep(hlog, "host2"));
+        CHECK(host->Host(&err));
+        CHECK(host->ReservedFor(FakeWorld::H(geo)) == "steam:502");   // from the file (no name until he is back)
+        const int ensures = hw.ensureCalls;
+        FakeWorld bw2;
+        AtMenu(bw2);
+        bw2.editorSupported = true;
+        b = std::make_unique<Session>(bw2, bc, Now, Quiet("b2"));
+        CHECK(b->Join("127.0.0.1", hc.port, &err));
+        Run({{host.get(), &hw}, {b.get(), &bw2}}, 10.0, [&] { return bw2.editorOpen; });
+        CHECK(bw2.editorOpen && Controls(bw2, geo) && hw.ensureCalls == ensures);
+        bw2.editorOpen = false;
+        Run({{host.get(), &hw}, {b.get(), &bw2}}, 5.0, [&] { return !hw.holding; });
+        Run({{host.get(), &hw}, {b.get(), &bw2}}, 1.5);
+        k = RosterKind::Editor;
+        CHECK(Recorded(*host, "steam:502", FakeWorld::H(geo), &k) && k == RosterKind::Own);   // made now
+    }
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);   // every line out before a crash
+    if (std::getenv("KC_ONLY_NIGHTJOIN")) {   // night-join tests alone
+        TestRosterFile();
+        TestNightJoin();
+        std::printf("%d checks, %d failed\n", g_checks, g_failed);
+        return g_failed ? 1 : 0;
+    }
     if (std::getenv("KC_ONLY_STREAMING")) {   // the 0.3.1 streaming tests alone
         TestStreamingTools();
         TestGroupCentres();
@@ -7260,6 +7599,8 @@ int main() {
     TestManyPlayers();
     TestJoinQueue();
     TestJoinReturns();
+    TestRosterFile();   // night-join: who had which characters
+    TestNightJoin();    // night-join: whole squads back, captives kept, host loads a save, editor queue
     TestWorldPacking();
     TestWorkshop();   // research, crafting benches, machines, power
     TestMachineInventoryClosed();   // 0.3.4: a closed machine asks no moves; a forgotten one goes
