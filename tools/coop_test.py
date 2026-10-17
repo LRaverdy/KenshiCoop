@@ -10199,13 +10199,13 @@ def exp_buildingpeek(host, cli):
     if own is None:
         summary()
         return
-    if not sandbox_building(host, STORAGE, 0, 450, "panneau"):
+    if not sandbox_building(host, STORAGE, 0, 200, "panneau"):   # 200: 450 put it up a hill nobody reached (17/10)
         check("panneau : coffre de stockage pose loin du perso du client", False, "")
         summary()
         return
     log("sandbox fabrics:", cmd(host, f"giveitem {FABRICS} 10 0"))
     log("host fills it:", cmd(host, f"conput 0 {STORAGE} {FABRICS}"))
-    for t in ("looks_at", "goes_to_look_into", "wait_for_our_character", "building_panel"):
+    for t in ("looks_at", "goes_to_look_into", "wait_for_our_character", "building_panel", "keeps_in_step_here"):
         cmd(host, f"logcount {t}")
         cmd(cli, f"logcount {t}")
     p0 = pos_xz(cli, own)
@@ -10215,13 +10215,16 @@ def exp_buildingpeek(host, cli):
     p1 = pos_xz(cli, own)
     moved = math.hypot(p1[0] - p0[0], p1[1] - p0[1]) if p0 and p1 else -1
     check("panneau : le perso du client ne bouge pas pour regarder", 0 <= moved < 10, f"{moved:.1f} unites")
-    check("panneau : l'hote envoie le contenu sans marche (looks at)", cmd(host, "logcount looks_at")[1] not in ("ok 0", "0") and
+    # either the host sends the content (looks at), or the client already has it in step (a storage is a
+    # machine the host keeps in step: "nothing to ask, nobody walks", 17/10); never a walk to look
+    check("panneau : contenu sans marche (looks at, ou deja a jour chez le client)",
+          (cmd(host, "logcount looks_at")[1] not in ("ok 0", "0") or cmd(cli, "logcount keeps_in_step_here")[1] not in ("ok 0", "0")) and
           cmd(host, "logcount goes_to_look_into")[1] in ("ok 0", "0"), "")
     h, c = _storage_total(host, STORAGE), _storage_total(cli, STORAGE)
     check("panneau : meme contenu chez le client", h == c and h > 0, f"{h} / {c}")
     took = cmd(cli, f"contake {own} {STORAGE}")
     log("client takes from the panel:", took)
-    for _ in range(30):
+    for _ in range(120):   # it walks there first (a building up a hill: 1240 units, 17/10)
         time.sleep(1)
         if _storage_total(host, STORAGE) < h:
             break
@@ -10233,7 +10236,13 @@ def exp_buildingpeek(host, cli):
     rep = compare(dump(host, "h_peek"), dump(cli, "c_peek"), "building panel")
     check("panneau : memes inventaires partout", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
     # a machine (a well) is kept in step everywhere: nothing to ask, nobody walks
-    if sandbox_building(host, WELL, 300, 450, "panneau (puits)"):
+    if sandbox_building(host, WELL, 300, 200, "panneau (puits)"):
+        for _ in range(20):   # standing still first (the take above may still have it walking)
+            a_ = pos_xz(cli, own)
+            time.sleep(1)
+            b_ = pos_xz(cli, own)
+            if a_ and b_ and math.hypot(a_[0] - b_[0], a_[1] - b_[1]) < 1:
+                break
         p3 = pos_xz(cli, own)
         log("client clicks the well:", cmd(cli, f"peekbuilding {own} {WELL}"))
         time.sleep(5)

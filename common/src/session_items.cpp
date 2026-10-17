@@ -15,7 +15,8 @@
 namespace kc {
 
 namespace {
-constexpr double kHeldWalk = 30.0;      // a take or put in a building panel waits this long for our character
+constexpr double kHeldWalk = 30.0;      // a take or put in a building panel waits this long for our character,
+constexpr double kHeldWalkMax = 180.0;  // longer while it still walks there (17/10: 1240 units up a hill, dropped after 30 s)
 constexpr double kTakenWatch = 8.0;     // an item taken out of a storage is watched this long
 constexpr size_t kMaxHeldMoves = 8, kMaxTakenWatch = 32;
 float Quantize(float v) { return std::isfinite(v) ? std::round(v * 200.0f) / 200.0f : 0.0f; }
@@ -236,6 +237,11 @@ void Session::HoldMovesForWalk(uint32_t container, std::vector<InvOp>& ops, cons
     h.ops = std::move(ops);
     h.involved = involved;
     h.until = now + kHeldWalk;
+    h.start = now;
+    if (auto e = entities_.find(looter); e != entities_.end() && !e->second.buf.empty()) {
+        h.lastPos = e->second.buf.back().s.pos;
+        h.havePos = true;
+    }
     for (uint32_t id : involved)
         if (auto it = entities_.find(id); it != entities_.end()) {
             it->second.invPendingUntil = h.until + 5.0;   // ours as the player left it, until the host answers
@@ -268,6 +274,19 @@ void Session::ReleaseHeldMoves(uint32_t container, uint32_t looter) {
 void Session::ExpireHeldMoves(double now) {
     for (auto it = heldMoves_.begin(); it != heldMoves_.end();) {
         if (now <= it->until) { ++it; continue; }
+        // still on its way (it moved since the last look): wait on, up to kHeldWalkMax
+        if (auto e = entities_.find(it->looter); e != entities_.end() && !e->second.buf.empty() && now - it->start < kHeldWalkMax) {
+            const Vec3 p = e->second.buf.back().s.pos;
+            if (!it->havePos || FlatDist(p, it->lastPos) > 5.0f) {
+                it->lastPos = p;
+                it->havePos = true;
+                it->until = now + 10.0;
+                for (uint32_t id : it->involved)
+                    if (auto x = entities_.find(id); x != entities_.end()) x->second.invPendingUntil = it->until + 5.0;
+                ++it;
+                continue;
+            }
+        }
         for (uint32_t id : it->involved)
             if (auto e = entities_.find(id); e != entities_.end()) {
                 e->second.invDirty = true;   // back to the host's state: nothing moved there

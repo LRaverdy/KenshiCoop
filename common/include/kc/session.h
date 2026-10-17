@@ -1171,7 +1171,9 @@ private:
         uint32_t container = 0, looter = 0;
         std::vector<InvOp> ops;
         std::vector<uint32_t> involved;
-        double until = 0;
+        double until = 0, start = 0;
+        Vec3 lastPos{};          // our character when the wait was last extended (it still walks: wait on)
+        bool havePos = false;
     };
     std::vector<HeldMoves> heldMoves_;
     void HoldMovesForWalk(uint32_t container, std::vector<InvOp>& ops, const std::vector<uint32_t>& involved, double now);
