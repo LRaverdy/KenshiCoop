@@ -123,6 +123,8 @@ bool Session::Host(std::string* err) {
     nextInterest_ = 0;
     log_("hosting on UDP port " + std::to_string(cfg_.port));
     StatsStart();   // player statistics: this world's file
+    hostGen_ = world_.WorldGeneration();
+    LoadRosterFile();   // night-join: who had which characters (session_roster.cpp)
     return true;
 }
 
@@ -141,6 +143,11 @@ bool Session::Join(const std::string& address, uint16_t port, std::string* err, 
 void Session::Leave() {
     const bool wasActive = state_ != SessionState::Idle && state_ != SessionState::Failed;
     const bool roleWasSet = state_ == SessionState::Hosting || state_ == SessionState::Connected;
+    if (state_ == SessionState::Hosting) SaveRosterFile(clock_(), true);   // night-join: the players' roster
+    roster_.Clear();
+    rosterHandles_.clear();
+    rosterAt_ = rosterSaveAt_ = 0;
+    hostGen_ = 0;
     if (statsActive_) {   // player statistics: written, and the last view kept to show after the session
         SavePlayerStatsNow("session end");
         clientStats_ = playerStats();
@@ -275,8 +282,26 @@ void Session::SkipStall(double now) {
 
 void Session::HostTick(double now, bool live) {
     SkipStall(now);
-    if (live) lastLive_ = now;
-    else if (now - lastLive_ > cfg_.worldLostTimeout) { Fail("world unloaded"); return; }
+    if (live) {
+        lastLive_ = now;
+        // night-join: the host loaded another save (a quick load) and the session went on: the players'
+        // worlds are the old one (Geoffrey stayed in it 35 s on 16/10)
+        const uint32_t gen = world_.WorldGeneration();
+        if (!hostGen_) hostGen_ = gen;
+        else if (gen != hostGen_) {
+            const uint32_t was = hostGen_;
+            hostGen_ = gen;
+            HostWorldChanged(was, gen);
+        }
+    } else if (now - lastLive_ > cfg_.worldLostTimeout) {
+        // back to the menu (or a load that took too long): the players are told why the session ends
+        if (!players_.empty()) {
+            Announce("L'hôte a quitté sa partie (menu ou chargement) : la session est terminée.", "the host's world is gone: session ends");
+            net_.Flush();
+        }
+        Fail("world unloaded");
+        return;
+    }
 
     for (auto it = pendingPeers_.begin(); it != pendingPeers_.end();) {
         if (now - it->second > cfg_.handshakeTimeout) { net_.Kick(it->first); it = pendingPeers_.erase(it); }
@@ -291,6 +316,7 @@ void Session::HostTick(double now, bool live) {
         nextInterest_ = now + kInterestInterval;
         UpdateInterest();
     }
+    HostRoster(now, false);   // night-join: every player's characters recorded (session_roster.cpp)
     if (controllableDirty_) PushControllable();
 
     for (const auto& [key, why] : std::exchange(retireQueue_, {})) {   // 0.3.2: unfinished editor characters of players gone
@@ -547,6 +573,7 @@ void Session::AdvanceEditorQueue(double now) {
                 PlayerSync& s = sit->second;
                 s.editorWanted = false;
                 editorOwed_.erase(PlayerKey(pit->second));
+                roster_.EditorDone(PlayerKey(pit->second), s.own);   // night-join: their own character now
                 editorChars_.erase(PlayerKey(pit->second));
                 log_("character editor: " + name + "'s turn is over (" + over + ") after " + Secs(now - s.editorSentAt) +
                      (editorQueue_.empty() ? "" : ", " + std::to_string(editorQueue_.size()) + " still waiting"));
@@ -678,6 +705,14 @@ void Session::HostJoinFlow(double now, bool live) {
         PlayerSync& s = sync_[pid];
         if (p.inGame || !s.readyPending || s.kicked) continue;
         s.readyPending = false;
+        if (s.staleWorld) {   // night-join: they loaded the world the host has left since (another save)
+            s.staleWorld = false;
+            Writer w;
+            EncodeResync(w);
+            SendReliable(p.peer, w);
+            log_(p.name + " has loaded the host's previous world (another save was loaded meanwhile): they reload the new one");
+            continue;
+        }
         // The world they loaded is the save made for them; the host's may have changed since only
         // by the characters made for players who came after them (they get stand-ins for those).
         if (s.readyHash != s.sentHash || !joinFps_.count(world_.Fingerprint())) { Kick(p, RejectReason::WorldMismatch); continue; }
@@ -697,44 +732,12 @@ void Session::HostSaves(double now, bool live) {
         for (uint8_t id : joinQueue_) {
             RemotePlayer& p = players_[id];
             PlayerSync& s = sync_[id];
-            const std::string key = PlayerKey(p);
-            // The newcomer's own character goes into the world before it is saved for them.
-            if (cfg_.characterPerPlayer && !s.ownChecked) {
+            // The newcomer's own character goes into the world before it is saved for them, and a
+            // player coming back gets every character of theirs again (night-join: the roster, not
+            // only the one character KenshiCoop-players.txt used to remember; session_roster.cpp).
+            if (!s.ownChecked) {
                 s.ownChecked = true;
-                bool created = false;
-                if (world_.EnsurePlayerCharacter(p.name, p.steamId, s.own, created)) {
-                    Assign(s.own, p.id);
-                    if (created) {
-                        // one made for them before and never finished (0.3.2), no longer theirs: removed
-                        // when the game keeps it outside the squads, else kept as the host's
-                        if (auto old = editorChars_.find(key); old != editorChars_.end()) RetireEditorChar(key, "a new character was made for them");
-                        editorOwed_.insert(key);
-                        const Entity* ne = entityByHandle(s.own);
-                        editorChars_[key] = EditorChar{ne ? ne->netId : 0u, s.own, p.name};
-                    } else if (editorOwed_.count(key)) {
-                        log_(p.name + " never finished making their character (gone before closing the editor): the editor opens again for them");
-                    }
-                    s.ownCreated = created || editorOwed_.count(key);
-                } else {
-                    log_("no character of their own for " + p.name);
-                }
-            }
-            // a player coming back (after a crash, a lost connection): the characters they commanded
-            // when they went, if the host has not given them to someone else since (found by netId:
-            // a character keeps it when Kenshi gives it a new handle, a new squad or its death)
-            if (auto lo = leftOwned_.find(key); lo != leftOwned_.end()) {
-                size_t back = 0, own = 0;
-                for (uint32_t nid : lo->second) {
-                    auto e = entities_.find(nid);
-                    if (e == entities_.end() || !e->second.squad) continue;
-                    if (e->second.owner == p.id) { ++own; continue; }   // their own character, given back above
-                    if (e->second.owner != hostId_) continue;
-                    Assign(e->second.handle, p.id);
-                    ++back;
-                }
-                leftOwned_.erase(lo);
-                log_(p.name + " is back: " + std::to_string(back + own) + " character(s) they had are theirs again" +
-                     (own ? " (" + std::to_string(own) + " of them their own character)" : std::string()));
+                ReturnPlayer(p, s);
             }
             s.saveStartedAt = now;
             exportFor_.push_back(id);
@@ -871,6 +874,11 @@ void Session::FinishJoin(RemotePlayer& p) {
     squadsAt_ = -1e9;   // the newcomer gets the squads now
     StatsJoined(p);     // player statistics: a session more for them; they get everyone's
     s.inGameAt = clock_();
+    if (!s.returnNote.empty()) {   // night-join: what happened to their characters (a captive, a new one and why)
+        SendNotice(p.id, s.returnNote);
+        log_("told " + p.name + ": \"" + s.returnNote + "\"");
+        s.returnNote.clear();
+    }
     if (s.ownCreated && s.own.valid()) {
         // their turn in the character editor comes once everyone who arrived before them is done
         s.editorWanted = true;
@@ -1996,6 +2004,8 @@ void Session::Assign(const Handle& h, uint8_t playerId) {
     if (playerId != hostId_ && !players_.count(playerId)) return;
     auto it = std::find_if(owners_.begin(), owners_.end(), [&](auto& o) { return o.first == h; });
     if (it != owners_.end()) it->second = playerId; else owners_.emplace_back(h, playerId);
+    if (playerId == hostId_)   // night-join: the host took it back: no longer any player's to get back on return
+        for (const auto& [key, rp] : roster_.players()) roster_.ForgetMember(key, h);   // (the map itself is not changed)
     if (Entity* e = entityByHandle(h); e && e->squad) {
         e->owner = playerId;
         for (auto& [pid, p] : players_) if (p.inGame) SendBind(*e, p.peer);  // Bind doubles as an ownership update
@@ -2065,7 +2075,17 @@ void Session::RetireEditorChar(const std::string& key, const std::string& why, b
         editorChars_.erase(it);
         return;
     }
-    if (leaving) return;   // in the squad: theirs again when they come back
+    if (leaving) {
+        // in the squad: theirs again when they come back (night-join: also after a restart of the
+        // session, KenshiCoop-players.txt has it as theirs, editor not finished; never given to someone
+        // else). Its looks as the host has them go to everyone: a copy left in an editor's state (16/10:
+        // invisible on rob1's screen) shows normally again.
+        if (Entity* e = entityByHandle(h)) {
+            BroadcastLooks(*e);
+            log_("the character made for " + ec.name + "'s editor stays theirs (" + why + "): kept for them, its looks as on the host sent to everyone");
+        }
+        return;
+    }
     log_("the character made for " + ec.name + "'s editor stays in the squad as the host's (" + why + "): never a recruit");
     editorChars_.erase(it);
     if (editorChars_.size() < 64) editorChars_["retired:" + key + ":" + std::to_string(ec.netId) + ":" + std::to_string(h.serial)] = ec;
@@ -4154,6 +4174,7 @@ std::string Session::PlayerKey(const RemotePlayer& p) {
 void Session::ForgetPlayer(uint8_t id) {
     auto pit = players_.find(id);
     if (pit == players_.end()) return;
+    if (isHost()) HostRoster(clock_(), true, false);   // night-join: what they command now, recorded before it goes back to the host
     const std::string key = PlayerKey(pit->second);
     const std::string leaverName = pit->second.name;
     const bool wasInGame = pit->second.inGame;

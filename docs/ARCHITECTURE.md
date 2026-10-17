@@ -444,7 +444,9 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
      autre n'est en cours, et sert **tous** ceux qui attendent (voir « Arrivées » ci-dessous).
 2. L'hôte **gèle son monde** (`HoldForJoin` : vraie pause, réimposée si quelqu'un appuie sur
    lecture). Avec `own_character=1`, il retrouve ou crée le personnage de chaque joueur de la
-   sauvegarde (`EnsurePlayerCharacter`) **avant** de sauvegarder.
+   sauvegarde **avant** de sauvegarder, et lui rend tous ses autres persos (`Session::ReturnPlayer`,
+   registre des joueurs, voir « Retour d'un joueur » ci-dessous ; `EnsurePlayerCharacter` ne fait
+   plus que créer un perso neuf).
 3. L'hôte sauvegarde dans l'emplacement `KenshiCoopHost` (`HostSaves`). Le jeu efface sa demande
    avant d'avoir tout écrit : l'hôte attend que `quick.save` existe et que la taille du dossier ne
    bouge plus pendant 1 s.
@@ -502,12 +504,54 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 - **Personnage jamais fait** : un joueur dont le perso a été créé pour lui mais qui est parti
   avant de fermer l'éditeur (jeu fermé ou planté pendant le chargement, resync ou plantage
   éditeur ouvert : Geoffrey le 10/10) reste dans `editorOwed_` (par compte Steam, sinon par nom) :
-  à son retour, l'éditeur s'ouvre de nouveau sur ce même perso. Côté jeu, un perso mémorisé
-  (`KenshiCoop-players.txt`) qui n'est pas un membre **vivant** de l'escouade de ce monde ne lui
-  est pas rendu : il reçoit un nouveau perso, créé dans l'éditeur.
-- **Retour après un plantage** : ce que le joueur commandait est retenu par **netId**
-  (`leftOwned_`), qui ne change pas quand Kenshi donne un nouveau handle au perso (nouvelle
-  escouade, mort) ; à son retour, chaque perso encore à l'hôte lui est rendu sous le même netId.
+  à son retour, l'éditeur s'ouvre de nouveau sur ce même perso. Depuis night-join, le registre le
+  note `editor` : c'est vrai aussi après un redémarrage de la session de l'hôte (`LoadRosterFile`
+  refait `editorOwed_` et `editorChars_`). Ce perso reste dans l'escouade, réservé à son joueur :
+  jamais pris pour une recrue (`EditorCharOf`), jamais donné à un autre par Ctrl+Shift+G ou `give`
+  (`Session::HostGive` refuse, avec la raison en français). Au départ du joueur, son apparence telle
+  que l'hôte l'a part à tout le monde (`RetireEditorChar`, `BroadcastLooks`, « in editor » forcé à 0
+  par `WriteAppearance`).
+- **Retour d'un joueur (night-join, `common/src/session_roster.cpp`, `kc/roster.h`)**. Le registre
+  `KenshiCoop-players.txt` (dossier de Kenshi, `IWorld::LoadRoster` / `SaveRoster`) note **chaque**
+  perso que commande un joueur : son perso (`own`), les autres (`squad` : recrues, esclaves libérés,
+  persos donnés par l'hôte), le perso dont l'éditeur reste à finir (`editor`). Format : une ligne par
+  perso, `<steamId> [squad|editor] <handle> <nom>` (les lignes `own` gardent le format de 0.3.4 ; un
+  hôte 0.3.4 ignore les autres). Toutes les secondes (`HostRoster`), la session note les persos que
+  commandent les joueurs, et suit les **nouveaux handles** que Kenshi leur donne (changement
+  d'escouade, capture) : la nouvelle ligne est ajoutée juste après l'ancienne, gardée pour une
+  sauvegarde plus ancienne du même monde (sauvegarde rapide rechargée par l'hôte). Écrit au plus
+  2 s après un changement, par fichier temporaire puis renommage. Au retour (`ReturnPlayer`) :
+  - **son perso** : le plus récent de ses persos `own`/`editor` encore vivant **où qu'il soit**
+    (dans ses escouades, captif, enchaîné, en cage, esclave, dans une autre de ses escouades, ou
+    retenu hors de la faction du joueur). Retrouvé par handle, sinon (handle que la session n'a pas
+    pu suivre : session arrêtée) par son nom, si un seul perso de l'escouade le porte et que personne
+    d'autre ne l'a noté. Sans aucune ligne : un membre de l'escouade au nom du joueur que personne
+    n'a noté. Sinon **seulement** un perso neuf (`EnsurePlayerCharacter`), et le joueur lit pourquoi
+    (« Ton personnage X est mort / n'existe pas dans ce monde (sauvegarde plus ancienne ?) : un
+    nouveau personnage est créé pour toi. ») ; l'ancienne ligne reste (historique de 4 persos) ;
+  - **tous ses autres persos** notés (par handle seulement : les noms d'animaux se répètent), et ceux
+    qu'il commandait en partant (`leftOwned_`, par netId), s'ils sont à l'hôte : ils lui sont rendus.
+    Un perso que l'hôte a repris (`Assign` à l'hôte) n'est plus noté pour lui ; un perso donné à un
+    autre joueur change de ligne ;
+  - une seule ligne de journal : « X is back: their own character N (captive: still theirs); M other
+    character(s) of theirs given back (…); recorded but not given: … ». Le message au joueur
+    (`returnNote`) part avec `FinishJoin`.
+- **L'hôte charge une autre sauvegarde** (night-join, `HostWorldChanged`). Le monde de l'hôte change
+  de génération alors que la session continue (sauvegarde rapide rechargée en 2,6 s le 16/10, Geoffrey
+  resté 35 s dans l'ancien monde) : les identités d'objets (adresses) sont refaites, chaque joueur
+  dans le monde lit « L'hôte a chargé une autre partie : rechargement de son monde... » et reçoit
+  `Resync` (il quitte et revient : il charge le nouveau monde) ; une sauvegarde en cours pour un
+  arrivant est refaite ; un arrivant qui charge déjà l'ancienne reçoit `Resync` au lieu d'un refus
+  « monde différent » (`staleWorld`). Si le monde de l'hôte disparaît plus de 5 s (menu), chacun lit
+  « L'hôte a quitté sa partie (menu ou chargement) : la session est terminée. » avant la fin.
+- **Éditeur ouvert sur un jeu en pause** (night-join, client, `KenshiWorld::OpenCharacterEditor`).
+  Un joueur qui attend son tour dans la file a son jeu en pause (celle de l'hôte). L'éditeur ouvert
+  dans cet état ne met pas sa scène en place (voir MOTEUR.md, « Éditeur et pause ») : le client
+  enlève la pause et fait tourner son jeu au ralenti (0,05) 2 s, le temps que l'éditeur déplace le
+  perso vers sa scène, puis reprend la pause de l'hôte. Il vérifie après 3 s (perso à plus de 1 000
+  unités de sa place : « its scene is set up ») et réessaie deux fois sinon. Pendant l'attente, un
+  bandeau au milieu de l'écran dit la place du joueur, qui crée son perso, que la partie est en pause
+  et que son éditeur s'ouvrira tout seul.
 
 ### Positions (`SendSnapshots`, `KenshiWorld::Apply`)
 - Règles pures dans `common/include/kc/motion.h` (tests `TestMotion`).

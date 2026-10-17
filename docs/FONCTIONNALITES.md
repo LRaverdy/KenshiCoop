@@ -50,10 +50,15 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
     Les autres attendent dans le monde (en pause) et voient leur place (« Création de ton
     personnage : position 2/3 — Joueur2 crée le sien, chacun son tour… »). L'hôte voit les
     arrivées dans son panneau. Un joueur qui part ou plante pendant son tour d'éditeur passe la
-    main ;
+    main. 🟡 night-join : ce texte est aussi au milieu de l'écran, avec « La partie est en pause pour
+    tout le monde pendant que X crée son personnage. Ton éditeur de personnage s'ouvrira tout seul à
+    ton tour. », même panneau caché ; l'éditeur ouvert après une longue attente en pause met bien sa
+    scène en place (16/10 : Geoffrey bloqué 2 min 30 sur « un désert » ; expérience `nj_editorqueue`
+    pas encore lancée) ;
   - un joueur parti **avant d'avoir fermé l'éditeur** (jeu planté pendant le chargement, resync)
-    retrouve l'éditeur à son retour ; un perso mémorisé qui n'est plus un membre vivant de
-    l'escouade de ce monde est remplacé par un nouveau, créé dans l'éditeur ;
+    retrouve l'éditeur à son retour, sur le même perso (night-join : aussi après un redémarrage de
+    la session de l'hôte) ; un perso neuf n'est fait que si le sien est mort ou absent de ce monde
+    (pas s'il est captif), et le joueur lit pourquoi ;
   - délais : 120 s pour la sauvegarde de l'hôte, 300 s pour recevoir le monde depuis l'arrivée,
     puis 300 s pour le charger.
 - **Limites** : tous les joueurs doivent avoir la même version de Kenshi (1.0.68 Steam) et les
@@ -102,6 +107,22 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   `<steamId> <handle du perso> <nom>`. À défaut, il prend un membre de l'escouade qui porte le
   nom du joueur et n'appartient à aucun autre compte ; sinon il crée un nouveau personnage.
 - Vérifié par la suite (« reconnexion »).
+- 🟡 **night-join (0.3.5, tests unitaires ; expériences `nj_squadback`, `nj_quickload`, `nj_captive`,
+  `nj_editorleft` pas encore lancées)** : le fichier note maintenant **chaque** perso d'un joueur
+  (son perso, ses recrues, esclaves libérés, persos donnés par l'hôte, le perso de son éditeur pas
+  fini), suit les nouveaux handles que Kenshi leur donne (changement d'escouade, capture) en gardant
+  l'ancien pour une sauvegarde plus ancienne. Au retour (plantage, resync, session de l'hôte relancée,
+  sauvegarde rechargée), le joueur retrouve **toutes** ses escouades. Son perso capturé (cage,
+  chaînes, esclave, peine) ou dans une autre de ses escouades reste le sien ; un perso neuf n'est
+  fait que si le sien est mort ou absent de ce monde, et le joueur lit pourquoi ; l'ancienne ligne
+  reste. Le perso dont l'éditeur n'a pas été fini reste réservé à son joueur (l'éditeur rouvre à son
+  retour, même après un redémarrage de la session) ; Ctrl+Shift+G et `give` ne donnent jamais le
+  perso d'un joueur, ni celui de son éditeur, à un autre (« X est le personnage de Y : il lui reste
+  réservé. »).
+- 🟡 **L'hôte charge une autre sauvegarde** (night-join) : chaque joueur dans le monde lit « L'hôte a
+  chargé une autre partie : rechargement de son monde... » et recharge le nouveau monde (resync) ; un
+  joueur en train d'arriver reçoit le nouveau. L'hôte qui quitte sa partie (menu) : « L'hôte a quitté
+  sa partie (menu ou chargement) : la session est terminée. »
 
 ### Client qui plante ou perd la connexion 🟡 (tests unitaires ; test en jeu `crashrejoin` pas encore lancé)
 - **L'hôte** voit partir un client planté (jeu tué, réseau coupé) en 5 à 15 s. Un client dont le

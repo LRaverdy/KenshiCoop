@@ -329,6 +329,8 @@ public:
     bool SetGameHours(double hours) override;
     void HoldForJoin(bool hold) override;
     bool EnsurePlayerCharacter(const std::string& playerName, uint64_t steamId, kc::Handle& out, bool& created) override;
+    bool LoadRoster(std::string& text) override;         // night-join: KenshiCoop-players.txt
+    bool SaveRoster(const std::string& text) override;
     bool BeginWorldExport(std::string* err) override;
     kc::ExportStatus PollWorldExport(std::vector<kc::WorldFile>& files, std::string* err) override;
     bool BeginWorldImport(const std::vector<kc::WorldFile>& files, std::string* err) override;
@@ -765,6 +767,17 @@ private:   // first few lifecycle events (tests)
     bool DescribeBuildArgs(const BuildArgs& a, kc::BuildPlace& out);
     void* InventoryHolder(const kc::Handle& h);       // a character, or a container
     double pauseSeenAt_ = -1;   // client: when the host's pause arrived (we pause a little later)
+    // night-join (16/10 point 1): the character editor opened on a client whose game was paused (a
+    // player waiting in the join queue: the host holds the world) set up no scene: the player saw the
+    // editor's empty stage ("a desert"). The game runs at a crawl until the editor has moved our
+    // character to its stage (watched; tried again twice), then follows the host's pause again.
+    double editorWarmupUntil_ = -1;
+    struct EditorWatch { kc::Handle h; kc::Vec3 pos; double at = -1; int tries = 0; } editorWatch_;
+    void WatchEditor(double now);
+public:
+    int editorWarmups = 0;      // tests ("editorstate"): editors opened on a paused game, unpaused for their scene
+    bool editorStaged = false;  // tests: the last editor moved our character to its stage
+private:
     std::unordered_map<kc::Handle, double, kc::HandleHash> taskDropAt_;   // client: when its local tasks were last dropped
     float syncMaxErr_ = 0;      // client: largest correction since the last report
 public:

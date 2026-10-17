@@ -26,6 +26,7 @@ struct OverlayModel {
     std::vector<std::string> lines;     // status block
     std::vector<std::string> chat;      // recent events
     std::vector<std::string> toasts;    // transient warnings (already filtered by age)
+    std::vector<std::string> banner;    // night-join: shown mid-screen whatever `visible` (waiting in the join queue)
     // "Multijoueur" window
     bool worldLoaded = false;           // a game is loaded: hosting is possible
     bool active = false;                // a session is running (hosting or joined)

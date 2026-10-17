@@ -805,6 +805,20 @@ Emplacements de vtable :
   - `ForgottenGUI` +0x1C0 ; ses personnages à +0x260 (données) et +0x268 (nombre) ;
   - ouverture : `showCharacterEditor(gui, lektor par valeur, mode, races)`. Mode 2 =
     `EDIT_DEBUG` : race et sexe modifiables, rien de tiré au hasard ; `races = nullptr`.
+  - **Éditeur et pause** (night-join, déduit du journal du 16/10, pas lu au désassemblage) :
+    l'éditeur emmène les persos vers sa scène, à ~65 650 unités de leur place (rob1 pendant son
+    éditeur : « 3 off, max offset 65658 »). Ouvert alors que le jeu **tournait** encore (rob1 à
+    21:23:25, Geoffrey au 2ᵉ essai à 21:29:49 : moins d'une seconde après le chargement, avant que
+    le client ne prenne la pause de l'hôte, 0,8 s plus tard), il marche, et la pause prise ensuite
+    ne le gêne plus. Ouvert sur un jeu **en pause depuis 2 min** (Geoffrey à 21:26:19, après la
+    file d'attente), « character editor opened: ok », 465 img/s, mais aucun perso déplacé (« 0
+    off ») : le joueur voyait la scène vide de l'éditeur (« un désert »). Le client ouvre donc
+    l'éditeur jeu en marche au ralenti (0,05) pendant 2 s et vérifie que son perso est parti vers
+    la scène (`KenshiWorld::WatchEditor`). À confirmer en jeu : expérience `nj_editorqueue`.
+  - La GameData d'apparence a un booléen « in editor » ; `WriteAppearance` l'écrit toujours à 0.
+    L'hôte renvoie à tous l'apparence d'un perso dont l'éditeur a été abandonné (night-join) : une
+    copie restée dans cet état est montrée normalement (cause de l'invisibilité chez rob1 le 16/10
+    non prouvée).
 
 ### SaveManager
 - +0x50 chemin local, +0x78 chemin utilisateur, +0xA0 opération en attente (0 = rien), +0xD8

@@ -278,6 +278,28 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         return steam::JoinAddress(s, addr, uint16_t(port), &err) ? "ok" : "err " + err;
     }
     if (cmd == "leave") { s.Leave(); return "ok"; }
+    if (cmd == "roster") {   // night-join (host): every player's recorded characters, "key:kind:handle:name;..." (names without spaces)
+        std::ostringstream o;
+        o << "ok players=" << s.roster().players().size();
+        for (const auto& [key, p] : s.roster().players()) {
+            o << " " << key << "=";
+            bool first = true;
+            for (const auto& c : p.chars) {
+                std::string n = c.name;
+                for (char& ch : n) if (ch == ' ' || ch == ';' || ch == '=') ch = '_';
+                o << (first ? "" : ";") << (c.kind == kc::RosterKind::Own ? "own" : c.kind == kc::RosterKind::Editor ? "editor" : "squad") << ':'
+                  << kc::RosterHandleText(c.handle) << ':' << (n.empty() ? "-" : n);
+                first = false;
+            }
+        }
+        return o.str();
+    }
+    if (cmd == "editorstate") {   // night-join (client): the character editor, its scene, the pause around it
+        std::ostringstream o;
+        o << "ok open=" << kenshi::CharacterEditorOpen() << " staged=" << w.editorStaged << " warmups=" << w.editorWarmups
+          << " paused=" << kenshi::GetPaused() << " queued=" << (s.queueStatus() ? 1 : 0);
+        return o.str();
+    }
 
     // everything below touches the world
     if (!live || !w.Ready()) return "err no live world";
@@ -290,6 +312,21 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         for (size_t i = 0; i < squad.size(); ++i)
             if (which == "all" || which == std::to_string(i)) { s.Assign(squad[i], uint8_t(pid)); ++n; }
         return n ? "ok " + std::to_string(n) : "err no such squad member";
+    }
+    if (cmd == "savegame") {   // night-join: savegame <slot>: the game saves the world under that name (as Escape > Save does)
+        std::string slot, folder;
+        in >> slot;
+        if (slot.empty()) return "err usage: savegame <slot>";
+        return kenshi::RequestSave(slot, &folder) ? "ok " + folder : "err the game refused to save now";
+    }
+    if (cmd == "hostgive") {   // night-join: hostgive <playerId> <index>: the host's own give (Ctrl+Shift+G): refused for a reserved character
+        int pid = 0;
+        size_t idx = 0;
+        in >> pid >> idx;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        std::string why;
+        return s.HostGive(squad[idx], uint8_t(pid), &why) ? "ok given" : "ok refused " + why;
     }
     if (cmd == "move" || cmd == "moverel") {   // move <index> <x> <z> | moverel <index> <dx> <dz>
         size_t idx = 0;

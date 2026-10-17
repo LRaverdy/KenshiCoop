@@ -17,6 +17,18 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
    - À faire : savoir ce qu'il voyait (fenêtre d'éditeur absente ? présente mais muette ?) et lire son
      `KenshiCoop.log` ; reproduire en jeu : deux clients qui rejoignent ensemble, le 2e passe de la
      file à l'éditeur.
+   - **Fait (branche `night-join`, à vérifier en jeu : expérience `nj_editorqueue`)**. Journal de
+     Geoffrey (relayé dans celui de l'hôte) : au 1er essai, après l'ouverture, « 0 off, max offset
+     3.7, 465 fps » : aucun perso déplacé vers la scène de l'éditeur ; chez rob1 (et au 2e essai de
+     Geoffrey), « 3 off, max offset 65658 ». Différence : rob1 et le 2e essai ont ouvert l'éditeur
+     moins d'une seconde après le chargement, avant que le client prenne la pause de l'hôte (0,8 s) ;
+     le 1er essai, sur un jeu en pause depuis 2 min. Cause **déduite** (pas lue au désassemblage) :
+     l'éditeur ouvert sur un jeu en pause ne met pas sa scène en place (le « désert » = sa scène vide).
+     Correctif client : le jeu tourne au ralenti (0,05) 2 s à l'ouverture de l'éditeur, puis reprend
+     la pause de l'hôte ; vérification après 3 s (« its scene is set up » ou « no scene yet », deux
+     nouveaux essais, « STILL NO SCENE ») ; `editorstate` pour les tests. Texte clair au milieu de
+     l'écran pendant l'attente (place, qui crée son perso, partie en pause, l'éditeur s'ouvrira tout
+     seul), même panneau caché. Focus/fenêtres du jeu : rien dans le journal ne les met en cause.
 2. **Annuler une tâche « suivre » (croix rouge) ne l'arrête pas.**
    - L'hôte crée une tâche « suivre rob1 » pour A1 (21:31:42 « jobs: A1 now has 1 job(s) »), l'annule
      avec la croix rouge du panneau des tâches (21:31:48 « A1 now has 0 job(s) », recopié chez les deux
@@ -77,6 +89,21 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      Geoffrey que `1:1:245483392:4`. Corriger : noter tout perso qui entre dans l'escouade d'un joueur
      (recrue, esclave libéré, prisonnier) et rendre au retour toute son escouade, pas seulement les
      persos mémorisés.
+   - **Fait (branche `night-join`, à vérifier en jeu : expériences `nj_squadback` et
+     `nj_quickload`)**. Causes vues au journal : (1) Kenshi change le handle d'un perso qui change
+     d'escouade (rob1 : `1:1:245483392:3:3754638592` → `1:55:2114746112:1:3664672768` en entrant
+     dans « Rob ») ; le fichier gardait l'ancien. À 21:50:35 le perso mémorisé n'était donc pas
+     trouvé (« a new one for them ») mais la recherche par nom a pris son perso « rob1 » sans le
+     dire : d'où les deux lignes contradictoires. (2) Seuls les persos commandés **dans la même
+     session** (en mémoire) étaient rendus. (3) La sauvegarde rapide (2,6 s) n'a pas arrêté la
+     session : les clients sont restés dans l'ancien monde, et les identités d'objets (adresses) de
+     l'ancien monde servaient encore. Correctifs : registre de **tous** les persos de chaque joueur
+     (`own` / `squad` / `editor`, nouveaux handles suivis, anciens gardés pour une sauvegarde plus
+     ancienne), rendus au retour, une seule ligne de journal ; l'hôte qui charge une autre sauvegarde
+     envoie tout le monde dans le nouveau monde (`Resync`, « L'hôte a chargé une autre partie… »),
+     ceux qui chargeaient l'ancien aussi ; « L'hôte a quitté sa partie… » s'il revient au menu.
+     Voir CHANGELOG 0.3.5. Barre d'escouade : plus de persos du joueur gardés par l'hôte, donc plus
+     cachés ; pas d'autre cause trouvée.
 7. **Barre d'entraînement restée sur le perso du client après une resync pendant l'entraînement.**
    - rob1 s'entraîne sur Mannequin Exerc. MkIII (« order "train" (97) » 21:50:54), l'hôte fait
      `resync 2` à 21:51:21 pendant l'entraînement : déconnexion, « player gone: … halted where it
@@ -137,6 +164,15 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
    - Lié au point 6 (persos rendus au retour) : même logique de reprise.
    - À reproduire en jeu : perso d'un client capturé par des esclavagistes, le client quitte et
      revient.
+   - **Fait (branche `night-join`, à vérifier en jeu : expérience `nj_captive`)**. Cause vue au
+     journal : capturé, plopette est **resté dans l'escouade du joueur** (diagnostic de 22:13:55 :
+     `idx=2 ser=279541024` à sa place) mais sous un **nouveau handle** (`…:4:3858764544` avant) ; le
+     fichier avait l'ancien, et aucun perso au nom « Geoffrey » : perso neuf, et toutes les lignes de
+     Geoffrey effacées. Maintenant : le handle est suivi, et au retour le perso le plus récent du
+     joueur encore vivant **où qu'il soit** (captif, en cage, enchaîné, esclave, dans une autre
+     escouade, hors de la faction) reste le sien ; il lit « Ton personnage X est prisonnier : il reste
+     à toi… » ; un perso neuf seulement s'il est mort ou absent, avec la raison ; l'ancienne ligne
+     n'est jamais effacée (historique de 4 persos).
 10. **Geoffrey KO : au réveil il se voit encore au sol, l'hôte le voit marcher.**
    - Son perso (`1:1:245483392:2:279541024`, « plopette », le joueur s'appelle maintenant plopette
      dans le journal) s'évanouit chez l'hôte à 22:41:29 ; « faints as on the host (now down=0
@@ -297,6 +333,21 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      dont l'éditeur n'a pas été fini (le rendre visible et normal partout, ou le supprimer si le
      joueur ne revient pas).
    - Contournement : resync de rob1.
+   - **Fait (branche `night-join`, à vérifier en jeu : expérience `nj_editorleft`)**. Comment rob1
+     l'a eu (journal de l'hôte) : à 22:13:43 le perso neuf « Geoffrey » est créé (point 9) et le
+     fichier ne garde que lui pour ce compte ; Geoffrey part pendant l'éditeur (22:14:18, 22:15:12) ;
+     à 22:15:51 **l'hôte relance sa session** (« session closed », « hosting » à 22:15:56) : la marque
+     « éditeur pas fini » (en mémoire) est perdue ; à 22:16:04 plopette (Geoffrey) revient et reçoit
+     ce perso comme le sien, sans éditeur ; puis l'**hôte** fait Ctrl+Shift+G (toasts « now controlled
+     by plopette / you / rob1 » de 22:16:35 à 22:18:36) : le dernier le donne à rob1 (mode dieu de
+     rob1 : 3 persos dès 22:31), qui le range dans « Rob » (22:18:52) ; à 22:25:12, plopette retrouve
+     son vrai perso par son nom. Invisibilité chez rob1 : **cause non trouvée** (aucune ligne de rob1
+     sur l'état du perso). Ce qui est fait : le perso d'un éditeur abandonné est noté `editor` dans le
+     fichier, reste à son joueur (l'éditeur rouvre à son retour, même après un redémarrage de la
+     session), n'est jamais pris pour une recrue ni donné à un autre (Ctrl+Shift+G et `give` refusent
+     avec « X est le personnage de Y : il lui reste réservé. », chaque don écrit au journal) ; à son
+     départ, son apparence telle que l'hôte l'a est renvoyée à tous (« in editor » remis à 0). Il
+     n'est pas supprimé si le joueur ne revient pas (choix : le garder pour lui).
 17. **plopette ne peut pas prendre d'objets sur le Taureau (bête de somme) contrôlé par l'hôte.**
    - 00:08:52-00:09:39 : « inventory change refused: that character belongs to Coucoudz » (x6) : refus
      voulu par la règle de propriété (un client ne touche pas aux persos d'un autre joueur, cf. la
