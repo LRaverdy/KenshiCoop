@@ -4770,7 +4770,7 @@ def own_index(pid):
     d = dump(pid, "own_probe")
     keys = sorted(d["squad"])
     for i, k in enumerate(keys):
-        if d["entity"].get(k, {}).get("owner") == "2":
+        if entity_of(d, k).get("owner") == "2":
             return i
     return len(keys) - 1
 
@@ -5289,7 +5289,7 @@ def _key_index(pid, key):
 def _owned_keys(host, owner):
     """The host's squad keys of the characters a player owns (owner "2", "3"...)."""
     d = dump(host, f"owned_{owner}")
-    return [k for k in sorted(d["squad"]) if d["entity"].get(k, {}).get("owner") == str(owner)]
+    return [k for k in sorted(d["squad"]) if entity_of(d, k).get("owner") == str(owner)]
 
 
 def _lying(pid, key):
@@ -5382,6 +5382,19 @@ def exp_kowake(host, cli):
     summary()
 
 
+def _wait_training(host, key, mark, secs=30):
+    """True once the host's character trains: an AI order or task, or (the usual case: a worker's AI
+    keeps no order while at the machine) the host's 'machine: Mannequin ... workers 0 -> 1' line."""
+    for _ in range(secs):
+        time.sleep(1)
+        kv = kv_of(host, f"orders {key}")
+        if kv.get("orders", 0) > 0 or kv.get("tasks", 0) > 0:
+            return True
+        if re.search(r"machine: Mannequin.* workers 0 -> 1", host_log()[mark:]):
+            return True
+    return False
+
+
 def exp_trainresync(host, cli):
     """0.3.5 (A_FAIRE 16/10 point 7): the client's character trains on a dummy (its own right click, task
     97, run by the host); the host resyncs the client meanwhile. The gone player's character is stopped
@@ -5408,15 +5421,10 @@ def exp_trainresync(host, cli):
     for pid in (host, cli):   # the same dummy on both games, next to squad member 0 (the same place everywhere)
         log("dummy", pid, cmd(pid, f"buildspawn {sid} 60 40"))
     time.sleep(3)
+    mark = len(host_log())
     r = cmd(cli, f"objreq {own} 97 Mannequin")
     log("client: train on the dummy", r)
-    training = False
-    for _ in range(30):
-        time.sleep(1)
-        kv = kv_of(host, f"orders {key}")
-        if kv.get("orders", 0) > 0 or kv.get("tasks", 0) > 0:
-            training = True
-            break
+    training = _wait_training(host, key, mark)
     time.sleep(5)
     lh = kv_of(host, "labels")
     log("host labels while training:", lh, "| orders", kv_of(host, f"orders {key}"))
@@ -5438,14 +5446,9 @@ def exp_trainresync(host, cli):
     lh2 = kv_of(host, "labels")
     check("resync : pas de barre d'entrainement chez l'hote", lh2.get("shown") == 0, lh2)
     log("client nightstats:", cmd(cli, "nightstats")[1])
+    mark = len(host_log())
     r = cmd(cli, f"objreq {own} 97 Mannequin")
-    again = False
-    for _ in range(30):
-        time.sleep(1)
-        kv = kv_of(host, f"orders {key}")
-        if kv.get("orders", 0) > 0 or kv.get("tasks", 0) > 0:
-            again = True
-            break
+    again = _wait_training(host, key, mark)
     check("resync : le client peut s'entrainer de nouveau", again, r)
     summary()
 
@@ -5480,12 +5483,14 @@ def exp_sneakwatch(host, clis):
         for name, kv in got.items():
             log(f"  x{speed} {name}: {kv}")
         h = got["hote"]
-        check(f"furtif x{speed} : le perso marche accroupi chez l'hote (etat 1)", h.get("state") == 1 and h.get("order") == 1, h)
+        # the animation's stealth flag (anim): Character+0xE0 ("state") stays 0 even on the host while it
+        # walks crouched (in game 17/10), it is logged only
+        check(f"furtif x{speed} : le perso marche accroupi chez l'hote", h.get("anim") == 1 and h.get("order") == 1 and "crouch" in str(h.get("anims")), h)
         hanims = set(str(h.get("anims", "-")).split(","))
         for name, kv in got.items():
             if name == "hote":
                 continue
-            check(f"furtif x{speed} : etat furtif chez {name}", kv.get("state") == 1, kv)
+            check(f"furtif x{speed} : marche accroupie chez {name}", kv.get("anim") == 1 and "crouch" in str(kv.get("anims")), kv)
             canims = set(str(kv.get("anims", "-")).split(","))
             same = len(hanims & canims) / max(1, len(hanims | canims))
             check(f"furtif x{speed} : memes animations que l'hote chez {name}", same >= 0.5, f"{sorted(hanims)} / {sorted(canims)}")
@@ -5495,10 +5500,11 @@ def exp_sneakwatch(host, clis):
     time.sleep(4)
     for name, pid in viewers:
         kv = kv_of(pid, f"sneak {key}")
-        check(f"furtif arrete : etat 0 chez {name}", kv.get("state") == 0 and kv.get("order") == 0, kv)
+        check(f"furtif arrete : debout chez {name}", kv.get("anim") == 0 and kv.get("order") == 0 and "crouch" not in str(kv.get("anims")), kv)
     hl = host_log()
     upright = [l for l in hl.splitlines() if "walks without sneaking on the host" in l]
     log("host 'walks without sneaking' lines:", len(upright), upright[-2:])
+    check("furtif : pas de ligne 'walks without sneaking' a tort chez l'hote", not upright, upright[-2:])
     for name, pid in viewers[1:]:
         log(f"{name} nightstats:", cmd(pid, "nightstats")[1])
     summary()
@@ -5517,6 +5523,11 @@ def exp_nightbeds(host, cli, minutes=3):
     for t in texts:
         cmd(cli, f"logcount {t}")
     log("host: 22:30", cmd(host, "sethour 22.5"))
+    # the town's NPCs may not go to bed within the minutes of the test: the host's own characters (not the
+    # client's) sleep too, as the squad at its base did on 16/10 (the ping-pong was on the host's sleepers)
+    own0 = own_index(host)
+    for i in [i for i in range(8) if i != own0][:3]:
+        log(f"host: squad member {i} to bed", cmd(host, f"bedreq {i}"))
     cmd(host, "speed 3")
     peak_h = 0
     samples = []

@@ -2427,6 +2427,10 @@ Lu au désassembleur sur `kenshi_x64.exe` 1.0.68 (A_FAIRE 16/10 points 7, 8, 10,
   ou 2 (ou +0x5B8) ; les listes d'animations de déplacement (`AnimationClass`+0x2C0, +0x0 et +0x18)
   sont jouées par `0x51D8E0` selon cet état ; chaque entrée est une `AnimationData` (`runAnimation`
   avec sa couche +0x60), donc retrouvable par son nom chez un client.
+- **Vu en jeu le 17/10** (expérience `sneakwatch`, x1 à x3) : le perso d'un joueur client qui marche
+  accroupi (ordre furtif, animations `crouch_walk`) garde +0xE0 = **0 chez l'hôte** ; seul le drapeau
+  d'animation `AnimationClass`+0x248 vaut 1. C'est lui qui dit « accroupi » (diagnostic de l'hôte,
+  expérience) ; +0xE0 reste recopié tel quel (il vaut la même chose partout).
 - Chez un client l'IA ne tourne pas : sans le mod, l'état d'une copie restait 0. Le mod impose celui de
   l'hôte (bit `kModeSneaking` des modes, `hk_setStealthMode`).
 

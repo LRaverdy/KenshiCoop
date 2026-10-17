@@ -2509,8 +2509,11 @@ bool KenshiWorld::ReadProgress(const kc::Handle& h, std::vector<float>& stats, u
 // for a while is told, once a minute: if a viewer sees it walk upright, this says whether the host's
 // own game does not sneak it (the cause is here) or the copies lose it (the cause is on the client).
 void KenshiWorld::NoteStealthOrder(const kc::Handle& h, kenshi::Character* c, uint16_t modes) {
-    if (!(modes & kc::kModeStealth) || (modes & kc::kModeSneaking) || !kenshi::IsMoving(c) || !squad_.count(h)) {
-        if (modes & kc::kModeSneaking) sneakToldAt_.erase(h);
+    // crouched = the animation's stealth flag (AnimationClass+0x248): +0xE0 stays 0 on the host while
+    // a client player's character walks crouched with the order on (in game 17/10), so not that
+    const bool crouched = (modes & kc::kModeSneaking) || kenshi::AnimStealthFlag(c) == 1;
+    if (!(modes & kc::kModeStealth) || crouched || !kenshi::IsMoving(c) || !squad_.count(h)) {
+        if (crouched) sneakToldAt_.erase(h);
         return;
     }
     const double now = NowSeconds();
