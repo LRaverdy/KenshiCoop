@@ -1276,6 +1276,12 @@ Trouvé par désassemblage le 10/10 (rien de vérifié en jeu).
   `CharMovement` (`0x148AC0`) ; les persos de la faction du joueur sont toujours dans la vue. Le mod
   met dans la vue les PNJ qu'un client voit (`hk_charUpdateView`) [D, faraway].
 - **Pendant la pause, le jeu n'enregistre aucune position écrite** sur un personnage.
+- **Un PNJ hors de la vue garde parfois un écart fixe** avec la position qu'on lui écrit (session du
+  16/10, journal) : la même copie « en sommeil » remise en place toutes les 0,5 s pendant des minutes
+  à exactement la même distance de la position de l'hôte (9, 48, 68 unités), puis plus rien. Ce n'est
+  pas un déplacement : c'est l'étage (68 unités, « floor group 9 ici, 10 chez l'hôte » sur la même
+  copie juste avant) ou une position que le jeu ne prend pas. Le mod mesure ces écarts à
+  plat et laisse la copie là où le jeu la garde (0.3.5, `kc::DormantStep`).
 
 **Ragdolls**
 - `pickupObject` (0x5CFF90) ne fait rien si le porteur est en ragdoll, porte déjà, ou si le corps a
@@ -2041,8 +2047,43 @@ l'objet (vt 0x58), `Faction::isPlayer` (+0x250), relations avec le joueur (`0x21
 `CampaignInstance` : +0x10 `CampaignData*`, +0x70 sa faction, +0x78 `enemy` (la faction attaquée ;
 vérifié dans le constructeur `0x9D4770`, 4e argument). `CampaignData`+0x12 `_isHostile`
 (`isHostile` `0x2856B0`). Un perso → son escouade : `Character`+0x658 `ActivePlatoon*`, +0x78
-`Platoon*`. Limite : seules les escouades chargées (personnages actifs chez l'hôte) sont vues ; un
-raid encore « abstrait » loin de tout joueur n'a pas de position.
+`Platoon*`. Limite (avant 0.3.5) : seules les escouades chargées (personnages actifs chez l'hôte)
+étaient vues ; un raid encore « abstrait » loin de tout joueur n'avait pas de position.
+
+**Position d'une escouade (0.3.5, branche `night-stream`) [D]**. RTTI : `Platoon` (vtable
+`0x1718808`), `ActivePlatoon` (`0x16E2E08`), `UnloadedPlatoon` (`0x1718758`).
+- `Platoon::getPosition` (slot 0x40, `0xD1E00`) rend `Platoon`+0x48 (Vector3).
+- `Platoon::update` (slot 0xD0, `0x7EBD40`) : si `Platoon`+0x1D8 (`ActivePlatoon*`) n'est pas nul,
+  `Platoon`+0x48 = `ActivePlatoon`+0xB4 puis `ActivePlatoon` slot 0x20 (`0x5003C0`, qui recalcule
+  +0xB4 à partir de ses persos par `0x1400420DC`) ; sinon, si `Platoon`+0x1E0 (`UnloadedPlatoon*`)
+  n'est pas nul, `Platoon`+0x48 = `UnloadedPlatoon`+0x64 puis `UnloadedPlatoon` slot 0x10
+  (`0x7EE790`, le déplacement abstrait sur la carte du monde : +0x48 son `Platoon`, +0x58 l'objet qui
+  le fait avancer, slot 0x90 = aller à, +0x60 un état, +0x64 sa position).
+- `FactionWarMgr`+0x28 : `std::map<Platoon*, CampaignInstance*>` (tête +0x30, taille +0x38 ; nœud :
+  gauche +0, parent +8, droite +0x10, clé +0x18, valeur +0x20, « nil » +0x29), lu par
+  `getCurrentCampaign` (`0x283500`), qui **ajoute** une entrée vide pour un `Platoon` inconnu (le mod
+  l'appelait déjà pour chaque escouade vue ; la lecture des raids abstraits parcourt l'arbre sans
+  l'appeler). `CampaignInstance` +0x28 « travel speed unloaded », +0x2C « travel speed loaded »
+  (constructeur `0x9D4770`, getters `0x9D4350` / `0x9D4360`, slots 0x90 / 0x98 de sa vtable
+  `0x1744548`).
+- Le mod (`KenshiWorld::ReadMapThreats`) prend `UnloadedPlatoon`+0x64 quand `Platoon`+0x1D8 est nul
+  et +0x1E0 ne l'est pas (le même choix que `Platoon::update`), sinon
+  `Platoon`+0x48 si les persos n'ont pas bougé depuis 4 s alors que celle-ci bouge
+  (`kc::PickThreatPosition`), sinon la moyenne des persos. Hypothèse à vérifier en jeu : les persos
+  d'un raid figé sur la carte restent dans la liste de mise à jour du monde (`GameWorld`
+  `charUpdateList`) avec leur dernière position, pendant que la `Platoon` avance (expérience
+  `farraid`, ligne « map: hostile squad … marker follows the squad »).
+
+**Membres d'escouade créés par le jeu (0.3.5) [D]**. `RootObjectFactory::create` (`0x583400`,
+thunk `0x2C5A2`) a 12 arguments : `rcx` fabrique, `rdx` `GameData*`, `r8` position, `r9b`, puis sur
+la pile (arg. 5 à 12, `[rbp+0xC0..0xF8]` dans la fonction) : … arg. 8 le propriétaire
+(`RootObjectContainer*`, l'`ActivePlatoon` pour un membre ; testé `+0x40 == 5`), arg. 9 un
+enregistrement de membre (son `GameData*` en +0 quand `rdx` est nul), arg. 12 un float. Appelée par
+`createRandomCharacter` (`0x58399D`, résultat testé) et par les créations de membres de
+l'`ActivePlatoon` : `0x36B140` (retour `0x36B207`), `0x36F2E0` (`0x36F565`), le slot 0x38
+`0x36F6B0` (`0x36F88E`) — ces trois ignorent le résultat — et `0x36BE50` (`0x36BEF1`), qui
+l'utilise aussitôt (jamais nul là). `ActivePlatoon::setSquadLeader` (`0x7917A0`, `(this, Character*)`)
+écrit +0xA0 et le `hand` du chef dans `Platoon`+0x130.
 
 **Origine de rendu mobile** : le Ogre de Kenshi a `SceneManager::getRelativeOrigin()`
 (export de `OgreMain_x64.dll`, `Vector3` rendu par pointeur caché) ; `CameraClass::getCameraPos`

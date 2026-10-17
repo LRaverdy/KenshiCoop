@@ -39,6 +39,18 @@ size_t Session::streamedTo(uint8_t playerId) const {
     return s == sync_.end() ? 0 : s->second.streamed;
 }
 
+bool Session::streamsFarTo(const Handle& h, uint8_t playerId) const {
+    auto b = byHandle_.find(h);
+    if (b == byHandle_.end() || playerId >= 32) return false;
+    auto e = entities_.find(b->second);
+    return e != entities_.end() && !StreamsTo(e->second, playerId) && (e->second.farMask & Bit(playerId)) != 0;
+}
+
+size_t Session::farStreamedTo(uint8_t playerId) const {
+    auto s = sync_.find(playerId);
+    return s == sync_.end() ? 0 : s->second.farStreamed;
+}
+
 // Host, every interest update (0.5 s): which player is sent which character. A player's centres are
 // their own characters; a player without any (a spectator) sees what the host's squad sees. Squad
 // members (every player's characters) and containers go to everyone, as before.
@@ -69,19 +81,25 @@ void Session::UpdateStreams() {
     std::vector<Handle> nearRemote;   // near a client player's own characters (damage numbers)
     for (auto& [id, e] : entities_) {
         before[id] = e.streamMask;
+        e.farMask = 0;
         if (e.container || e.squad || r <= 0) {
             e.streamMask = ~0u;
         } else {
-            uint32_t mask = 0;
+            uint32_t mask = 0, far = 0;
             auto p = at.find(id);
+            // 0.3.5 (night-stream): near any player's characters (the host's too): those who are not
+            // sent it in full get it at a low rate (kc::FarTierDue)
+            const bool nearSomeone = p != at.end() && WithinAny(p->second, squad, r);
             for (uint8_t pid : remote) {
                 if (p == at.end()) break;
                 auto o = own.find(pid);
                 const std::vector<Vec3>& centres = o != own.end() && !o->second.empty() ? o->second : squad;
                 const bool was = (e.streamMask & Bit(pid)) != 0;
                 if (WithinAny(p->second, centres, was ? r * kStreamHysteresis : r)) mask |= Bit(pid);
+                else if (nearSomeone) far |= Bit(pid);
             }
             e.streamMask = mask;
+            e.farMask = far;
         }
         if (e.container) continue;
         auto p = at.find(id);
@@ -113,10 +131,12 @@ void Session::UpdateStreams() {
     for (uint8_t pid : remote) {
         PlayerSync& s = sync_[pid];
         s.streamed = 0;
+        s.farStreamed = 0;
         for (auto& [id, e] : entities_) {
             if (e.container) continue;
             const bool now = StreamsTo(e, pid);
             s.streamed += now ? 1 : 0;
+            s.farStreamed += !now && (e.farMask & Bit(pid)) ? 1 : 0;
             auto b = before.find(id);
             const bool was = b != before.end() && (cfg_.streamRadius <= 0 || e.squad || (b->second & Bit(pid)) != 0);
             if (now && !was) s.sent.erase(id);
@@ -139,9 +159,11 @@ void Session::StreamReport(double now) {
         const NetStats st = net_.stats(p.peer);
         if (!first && s.statsAt > 0 && now > s.statsAt) {
             const double kbs = double(st.queued - std::min(st.queued, s.bytesAt)) / 1024.0 / (now - s.statsAt);
-            char b[220];
-            snprintf(b, sizeof(b), "stream: %s is sent %zu of %zu characters (around their own), %.1f KB/s to them, ping %u ms, %.1f %% lost",
-                     p.name.c_str(), s.streamed, chars, kbs, unsigned(st.rttMs), st.lossPermille / 10.0);
+            char b[320];
+            snprintf(b, sizeof(b),
+                     "stream: %s is sent %zu of %zu characters (around their own, every player's characters included), %zu more at a low rate "
+                     "(around the other players'), %.1f KB/s to them, ping %u ms, %.1f %% lost",
+                     p.name.c_str(), s.streamed, chars, s.farStreamed, kbs, unsigned(st.rttMs), st.lossPermille / 10.0);
             log_(b);
         }
         s.statsAt = now;
@@ -209,6 +231,12 @@ void Session::UpdateMyCentres() {
 
 bool Session::Dormant(const Entity& e, double now) const { return now - e.streamAt > kDormantAfter; }
 
+// 0.3.5 (night-stream): dormant, or sent to us at a low rate only (near another player's characters,
+// kFlagFar): held where the host has it, on our game's far update, never recreated or counted missing.
+bool Session::Quiet(const Entity& e, double now) const {
+    return Dormant(e, now) || (!e.buf.empty() && (e.buf.back().s.flags & kFlagFar) != 0);
+}
+
 // 3b (11 October evening: with the players spread out, each client followed 290-307 characters, the
 // host sending it only the few around its own; Geoffrey 133 -> 46 fps, nass4 down to 10): the
 // characters the host stopped streaming to us stay in our game where it loaded them, yet our game
@@ -220,7 +248,7 @@ void Session::UpdateFarCharacters(double now) {
     bool changed = false;
     size_t n = 0;
     for (auto& [id, e] : entities_) {
-        const bool farOff = e.present && !e.container && !e.squad && !e.buf.empty() && Dormant(e, now);
+        const bool farOff = e.present && !e.container && !e.squad && !e.buf.empty() && Quiet(e, now);
         if (farOff != e.farGiven) {
             e.farGiven = farOff;
             changed = true;
@@ -242,7 +270,7 @@ void Session::DormantCopies(std::vector<std::pair<Handle, Vec3>>& out) const {
     out.clear();
     const double now = clock_();
     for (const auto& [id, e] : entities_)
-        if (e.present && !e.container && !e.squad && !e.buf.empty() && Dormant(e, now)) out.emplace_back(e.handle, e.buf.back().s.pos);
+        if (e.present && !e.container && !e.squad && !e.buf.empty() && Quiet(e, now)) out.emplace_back(e.handle, e.buf.back().s.pos);
 }
 
 Session::StandInStats Session::standInStats() const {
@@ -256,6 +284,7 @@ Session::StandInStats Session::standInStats() const {
         if (!e.present) continue;
         ++s.present;
         if (!e.squad && Dormant(e, now)) ++s.dormant;
+        else if (!e.squad && Quiet(e, now)) ++s.lowRate;
         if (e.farGiven) ++s.leftFar;
         const bool close = cfg_.standInRadius <= 0 || myCentres_.empty() || e.buf.empty() ||
                           WithinAny(e.buf.back().s.pos, myCentres_, cfg_.standInRadius);
@@ -268,7 +297,7 @@ Session::StandInStats Session::standInStats() const {
 // A host character we may recreate here: the host still sends it to us, and it is near one of our own
 // characters (where our game has the land loaded). Without characters of our own: anywhere sent.
 bool Session::InMyArea(const Entity& e, double now) const {
-    if (e.buf.empty() || Dormant(e, now)) return false;
+    if (e.buf.empty() || Quiet(e, now)) return false;
     if (cfg_.standInRadius <= 0 || myCentres_.empty()) return true;
     return WithinAny(e.buf.back().s.pos, myCentres_, cfg_.standInRadius);
 }
@@ -278,7 +307,7 @@ bool Session::InMyArea(const Entity& e, double now) const {
 // (A_FAIRE 3g). Where our game has not loaded the land it goes again at once, and comes back after
 // the growing stand-in delay (StandInLossDelay) like any other.
 bool Session::FightsSquad(const Entity& e, double now) const {
-    if (e.squad || e.buf.empty() || Dormant(e, now)) return false;
+    if (e.squad || e.buf.empty() || Quiet(e, now)) return false;
     const uint32_t target = e.buf.back().s.combatTarget;
     auto t = target ? entities_.find(target) : entities_.end();
     return t != entities_.end() && t->second.squad;

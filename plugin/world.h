@@ -88,6 +88,11 @@ public:
     void HoldStill(const kc::Handle& h, const kc::EntityState& at) override;   // 0.3.4: dormant copies frozen
     // tests ("dormant"): dormant copies frozen here since the start: stopped walking, put back
     std::atomic<long long> dormantHalts{0}, dormantPutBack{0};
+    // 0.3.5 (night-stream): left where our game keeps them after the put-backs; walked off their anchor
+    std::atomic<long long> dormantAnchored{0}, dormantMoved{0};
+    // 0.3.5 (night-stream): our game's own members for the host's squads, refused / made all the same;
+    // strangers removed from a squad holding our copies, kept (no standing copy left in it), copies lost after
+    std::atomic<long long> extrasRefused{0}, extrasNotRefusable{0}, extrasRemoved{0}, extrasKept{0}, extrasCopiesLost{0};
     // tests ("copyfix", 0.3.4): copies put on the host's floor, host walkers seen getting nowhere
     std::atomic<long long> floorPlacements{0}, stalledWalkers{0};
     // tests ("posturecheck", 0.3.4): copies the host has standing whose body here lies, sits in a bed or
@@ -779,6 +784,9 @@ public:
     bool editorStaged = false;  // tests: the last editor moved our character to its stage
 private:
     std::unordered_map<kc::Handle, double, kc::HandleHash> taskDropAt_;   // client: when its local tasks were last dropped
+    std::unordered_map<kc::Handle, kc::DormantHold, kc::HandleHash> dormantHold_;   // client (0.3.5): HoldStill's book per copy
+    struct ExtraCheck { double at; std::string name; std::vector<kc::Handle> copies; };
+    std::vector<ExtraCheck> extraChecks_;   // client (0.3.5): copies that shared a squad with a stranger just removed
     float syncMaxErr_ = 0;      // client: largest correction since the last report
 public:
     uint64_t masterCorrections = 0, masterChecks = 0;   // tests: animation clock corrections on clients (fighting and fallen characters not counted)

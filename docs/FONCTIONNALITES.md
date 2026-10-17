@@ -1270,7 +1270,10 @@ la fenêtre du client.
   les **escouades hostiles qui nous visent** : un raid ou une vague d'attaque du jeu dont la cible
   est notre faction (cercle qui pulse), une escouade qui se bat contre un de nos persos, ou une
   escouade que le jeu marque « ennemie » à moins de ~250 m d'un de nos persos ; le nombre de
-  persos au-dessus. Une **légende** dans le coin de la carte ; au survol d'un point, une
+  persos au-dessus. (0.3.5, branche `night-stream`, à vérifier en jeu : `farraid`) Un raid loin de
+  tout joueur suit la route que le jeu lui fait prendre (position de son escouade, pas celle de ses
+  persos restés là où leur zone s'est déchargée) ; un raid sans aucun perso chargé est montré aussi,
+  « loin, effectif inconnu ». Une **légende** dans le coin de la carte ; au survol d'un point, une
   **infobulle** : nom, joueur (ou « recrue »), état, **distance** depuis le perso sélectionné. Les
   points suivent la carte quand on la fait glisser ou qu'on zoome (projection du jeu, relue à
   chaque image).
@@ -1392,6 +1395,19 @@ la fenêtre du client.
   destination connue (ou sa cible de combat) : nass4 voyait près de lui des bandits restés loin chez
   l'hôte (12/10 vers minuit). Commande de test `dormant` (écart maximal, combien à plus de 20 unités) ;
   point « les copies en sommeil ne bougent pas » de `farfps`.
+  **0.3.5 (branche `night-stream`, à vérifier en jeu : `farsquads`)** : remises en place à plat, deux au
+  plus par position de l'hôte, puis la copie reste là où le jeu la garde (le 16/10, ~54 000 remises de
+  copies que le jeu gardait à 9, 48 ou 68 unités : un étage) ; remise seulement si elle part vraiment.
+- **Gens autour des autres joueurs (0.3.5, branche `night-stream`, à vérifier en jeu : `farsquads`)** :
+  tous les persos de tous les joueurs (toutes leurs escouades, l'hôte compris) partent à tous, partout,
+  comme avant ; les PNJ autour d'eux partent maintenant aussi aux autres joueurs, **à faible cadence**
+  (position toutes les 2 à 10 s, santé toutes les 5 à 30 s) : en regardant l'escouade d'un autre joueur
+  au loin, les gens autour bougent au lieu de rester figés. Ils restent sur la mise à jour lointaine du
+  jeu (pas de coût de FPS), ne sont jamais recréés ni comptés manquants. Un membre d'escouade que l'hôte
+  n'a pas mis à jour depuis 15 s compte dans « membres de l'escouade manquants ».
+- **PNJ locaux en trop dans les escouades de l'hôte (0.3.5, branche `night-stream`, à vérifier en jeu)** :
+  le jeu d'un client ne peut plus ajouter ses propres membres à une escouade de l'hôte ; ceux déjà là
+  sont retirés quand une copie de l'hôte reste debout dans l'escouade (commande `extras`).
 - **Copie disparue puis revenue (0.3.4)** : chaque copie qui quitte le jeu du client puis revient
   (recréée, adoptée, rechargée) est dite dans le journal avec le temps d'absence (« copy of the host's
   … back here (made) 2.1 s after it left our game ») ; une copie qui n'est pas revenue 20 s après,

@@ -233,6 +233,26 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      aussi, alors que le raid avance probablement. À faire : pour un groupe hors zone chargée, lire la
      position du platoon (celle que le jeu utilise pour la simulation lointaine) au lieu de celle des
      persos ; vérifier en jeu en suivant un raid de loin, puis quand il arrive.
+   - **Fait (branche `night-stream`, à vérifier en jeu : expériences `farsquads` et `farraid`).**
+     - Constaté dans le code et le journal : les persos des joueurs (toutes les escouades de la faction
+       du joueur, donc de tous les joueurs et de l'hôte) étaient **déjà** envoyés à tous en entier
+       quelle que soit la distance (`Entity::squad`), et Geoffrey avait « 0 squad members missing ».
+       Ce qui était figé chez lui, ce sont les **gens autour** de l'autre escouade de rob1 (« 54
+       dormant ») : l'hôte ne les envoyait qu'à rob1. Cause de « ne voit pas les persos » non
+       confirmée par le journal (absents ou figés : jamais précisé).
+     - Correctif : **palier lointain** : tout PNJ près d'un perso de n'importe quel joueur (hôte
+       compris) part aussi aux autres joueurs, à faible cadence (état toutes les 2 à 10 s, santé toutes
+       les 5 à 30 s, marque `kFlagFar`, sans changement de protocole) ; chez eux il reste sur la mise à
+       jour lointaine du jeu, n'est jamais recréé ni compté manquant, et suit la position de l'hôte.
+       Un membre d'escouade sans état de l'hôte depuis 15 s compte dans « squad members missing »
+       (ligne une fois au journal du client). La ligne `stream:` de l'hôte dit « N more at a low rate ».
+     - Carte : la position du `Platoon` est lue (désassemblage, `docs/MOTEUR.md` « Position d'une
+       escouade ») : `Platoon::update` y recopie la position de l'`ActivePlatoon` (persos chargés) ou
+       celle de l'`UnloadedPlatoon` (escouade déplacée sur la carte du monde). Le marqueur suit
+       l'escouade quand elle est déchargée, ou quand ses persos ne bougent plus depuis 4 s alors
+       qu'elle bouge ; les raids sans aucun perso chargé sont lus dans les campagnes des factions et
+       montrés (« loin, effectif inconnu »). Hypothèse à confirmer en jeu : les persos du raid figé
+       restaient dans la liste du monde avec leur dernière position.
 12. **Bilan désync de la session (journal 21:20-23:05, 30 700 lignes).**
    - Rapports « sync NEEDS A LOOK » : rob1 56 (contre 83 bons), Geoffrey 37/37, plopette 32/43 ;
      7 resyncs de zone automatiques, 9 resyncs complètes demandées par l'hôte, 17 déconnexions.
@@ -252,13 +272,42 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      - **PNJ « dormants » non envoyés : 1 055** (« no longer sent to us … had moved N units here: put
        back »). Le jeu du client fait bouger des copies que l'hôte n'envoie plus ; même cause que le
        point 11 (envoi seulement autour des persos du joueur).
+       - **Fait (branche `night-stream`, à vérifier en jeu : expérience `farsquads`).** Cause
+         confirmée par le journal : 1 055 lignes écrites mais ~54 000 remises (« N more such lines not
+         written »), toujours **la même copie à la même distance** (9 unités, 48, 68… pendant des
+         minutes) : le jeu ne la déplaçait pas, il la gardait là (un autre étage : la copie
+         `1:44:1028564480:1:930053696` est « 68 units under the host's (floor group 9 here, 10 on the
+         host) » puis « dormant: … had moved 68 units » 69 fois ; ou une position écrite que le jeu ne
+         prend pas hors de la vue). `HoldStill` mesure maintenant à plat, remet en place deux fois au
+         plus par position de l'hôte, puis laisse la copie là où le jeu la garde (« stays N units …
+         left there ») ; seule une copie qui part vraiment de cet endroit est arrêtée (tâches locales
+         vidées) et remise. Les copies reçues à faible cadence (point 11) suivent la même règle.
      - **Sols : ~940** (sous/au-dessus du sol de l'hôte, remis ; 57 abandons « left to the game »),
        surtout dans les bâtiments à étages.
+       - **Notes (branche `night-stream`), pas de cause claire** : 193 copies différentes, surtout
+         « groupe 9 ici, 10 chez l'hôte » (126), « 2 ici, 9 chez l'hôte » (78, la copie dehors sous un
+         intérieur), « 15 / 9 » (70). Le placement du jeu (`PlaceOnFloorAt`) répond « ok » mais la
+         copie reste à l'étage du dessous 68 unités plus bas (3 essais puis abandon) : piste, l'étage
+         n'existe pas (pas encore créé, ou autre bâtiment) chez le client à cet endroit. Fait : plus de
+         placement d'étage pour une copie en sommeil ou reçue à faible cadence (son étage chez l'hôte
+         est ancien, et la placer l'arrêtait pour personne). À faire : à l'abandon, écrire le bâtiment
+         sous la copie et ses étages chez le client et chez l'hôte.
      - **PNJ locaux en trop non supprimés : 303** (« Vagabond Affamé », « Garde caravane », « Chasseur
        Esclaves », « Fermier Hors-la-Loi » : persos que l'hôte n'a pas, dans une escouade avec une copie
        d'un perso de l'hôte, donc laissés). Le jeu du client fait apparaître ses propres PNJ dans des
        escouades de l'hôte : les retirer sans emporter la copie (sortir la copie de l'escouade
        d'abord), ou bloquer leur apparition.
+       - **Fait (branche `night-stream`, à vérifier en jeu : expérience `farsquads`, commande `extras`).**
+         L'autre chemin de création : l'`ActivePlatoon` fait ses membres elle-même en appelant
+         `RootObjectFactory::create` (désassemblage, `docs/MOTEUR.md`), pas `createRandomCharacter`.
+         Chez un client, un nouveau membre d'une escouade qui contient déjà une copie d'un perso de
+         l'hôte est refusé (aux trois appels qui ignorent le résultat ; le quatrième l'utilise : compté
+         et écrit « extra NPC: … made », avec l'adresse de l'appel). Les inconnus déjà là sont retirés
+         quand une de nos copies est debout dans l'escouade (elle en prend la tête d'abord si
+         l'inconnu la menait) : ce qui avait emporté la copie de rob le 12/10, c'était le retrait du
+         dernier membre debout. Copies vérifiées 2 s après (« all still here » / « LEFT OUR GAME »).
+         Hypothèse à confirmer en jeu : lequel des quatre appels fait ces PNJ (la ligne « extra NPC »
+         le dira).
      - Mouvement « gets nowhere » : 891 ; porter un corps : 372 ; 20 ordres refusés (« carry someone »,
        « pick shackles » : mauvaise cible, copies pas liées).
    - Les bugs de reprise (points 6, 7, 9, 10) s'ajoutent : persos perdus au retour, KO jamais relevé,

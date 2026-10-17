@@ -915,7 +915,7 @@ struct PerfWindow {
     std::string Describe(double now) const {
         const double secs = std::max(1e-3, now - start);
         const double n = double(std::max<uint64_t>(1, ticks)), fn = double(std::max<uint64_t>(1, frames));
-        char b[400];
+        char b[560];
         snprintf(b, sizeof(b), "our work %.2f ms per frame (session %.2f, end of frame %.2f; worst %.1f ms), frame %.1f ms (%.0f fps, worst %.0f ms)",
                  tickMs / n, sessionMs / n, endMs / n, worstTickMs, frameMs / fn, frames ? 1000.0 * fn / frameMs : 0.0, worstFrameMs);
         std::string s = b;
@@ -923,10 +923,12 @@ struct PerfWindow {
         if (g_session->isClient()) {
             const kc::Session::StandInStats st = g_session->standInStats();
             snprintf(b, sizeof(b),
-                     "; host characters %zu followed, %zu here: %zu within %.0f of ours, %zu farther (%zu dormant, %zu left to the game's far update); "
+                     "; host characters %zu followed, %zu here: %zu within %.0f of ours, %zu farther (%zu dormant, %zu sent at a low rate, %zu left to "
+                     "the game's far update; %lld put back, %lld left where our game keeps them so far); "
                      "stand-ins %zu near, %zu far; full updates forced %.0f/s, left far %.0f/s",
-                     st.followed, st.present, st.nearUs, st.radius, st.farFromUs, st.dormant, st.leftFar, st.standInsNear, st.standInsFar,
-                     double(g_world->charsForcedInView.load() - forced) / secs, double(g_world->charsLeftFar.load() - leftFar) / secs);
+                     st.followed, st.present, st.nearUs, st.radius, st.farFromUs, st.dormant, st.lowRate, st.leftFar, g_world->dormantPutBack.load(),
+                     g_world->dormantAnchored.load(), st.standInsNear, st.standInsFar, double(g_world->charsForcedInView.load() - forced) / secs,
+                     double(g_world->charsLeftFar.load() - leftFar) / secs);
             s += b;
         } else if (g_session->isHost()) {
             snprintf(b, sizeof(b), "; movement near client players: %lld full, %lld out of view, %lld long steps split, %lld left whole, longest step %d ms",

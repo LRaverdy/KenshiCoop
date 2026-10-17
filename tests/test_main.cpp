@@ -6507,6 +6507,64 @@ static void TestStreamingTools() {
     }
     CHECK(still == 1);
     CHECK(resyncs == 3 + 1);   // three quick ones, then one more 5 min after the last (in 500 s)
+
+    // 0.3.5 (night-stream): the far tier's pace (kc::FarTierDue)
+    std::printf("streaming (0.3.5): far tier at a low rate, dormant copies held without endless put-backs, raid markers on the squad\n");
+    EntityState a0, a1;
+    a0.pos = {100, 0, 100};
+    a1 = a0;
+    CHECK(!FarTierDue(a1, a0, 1.9));                 // never more often than every 2 s
+    CHECK(!FarTierDue(a1, a0, 5.0));                 // unchanged: not before the 10 s refresh
+    CHECK(FarTierDue(a1, a0, kFarTierRefresh));
+    a1.pos.x += 3.0f;
+    CHECK(FarTierDue(a1, a0, 2.5));                  // moved
+    a1 = a0;
+    a1.pos.y += 40.0f;
+    CHECK(!FarTierDue(a1, a0, 2.5));                 // a height difference alone (floors): not a move
+    a1 = a0;
+    a1.flags = kFlagDown;
+    CHECK(FarTierDue(a1, a0, 2.5));                  // fell
+    a1 = a0;
+    a1.flags = kFlagFar;
+    CHECK(!FarTierDue(a1, a0, 2.5));                 // the mark itself is no change
+    // HoldStill's book (kc::DormantStep): the 16/10 copy kept 9 units off by our game forever
+    DormantHold hb;
+    const Vec3 hostAt{0, 0, 0}, kept{9, 0, 0};
+    CHECK(DormantStep(hb, kept, hostAt) == HoldStep::PutBack);
+    CHECK(DormantStep(hb, kept, hostAt) == HoldStep::PutBack);
+    CHECK(DormantStep(hb, kept, hostAt) == HoldStep::Anchored);   // two tries, then left there
+    int more = 0;
+    for (int i = 0; i < 100; ++i) more += DormantStep(hb, kept, hostAt) != HoldStep::None;
+    CHECK(more == 0);                                // not 54 000 put-backs
+    CHECK(DormantStep(hb, {40, 0, 0}, hostAt) == HoldStep::Moved);   // it walks off its anchor: stopped, put back
+    CHECK(DormantStep(hb, {40, 0, 0}, hostAt) == HoldStep::PutBack);
+    CHECK(DormantStep(hb, {40, 0, 0}, hostAt) == HoldStep::Anchored);
+    CHECK(DormantStep(hb, {300, 0, 0}, {300, 0, 2}) == HoldStep::None);   // the host's moved there: fine where it is
+    DormantHold hv;
+    CHECK(DormantStep(hv, {0, 68, 0}, hostAt) == HoldStep::None);   // 68 units under or over (another floor): not drift
+    DormantHold hn;
+    CHECK(DormantStep(hn, {100, 0, 0}, hostAt) == HoldStep::PutBack);
+    CHECK(DormantStep(hn, {0, 0, 0}, hostAt) == HoldStep::None);     // the put-back took
+    CHECK(DormantStep(hn, {0, 0, 0}, {500, 0, 0}) == HoldStep::PutBack);   // a new position from the host (far tier)
+    // map markers (kc::PickThreatPosition): characters frozen where their zone was left, the squad moving on
+    ThreatTrack tt;
+    const Vec3 frozen{1000, 0, 1000};
+    double tm = 0;
+    Vec3 shown = PickThreatPosition(tt, frozen, true, {1000, 0, 1000}, false, tm);
+    CHECK(!tt.fromPlatoon && FlatDist(shown, frozen) < 1.0f);
+    for (int i = 1; i <= 30; ++i) shown = PickThreatPosition(tt, frozen, true, {1000.0f + i * 20.0f, 0, 1000}, false, tm += 0.34);
+    CHECK(tt.fromPlatoon && shown.x > 1500.0f);      // the marker goes with the squad
+    shown = PickThreatPosition(tt, {shown.x, 0, 1000}, true, {shown.x + 5.0f, 0, 1000}, false, tm += 0.34);
+    CHECK(!tt.fromPlatoon);                          // characters moving again (loaded): theirs
+    ThreatTrack walking;
+    for (int i = 0; i <= 30; ++i) shown = PickThreatPosition(walking, {float(i) * 10.0f, 0, 0}, true, {float(i) * 10.0f + 100.0f, 0, 0}, false, tm += 0.34);
+    CHECK(!walking.fromPlatoon && FlatDist(shown, {300, 0, 0}) < 1.0f);   // a loaded squad on the move: its characters
+    ThreatTrack unloaded;
+    shown = PickThreatPosition(unloaded, frozen, true, {5000, 0, 5000}, true, tm);
+    CHECK(unloaded.fromPlatoon && FlatDist(shown, {5000, 0, 5000}) < 1.0f);   // the game says unloaded: the squad's own
+    ThreatTrack noPlatoon;
+    for (int i = 0; i < 30; ++i) shown = PickThreatPosition(noPlatoon, frozen, false, {}, false, tm += 0.34);
+    CHECK(!noPlatoon.fromPlatoon && FlatDist(shown, frozen) < 1.0f);
 }
 
 // A player's streaming centres: their own characters and the squad members of the group they are with.
@@ -6580,6 +6638,54 @@ static void TestPerPlayerStreaming() {
         return false;
     };
     CHECK(interest(70) && interest(71) && interest(first) && !interest(72));
+    // 0.3.5 (night-stream, A_FAIRE 16/10 point 11): every player's characters (any squad, the host's
+    // too) go to everyone in full wherever they are; the people around them go to the other players at
+    // a low rate (kc::FarTierDue): a player looking at another player's squad far away sees them move
+    std::printf("streaming (0.3.5): every player's characters in full, the people around them to the others at a low rate\n");
+    CHECK(host.streamsFarTo(FakeWorld::H(71), idA) && !host.streamsFarTo(FakeWorld::H(71), idB));
+    CHECK(host.streamsFarTo(FakeWorld::H(72), idA) && host.streamsFarTo(FakeWorld::H(72), idB));   // around the host's far character
+    CHECK(host.streamsFarTo(FakeWorld::H(70), idB) && !host.streamsFarTo(FakeWorld::H(70), idA));
+    CHECK(!host.streamsFarTo(FakeWorld::H(second), idA) && !host.streamsFarTo(FakeWorld::H(3), idB));   // players' characters: in full
+    CHECK(host.farStreamedTo(idA) >= 2 && host.farStreamedTo(idB) >= 2);
+    CHECK(aw.chars.count(71) == 0 && aw.chars.count(72) == 0 && cliA.missingNpcs() == 0);   // never made far away, never "missing"
+    CHECK(aw.chars.count(second) == 1 && Dist(aw.chars[second].pos, hw.chars[second].pos) < 5.0f);   // the other player, 20 km off
+    CHECK(bw.chars.count(3) == 1 && Dist(bw.chars[3].pos, hw.chars[3].pos) < 5.0f);                // the host's far character
+    CHECK(cliA.missingSquad() == 0 && cliB.missingSquad() == 0);
+    {
+        // our game has the land around the second player loaded too (their characters are of our
+        // faction here): its copy of the NPC walking there follows the host's, a few times a minute
+        Run(all, 10.0, [&] { confirm(); return !hw.holding; });   // a character editor still open holds the host
+        CHECK(!hw.holding);
+        FakeChar copy = hw.chars[71];
+        aw.chars[71] = copy;
+        hw.chars[71].dest = {20600, 0, 0};   // 10 s of walking at the fake world's pace
+        int changes = 0;
+        Vec3 seen{1e9f, 0, 0};
+        bool farMarked = false;
+        const double t0 = Now();
+        Run(all, 7.0, [&] {
+            confirm();
+            EntityState latest, rendered;
+            if (cliA.TargetOf(FakeWorld::H(71), latest, rendered)) {
+                if (Dist(latest.pos, seen) > 1.0f) { ++changes; seen = latest.pos; }
+                farMarked = farMarked || (latest.flags & kFlagFar) != 0;
+            }
+            return false;
+        });
+        (void)t0;
+        CHECK(farMarked);
+        CHECK(changes >= 2 && changes <= 5);   // every ~2 s while it walks, not 20 times a second
+        CHECK(Dist(aw.chars[71].pos, hw.chars[71].pos) < 160.0f);   // where the host has it, give or take one step
+        bool far71 = false;
+        for (const Handle& h : aw.farChars) far71 = far71 || h.serial == 71;
+        CHECK(far71);                          // on our game's cheap far update
+        CHECK(cliA.standInStats().lowRate >= 1);
+        CHECK(cliA.missingNpcs() == 0);
+        aw.chars.erase(71);                    // its zone unloads here: nothing made again, nothing missing
+        Run(all, 3.0);
+        CHECK(aw.chars.count(71) == 0 && cliA.missingNpcs() == 0);
+        hw.chars[71].pos = hw.chars[71].dest = {20100, 0, 0};
+    }
     // A_FAIRE 3g: NPCs hitting the second player's character far away go to the first player too
     // (whose camera may follow that fight), and are made there; an NPC beside them that fights
     // nobody does not. Once the fight ends they leave the first player's stream again.
@@ -6646,7 +6752,7 @@ static void TestPerPlayerStreaming() {
     for (const Handle& h : aw.farChars) CHECK(!(h.serial == first || h.serial == second || h.serial <= 3));
     {
         const Session::StandInStats st = cliA.standInStats();
-        CHECK(st.leftFar >= 1 && st.dormant >= st.leftFar && st.present >= st.leftFar && st.squad >= 2);
+        CHECK(st.leftFar >= 1 && st.dormant + st.lowRate >= st.leftFar && st.present >= st.leftFar && st.squad >= 2);
         CHECK(st.nearUs + st.farFromUs == st.present);
     }
     hw.chars[70].pos = hw.chars[70].dest = {150, 0, 30};   // back next to the first player

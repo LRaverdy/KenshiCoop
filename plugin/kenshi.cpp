@@ -272,6 +272,9 @@ const FunctionSig kFunctions[FnCount] = {
     {"ForgottenGUI::<refresh jobs panel>", 0x6E2050, {0x48, 0x8D, 0x91, 0xC0, 0x02, 0x00, 0x00, 0x48, 0x8B, 0x49, 0x10, 0xE9}},
     // ---- 0.3.5 night-posture: stealth state of a character
     {"Character::setStealthMode", 0x5C7E20, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48}},
+    // ---- 0.3.5 (night-stream): squads of the host's characters filled by a client's own game
+    {"RootObjectFactory::create", 0x583400, {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57}},
+    {"ActivePlatoon::setSquadLeader", 0x7917A0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B}},
 };
 
 namespace {
@@ -5831,6 +5834,72 @@ bool CheckSquadBar(SquadBarReport& out, bool repair) {
     }
     if (refill) BarUpdateSeh(FnAddr(FnMainBarUpdateCurrent), bar);
     return true;
+}
+
+// ---- 0.3.5 (night-stream, A_FAIRE 16/10 point 12)
+namespace {
+constexpr uintptr_t kVtActivePlatoon = 0x16E2E08;   // RTTI ".?AVActivePlatoon@@"
+constexpr uintptr_t AP_leader = 0xA0;               // ActivePlatoon: Character* squad leader
+constexpr uintptr_t kCreateThunk = 0x2C5A2;         // jmp RootObjectFactory::create (0x583400)
+bool SetLeaderSeh(void* fn, void* sq, void* c) {
+    __try { reinterpret_cast<void (*)(void*, void*)>(fn)(sq, c); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
+bool IsActivePlatoon(const void* p) { return p && Vtable(p) == Addr(kVtActivePlatoon); }
+
+bool IsPlayerSquad(void* squad) {
+    void* platoon = PlatoonOf(squad);
+    void* f = PlayerFaction();
+    uint32_t n = 0;
+    void** data = nullptr;
+    if (!platoon || !f || !Rd(f, FA_platoonCount, n) || !Rd(f, FA_platoonData, data) || !data || n > 4096) return false;
+    for (uint32_t i = 0; i < n; ++i) {
+        void* p = nullptr;
+        if (Rd(data, i * sizeof(void*), p) && p == platoon) return true;
+    }
+    return false;
+}
+
+void SquadAllMembers(void* squad, std::vector<Character*>& out) {
+    out.clear();
+    if (!IsActivePlatoon(squad)) return;
+    std::vector<void*> members;
+    ReadPointerLektor(reinterpret_cast<const uint8_t*>(squad) + AP_members, members, 256);
+    for (void* m : members)
+        if (IsCharacter(m)) out.push_back(static_cast<Character*>(m));
+}
+
+Character* SquadLeader(void* squad) {
+    void* c = nullptr;
+    return IsActivePlatoon(squad) && Rd(squad, AP_leader, c) && IsCharacter(c) ? static_cast<Character*>(c) : nullptr;
+}
+
+bool SetSquadLeader(void* squad, Character* c) {
+    return IsActivePlatoon(squad) && IsCharacter(c) && SquadOf(c) == squad && SetLeaderSeh(FnAddr(FnSetSquadLeader), squad, c);
+}
+
+bool FactoryCreateResultUnused(uintptr_t returnRva) {
+    static const uintptr_t kSites[] = {0x36B207, 0x36F565, 0x36F88E};
+    static const bool sitesOk = [] {
+        for (uintptr_t s : kSites) {   // each is right after "call <create's thunk>" (E8 rel32)
+            uint8_t b[5];
+            if (!SafeCopy(b, reinterpret_cast<const void*>(Addr(s - 5)), sizeof(b)) || b[0] != 0xE8) return false;
+            int32_t rel = 0;
+            std::memcpy(&rel, b + 1, 4);
+            if (s + uintptr_t(intptr_t(rel)) != kCreateThunk) return false;
+        }
+        return true;
+    }();
+    if (!sitesOk) return false;
+    for (uintptr_t s : kSites) if (s == returnRva) return true;
+    return false;
+}
+
+std::string GameDataName(const void* gd) {
+    std::string s;
+    if (gd) ReadGameString(reinterpret_cast<const uint8_t*>(gd) + off::GD_name, s);
+    return s;
 }
 
 } // namespace kenshi

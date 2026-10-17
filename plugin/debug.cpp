@@ -249,7 +249,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
     if (cmd == "status") {
         std::ostringstream o;
         o << "ok state=" << StateStr(s.state()) << " live=" << live << " ready=" << w.Ready() << " id=" << int(s.localId())
-          << " entities=" << s.entityCount() << " npcs=" << s.npcCount() << " missingNpcs=" << s.missingNpcs()
+          << " entities=" << s.entityCount() << " npcs=" << s.npcCount() << " missingNpcs=" << s.missingNpcs() << " missingSquad=" << s.missingSquad()
           << " joining=" << s.joiningPlayers();
         // join queue (names without spaces): client "queue=2/3 queueWait=<name> queuePhase=saving|loading|editor",
         // host "queue=<name>:<phase>,<name>:wait,..."
@@ -2068,6 +2068,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
     }
     if (cmd == "towns") return w.TownPositions();   // towns: every town, "sid|name|x,y,z|owner" each
     if (cmd == "campos") return DescribeCamera();   // campos: this machine's camera eye, world units "ok x,y,z fwd=fx,fz"
+    if (cmd == "mapthreats") return DescribeMapThreats();   // mapthreats: host (0.3.5), hostile squads of the map feed and where each marker comes from
     if (cmd == "inview")   // inview: character updates switched to the game's in-view (full) path by hk_charUpdateView since the start
         return "ok forced=" + std::to_string(w.charsForcedInView.load()) + " leftfar=" + std::to_string(w.charsLeftFar.load());
     if (cmd == "farleave") {   // farleave 0|1: client, leave the host characters it no longer streams to us to the game's far update (3b; 1 by default)
@@ -2083,8 +2084,42 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         const kc::Session::StandInStats st = s.standInStats();
         std::ostringstream o;
         o << "ok followed=" << st.followed << " present=" << st.present << " squad=" << st.squad << " near=" << st.nearUs << " far=" << st.farFromUs
-          << " dormant=" << st.dormant << " leftfar=" << st.leftFar << " farset=" << w.FarCharacterCount() << " standins_near=" << st.standInsNear
+          << " dormant=" << st.dormant << " lowrate=" << st.lowRate << " leftfar=" << st.leftFar << " farset=" << w.FarCharacterCount() << " standins_near=" << st.standInsNear
           << " standins_far=" << st.standInsFar << " radius=" << st.radius;
+        return o.str();
+    }
+    if (cmd == "extras") {   // extras: client (0.3.5), our game's own members for the host's squads since the start
+        if (!s.isClient()) return "err client only";
+        std::ostringstream o;
+        o << "ok refused=" << w.extrasRefused.load() << " notrefusable=" << w.extrasNotRefusable.load() << " removed=" << w.extrasRemoved.load()
+          << " kept=" << w.extrasKept.load() << " copieslost=" << w.extrasCopiesLost.load();
+        return o.str();
+    }
+    if (cmd == "streamcount") {   // streamcount <playerId>: host (0.3.5), characters sent to that player in full and at a low rate
+        int pid = 0;
+        in >> pid;
+        if (!s.isHost()) return "err host only";
+        return "ok near=" + std::to_string(s.streamedTo(uint8_t(pid))) + " far=" + std::to_string(s.farStreamedTo(uint8_t(pid)));
+    }
+    if (cmd == "squadsync") {   // squadsync: client (0.3.5), the other players' characters here: present, how far from the host's latest
+        if (!s.isClient()) return "err client only";
+        int others = 0, present = 0, over20 = 0;
+        float maxOff = 0;
+        s.ForEachEntity([&](uint32_t, const kc::Handle& h, uint8_t owner, bool squad, bool here) {
+            if (!squad || owner == s.localId()) return;
+            ++others;
+            if (!here) return;
+            ++present;
+            kc::EntityState latest, rendered;
+            kc::Vec3 p;
+            kenshi::Character* c = w.Find(h);
+            if (!c || !kenshi::GetPosition(c, p) || !s.TargetOf(h, latest, rendered)) return;
+            const float d = std::sqrt((p.x - latest.pos.x) * (p.x - latest.pos.x) + (p.z - latest.pos.z) * (p.z - latest.pos.z));
+            maxOff = std::max(maxOff, d);
+            over20 += d > 20.0f ? 1 : 0;
+        });
+        std::ostringstream o;
+        o << "ok others=" << others << " present=" << present << " maxoff=" << int(maxOff) << " over20=" << over20 << " missingSquad=" << s.missingSquad();
         return o.str();
     }
     if (cmd == "dormant") {   // dormant: client (0.3.4), the copies no longer streamed to us and how far each is from where the host last had it
@@ -2104,7 +2139,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         std::ostringstream o;
         o << "ok n=" << copies.size() << " found=" << found << " maxdrift=" << int(maxD) << " over20=" << over20 << " halts=" << w.dormantHalts.load()
-          << " putback=" << w.dormantPutBack.load();
+          << " putback=" << w.dormantPutBack.load() << " anchored=" << w.dormantAnchored.load() << " moved=" << w.dormantMoved.load();
         return o.str();
     }
     if (cmd == "copyfix") {   // copyfix: client (0.3.4), copies put on the host's floor and host walkers seen getting nowhere since the start

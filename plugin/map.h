@@ -28,6 +28,9 @@ std::string DescribeMapConversion();
 std::string DescribeCamera();
 // Tests ("mapui open|close|maptab|state"): clicks the game's MAP button through MyGUI's input.
 std::string MapUi(const std::string& what);
+// Tests ("mapthreats", host, 0.3.5): the hostile squads of the last map feed and where each marker's
+// position came from: "ok N x,z:kind=K:n=M:src=chars|platoon|unloaded ...".
+std::string DescribeMapThreats();
 
 // Hooks on the squad bar's portraits and on the game's names above the heads (installed with the
 // others in hooks.cpp).

@@ -193,7 +193,8 @@ rapport avec les journaux de tout le monde dans `KenshiCoop_bugs\`, et le chat c
   d'un coup. Le mode construction ne met plus personne en pause (sauf si l'hôte avait déjà mis
   pause lui-même).
 - **Caméra** : libre chez chaque joueur ; le mod ne la ramène plus sur ton perso quand tu la
-  déplaces. En suivant de loin le combat d'un autre joueur, on voit les PNJ qui le frappent.
+  déplaces. En suivant de loin le combat d'un autre joueur, on voit les PNJ qui le frappent ; autour
+  des persos des autres joueurs, même très loin, les PNJ bougent (mis à jour quelques fois par minute).
 - **Météo** (pluie, tempêtes, éclairs, nuages de gaz…) : celle de l'hôte, région par région.
 - **Inventaires et équipement** de tous les personnages proches, sacs à dos compris : ranger,
   sortir, empiler (une unité posée sur une unité fait une pile, comme dans le jeu) et lâcher au sol
@@ -219,7 +220,7 @@ rapport avec les journaux de tout le monde dans `KenshiCoop_bugs\`, et le chat c
   plus.
 - **Cadavres** : restent synchronisés et se fouillent, près des joueurs.
 - **Carte et repères** : sur la carte du jeu (onglet CARTE de la fenêtre de gestion, bouton MAP), tous les persos de tous les joueurs à la couleur
-  de leur joueur et les escouades hostiles qui nous visent en rouge ; une minicarte ronde ; le nom
+  de leur joueur et les escouades hostiles qui nous visent en rouge (un raid encore loin suit sa route) ; une minicarte ronde ; le nom
   au-dessus de la tête de chaque perso d'un joueur à sa couleur (son perso principal encadré, aussi
   pour un joueur arrivé après toi, v0.3.4) ;
   leur cadre de portrait coloré ; des pings

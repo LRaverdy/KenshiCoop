@@ -115,6 +115,48 @@ Protocole inchangé (36) : le nouveau message des stats est ignoré par un clien
   - Commandes de test `roster`, `editorstate`, `hostgive`, `savegame` ; tests `TestRosterFile`,
     `TestNightJoin` (`KC_ONLY_NIGHTJOIN=1`) ; expériences `nj_squadback`, `nj_quickload`,
     `nj_captive`, `nj_editorqueue`, `nj_editorleft`. **Non vérifié en jeu.**
+- **Escouades des autres joueurs loin, raids sur la carte, copies en sommeil, PNJ locaux en trop
+  (branche `night-stream`, A_FAIRE 16/10 points 11 et 12)**. À vérifier en jeu : expériences
+  `farsquads` et `farraid` de `tools/coop_test.py`.
+  - **Palier lointain** (hôte, `session_streaming.cpp`, `kc::FarTierDue`) : les persos des joueurs
+    (toutes les escouades de tous les joueurs et de l'hôte) partaient déjà à tous en entier, mais les
+    gens autour d'eux n'allaient qu'au joueur concerné : chez Geoffrey, ceux autour de l'autre
+    escouade de rob1 restaient figés (« 54 dormant »). Tout PNJ près d'un perso de n'importe quel
+    joueur part maintenant aussi aux autres, à faible cadence : position et état toutes les 2 s au
+    plus s'ils changent, 10 s au moins ; santé toutes les 5 à 30 s. Marqué `kFlagFar` (bit 5 des
+    drapeaux d'état, ignoré par un client plus ancien : protocole inchangé). Ligne `stream:` de
+    l'hôte : « N more at a low rate (around the other players') ».
+  - Client : un tel perso est tenu comme un perso en sommeil (mise à jour lointaine du jeu, jamais
+    recréé ni compté manquant, pas de placement d'étage) mais sur la dernière position de l'hôte
+    (`Session::Quiet`). Un membre d'escouade sans état de l'hôte depuis 15 s compte dans « squad
+    members missing » (une ligne au journal). Ligne `sync perf` : persos reçus à faible cadence,
+    remises en place, copies laissées.
+  - **Copies en sommeil** (`KenshiWorld::HoldStill`, `kc::DormantStep`) : 1 055 lignes « dormant: …
+    put back » le 16/10, en réalité ~54 000 remises, toujours la même copie à la même distance (9,
+    48, 68 unités : un étage, ou une position que le jeu ne prend pas hors de la vue). Distance à
+    plat, deux remises au plus par position de l'hôte, puis la copie est laissée là où le jeu la garde
+    (« stays N units … left there ») ; remise seulement si elle part vraiment (ses tâches locales
+    vidées) ou si l'hôte la déplace.
+  - **Marqueurs de raids figés sur la carte** (`KenshiWorld::ReadMapThreats`, `kc::PickThreatPosition`) :
+    position de l'escouade du jeu (`Platoon`+0x48, recopiée par `Platoon::update` depuis
+    l'`ActivePlatoon` ou l'`UnloadedPlatoon` qui la déplace sur la carte du monde ; offsets dans
+    `docs/MOTEUR.md`) quand elle est déchargée, ou quand ses persos ne bougent plus depuis 4 s alors
+    qu'elle bouge. Raids sans aucun perso chargé lus dans les campagnes des factions (toutes les 2 s),
+    montrés avec « loin, effectif inconnu ». Ligne « map: hostile squad … marker follows the squad ».
+  - **PNJ locaux en trop dans les escouades de l'hôte** (303 « not removed » le 16/10) : le jeu du
+    client fait ses propres membres d'escouade par `RootObjectFactory::create` (pas
+    `createRandomCharacter`, déjà refusé). Nouveau détour `hk_factoryCreate` : un nouveau membre d'une
+    escouade qui contient déjà une copie d'un perso de l'hôte est refusé chez un client (aux trois
+    appels du jeu qui ignorent le résultat ; le quatrième est compté et écrit). `Reconcile` retire un
+    inconnu d'une telle escouade quand une de nos copies y est debout (elle en prend la tête d'abord
+    si besoin, `ActivePlatoon::setSquadLeader`) et vérifie 2 s après que nos copies sont toujours là.
+  - **Étages** : plus de placement pour une copie en sommeil ou à faible cadence ; notes sur les
+    abandons dans A_FAIRE (pas de cause claire).
+  - Commandes de test : `streamcount <id>` (hôte), `squadsync`, `extras` (client), `mapthreats`
+    (hôte) ; `status` donne `missingSquad=`, `standins` `lowrate=`, `dormant` `anchored=` et `moved=`.
+  - Tests : `TestStreamingTools` (cadence du palier lointain, `DormantStep`, `PickThreatPosition`),
+    `TestPerPlayerStreaming` (palier lointain, persos des joueurs partout, copie suivie à faible
+    cadence, jamais recréée ni manquante).
 
 - **Rapport de bug en une commande (branche `bugreport`)**. Quand un ami tombait sur un bug, il
   fallait lui demander son `KenshiCoop.log` après coup. Désormais, n'importe quel joueur tape

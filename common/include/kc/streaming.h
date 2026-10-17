@@ -104,6 +104,99 @@ private:
     uint32_t held_ = 0;
 };
 
+// ---- 0.3.5 (branch night-stream, A_FAIRE 16/10 points 11 and 12)
+
+inline float FlatDist(const Vec3& a, const Vec3& b) {
+    const float dx = a.x - b.x, dz = a.z - b.z;
+    return std::sqrt(dx * dx + dz * dz);
+}
+
+// Far tier. A player is sent everything around their own characters at full rate; the characters
+// around the OTHER players' characters (any squad, the host's included) now go to them too, at a
+// low rate: position and state at most every kFarTierEvery seconds when they changed, at least every
+// kFarTierRefresh, health every kFarTierVitalsEvery. Before, they were not sent at all: a player
+// looking at another player's squad far away saw the people around it frozen where their own game
+// last had them ("dormant", 54 of them on Geoffrey's side at 23:04 on 16 October). Marked kFlagFar:
+// the client keeps them on its game's cheap far update and only puts them where the host has them.
+constexpr double kFarTierEvery = 2.0;
+constexpr double kFarTierRefresh = 10.0;
+constexpr double kFarTierVitalsEvery = 5.0;
+inline bool FarTierDue(const EntityState& st, const EntityState& last, double sinceLast) {
+    if (sinceLast < kFarTierEvery) return false;
+    if (sinceLast >= kFarTierRefresh) return true;
+    return FlatDist(st.pos, last.pos) > 2.0f || ((st.flags ^ last.flags) & ~kFlagFar) != 0 || st.combatTarget != last.combatTarget ||
+           st.carrying != last.carrying;
+}
+
+// Client: a copy the host no longer sends (dormant) or sends at a low rate (far tier) is held where
+// the host last had it. The 16/10 session put such copies back ~54 000 times (1055 lines written):
+// the same copy, the same distance each time (9 units, 48 units, for minutes), so our game kept it
+// there (a floor of its own, a far character ignoring written positions) and nothing walked it away.
+// Now: measured flat (floors are the floor code's business), put back at most `maxTries` times per
+// host position; after that the place our game keeps it at is its anchor, and it is only put back
+// again if it really moves away from that anchor (then its local tasks are dropped as well) or if the
+// host's position changes.
+struct DormantHold {
+    Vec3 target, anchor;
+    bool haveTarget = false, anchored = false;
+    int tries = 0;
+};
+enum class HoldStep : uint8_t {
+    None,       // where it should be, or anchored and not moving: nothing to do
+    PutBack,    // put it where the host has it
+    Anchored,   // it stays off after the put-backs: left where our game keeps it (say it once)
+    Moved,      // it walked away from its anchor here: stop it and put it back
+};
+inline HoldStep DormantStep(DormantHold& b, const Vec3& local, const Vec3& target, float drift = 8.0f, int maxTries = 2) {
+    if (!b.haveTarget || FlatDist(b.target, target) > 4.0f) {
+        b = DormantHold{};
+        b.target = target;
+        b.haveTarget = true;
+    }
+    if (b.anchored) {
+        if (FlatDist(local, b.anchor) <= drift) return HoldStep::None;
+        b.anchored = false;
+        b.tries = 1;
+        return HoldStep::Moved;
+    }
+    if (FlatDist(local, target) <= drift) return HoldStep::None;
+    if (b.tries < maxTries) {
+        ++b.tries;
+        return HoldStep::PutBack;
+    }
+    b.anchored = true;
+    b.anchor = local;
+    return HoldStep::Anchored;
+}
+
+// Host, map markers: where to draw a hostile squad. Its characters' average, as before, unless the
+// game moves the squad as a whole (its Platoon) while the characters stay where their zone was left
+// (a raid on its way far from every player, 16/10 00:21: frozen on everyone's map). The platoon's
+// position is used when the game says the squad is unloaded (an UnloadedPlatoon), or when the
+// characters have not moved for kThreatStill seconds while the platoon has.
+constexpr double kThreatStill = 4.0;
+struct ThreatTrack {
+    Vec3 avg, plat;
+    bool have = false, havePlat = false, fromPlatoon = false;
+    double avgMovedAt = -1e18, platMovedAt = -1e18, seenAt = 0;
+};
+inline Vec3 PickThreatPosition(ThreatTrack& t, const Vec3& avg, bool platOk, const Vec3& plat, bool unloaded, double now) {
+    constexpr float kMoved = 5.0f, kApart = 50.0f;
+    t.seenAt = now;
+    if (!t.have || FlatDist(avg, t.avg) > kMoved) {
+        if (t.have) t.avgMovedAt = now;
+        t.avg = avg;
+        t.have = true;
+    }
+    if (platOk && (!t.havePlat || FlatDist(plat, t.plat) > kMoved)) {
+        if (t.havePlat) t.platMovedAt = now;
+        t.plat = plat;
+        t.havePlat = true;
+    }
+    t.fromPlatoon = platOk && (unloaded || (now - t.avgMovedAt > kThreatStill && now - t.platMovedAt < kThreatStill && FlatDist(plat, avg) > kApart));
+    return t.fromPlatoon ? plat : avg;
+}
+
 // How long a client waits before recreating a stand-in that vanished `losses` times in a row
 // (killed and cleaned up once is normal; again and again means the local game does not keep that
 // place loaded): 2 s, 10 s, 30 s, then a minute, then two.

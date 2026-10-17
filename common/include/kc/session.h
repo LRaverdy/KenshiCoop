@@ -652,6 +652,9 @@ public:
     // host: whether that character's positions, health and animations go to that player now
     bool streamsTo(const Handle& h, uint8_t playerId) const;
     size_t streamedTo(uint8_t playerId) const;                // host: characters that player is sent
+    // host (0.3.5, night-stream): sent to that player at a low rate only (near another player's characters)
+    bool streamsFarTo(const Handle& h, uint8_t playerId) const;
+    size_t farStreamedTo(uint8_t playerId) const;
     size_t zoneResyncs() const { return zoneResyncs_; }       // host: automatic zone resyncs done
     size_t resyncedHere() const { return resyncedHere_; }     // client: characters the host sent again
     int spawnPeak() const { return spawnPeak_; }              // client: most stand-ins made in one frame
@@ -661,6 +664,7 @@ public:
     struct StandInStats {
         size_t followed = 0, present = 0, squad = 0, nearUs = 0, farFromUs = 0, dormant = 0;
         size_t standInsNear = 0, standInsFar = 0, leftFar = 0;
+        size_t lowRate = 0;   // 0.3.5: sent to us at a low rate (near another player's characters)
         float radius = 0;
     };
     StandInStats standInStats() const;
@@ -841,9 +845,11 @@ private:
         double presentSince = -1;            // client: here since
         double lostAt = -1;                  // client (0.3.4): our copy left our game then (-1: not lost); told when made again
         bool lostTold = false;               // client (0.3.4): "still not back" said once for this loss
+        bool staleTold = false;              // client (0.3.5): a squad member without state for a while, said once
         double dormantApplyAt = 0;           // client: a dormant one is driven only now and then
         bool farGiven = false;               // client: in the last IWorld::SetFarCharacters list
         uint32_t streamMask = 0;             // host: players (bit = id) it is streamed to
+        uint32_t farMask = 0;                // host (0.3.5): players it is sent to at a low rate (kc::FarTierDue)
         // host
         bool keep = false;                   // scratch flag for interest updates
         bool container = false;              // a container a player has open (no character)
@@ -895,6 +901,7 @@ private:
         std::string returnNote;              // night-join: what they are told once in (French; their characters)
         bool staleWorld = false;             // night-join: their save is of a world the host has left (another save loaded)
         size_t streamed = 0;                 // characters streamed to them (UpdateStreams)
+        size_t farStreamed = 0;              // 0.3.5: and at a low rate (near other players' characters)
         double statsAt = -1;                 // their stream report: last time, bytes sent then
         uint64_t bytesAt = 0;
     };
@@ -920,6 +927,7 @@ private:
     bool InMyArea(const Entity& e, double now) const;   // client: near our characters and still sent
     bool FightsSquad(const Entity& e, double now) const;   // client: still sent, and fighting a squad member (any player's)
     bool Dormant(const Entity& e, double now) const;    // client: the host stopped sending it
+    bool Quiet(const Entity& e, double now) const;      // client (0.3.5): dormant, or sent at a low rate (kFlagFar)
     std::vector<Vec3> myCentres_;            // client
     void UpdateFarCharacters(double now);    // client (3b): IWorld::SetFarCharacters when the set changed
     size_t farGiven_ = 0;                    // client: size of the last list given
@@ -1433,6 +1441,7 @@ private:
     std::vector<RegionWeather> lastWeather_;
     bool controllableDirty_ = true;
     uint32_t missingSquad_ = 0;
+    double lastSnapshotAt_ = -1e9;   // client (0.3.5): when the host's last snapshot arrived
     double connectStarted_ = 0;
     std::map<PeerId, double> pendingPeers_;          // host: connected, Hello not received yet
     std::vector<std::pair<uint8_t, Command>> pendingCommands_;  // host: run on the next live tick

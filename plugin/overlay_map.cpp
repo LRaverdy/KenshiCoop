@@ -189,7 +189,7 @@ void DrawMapScreen(const MapScene& s, float w, float h) {
         const float d = std::hypot(x - cx, y - cy);
         if (d < bestD) {
             bestD = d;
-            tip = {t.label.empty() ? "Hostiles" : t.label, std::to_string(t.count) + " perso(s), " + ThreatKindName(t.kind)};
+            tip = {t.label.empty() ? "Hostiles" : t.label, (t.count ? std::to_string(t.count) + " perso(s), " : std::string("loin, effectif inconnu, ")) + ThreatKindName(t.kind)};
             if (s.centreOk) tip.push_back("Distance : " + Metres(Dist2D(t.pos, s.centre)));
         }
     }
@@ -411,7 +411,7 @@ void DrawMinimap(const MapScene& s, float w, float h, ID3D11Device* dev) {
         dl->AddCircle(ImVec2(x, y), 5.0f, kShadow, 12, 1.2f);
         if (const float d = std::hypot(x - mx, y - my); d < bestD) {
             bestD = d;
-            tip = {t.label.empty() ? "Hostiles" : t.label, std::to_string(t.count) + " perso(s), " + ThreatKindName(t.kind), "Distance : " + Metres(Dist2D(t.pos, s.centre))};
+            tip = {t.label.empty() ? "Hostiles" : t.label, (t.count ? std::to_string(t.count) + " perso(s), " : std::string("loin, effectif inconnu, ")) + ThreatKindName(t.kind), "Distance : " + Metres(Dist2D(t.pos, s.centre))};
         }
     }
     for (const auto& c : s.chars) {
