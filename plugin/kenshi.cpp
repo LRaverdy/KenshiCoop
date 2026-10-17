@@ -809,6 +809,32 @@ bool SetFarWoundVisuals(bool on) {
     return true;
 }
 
+// 17/10 (A_FAIRE 16/10 point 1, docs/MOTEUR.md "Éditeur et pause"): the character editor builds its
+// stage (0x5F03C0, from CharacterEditor::update 0x5F16A0) once every character's body is rebuilt, and
+// that rebuild runs from the character's animation update. Paused, the game's update (0x5C7B20) skips
+// it for the player's characters while an editor is open (jne at 0x5C7B5E): a client paused by the
+// host's hold never got its stage (camera under the ground, empty editor). Let through (nop) while an
+// editor waits for its stage; the game's bytes again once it is built (the editor pauses by itself).
+bool SetEditorPausedAnim(bool on) {
+    static int state = -1;   // as in SetFarTalk
+    if (state == 2) return false;
+    if (state == int(on)) return true;
+    static constexpr uint8_t kGame[2] = {0x75, 0x10};   // jne 0x5C7B70 (skip the animation update)
+    static constexpr uint8_t kNop[2] = {0x90, 0x90};
+    auto* at = reinterpret_cast<uint8_t*>(g_base + 0x5C7B5E);
+    if (state == -1 && std::memcmp(at, kGame, 2) != 0 && std::memcmp(at, kNop, 2) != 0) {
+        state = 2;
+        return false;
+    }
+    DWORD old = 0;
+    if (!VirtualProtect(at, 2, PAGE_EXECUTE_READWRITE, &old)) return false;
+    std::memcpy(at, on ? kNop : kGame, 2);
+    VirtualProtect(at, 2, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), at, 2);
+    state = int(on);
+    return true;
+}
+
 bool GetPosition(Character* c, kc::Vec3& out) {
     if (!IsCharacter(c)) return false;
     void* fn = VSlot(c, slot::RO_getPosition);
@@ -1337,6 +1363,18 @@ uint32_t DropCharacterList(void* lektor) {
 bool CharacterEditorOpen() {
     void* ed = nullptr;
     return Rd(reinterpret_cast<void*>(Addr(kTheGui)), GUI_editor, ed) && ed;
+}
+
+bool EditorStageReady() {
+    void* ed = nullptr;
+    void* selected = nullptr;   // CharacterEditor+0x278: set by the stage setup (0x5EFD60), 0 until then
+    return Rd(reinterpret_cast<void*>(Addr(kTheGui)), GUI_editor, ed) && ed && Rd(ed, 0x278, selected) && selected;
+}
+
+bool InCharacterEditor(Character* c) {
+    std::vector<Character*> chars;
+    EditorCharacters(chars);
+    return std::find(chars.begin(), chars.end(), c) != chars.end();
 }
 
 void EditorCharacters(std::vector<Character*>& out) {
@@ -2968,6 +3006,36 @@ std::string WhyNotWorn(void* holder, void* inv, void* item, const std::string& s
     return why.empty() ? "no room at its cell" : why;
 }
 } // namespace
+
+// Tests ("secnames"): a holder's inventory sections, "name:WxH:enabled:allowed" each (allowed: that item's
+// type taken there, '-' without an item).
+std::string DescribeSections(void* holder, void* item) {
+    void* inv = InventoryOf(holder);
+    if (!inv) return "no inventory";
+    const auto* map = reinterpret_cast<const uint8_t*>(inv) + INV_sections;
+    uint64_t size = 0, bucketCount = 0;
+    void** buckets = nullptr;
+    if (!Rd(map, off::US_size, size) || size > 256) return "unreadable";
+    if (size == 0) return "no sections";
+    if (!Rd(map, off::US_bucketCount, bucketCount) || !Rd(map, off::US_buckets, buckets) || !buckets) return "unreadable";
+    void* node = nullptr;
+    if (!Rd(buckets, bucketCount * sizeof(void*), node)) return "unreadable";
+    std::string out, key;
+    for (uint64_t i = 0; node && i < size; ++i) {
+        void* sec = nullptr;
+        if (ReadGameString(reinterpret_cast<uint8_t*>(node) + off::MapNode_key, key) && Rd(node, off::MapNode_mapped, sec) && sec) {
+            int w = 0, h = 0;
+            uint8_t enabled = 0;
+            Rd(sec, SEC_width, w); Rd(sec, SEC_height, h); Rd(sec, SEC_enabled, enabled);
+            bool allowed = false;
+            const char* a = !item ? "-" : (TypeAllowedSeh(sec, item, allowed) ? (allowed ? "1" : "0") : "?");
+            out += (out.empty() ? "" : " ") + (key.empty() ? std::string("''") : key) + ":" + std::to_string(w) + "x" + std::to_string(h) + ":" +
+                   std::to_string(int(enabled)) + ":" + a;
+        }
+        if (!Rd(node, off::USNode_next, node)) break;
+    }
+    return out;
+}
 
 bool RebuildInventory(void* c, const std::vector<kc::ItemState>& items, std::string* err) {
     void* inv = InventoryOf(c);
@@ -4702,6 +4770,24 @@ bool GiveNewItem(Character* c, const std::string& sid, int32_t qty, std::string*
         return false;
     }
     return true;
+}
+
+// Tests (sandbox): n new items straight into that section of a holder (a machine), never through a
+// character's inventory: 17/10 nightitems, member 0's bag was full, the item went where the game's give
+// put it and the host crashed in its next frame (kenshi_x64+0x6d1c7, an item model without "texture
+// map"). Not taken there: destroyed at once.
+bool GiveNewItemInto(void* holder, const std::string& sid, int32_t qty, const std::string& section, std::string* why) {
+    void* inv = InventoryOf(holder);
+    if (!inv) { if (why) *why = "no inventory"; return false; }
+    kc::ItemState st;
+    st.templateSid = sid;
+    st.quantity = qty > 0 ? qty : 1;
+    void* item = CreateItemFromState(st, why);
+    if (!item) return false;
+    if (PlaceItem(inv, item, section, -1, -1, st.quantity, false)) return true;
+    if (GameWorld* w = World()) CallDestroy(FnAddr(FnWorldDestroy), w, item);
+    if (why) *why = "no room";
+    return false;
 }
 
 namespace {

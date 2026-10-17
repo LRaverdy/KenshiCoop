@@ -296,7 +296,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
     }
     if (cmd == "editorstate") {   // night-join (client): the character editor, its scene, the pause around it
         std::ostringstream o;
-        o << "ok open=" << kenshi::CharacterEditorOpen() << " staged=" << w.editorStaged << " warmups=" << w.editorWarmups
+        o << "ok open=" << kenshi::CharacterEditorOpen() << " staged=" << w.editorStaged << " stage=" << kenshi::EditorStageReady()
           << " paused=" << kenshi::GetPaused() << " queued=" << (s.queueStatus() ? 1 : 0);
         return o.str();
     }
@@ -1914,7 +1914,10 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             kc::InvOp mv;
             mv.kind = kc::InvOpKind::Move;
             mv.item = *loose;
-            mv.toSection = "main";
+            // the container's own section: a storage chest has only "backpack_content" (17/10: "main"
+            // answered "no room" for every item)
+            const std::string secs = kenshi::DescribeSections(best, nullptr);
+            mv.toSection = secs.find("main:") != std::string::npos || secs.find(':') == std::string::npos ? "main" : secs.substr(0, secs.find(':'));
             mv.toX = -1;
             mv.toY = -1;
             std::string why;
@@ -1935,6 +1938,31 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         HostCallScope scope;   // the window's own move (the client's diff then asks the host)
         const bool ok = kenshi::MoveInventoryItem(best, me, mv, &why);
         return (ok ? "ok took " : "err ") + items[0].templateSid + (ok ? "" : " " + why) + " from " + bestName + " (" + std::to_string(items.size()) + " stacks)";
+    }
+    if (cmd == "secnames") {   // secnames <sid|name part> [itemSid]: the nearest such object's inventory sections (around squad member 0), and whether member 0's item of that kind is allowed there
+        std::string part, itemSid;
+        in >> part >> itemSid;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        kenshi::Character* me = squad.empty() ? nullptr : w.FindSquad(squad[0]);
+        kc::Vec3 p, op;
+        if (!me || !kenshi::GetPosition(me, p)) return "err";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(p, 1500, objs);
+        void* best = nullptr;
+        float bestD = 1e30f;
+        for (void* o : objs) {
+            std::string sid, name;
+            if (!kenshi::ObjectTemplate(o, sid) || !kenshi::TemplateDisplayName(sid, name) || (sid != part && name.find(part) == std::string::npos) ||
+                !kenshi::ObjectPosition(o, op))
+                continue;
+            const float d = (op.x - p.x) * (op.x - p.x) + (op.z - p.z) * (op.z - p.z);
+            if (d < bestD) { bestD = d; best = o; }
+        }
+        if (!best) return "err none called " + part;
+        void* item = nullptr;
+        if (!itemSid.empty()) item = kenshi::FindItemOfKind(me, itemSid);
+        return "ok " + kenshi::DescribeSections(best, item) + (itemSid.empty() ? "" : (item ? " (item found)" : " (no such item on member 0)"));
     }
     if (cmd == "contcount") {   // contcount <name part>: stacks in the nearest container with that name (around squad member 0)
         std::string part;
@@ -2218,7 +2246,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         std::ostringstream o;
         o << "ok n=" << copies.size() << " found=" << found << " maxdrift=" << int(maxD) << " over20=" << over20 << " halts=" << w.dormantHalts.load()
-          << " putback=" << w.dormantPutBack.load() << " anchored=" << w.dormantAnchored.load() << " moved=" << w.dormantMoved.load();
+          << " putback=" << w.dormantPutBack.load() << " anchored=" << w.dormantAnchored.load() << " moved=" << w.dormantMoved.load() << " followed=" << w.dormantFollowed.load();
         return o.str();
     }
     if (cmd == "copyfix") {   // copyfix: client (0.3.4), copies put on the host's floor and host walkers seen getting nowhere since the start
@@ -3395,15 +3423,17 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         }
         return out;
     }
-    if (cmd == "giveitem") {   // giveitem <templateSid|name part> <n> <squadIndex>: (host) n new items into that member's inventory
-        std::string what;
+    if (cmd == "giveitem") {   // giveitem <templateSid|name part> <n> <squadIndex|npc>: (host) n new items into that member's inventory (npc: the last spawnnpc)
+        std::string what, who;
         int32_t n = 1;
-        size_t idx = 0;
-        in >> what >> n >> idx;
+        in >> what >> n >> who;
         if (!s.isHost()) return "err host only";
         std::replace(what.begin(), what.end(), '_', ' ');
         auto squad = SortedSquad(w);
-        if (idx >= squad.size()) return "err no such squad member";
+        kenshi::Character* target = nullptr;
+        if (who == "npc") target = w.Find(lastSpawned_);
+        else if (size_t idx = who.empty() ? 0 : size_t(std::strtoul(who.c_str(), nullptr, 10)); idx < squad.size()) target = w.FindSquad(squad[idx]);
+        if (!target) return "err no such character";
         // a name can belong to several records (the item, and e.g. a research or a dialogue line called
         // "Building Materials", which the item factory refuses): items first (ItemTemplates), then
         // each candidate until one is an item the factory makes
@@ -3416,7 +3446,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         std::string why, all;
         HostCallScope scope;
         for (const auto& sid : cands) {
-            if (kenshi::GiveNewItem(w.FindSquad(squad[idx]), sid, n, &why)) return "ok " + sid + " x" + std::to_string(n);
+            if (kenshi::GiveNewItem(target, sid, n, &why)) return "ok " + sid + " x" + std::to_string(n);
             if (all.size() < 400) all += (all.empty() ? "" : "; ") + why;
         }
         return "err " + all;

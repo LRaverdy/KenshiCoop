@@ -87,7 +87,7 @@ public:
     void SetFarCharacters(const std::vector<kc::Handle>& handles) override;    // 3b
     void HoldStill(const kc::Handle& h, const kc::EntityState& at) override;   // 0.3.4: dormant copies frozen
     // tests ("dormant"): dormant copies frozen here since the start: stopped walking, put back
-    std::atomic<long long> dormantHalts{0}, dormantPutBack{0};
+    std::atomic<long long> dormantHalts{0}, dormantPutBack{0}, dormantFollowed{0};   // followed: a low-rate copy moved to the host's new position
     // 0.3.5 (night-stream): left where our game keeps them after the put-backs; walked off their anchor
     std::atomic<long long> dormantAnchored{0}, dormantMoved{0};
     // 0.3.5 (night-stream): our game's own members for the host's squads, refused / made all the same;
@@ -794,14 +794,12 @@ private:   // first few lifecycle events (tests)
     double pauseSeenAt_ = -1;   // client: when the host's pause arrived (we pause a little later)
     // night-join (16/10 point 1): the character editor opened on a client whose game was paused (a
     // player waiting in the join queue: the host holds the world) set up no scene: the player saw the
-    // editor's empty stage ("a desert"). The game runs at a crawl until the editor has moved our
-    // character to its stage (watched; tried again twice), then follows the host's pause again.
-    double editorWarmupUntil_ = -1;
+    // editor's empty stage ("a desert"): a paused game skipped the body rebuild the stage waits for
+    // (17/10, read in the disassembly). Let through until the stage is built (UpdateEditorStage).
     struct EditorWatch { kc::Handle h; kc::Vec3 pos; double at = -1; int tries = 0; } editorWatch_;
-    void WatchEditor(double now);
+    void UpdateEditorStage(double now);
 public:
-    int editorWarmups = 0;      // tests ("editorstate"): editors opened on a paused game, unpaused for their scene
-    bool editorStaged = false;  // tests: the last editor moved our character to its stage
+    bool editorStaged = false;  // tests: the last editor opened here built its stage
 private:
     std::unordered_map<kc::Handle, double, kc::HandleHash> taskDropAt_;   // client: when its local tasks were last dropped
     std::unordered_map<kc::Handle, kc::DormantHold, kc::HandleHash> dormantHold_;   // client (0.3.5): HoldStill's book per copy

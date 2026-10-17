@@ -693,6 +693,9 @@ bool WriteAppearance(Character* c, const kc::AppearanceMsg& m);
 bool OpenCharacterEditor(Character* c);
 void EditorCharacters(std::vector<Character*>& out);           // who the open editor works on
 bool CharacterEditorOpen();
+bool EditorStageReady();                  // the open editor has built its stage (CharacterEditor+0x278 set)
+bool InCharacterEditor(Character* c);     // one of the open editor's characters (it owns them: on its stage)
+bool SetEditorPausedAnim(bool on);        // paused, the player's characters still rebuild their bodies for an editor (0x5C7B5E)
 // 0.3.4: a lektor<Character*> passed by value to the editor (showCharacterEditor) that will not be
 // opened: its storage freed as the callee would (the game's delete). Returns how many it held.
 uint32_t DropCharacterList(void* lektor);
@@ -983,6 +986,8 @@ bool IsItemObject(const void* obj);
 bool ItemInWorld(void* item);
 void WorldItemsNear(const kc::Vec3& pos, float radius, std::vector<void*>& out);
 void* InventoryCallback(void* inventory);      // Inventory +0x80: the object whose dropItem the inventory calls
+std::string DescribeSections(void* holder, void* item);   // tests: "name:WxH:enabled:allowed" per section
+bool GiveNewItemInto(void* holder, const std::string& sid, int32_t qty, const std::string& section, std::string* why);   // tests: new items into that section, destroyed if refused   // tests: "name:WxH:enabled:allowed" per section
 void* InventoryOfHolder(void* holder);         // a character's or a building's inventory
 // What an inventory window does when an item held by the mouse is released over the world:
 // Inventory::dropItem on the window's inventory (vt 0x38).

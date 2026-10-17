@@ -335,14 +335,7 @@ void KenshiWorld::EndFrame() {
         constexpr double kSettleBeforePause = 0.8;
         constexpr float kCrawl = 0.05f;
         const double now = NowSeconds();
-        WatchEditor(now);   // night-join: the character editor's scene set up?
-        if (now < editorWarmupUntil_) {
-            // night-join: the character editor sets up its scene: the game runs at a crawl meanwhile, then
-            // settles into the host's pause as after any unpause
-            if (kenshi::GetPaused()) kenshi::CallUserPause(false);
-            if (std::fabs(kenshi::GetFrameSpeed() - 0.05f) > 1e-3f) kenshi::CallSetFrameSpeed(0.05f);
-            pauseSeenAt_ = -1;
-        } else if (hostTime_.paused && !kenshi::GetPaused()) {
+        if (hostTime_.paused && !kenshi::GetPaused()) {
             if (pauseSeenAt_ < 0) {
                 pauseSeenAt_ = now;
                 kenshi::CallSetFrameSpeed(kCrawl);
@@ -366,6 +359,7 @@ void KenshiWorld::EndFrame() {
                 kenshi::CallSetFrameSpeed(hostTime_.speed);
         }
     }
+    UpdateEditorStage(NowSeconds());   // night-join: the character editor's stage, paused or not
     // While players join, the host's world stays frozen even if someone presses unpause.
     if (holding_ && !kenshi::GetPaused()) {
         kenshi::CallUserPause(true);
@@ -1094,6 +1088,9 @@ bool KenshiWorld::ReadVitals(const kc::Handle& h, kc::EntityVitals& out) {
 void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, const kc::EntityState& latest) {
     kenshi::Character* c = Find(h);
     if (!c) return;
+    // in the character editor: the editor holds it on its stage (moved to the world's origin, its body
+    // under the stage's node): a host position written now would throw the model off the stage
+    if (kenshi::CharacterEditorOpen() && kenshi::InCharacterEditor(c)) return;
     // The tasks it had in the save (sit on a stool, patrol, wander...) would keep running here and
     // fight the host's positions (characters jumping back and forth between two spots): it drops
     // them, the game's own way. Nothing gives it new ones on a client.
@@ -1554,6 +1551,13 @@ void KenshiWorld::HoldStill(const kc::Handle& h, const kc::EntityState& at) {
     case kc::HoldStep::PutBack:
         kenshi::Teleport(c, at.pos, at.rot);
         lastDest_.erase(h);
+        // a copy sent at a low rate whose host's position just changed: that is how it follows the host
+        // (in game 17/10, farsquads: walkers near another player, ~30 such per copy in 3 min at x3), not
+        // a copy our game keeps off: counted apart, no line
+        if (step == kc::HoldStep::PutBack && (at.flags & kc::kFlagFar) && book.tries == 1) {
+            ++dormantFollowed;
+            return;
+        }
         ++dormantPutBack;
         if (dormantLog_.Allow(NowSeconds(), &held))
             Log("dormant: %s (%s) was %.0f units here from where the host has it%s: put back (%d/2)%s", KeyOf(h).c_str(),
@@ -1614,61 +1618,39 @@ bool KenshiWorld::OpenCharacterEditor(const kc::Handle& h) {
     kenshi::Character* c = Find(h);
     if (!c || !live_) return false;
     HostCallScope scope;
-    // night-join (16/10 point 1): Geoffrey's editor opened after 2 min in the join queue, his game
-    // paused by the host's hold: "editor opened: ok", 465 fps, but our characters never left their
-    // spot ("0 off" in his reports) and he saw only the editor's empty stage. rob1's, and Geoffrey's
-    // second try, opened within a second of loading, before this game had paused: the editor moved the
-    // characters to its stage ("3 off, max offset 65658"). So the editor gets a running game (a crawl)
-    // for its first frames, whatever the host's pause.
+    // night-join (16/10 point 1): Geoffrey's editor opened after 2 min in the join queue, his game paused
+    // by the host's hold, showed an empty stage ("un désert"). The editor builds its stage only once the
+    // character's body is rebuilt, which a paused game skips for the player's characters while an
+    // editor is open (kenshi::SetEditorPausedAnim, let through by UpdateEditorStage until the stage is
+    // up): no unpause needed, the host's pause is kept.
     const bool paused = kenshi::GetPaused();
-    if (client_ && active_) {
-        editorWarmupUntil_ = NowSeconds() + 2.0;
-        if (paused) {
-            kenshi::CallUserPause(false);
-            ++editorWarmups;
-        }
-        kenshi::CallSetFrameSpeed(0.05f);
-    }
-    kc::Vec3 before;
-    const bool havePos = kenshi::GetPosition(c, before);
     const bool ok = kenshi::OpenCharacterEditor(c);
-    Log("character editor opened: %s%s", ok ? "ok" : "failed",
-        client_ && paused ? " (this game was paused by the host's hold: it runs at a crawl while the editor sets up its scene)" : "");
+    Log("character editor opened: %s%s", ok ? "ok" : "failed", paused ? " (this game is paused: the editor's stage is built all the same)" : "");
     editorStaged = false;
-    if (ok && client_ && havePos) editorWatch_ = EditorWatch{h, before, NowSeconds(), 0};
+    if (ok && client_) editorWatch_ = EditorWatch{h, {}, NowSeconds(), 0};
     return ok;
 }
 
-// Client: did the editor move our character to its stage (tens of thousands of units away)? Written
-// once; not yet after 3 s: the game runs at a crawl again for 2 s (twice at most).
-void KenshiWorld::WatchEditor(double now) {
-    if (editorWatch_.at < 0 || now - editorWatch_.at < 3.0) return;
-    if (!kenshi::CharacterEditorOpen()) { editorWatch_.at = -1; return; }
-    kenshi::Character* c = Find(editorWatch_.h);
-    kc::Vec3 p;
-    if (!c || !kenshi::GetPosition(c, p)) { editorWatch_.at = -1; return; }
-    const float moved = std::sqrt((p.x - editorWatch_.pos.x) * (p.x - editorWatch_.pos.x) + (p.z - editorWatch_.pos.z) * (p.z - editorWatch_.pos.z));
-    if (moved > 1000.0f) {
+// Each frame: while an open editor has not built its stage yet, the paused game's update rebuilds the
+// player's bodies (the game's bytes again afterwards). Client: the stage written once (a test reads
+// "editorstate"); still none after 6 s is told.
+void KenshiWorld::UpdateEditorStage(double now) {
+    const bool open = kenshi::CharacterEditorOpen();
+    const bool ready = open && kenshi::EditorStageReady();
+    kenshi::SetEditorPausedAnim(open && !ready);
+    if (editorWatch_.at < 0) return;
+    if (!open) { editorWatch_.at = -1; return; }
+    if (ready) {
         editorStaged = true;
-        Log("character editor: its scene is set up (our character moved %.0f units to the editor's stage, after %d retr%s)", moved, editorWatch_.tries,
-            editorWatch_.tries == 1 ? "y" : "ies");
+        Log("character editor: its stage is built after %.1f s (paused=%d)", now - editorWatch_.at, int(kenshi::GetPaused()));
         editorWatch_.at = -1;
         return;
     }
-    if (editorWatch_.tries >= 2) {
-        Log("character editor: STILL NO SCENE after 3 tries (our character %.0f units from its spot, paused=%d speed=%.2f): the player may see an empty "
-            "stage (a resync opens the editor again)",
-            moved, int(kenshi::GetPaused()), kenshi::GetFrameSpeed());
+    if (now - editorWatch_.at >= 6.0) {
+        Log("character editor: STILL NO SCENE after 6 s (paused=%d speed=%.2f): the player may see an empty stage (a resync opens the editor again)",
+            int(kenshi::GetPaused()), kenshi::GetFrameSpeed());
         editorWatch_.at = -1;
-        return;
     }
-    ++editorWatch_.tries;
-    Log("character editor: no scene yet after 3 s (our character %.0f units from its spot, paused=%d speed=%.2f): the game runs at a crawl again for 2 s",
-        moved, int(kenshi::GetPaused()), kenshi::GetFrameSpeed());
-    if (kenshi::GetPaused()) kenshi::CallUserPause(false);
-    kenshi::CallSetFrameSpeed(0.05f);
-    editorWarmupUntil_ = now + 2.0;
-    editorWatch_.at = now;
 }
 
 void KenshiWorld::TakeSyncStats(float& maxErr, uint16_t& farOff) {
@@ -2119,6 +2101,9 @@ void KenshiWorld::UpdateFloorFocus() {
     const double now = NowSeconds();
     if (now < nextFocusCheck_) return;
     nextFocusCheck_ = now + 0.5;
+    // not while the character editor is open: its stage has its own camera, and tracking our character
+    // took it back to the world (in game 17/10: an editor over the bare ground, A_FAIRE 16/10 point 1)
+    if (kenshi::CharacterEditorOpen()) return;
     constexpr int kMaxRetakes = 3;
     std::vector<std::pair<kc::Handle, kenshi::Character*>> mine;   // local handles
     for (const kc::Handle& h : controllable_) {
@@ -3008,6 +2993,23 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
         for (int i = 0; i < jobsBefore && !hadSameKind; ++i) hadSameKind = kenshi::PermajobType(c, i) == cmd.task;
         const bool ok = RunPlayerTask(c, cmd, subject, building, &orderRefusal_);
         if (!ok && !orderRefusal_.empty()) orderRefusalReason_ = kc::ResultReason::SelectionBusy;
+        // A_FAIRE 16/10 point 21: Shift + right click on a storage. The game's own click turns the "loot"
+        // (26) into OPERATE_STORAGE (124, "ranger", newPlayerTaskSelectedCharacters 0x7FA6AC-0x7FA6E3)
+        // only when the object's vt 0x2F8 gives its storage; replayed here it added nothing (in game
+        // 17/10: "jobs 0 -> 0" on a Coffre Stock Général, while 124 given the JOBS button's way is
+        // taken). So the same job, the JOBS button's way, on an object with an inventory.
+        if (ok && cmd.shift && cmd.task == 26 && askOrder && subject && !kenshi::IsCharacter(subject) && kenshi::PermajobCount(c) == jobsBefore) {
+            bool had124 = false;
+            for (int i = 0; i < jobsBefore && !had124; ++i) had124 = kenshi::PermajobType(c, i) == 124;
+            std::vector<kc::ItemState> inside;
+            kc::Vec3 sp;
+            if (!had124 && kenshi::ReadInventory(subject, inside) && kenshi::ObjectPosition(subject, sp)) {
+                const float sl[3] = {sp.x, sp.y, sp.z};
+                using FnAddJob = void (*)(void*, int, void*, bool, bool, const float*);
+                kenshi::WithSelection(c, [&] { reinterpret_cast<FnAddJob>(kenshi::FnAddr(kenshi::FnAddJobSelected))(kenshi::Player(), 124, subject, true, true, sl); });
+                Log("client task 26 with Shift on a storage: given as the permanent job 124 (store items): jobs %d -> %d", jobsBefore, kenshi::PermajobCount(c));
+            }
+        }
         if (!client_ && ok) {
             kc::Handle nh;
             if (talk && subject && kenshi::IsCharacter(subject) && kenshi::GetHandle(static_cast<kenshi::Character*>(subject), nh))
@@ -4757,7 +4759,6 @@ void KenshiWorld::SetRole(bool client, bool active) {
     active_ = active;
     haveHostTime_ = false;
     pauseSeenAt_ = -1;
-    editorWarmupUntil_ = -1;
     editorWatch_ = EditorWatch{};
     lastDest_.clear();
     hostBounties_.clear();

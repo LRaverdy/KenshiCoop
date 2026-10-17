@@ -1197,22 +1197,13 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
         // 0.3.4: every section of the machine, not only the first one (13/10 workstations and
         // machineout runs: "no room" for the stove, whose first section did not take that item)
         const std::vector<std::string> sections = kenshi::SectionNames(b);
+        // 17/10: made right in the machine's section (kenshi::GiveNewItemInto), never through member 0's
+        // bag: a full bag left the new item where the game's give put it and the host crashed
         for (const auto& sid : cands) {
-            if (!kenshi::GiveNewItem(c, sid, n, &why)) continue;
-            std::vector<kc::ItemState> items;
-            kenshi::ReadInventory(c, items);
-            for (const auto& it : items) {
-                if (it.templateSid != sid) continue;
-                for (const auto& sec : sections) {
-                    kc::InvOp op;
-                    op.item = it;
-                    op.toSection = sec;
-                    op.toX = -1;
-                    op.toY = -1;
-                    std::string e;
-                    if (kenshi::MoveInventoryItem(c, b, op, &e)) return "ok " + sid + " x" + std::to_string(it.quantity) + " in " + sec;
-                    why = e + " (" + sid + " in " + sec + ")";
-                }
+            for (const auto& sec : sections) {
+                std::string e;
+                if (kenshi::GiveNewItemInto(b, sid, n, sec, &e)) return "ok " + sid + " x" + std::to_string(n) + " in " + sec;
+                why = e + " (" + sid + " in " + sec + ")";
             }
         }
         std::string secs;

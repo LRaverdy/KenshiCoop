@@ -896,16 +896,31 @@ Emplacements de vtable :
   - `ForgottenGUI` +0x1C0 ; ses personnages à +0x260 (données) et +0x268 (nombre) ;
   - ouverture : `showCharacterEditor(gui, lektor par valeur, mode, races)`. Mode 2 =
     `EDIT_DEBUG` : race et sexe modifiables, rien de tiré au hasard ; `races = nullptr`.
-  - **Éditeur et pause** (night-join, déduit du journal du 16/10, pas lu au désassemblage) :
-    l'éditeur emmène les persos vers sa scène, à ~65 650 unités de leur place (rob1 pendant son
-    éditeur : « 3 off, max offset 65658 »). Ouvert alors que le jeu **tournait** encore (rob1 à
-    21:23:25, Geoffrey au 2ᵉ essai à 21:29:49 : moins d'une seconde après le chargement, avant que
-    le client ne prenne la pause de l'hôte, 0,8 s plus tard), il marche, et la pause prise ensuite
-    ne le gêne plus. Ouvert sur un jeu **en pause depuis 2 min** (Geoffrey à 21:26:19, après la
-    file d'attente), « character editor opened: ok », 465 img/s, mais aucun perso déplacé (« 0
-    off ») : le joueur voyait la scène vide de l'éditeur (« un désert »). Le client ouvre donc
-    l'éditeur jeu en marche au ralenti (0,05) pendant 2 s et vérifie que son perso est parti vers
-    la scène (`KenshiWorld::WatchEditor`). À confirmer en jeu : expérience `nj_editorqueue`.
+  - **Éditeur et pause** [D, lu au désassembleur le 17/10, vérifié en jeu] :
+    - `showCharacterEditor` crée l'éditeur (constructeur `0x5F4DD0`) : il place tout de suite la
+      caméra à (x, **-3000**, z) (`0x5E9CA0`) et fait recharger le corps de chaque humain (`0x52D1F0` :
+      entités détruites, reconstruction demandée, `Appearance`+0x143 = 1). Ni pause, ni déplacement.
+    - Chaque image, `ForgottenGUI::update` (`0x6EA070`) appelle `CharacterEditor::update` (`0x5F16A0`),
+      en pause ou non. Tant que `CharacterEditor`+0x278 (perso choisi) vaut 0, il attend que tous les
+      corps aient leur maillage, puis monte la scène **une fois** (`0x5F03C0`) : nœud
+      `charedit_root_node`, plateforme `5370-platform_otto.mod`, chaque perso retiré de la liste
+      active du monde (`GameWorld`+0x750), son nœud rattaché à la scène, sa position mise à l'origine
+      (`setPosition` `0x5CA680` : (0,0,0), puis (0,-500,0) pour les suivants), puis
+      `userPause(true)` (`0x5F145E`). D'où le « max offset 65658 » de rob1 le 16/10.
+    - La reconstruction du corps passe par la mise à jour d'animation du perso. Jeu en marche
+      (`0x5CF130`) : toujours. **En pause** (`0x5C7B20`) : sautée pour les persos du joueur quand un
+      éditeur est ouvert (`jne` en `0x5C7B5E`, octets `75 10`). Un client en pause par l'hôte (file
+      d'attente, attente de connexion) n'avait donc jamais de scène : caméra sous le sol, éditeur
+      sur le sable sans perso (Geoffrey le 16/10, « un écran dans un désert »).
+    - Le mod remplace ce saut par deux `nop` tant qu'un éditeur ouvert n'a pas monté sa scène
+      (`kenshi::SetEditorPausedAnim`, `KenshiWorld::UpdateEditorStage`), puis remet les octets du
+      jeu. La pause de l'hôte reste en place. Pendant l'éditeur, le mod n'écrit plus la position de
+      l'hôte sur ces persos (`Apply` : l'éditeur les tient sur sa scène).
+    - Fermeture (destructeur `0x5F5D10`) : `userPause(false)` et vitesse 1, persos remis à leur
+      place (hauteur du sol), rendus au monde. Le client reprend ensuite la pause et la vitesse de
+      l'hôte comme après toute reprise.
+    - Expérience `nj_editorqueue` (17/10) : scène montée jeu en pause (`stage=1 paused=1`), capture
+      d'écran : le perso sur sa plateforme.
   - La GameData d'apparence a un booléen « in editor » ; `WriteAppearance` l'écrit toujours à 0.
     L'hôte renvoie à tous l'apparence d'un perso dont l'éditeur a été abandonné (night-join) : une
     copie restée dans cet état est montrée normalement (cause de l'invisibilité chez rob1 le 16/10

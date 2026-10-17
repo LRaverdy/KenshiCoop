@@ -128,7 +128,7 @@ uint64_t LogWatch(const std::string& text) {
     std::lock_guard<std::mutex> lk(g_logMutex);
     for (const auto& [t, n] : g_watches)
         if (t == text) return n;
-    if (text.empty() || g_watches.size() >= 16) return 0;
+    if (text.empty() || g_watches.size() >= 64) return 0;   // 64: the nightitems run chains experiments in one game (16 left its later counts at 0, 17/10)
     g_watches.emplace_back(text, 0);
     return 0;
 }

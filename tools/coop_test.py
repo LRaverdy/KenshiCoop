@@ -4054,16 +4054,22 @@ def exp_farsquads(host, clis, seconds=180):
     time.sleep(20)
     # 3. every player's characters, everywhere, and the people around them at a low rate
     def squads_seen(label):
+        low = []
         for p in players:
             s = kv_of(p.cli, "squadsync")
             st = kv_of(p.cli, "standins")
             sc = kv_of(host, f"streamcount {p.pid}")
             p.log(f"[{label}] squadsync {s} | standins {st} | host streamcount {sc}")
             p.check(f"{label} : tous les persos des autres joueurs presents ici", (s.get("others") or 0) >= 2 and s.get("present") == s.get("others"), s)
-            p.check(f"{label} : ou l'hote les a (ecart < 30)", (s.get("maxoff") or 99) < 30 and (s.get("over20") or 0) == 0, s)
+            p.check(f"{label} : ou l'hote les a (ecart < 30)", s.get("maxoff", 99) < 30 and (s.get("over20") or 0) == 0, s)
             p.check(f"{label} : aucun membre d'escouade manquant", (s.get("missingSquad") or 0) == 0, s)
-            p.check(f"{label} : les gens autour des autres joueurs envoyes a faible cadence (host far > 0, lowrate ici)",
-                    (sc.get("far") or 0) > 0 and (st.get("lowrate") or 0) > 0, f"{sc} | {st}")
+            # sent at a low rate by the host to each player; a copy exists only where that client's game
+            # loaded the zone (in game 17/10: J2's far town loaded none of them, J3's 19), so "lowrate"
+            # is required on one client at least
+            p.check(f"{label} : les gens autour des autres joueurs envoyes a faible cadence par l'hote (host far > 0)",
+                    (sc.get("far") or 0) > 0, f"{sc} | {st}")
+            low.append(st.get("lowrate") or 0)
+        check(f"{label} : des copies a faible cadence chez un client au moins", max(low) > 0, low)
     squads_seen("escouades loin")
     # 4. a few minutes at x3, everyone where they are: dormant put-backs and local extras counted
     for p in players:
@@ -10293,6 +10299,11 @@ def exp_teampack(host, cli):
     own = own_index(host)
     ah = cmd(host, "squadanimals")
     log("squad animals:", ah)
+    if ah[0] and ah[1].split()[1] == "0":   # none on the save: a bull spawned and recruited (17/10: kctest_base has none)
+        log("sandbox: a bull for the squad:", cmd(host, f"spawncreature 3986-gamedata.base 20 10 {own}"), cmd(host, "recruitnpc"))
+        time.sleep(6)
+        ah = cmd(host, "squadanimals")
+        log("squad animals:", ah)
     if not ah[0] or ah[1].split()[1] == "0":
         log("NOT TESTED: no pack animal in the squad (buy or tame one on the save first)")
         summary()
@@ -10381,6 +10392,8 @@ def exp_lootground(host, cli):
         summary()
         return
     key = text.split()[1]
+    # something to loot: the NPC copied may carry nothing (17/10: a skeleton, "no item there")
+    log("an item for the NPC:", cmd(host, f"giveitem {FABRICS} 1 npc"))
     time.sleep(5)
     log("ko:", cmd(host, f"ko {key}"))
     time.sleep(4)
@@ -10388,11 +10401,13 @@ def exp_lootground(host, cli):
         cmd(host, f"logcount {t}")
         cmd(cli, f"logcount {t}")
     log("client loots it:", cmd(cli, f"loot {key} {own}"))
-    for _ in range(20):
+    opened = False
+    for _ in range(20):   # each logcount counts from the previous one: the answer is kept, not asked again
         time.sleep(1)
         if cmd(cli, "logcount loot_window_opened")[1] not in ("ok 0", "0"):
+            opened = True
             break
-    check("pillage au sol : fenetre de pillage ouverte chez le client", cmd(cli, "logcount loot_window_opened")[1] not in ("ok 0", "0"), "")
+    check("pillage au sol : fenetre de pillage ouverte chez le client", opened, "")
     gb = cmd(host, f"groundall 300 {own}")[1].split()[2:]
     if os.path.exists(UI_PS1):   # a real drag: the body's first slot to an empty spot of the ground
         r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", UI_PS1, "drag", str(cli), "372", "180", "900", "620"],
