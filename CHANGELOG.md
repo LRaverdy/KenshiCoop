@@ -8,6 +8,48 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 Protocole inchangé (36) : le nouveau message des stats est ignoré par un client 0.3.4.
 
+- **Actions des persos des clients faites par le jeu de l'hôte (branche `night-actions`, lot 5 des
+  bugs du 16/10, à vérifier en jeu)**. Pas de changement de protocole : messages 135-139 nouveaux,
+  ignorés par un pair qui ne les connaît pas (`kc/actions.h`, `common/src/session_actions.cpp`,
+  `plugin/actions.cpp`, `plugin/shops.cpp`).
+  - **Esclaves (point 4)** : « Je voudrais acheter des esclaves » (action de dialogue 0x2A,
+    gestionnaire `0x6A7970`) et « vendre des esclaves » (0x29, `0x6A6F50`) ouvraient la fenêtre des
+    esclaves sur l'écran de l'hôte. Comme la boutique d'animaux : la fenêtre de l'hôte reste cachée,
+    l'offre part au joueur qui parlait (`SlaveShop`, avec les prix de l'hôte), sa fenêtre du jeu
+    s'ouvre chez lui, son choix revient (`SlaveTrade`, perso de la conversation à lui, persos de
+    l'offre seulement) et le jeu de l'hôte fait l'achat (`confirm` `0x6ADD20` : l'esclave est libéré,
+    suit l'acheteur et lui parle ; les cats pris à la faction, l'argent vérifié avant) ou la vente
+    (`0x6A7740` : le perso devient l'esclave du marchand, les cats payés). Vente : seuls les persos
+    du joueur, jamais son perso principal, ni ceux de l'hôte ou d'un autre joueur.
+  - **Barre de progression (point 5)** : crocheter / scier / forcer une serrure (et tout
+    `ProgressBarTask`) ne montrait rien chez le client. L'hôte suit `<add progress>` (`0x336E60`) et
+    `<set progress>` (`0x3375D0`) des persos des autres joueurs et envoie la progression à leur joueur
+    (`ActionProgress`, 4 fois par seconde au plus, « fini » après 1 s sans mouvement) ; le client
+    dessine la barre flottante du jeu (`0x73FAB0`, `0x6E3530`) au-dessus de sa copie, une ligne de
+    l'overlay si la barre ne peut pas être faite.
+  - **Déguisement (point 13)** : trouvé où le jeu le calcule (IA vt 0x48, `0x5A51E0` :
+    `StateBroadcastData` +0x100 niveau de l'uniforme, +0x108 faction, +0x110 « percé » ; voir
+    docs/MOTEUR.md). L'hôte le recalcule tout de suite après chaque déplacement d'objet demandé par
+    un client (`AfterClientItemMove`), écrit chaque changement dans son journal (`disguise: X now
+    passes for ...`) et l'envoie au joueur (`Disguise`) ; la copie du client le prend (indicateur
+    « In Disguise » du jeu) et l'overlay dit « Déguisé en ... ». Cause des attaques non confirmée :
+    tenue chez l'hôte différente (lot 4), recalcul seulement périodique, ou discrétion basse (règle du
+    jeu) ; le journal le dira.
+  - **Vente après un TP lointain (point 15)** : un client qui n'arrive pas à reconstruire un
+    inventaire 3 fois de suite (zone en chargement) arrêtait de le suivre : rien de vendu ou déplacé
+    n'était vu, jusqu'à une reconnexion. Il redemande maintenant ses propres inventaires à l'hôte
+    (`InvResend`), et une fenêtre de commerce attend (6 s au plus) que le perso et son sac soient
+    suivis ; une vente comptée par la fenêtre sans déplacement vu est écrite dans le journal. Les
+    25000 → 22963 cats du marchand : achats de l'hôte lui-même (« the host's own conversation »
+    23:38:11, puis sa fenêtre sur ce marchand), que le mod n'écrivait pas ; chaque changement des cats
+    d'un marchand pendant le commerce d'un client est désormais écrit. Pas de doublon trouvé.
+  - **Tâche « suivre » retirée (point 2)** : la croix (`removePermajob` `0x5C9000` → `0x507300`)
+    retire seulement la tâche de la liste ; l'ordre en cours (`AITaskSystem` +0x80) continue, en solo
+    aussi. Chez l'hôte, quand la tâche retirée est celle que le perso fait et qu'aucune pareille ne
+    reste, il l'abandonne (`reThinkCurrentAIAction`), persos de l'hôte et des clients.
+  - Tests : `TestSlaveShop`, `TestActionProgress`, `TestDisguiseState`, `TestTradeAfterFarTp`,
+    `TestJobRemovedEndsTask` ; expériences `slaveshop`, `lockprogress`, `disguise`, `tradefartp`,
+    `followjob` (non lancées).
 - **Rapport de bug en une commande (branche `bugreport`)**. Quand un ami tombait sur un bug, il
   fallait lui demander son `KenshiCoop.log` après coup. Désormais, n'importe quel joueur tape
   `/bug <phrase>` dans la console du jeu (Ctrl+Shift+K) ou dans la console de l'hôte, et l'hôte

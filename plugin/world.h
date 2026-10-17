@@ -359,6 +359,19 @@ public:
     void DropAnimalOffer(uint64_t key) override;
     bool OpenAnimalShop(const kc::Handle& seller, const kc::Handle& buyer, const std::vector<kc::Handle>& animals, int32_t basePrice) override;
     void TakeAnimalChoices(std::vector<AnimalChoice>& out) override;
+    // 0.3.5 lot 5: slave shops (plugin/shops.cpp); action progress, disguise (plugin/actions.cpp)
+    void TakeSlaveOffers(std::vector<SlaveOffer>& out) override;
+    bool TradeSlaves(uint64_t key, const std::vector<kc::Handle>& slaves, int32_t& price, std::string& why) override;
+    void DropSlaveOffer(uint64_t key) override;
+    bool OpenSlaveShop(uint8_t kind, const kc::Handle& seller, const kc::Handle& buyer, const std::vector<kc::Handle>& slaves,
+                       const std::vector<int32_t>& prices, int32_t basePrice) override;
+    void TakeSlaveChoices(std::vector<SlaveChoice>& out) override;
+    void TakeActionProgress(std::vector<ActionProgress>& out) override;
+    bool ShowActionProgress(const kc::Handle& who, float progress) override;
+    bool ReadDisguise(const kc::Handle& h, kc::DisguiseInfo& out) override;
+    bool ApplyDisguise(const kc::Handle& h, const kc::DisguiseInfo& d) override;
+    // Host: a client's item move just ran on these inventories (their characters' disguise worked out again).
+    void AfterClientItemMove(const kc::Handle& a, const kc::Handle& b);
     // Called from hooks (client): a portrait dropped in the squad window, asked of the host.
     void QueueSquadRequest(kenshi::Character* actor, void* targetSquad, int index);
     kc::Handle HostSquadId(void* localSquad) const;   // client: the host squad ours is matched to (invalid: none)

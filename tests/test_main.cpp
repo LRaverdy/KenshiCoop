@@ -364,7 +364,7 @@ struct FakeWorld : IWorld {
     }
     bool ApplyInventory(const Handle& h, const std::vector<ItemState>& items) override {
         auto* mine = ItemsOf(h);
-        if (!mine) return false;
+        if (!mine || failApply.count(h.serial)) return false;
         *mine = items;
         return true;
     }
@@ -591,6 +591,65 @@ struct FakeWorld : IWorld {
         return true;
     }
     void TakeAnimalChoices(std::vector<AnimalChoice>& out) override { out.swap(animalChoicesQ); animalChoicesQ.clear(); }
+    // 0.3.5 lot 5: slave shops (host offers, deals run, offers freed; client windows and choices),
+    // action progress (host: the game's tasks; client: bars shown), disguise (host: the game's; client:
+    // applied), inventories the client's game cannot lay out like the host's
+    std::vector<SlaveOffer> slaveOffersQ;
+    std::map<uint64_t, uint8_t> slaveKinds;
+    std::vector<std::pair<uint64_t, std::vector<uint32_t>>> slaveDeals;
+    std::vector<uint64_t> slaveOffersDropped;
+    std::string slaveDealFails;
+    int slaveShopOpens = 0;
+    uint8_t slaveShopKind = 0xFF;
+    std::vector<Handle> slaveShopShown;
+    std::vector<int32_t> slaveShopPrices;
+    std::vector<SlaveChoice> slaveChoicesQ;
+    void TakeSlaveOffers(std::vector<SlaveOffer>& out) override {
+        for (const auto& o : slaveOffersQ) slaveKinds[o.key] = o.kind;
+        out.swap(slaveOffersQ);
+        slaveOffersQ.clear();
+    }
+    bool TradeSlaves(uint64_t key, const std::vector<Handle>& slaves, int32_t& price, std::string& why) override {
+        price = 0;
+        if (!slaveDealFails.empty()) { why = slaveDealFails; return false; }
+        const bool sell = slaveKinds[key] == kSlaveSell;
+        std::vector<uint32_t> serials;
+        for (const Handle& h : slaves) {
+            serials.push_back(h.serial);
+            if (sell) chars[h.serial].squad = false;   // the slaver's slave now
+            price += sell ? -30 : 50;
+        }
+        money -= price;
+        slaveDeals.emplace_back(key, serials);
+        return true;
+    }
+    void DropSlaveOffer(uint64_t key) override { slaveOffersDropped.push_back(key); }
+    bool OpenSlaveShop(uint8_t kind, const Handle&, const Handle&, const std::vector<Handle>& slaves, const std::vector<int32_t>& prices, int32_t) override {
+        ++slaveShopOpens;
+        slaveShopKind = kind;
+        slaveShopShown = slaves;
+        slaveShopPrices = prices;
+        return true;
+    }
+    void TakeSlaveChoices(std::vector<SlaveChoice>& out) override { out.swap(slaveChoicesQ); slaveChoicesQ.clear(); }
+    std::vector<ActionProgress> progressQ;
+    std::map<uint32_t, float> barsShown;
+    int barCalls = 0;
+    void TakeActionProgress(std::vector<ActionProgress>& out) override { out.swap(progressQ); progressQ.clear(); }
+    bool ShowActionProgress(const Handle& who, float p) override {
+        ++barCalls;
+        if (p < 0) barsShown.erase(who.serial);
+        else barsShown[who.serial] = p;
+        return true;
+    }
+    std::map<uint32_t, DisguiseInfo> disguise;
+    bool ReadDisguise(const Handle& h, DisguiseInfo& out) override {
+        auto it = disguise.find(h.serial);
+        out = it == disguise.end() ? DisguiseInfo{} : it->second;
+        return chars.count(h.serial) != 0;
+    }
+    bool ApplyDisguise(const Handle& h, const DisguiseInfo& d) override { disguise[h.serial] = d; return true; }
+    std::set<uint32_t> failApply;   // client: their inventory never matches the host's here (a far zone loading)
     int TheftCheck(const Handle& thief, const Handle& from, const ItemState& item) override {
         (void)thief; (void)from; (void)item;
         ++thefts;
@@ -3298,6 +3357,353 @@ static void TestAnimalShop() {
     CHECK(cw.animalShopOpens == opens && host.animalOffers() == 0);
     CHECK(std::count(hw.animalOffersDropped.begin(), hw.animalOffersDropped.end(), uint64_t(0xA5)) == 1);
     CHECK(host.state() == SessionState::Hosting && cli.state() == SessionState::Connected);
+}
+
+// 0.3.5 lot 5 (A_FAIRE 16/10 point 4): a slaver's "buy slaves" / "sell slaves" in a client player's
+// conversation: the window opens on that player's screen with the host's prices, the deal is run by
+// the host's game; only the player's own characters (never their main one) can be sold; forged or
+// stale answers are refused (the animal shops' design).
+static void TestSlaveShop() {
+    std::printf("session: slave shop offered to the player (buy and sell), dealt through the host, only their own characters sold\n");
+    {   // the messages (types 135 / 136, no protocol change)
+        SlaveShopMsg m; m.offerId = 7; m.kind = kSlaveSell; m.sellerNetId = 3; m.buyerNetId = 4; m.basePrice = 0; m.slaves = {9, 10}; m.prices = {800, 1250};
+        Writer w; Encode(w, m);
+        Reader r(w.data(), w.size());
+        SlaveShopMsg d;
+        CHECK(PeekType(r) == Msg::SlaveShop && Decode(r, d) && d.offerId == 7 && d.kind == kSlaveSell && d.buyerNetId == 4 && d.slaves == m.slaves &&
+              d.prices == m.prices);
+        SlaveTradeMsg b; b.offerId = 7; b.kind = kSlaveSell; b.buyerNetId = 4; b.slaves = {10}; b.shownPrice = 1250;
+        Writer wb; Encode(wb, b);
+        Reader rb(wb.data(), wb.size());
+        SlaveTradeMsg db;
+        CHECK(PeekType(rb) == Msg::SlaveTrade && Decode(rb, db) && db.slaves == b.slaves && db.shownPrice == 1250 && db.kind == kSlaveSell);
+        b.buyerNetId = 0;   // no actor named: malformed
+        Writer wz; Encode(wz, b);
+        Reader rz(wz.data(), wz.size());
+        CHECK(!Decode(rz, db));
+        b.buyerNetId = 4; b.kind = 7;   // no such kind
+        Writer wk; Encode(wk, b);
+        Reader rk(wk.data(), wk.size());
+        CHECK(PeekType(rk) == Msg::SlaveTrade && !Decode(rk, db));
+        CHECK(MessageRuleFor(Msg::SlaveShop)->role == AuthRole::HostOnly && MessageRuleFor(Msg::SlaveTrade)->subject == AuthSubject::OwnCharacter);
+        static_assert(uint8_t(Msg::SlaveShop) == 135 && uint8_t(Msg::InvResend) == 139 && kProtocolVersion == 36, "lot 5: ids 135-139, no protocol change");
+    }
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    FakeChar slaver; slaver.squad = false; slaver.pos = {10, 0, -20}; slaver.dest = slaver.pos;
+    hw.chars[60] = slaver;
+    for (uint32_t s : {70u, 71u}) {
+        FakeChar slave; slave.squad = false; slave.pos = {12.0f + float(s - 70) * 3, 0, -22}; slave.dest = slave.pos;
+        hw.chars[s] = slave;
+    }
+    hw.money = 1000;
+    AtMenu(cw);
+    SessionConfig hc; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    std::vector<std::string> hostLog;
+    Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(cli.Join("127.0.0.1", hc.port, &err));
+    const uint32_t me = 5000;   // the client player's own (main) character
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}};
+    std::map<uint32_t, uint32_t> net;
+    auto nets = [&] { net.clear(); host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { net[h.serial] = id; }); };
+    Run(all, 3.0, [&] { nets(); return cw.money == 1000 && net.count(60) && net.count(70) && net.count(71) && cw.chars.count(71); });
+    nets();
+    CHECK(cw.money == 1000 && net.count(60) && net.count(71));
+    // 1. "Je voudrais acheter des esclaves" in the client's conversation: the window opens on their
+    //    screen, with the host's price of each slave
+    hw.slaveOffersQ.push_back({0xB1, kSlaveBuy, FakeWorld::H(60), FakeWorld::H(me), 0, {FakeWorld::H(70), FakeWorld::H(71)}, {800, 900}});
+    Run(all, 2.0, [&] { return cw.slaveShopOpens == 1 && cli.slaveShopOpen() != 0; });
+    CHECK(cw.slaveShopOpens == 1 && cw.slaveShopKind == kSlaveBuy && cw.slaveShopShown.size() == 2 && cw.slaveShopPrices == std::vector<int32_t>({800, 900}));
+    CHECK(host.slaveOffers() == 1);
+    // 2. they buy one: the host's game runs the purchase with the offer it kept; the cats everywhere
+    cw.slaveChoicesQ.push_back({kSlaveBuy, {FakeWorld::H(71)}, 900});
+    Run(all, 4.0, [&] { return host.slavesTraded() == 1 && cw.money == 950; });
+    CHECK(host.slavesTraded() == 1 && hw.slaveDeals.size() == 1 && hw.slaveDeals[0].first == 0xB1 && hw.slaveDeals[0].second == std::vector<uint32_t>{71});
+    CHECK(hw.money == 950 && cw.money == 950 && host.slaveOffers() == 0 && cli.slaveShopOpen() == 0);
+    CHECK(std::count(hw.slaveOffersDropped.begin(), hw.slaveOffersDropped.end(), uint64_t(0xB1)) == 1);
+    // 3. a forged answer naming a character the offer does not hold (the slaver): refused, no deal
+    hw.slaveOffersQ.push_back({0xB2, kSlaveBuy, FakeWorld::H(60), FakeWorld::H(me), 0, {FakeWorld::H(70)}, {800}});
+    Run(all, 2.0, [&] { return cw.slaveShopOpens == 2; });
+    const uint32_t refusals0 = host.actorRefusals();
+    {
+        SlaveTradeMsg b; b.offerId = cli.slaveShopOpen(); b.kind = kSlaveBuy; b.buyerNetId = net[me]; b.slaves = {net[60]};
+        Writer w; Encode(w, b); CHECK(host.InjectForTest(cli.localId(), w));
+    }
+    Run(all, 1.0);
+    CHECK(host.slavesTraded() == 1 && host.actorRefusals() == refusals0 + 1 && host.slaveOffers() == 0 && hw.slaveDeals.size() == 1);
+    // 4. an answer for the host's character: refused by the authority check
+    {
+        SlaveTradeMsg b; b.offerId = 99; b.buyerNetId = net[1]; b.slaves = {net[70]};
+        Writer w; Encode(w, b); CHECK(host.InjectForTest(cli.localId(), w));
+    }
+    Run(all, 0.5);
+    CHECK(host.slavesTraded() == 1 && host.actorRefusals() == refusals0 + 2);
+    // 5. "vendre des esclaves": the game offers the squad mates standing near (the host's, the player's
+    //    main character, one of theirs): only theirs, not the main one, is offered
+    host.Assign(FakeWorld::H(2), cli.localId());
+    Run(all, 1.5);
+    nets();
+    hw.slaveOffersQ.push_back({0xB3, kSlaveSell, FakeWorld::H(60), FakeWorld::H(me), 0, {FakeWorld::H(2), FakeWorld::H(3), FakeWorld::H(me)}, {600, 700, 900}});
+    Run(all, 2.0, [&] { return cw.slaveShopOpens == 3; });
+    CHECK(cw.slaveShopOpens == 3 && cw.slaveShopKind == kSlaveSell && cw.slaveShopShown.size() == 1 && cw.slaveShopShown[0].serial == 2 &&
+          cw.slaveShopPrices == std::vector<int32_t>({600}));
+    bool leftOut = false;
+    for (const auto& l : hostLog) leftOut |= l.find("left out") != std::string::npos;
+    CHECK(leftOut);
+    Run(all, 2.1);   // (the refusals above were told: the next note waits 2 s)
+    cw.slaveChoicesQ.push_back({kSlaveSell, {FakeWorld::H(2)}, 600});
+    Run(all, 4.0, [&] { return host.slavesTraded() == 2 && cw.money == 980; });
+    CHECK(host.slavesTraded() == 2 && hw.money == 980 && cw.money == 980 && !hw.chars[2].squad);
+    // 6. nothing of theirs to sell: told, nothing opens
+    const int opens = cw.slaveShopOpens;
+    hw.slaveOffersQ.push_back({0xB4, kSlaveSell, FakeWorld::H(60), FakeWorld::H(me), 0, {FakeWorld::H(3), FakeWorld::H(me)}, {700, 900}});
+    bool told = false;
+    Run(all, 2.0, [&] { for (const auto& l : cli.chatLog()) told |= l.find("aucun personnage") != std::string::npos; return told; });
+    CHECK(told && cw.slaveShopOpens == opens && host.slaveOffers() == 0);
+    CHECK(std::count(hw.slaveOffersDropped.begin(), hw.slaveOffersDropped.end(), uint64_t(0xB4)) == 1);
+    // 7. the game cannot do it: told, the offer freed, nothing changes
+    hw.slaveOffersQ.push_back({0xB5, kSlaveBuy, FakeWorld::H(60), FakeWorld::H(me), 0, {FakeWorld::H(70)}, {800}});
+    Run(all, 2.0, [&] { return cw.slaveShopOpens == opens + 1; });
+    Run(all, 2.1);
+    hw.slaveDealFails = "pas assez d'argent";
+    cw.slaveChoicesQ.push_back({kSlaveBuy, {FakeWorld::H(70)}, 800});
+    told = false;
+    Run(all, 3.0, [&] { for (const auto& l : cli.chatLog()) told |= l.find("Achat d'esclaves impossible") != std::string::npos; return told; });
+    CHECK(told && host.slavesTraded() == 2 && hw.money == 980);
+    hw.slaveDealFails.clear();
+    // 8. the window closed without a deal: the offer is freed
+    hw.slaveOffersQ.push_back({0xB6, kSlaveBuy, FakeWorld::H(60), FakeWorld::H(me), 0, {FakeWorld::H(70)}, {800}});
+    Run(all, 2.0, [&] { return cw.slaveShopOpens == opens + 2; });
+    CHECK(host.slaveOffers() == 1);
+    cw.slaveChoicesQ.push_back({kSlaveBuy, {}, 0});
+    Run(all, 2.0, [&] { return host.slaveOffers() == 0; });
+    CHECK(host.slaveOffers() == 0 && std::count(hw.slaveOffersDropped.begin(), hw.slaveOffersDropped.end(), uint64_t(0xB6)) == 1);
+    // 9. an offer for the host's own character never leaves the host (its window shows there)
+    hw.slaveOffersQ.push_back({0xB7, kSlaveBuy, FakeWorld::H(60), FakeWorld::H(1), 0, {FakeWorld::H(70)}, {800}});
+    Run(all, 1.0);
+    CHECK(cw.slaveShopOpens == opens + 2 && host.slaveOffers() == 0);
+    CHECK(std::count(hw.slaveOffersDropped.begin(), hw.slaveOffersDropped.end(), uint64_t(0xB7)) == 1);
+    CHECK(host.state() == SessionState::Hosting && cli.state() == SessionState::Connected);
+}
+
+// 0.3.5 lot 5 (point 5): the progress bar of a timed task (picking, cutting, forcing a lock) of a
+// client's character, run by the host's game, is drawn on that player's screen; at most 4 updates a
+// second; the bar goes when the task stops; the host's own characters' are never sent.
+static void TestActionProgress() {
+    std::printf("session: the host's progress of a client's lock picking shown on that client, throttled, gone when it stops\n");
+    {   // the pure rules
+        actions::ProgressTrack t;
+        CHECK(actions::ProgressToSend(t, 10.0) == -1.0f);   // never seen: nothing
+        t.value = 0.2f; t.seenAt = 10.0;
+        CHECK(actions::ProgressToSend(t, 10.0) == 0.2f);
+        t.value = 0.3f; t.seenAt = 10.1;
+        CHECK(actions::ProgressToSend(t, 10.1) == -1.0f);   // too soon
+        CHECK(actions::ProgressToSend(t, 10.3) == 0.3f);
+        CHECK(actions::ProgressToSend(t, 10.6) == -1.0f);   // unchanged
+        CHECK(actions::ProgressToSend(t, 11.5) == actions::kSendEnded);   // not moved for a second: over
+        CHECK(actions::ProgressToSend(t, 11.8) == -1.0f);   // told once
+        ActionProgressMsg m; m.entries = {{4, 250}, {5, kProgressEnded}};
+        Writer w; Encode(w, m);
+        Reader r(w.data(), w.size());
+        ActionProgressMsg d;
+        CHECK(PeekType(r) == Msg::ActionProgress && Decode(r, d) && d.entries.size() == 2 && d.entries[1].permille == kProgressEnded);
+        m.entries = {{4, 1500}};
+        Writer wb; Encode(wb, m);
+        Reader rb(wb.data(), wb.size());
+        CHECK(PeekType(rb) == Msg::ActionProgress && !Decode(rb, d));
+    }
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    AtMenu(cw);
+    SessionConfig hc; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    Session host(hw, hc, Now, Quiet("host"));
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(cli.Join("127.0.0.1", hc.port, &err));
+    const uint32_t me = 5000;
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}};
+    Run(all, 3.0, [&] { return cli.state() == SessionState::Connected && cw.chars.count(me); });
+    uint32_t myNet = 0;
+    host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { if (h.serial == me) myNet = id; });
+    CHECK(myNet != 0);
+    // the host's game picks a lock with the client's character (and the host's own does too)
+    float p = 0.0f;
+    const size_t sent0 = host.progressSent();
+    Run(all, 2.0, [&] {
+        p = std::min(1.0f, p + 0.004f);
+        hw.progressQ.push_back({FakeWorld::H(me), p});
+        hw.progressQ.push_back({FakeWorld::H(1), p});
+        return false;
+    });
+    CHECK(cli.progressShown().count(myNet) && std::fabs(cli.progressShown().at(myNet) - p) < 0.15f);
+    CHECK(cw.barsShown.count(me) && !cw.barsShown.count(1));
+    const size_t sent = host.progressSent() - sent0;
+    CHECK(sent >= 4 && sent <= 10);   // ~4 a second, never every frame
+    // it stops (lock picked, or the order changed): the bar goes
+    Run(all, 3.0, [&] { return !cli.progressShown().count(myNet) && !cw.barsShown.count(me); });
+    CHECK(!cli.progressShown().count(myNet) && !cw.barsShown.count(me));
+    CHECK(cli.actionLines().empty());   // the game's bar was made: no overlay line
+    CHECK(host.state() == SessionState::Hosting && cli.state() == SessionState::Connected);
+}
+
+// 0.3.5 lot 5 (point 13): the disguise the host's game works out for a client's character (its uniform)
+// is sent to that player, whose copy takes it (the game's indicator), with a line in the overlay; a
+// change is sent once (not the blown timer counting down); the host's own characters' are not sent.
+static void TestDisguiseState() {
+    std::printf("session: a client character's disguise (host's game) reaches its player's copy and indicator\n");
+    {
+        DisguiseInfo a; a.factionSid = "holy"; a.factionName = "Nation Sacrée"; a.level = 0.8f;
+        CHECK(actions::Disguised(a));
+        DisguiseInfo b = a; b.level = 0.4f;
+        CHECK(!actions::Disguised(b) && actions::DisguiseChanged(a, b));
+        DisguiseInfo c = a; c.blown = 20.0f;
+        CHECK(!actions::Disguised(c) && actions::DisguiseChanged(a, c));
+        DisguiseInfo d = c; d.blown = 12.0f;
+        CHECK(!actions::DisguiseChanged(c, d));   // the timer counting down is not news
+        DisguiseMsg m; m.entries = {{4, a}, {5, c}};
+        Writer w; Encode(w, m);
+        Reader r(w.data(), w.size());
+        DisguiseMsg dm;
+        CHECK(PeekType(r) == Msg::Disguise && Decode(r, dm) && dm.entries.size() == 2 && dm.entries[0].d == a && dm.entries[1].d.blown == 20.0f);
+    }
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    AtMenu(cw);
+    SessionConfig hc; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    std::vector<std::string> hostLog;
+    Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(cli.Join("127.0.0.1", hc.port, &err));
+    const uint32_t me = 5000;
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}};
+    Run(all, 3.0, [&] { return cli.state() == SessionState::Connected && cw.chars.count(me); });
+    uint32_t myNet = 0;
+    host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { if (h.serial == me) myNet = id; });
+    // the player dressed their character as a Holy Nation paladin: the host's game says it is disguised
+    DisguiseInfo holy; holy.factionSid = "holy"; holy.factionName = "Nation Sacrée"; holy.level = 0.8f;
+    hw.disguise[me] = holy;
+    hw.disguise[1] = holy;   // the host's own: its game shows it there
+    Run(all, 3.0, [&] { return cw.disguise.count(me) && cw.disguise[me] == holy; });
+    CHECK(cw.disguise.count(me) && cw.disguise[me] == holy && !cw.disguise.count(1) && cli.disguises().count(myNet));
+    bool line = false;
+    for (const auto& l : cli.actionLines()) line |= l.find("Déguisé en Nation Sacrée") != std::string::npos;
+    CHECK(line);
+    bool logged = false;
+    for (const auto& l : hostLog) logged |= l.find("now passes for Nation Sacrée") != std::string::npos;
+    CHECK(logged);
+    // the client's own game changes it (no AI there, but anything else): put back within 2 s
+    cw.disguise[me] = DisguiseInfo{};
+    Run(all, 3.0, [&] { return cw.disguise[me] == holy; });
+    CHECK(cw.disguise[me] == holy);
+    // a paladin saw through it: blown, said
+    hw.disguise[me].blown = 25.0f;
+    Run(all, 3.0, [&] { return cw.disguise[me].blown > 0; });
+    line = false;
+    for (const auto& l : cli.actionLines()) line |= l.find("Déguisement percé") != std::string::npos;
+    CHECK(cw.disguise[me].blown > 0 && line);
+    // the helmet taken off: no longer disguised
+    hw.disguise[me] = holy;
+    hw.disguise[me].level = 0.4f;
+    Run(all, 3.0, [&] { return cw.disguise[me].level < 0.5f; });
+    CHECK(cw.disguise[me].level < 0.5f && !actions::Disguised(cw.disguise[me]));
+    CHECK(host.state() == SessionState::Hosting && cli.state() == SessionState::Connected);
+}
+
+// 0.3.5 lot 5 (point 15): after an admin teleport far away, the client's game could not lay its own
+// character's inventory out like the host's while the zone loaded; it gave up (3 attempts) and then
+// saw nothing the player sold: no sale reached the host until a rejoin. It asks for it again; a trade
+// window waits for it; the sale reaches the host.
+static void TestTradeAfterFarTp() {
+    std::printf("session: a client's inventory given up after a far teleport is asked again; sales reach the host\n");
+    {
+        InvResendMsg m; m.netIds = {4, 9};
+        Writer w; Encode(w, m);
+        Reader r(w.data(), w.size());
+        InvResendMsg d;
+        CHECK(PeekType(r) == Msg::InvResend && Decode(r, d) && d.netIds == m.netIds);
+        CHECK(MessageRuleFor(Msg::InvResend)->role == AuthRole::InGame);
+    }
+    FakeWorld hw, cw;
+    SetupHost(hw);
+    auto item = [](const char* sid, int q, const char* sec, int x, int y) {
+        ItemState i; i.templateSid = sid; i.quantity = q; i.section = sec; i.x = int16_t(x); i.y = int16_t(y); return i;
+    };
+    FakeChar merchant; merchant.squad = false; merchant.pos = {10, 0, -20}; merchant.dest = merchant.pos;
+    hw.chars[50] = merchant;
+    hw.boxes[900] = {"counter", {15, 0, -15}, {item("bread", 5, "main", 0, 0)}};
+    hw.shops[50] = {900};
+    hw.money = 1000;
+    hw.merchantMoney[50] = 500;
+    AtMenu(cw);
+    cw.boxes = hw.boxes;
+    cw.boxes[900].items.clear();
+    SessionConfig hc; hc.port = ++g_port; SessionConfig cc; cc.port = hc.port; cc.name = "C";
+    std::vector<std::string> hostLog;
+    Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
+    Session cli(cw, cc, Now, Quiet("cli"));
+    std::string err;
+    host.Host(&err);
+    CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 5));
+    const uint32_t me = 5000;
+    auto all = std::vector<std::pair<Session*, FakeWorld*>>{{&host, &hw}, {&cli, &cw}};
+    hw.chars[me].items = {item("sword", 1, "main", 0, 0)};
+    Run(all, 3.0, [&] { return cw.money == 1000 && cw.chars[me].items == hw.chars[me].items; });
+    CHECK(cw.chars[me].items == hw.chars[me].items);
+    // the far teleport: the zone loads, our game cannot rebuild the character's inventory, gives up
+    cw.failApply.insert(me);
+    hw.chars[me].items.push_back(item("sword", 1, "main", 2, 0));
+    Run(all, 8.0, [&] { return cli.invResendAsked() > 0; });
+    CHECK(cli.invResendAsked() > 0);   // given up: asked again
+    cw.failApply.clear();              // the zone is loaded now
+    // the merchant's "let's trade": the window waits for our side, then opens
+    hw.tradeReqs.push_back({FakeWorld::H(me), FakeWorld::H(50)});
+    Run(all, 15.0, [&] { return cli.tradeView().open && cw.chars[me].items == hw.chars[me].items; });
+    CHECK(cli.tradeView().open && cw.chars[me].items == hw.chars[me].items && host.invResendSent() > 0);
+    // a sale in the window: it reaches the host
+    {
+        auto& mine = cw.chars[me].items;
+        mine.erase(std::remove_if(mine.begin(), mine.end(), [](const ItemState& i) { return i.x == 2; }), mine.end());
+    }
+    cw.boxes[900].items.push_back(item("sword", 1, "main", 3, 0));
+    cw.money += 40;
+    Run(all, 5.0, [&] { return hw.money == 1040; });
+    CHECK(hw.money == 1040 && hw.merchantMoney[50] == 460 && hw.chars[me].items.size() == 1);
+    bool asked = false;
+    for (const auto& l : hostLog) asked |= l.find("inventory(ies) again") != std::string::npos;
+    CHECK(asked);
+    // another player's inventory is never sent on request
+    {
+        InvResendMsg m; m.netIds = {};
+        host.ForEachEntity([&](uint32_t id, const Handle& h, uint8_t, bool, bool) { if (h.serial == 1) m.netIds.push_back(id); });
+        const size_t before = host.invResendSent();
+        Writer w; Encode(w, m); CHECK(host.InjectForTest(cli.localId(), w));
+        Run(all, 0.5);
+        CHECK(host.invResendSent() == before);
+    }
+    CHECK(host.state() == SessionState::Hosting && cli.state() == SessionState::Connected);
+}
+
+// 0.3.5 lot 5 (point 2): a job removed with the panel's cross ends what the character does for it (the
+// game leaves a "follow" running), but not another job, nor one like it still in the list.
+static void TestJobRemovedEndsTask() {
+    std::printf("jobs: the order of a removed job ends with it (follow), other orders go on\n");
+    using actions::JobRef;
+    auto H = [](uint32_t s) { return FakeWorld::H(s); };
+    const JobRef follow{133, H(7)}, followOther{133, H(8)}, mine{87, H(9)};
+    CHECK(actions::EndsCurrentTask(follow, {}, follow));
+    CHECK(actions::EndsCurrentTask(follow, {mine}, JobRef{133, Handle{}}));   // the order names no subject
+    CHECK(!actions::EndsCurrentTask(follow, {}, followOther));               // following someone else
+    CHECK(!actions::EndsCurrentTask(follow, {}, mine));                      // doing another job
+    CHECK(!actions::EndsCurrentTask(follow, {follow}, follow));              // the same job is still there
+    CHECK(actions::EndsCurrentTask(follow, {followOther}, follow));          // another follow is not this one
+    CHECK(actions::EndsCurrentTask(JobRef{133, Handle{}}, {}, follow));      // every job of that kind removed
+    CHECK(!actions::EndsCurrentTask(JobRef{-1, Handle{}}, {}, follow));
 }
 
 static void TestTravellingTrade() {
@@ -7232,6 +7638,11 @@ int main() {
     TestTrade();
     TestTravellingTrade();
     TestAnimalShop();   // A_FAIRE 3i
+    TestSlaveShop();   // 0.3.5 lot 5 (A_FAIRE 16/10 points 4, 5, 13, 15, 2)
+    TestActionProgress();
+    TestDisguiseState();
+    TestTradeAfterFarTp();
+    TestJobRemovedEndsTask();
     TestCrashRejoin();
     TestBuildings();
     TestRanged();   // lot C

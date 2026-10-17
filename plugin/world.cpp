@@ -1,4 +1,4 @@
-﻿#include "world.h"
+#include "world.h"
 
 #include <windows.h>
 
@@ -4226,6 +4226,7 @@ bool KenshiWorld::ExecuteInvOp(const kc::Handle& from, const kc::Handle& to, con
     else
         Log("client item move refused: %s (%s x%d)", err.c_str(), op.item.templateSid.c_str(), op.item.quantity);
     CheckAfterOp(op.kind == kc::InvOpKind::Drop ? "a drop" : "a move", a, b);
+    if (ok) AfterClientItemMove(from, to);   // 0.3.5 lot 5: a uniform put on or taken off: the disguise at once
     return ok;
 }
 
@@ -4239,6 +4240,7 @@ bool KenshiWorld::ExecuteInvSwap(const kc::Handle& from, const kc::Handle& to, c
     Log("client item swap %s: %s <-> %s (%s %d,%d)%s%s", ok ? "done" : "not possible", a.item.templateSid.c_str(), b.item.templateSid.c_str(),
         a.toSection.c_str(), a.toX, a.toY, ok ? "" : ": ", err.c_str());
     CheckAfterOp("a swap", x, y);
+    if (ok) AfterClientItemMove(from, to);   // 0.3.5 lot 5
     return ok;
 }
 

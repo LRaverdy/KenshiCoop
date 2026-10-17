@@ -119,6 +119,12 @@ enum class Msg : uint8_t {
     AnimalBuy = 92,       // C->S  the animals the player chose in that window (none: closed without buying)
     // ---- player statistics (0.3.5, no protocol change: older clients ignore an unknown type)
     PlayerStats = 66,     // S->C  every player's statistics in this world (kc/player_stats.h), on join and every 10 s when they change
+    // ---- 0.3.5 lot 5, night-actions (kc/actions.h; no protocol change: older peers ignore these types)
+    SlaveShop = 135,      // S->C  a slaver's slaves for sale, or our characters it would buy: open the game's slave window
+    SlaveTrade = 136,     // C->S  the characters ticked in that window (none: closed without a deal)
+    ActionProgress = 137, // S->C  the progress bar of our characters' timed tasks (lock picking, cutting, forcing...)
+    Disguise = 138,       // S->C  the faction our characters pass for (their uniform), as the host's game works it out
+    InvResend = 139,      // C->S  send these inventories of ours again (we gave up rebuilding them)
 };
 
 // World transfer limits (a Kenshi save is a few MB).

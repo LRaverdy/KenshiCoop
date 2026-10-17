@@ -213,6 +213,7 @@ void Session::Leave() {
     ResetDiplomacy();
     ResetDoors();   // lot A
     ResetAnimalShops();
+    ResetActions();   // 0.3.5 lot 5
     ResetWorkshop();   // research, crafting, machines, power
     floorSent_.clear(); floors_.clear(); nextFloors_ = nextFloorsFull_ = 0; floorPlayers_ = 0;   // fix G6
     ResetJobs();   // fix G5
@@ -318,6 +319,9 @@ void Session::HostTick(double now, bool live) {
     HostBags(now);
     HostTrades(now);
     HostAnimalShops(now);   // animal shops of other players' conversations
+    HostSlaveShops(now);   // 0.3.5 lot 5: slave shops, action progress, disguise
+    HostActionProgress(now);
+    HostDisguises(now);
     HostDoors(now);   // lot A
     HostWorkshopRequests();   // research and machine requests, one after the other
     HostResearch(now);
@@ -1644,6 +1648,10 @@ void Session::HostTrades(double now) {
         // the merchant's cats changed (another player traded, or the host): the window shows them
         int32_t money = 0;
         if (world_.MoneyOf(trader->second.handle, money) && money != it->second.traderMoney) {
+            // 0.3.5 lot 5 (A_FAIRE 16/10 point 15): said, so that a change no "sells / buys" line explains
+            // (the host's own trade with that merchant, which the mod does not log) is seen in the log
+            log_("[" + pl->second.name + "] trade: " + world_.CharacterNameOf(trader->second.handle) + "'s cats " + std::to_string(it->second.traderMoney) +
+                 " -> " + std::to_string(money) + " while their window is open (a client's sale or purchase is logged just above; otherwise the host traded)");
             it->second.traderMoney = money;
             TradeOpen m;
             m.traderNetId = it->second.trader;
@@ -1754,6 +1762,9 @@ void Session::ClientContainers(double now) {
         auto trader = entities_.find(trade_.trader);
         auto looter = entities_.find(trade_.looter);
         const bool here = trader != entities_.end() && looter != entities_.end() && trader->second.present && looter->second.present;
+        // 0.3.5 (A_FAIRE 16/10 point 15): our side of the window must be followed here (its inventories
+        // known), else nothing sold in it is ever seen: asked of the host again, the window waits for them
+        if (here && ready && !TradeSideFollowed(now)) ready = false;
         if (trade_.pendingSince == 0) trade_.pendingSince = now;
         if ((!here && now - trade_.pendingSince > 10.0) || (!ready && now - trade_.pendingSince > 20.0)) {
             log_(!here ? "trade window cancelled: the merchant or our character is not here" : "trade window cancelled: the merchant's stock never arrived here");
@@ -2423,6 +2434,8 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
     }
     case Msg::DoorRequest: HostDoorPacket(pl->id, r); break;   // lot A
     case Msg::AnimalBuy: HostAnimalBuyPacket(pl->id, r); break;
+    case Msg::SlaveTrade: HostSlaveTradePacket(pl->id, r); break;   // 0.3.5 lot 5
+    case Msg::InvResend: HostInvResendPacket(pl->id, r); break;
     case Msg::ResearchRequest: HostResearchPacket(pl->id, r); break;   // workshop
     case Msg::MachineRequest: HostMachinePacket(pl->id, r); break;
     case Msg::MapPing: if (pl && pl->inGame) HostPingPacket(pl->id, r); break;   // map pings
@@ -3541,6 +3554,10 @@ void Session::ClientTick(double now, bool live) {
     SendEditedAppearances();
     ClientContainers(now);
     ClientAnimalShops();
+    ClientSlaveShops();   // 0.3.5 lot 5: slave shops, action progress, disguise, inventories asked again
+    ClientActionProgress(now);
+    ClientDisguises(now);
+    ClientInvResend(now);
     ClientFactionsTick(now);   // lot B
     ClientDiplomacyTick(now);
     ClientDoors(now);   // lot A
@@ -4092,6 +4109,9 @@ void Session::ClientPacket(Msg type, Reader& r) {
     }
     case Msg::Doors: ClientDoorsPacket(r); break;   // lot A
     case Msg::AnimalShop: ClientAnimalShopPacket(r); break;
+    case Msg::SlaveShop: ClientSlaveShopPacket(r); break;   // 0.3.5 lot 5
+    case Msg::ActionProgress: ClientActionProgressPacket(r); break;
+    case Msg::Disguise: ClientDisguisePacket(r); break;
     case Msg::Research: ClientResearchPacket(r); break;   // workshop
     case Msg::Machines: ClientMachinesPacket(r); break;
     case Msg::JobList: ClientJobsPacket(r); break;   // fix G5

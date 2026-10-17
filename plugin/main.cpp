@@ -603,6 +603,7 @@ void PublishOverlay() {
         // host: everyone on their way in; client in the world: our turn in the character editor to come
         if (g_session->isHost() || g_session->queueStatus()) m.lines.insert(m.lines.end(), m.queueLines.begin(), m.queueLines.end());
         if (g_session->isHost()) m.lines.push_back("Ctrl+Shift+G  confier la sélection au joueur suivant");
+        for (const auto& l : g_session->actionLines()) m.lines.push_back(l);   // 0.3.5 lot 5: disguise, action progress without the game's bar
         m.lines.push_back("Ctrl+Shift+F  diplomatie (relations, primes, monde)");
         m.lines.push_back("Un bug ? Ctrl+Shift+K puis /bug <phrase>");
         m.lines.push_back("Ctrl+Shift+L  quitter la session");

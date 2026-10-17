@@ -958,6 +958,22 @@ la fenêtre du client.
   le harnais : l'expérience `caravan` a besoin d'une sauvegarde avec une caravane près de
   l'escouade.
 
+### Esclaves, barres de progression, déguisement (0.3.5, lot 5) 🟡 (à vérifier en jeu)
+- **Marchands d'esclaves** : « Je voudrais acheter / vendre des esclaves » dans la conversation d'un
+  client ouvre la fenêtre des esclaves chez lui (cachée chez l'hôte), avec les prix de l'hôte ; l'hôte
+  fait l'affaire (argent de la faction). Un esclave acheté est libéré, suit l'acheteur et lui parle,
+  comme en solo. On ne vend que ses propres persos, jamais son perso principal.
+- **Barre de progression** des actions minutées (crocheter, scier, forcer une serrure, menottes...) du
+  perso d'un client : faite par le jeu de l'hôte, dessinée aussi chez ce client (barre du jeu, sinon
+  une ligne de l'overlay).
+- **Déguisement** : calculé par le jeu de l'hôte, refait aussitôt quand un client change de tenue,
+  recopié sur la copie du client (indicateur « In Disguise » du jeu, ligne « Déguisé en ... » de
+  l'overlay) ; chaque changement est écrit dans le journal de l'hôte.
+- **Inventaires redemandés** : un client qui n'arrive plus à reconstruire l'inventaire de ses persos
+  (après un TP lointain) le redemande à l'hôte ; une fenêtre de commerce attend qu'il soit à jour.
+- **Tâche retirée** (croix du panneau Tâches) : l'action en cours de cette tâche (un « suivre »)
+  s'arrête aussi, chez l'hôte, pour tous les persos de la faction.
+
 ### Animaux de l'escouade 🟡 (à vérifier en jeu)
 - Bêtes de somme, chiens, chèvres... achetés ou apprivoisés sont des membres de l'escouade comme les
   autres : position, santé, faim (dans les signes vitaux) et inventaire sont ceux de l'hôte partout ;

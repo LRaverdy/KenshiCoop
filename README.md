@@ -180,6 +180,11 @@ rapport avec les journaux de tout le monde dans `KenshiCoop_bugs\`, et le chat c
 - **Achat d'animaux** : « T'as des animaux à vendre ? » ouvre la fenêtre d'achat d'animaux chez toi
   (plus chez l'hôte) ; l'animal acheté est payé avec l'argent commun, t'appartient et rejoint ton
   escouade, chez tout le monde.
+- **Marchands d'esclaves** (0.3.5) : « Je voudrais acheter / vendre des esclaves » ouvre la fenêtre
+  chez toi ; l'hôte fait l'affaire. Tu ne vends que tes propres persos (jamais ton perso principal).
+- **Crochetage, sciage, forçage** (0.3.5) : la barre de progression s'affiche chez toi aussi.
+- **Déguisement** (0.3.5) : l'hôte calcule le déguisement de tes persos dès que tu changes de tenue,
+  et l'indicateur « déguisé » s'affiche chez toi.
 - **Prospection** : le bouton PROSPECT de la barre d'ordres ouvre la fenêtre de prospection chez
   toi, pour l'endroit où se trouve ton perso.
 - **Heure, vitesse et pause** : celles de l'hôte, imposées en permanence. Les clients ne peuvent

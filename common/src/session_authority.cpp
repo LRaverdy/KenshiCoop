@@ -153,6 +153,10 @@ bool Session::Authorize(RemotePlayer& pl, Msg type, Reader r) {
             AnimalBuyMsg m;
             if (!Decode(r, m)) return malformed();
             actor = m.buyerNetId;
+        } else if (type == Msg::SlaveTrade) {   // 0.3.5 lot 5: the character in the conversation (the offer is checked by HostSlaveShops)
+            SlaveTradeMsg m;
+            if (!Decode(r, m)) return malformed();
+            actor = m.buyerNetId;
         }
         return AdmitActor(pl.id, actor, rule->name, type, seq);
     }

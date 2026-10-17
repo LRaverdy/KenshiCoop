@@ -154,28 +154,60 @@ bool WidgetVisible(const void* widget, bool& out) {
 }
 } // namespace
 
-bool OpenAnimalShopWindow(Character* seller, Character* buyer, const std::vector<Character*>& animals, int32_t basePrice, void** handlerOut) {
+namespace {
+void* TradeCtorSeh(void* fn, void* h, Character* seller, Character* buyer, Lektor* l, int price) {
+    __try { return reinterpret_cast<AnimalCtorFn>(fn)(h, seller, buyer, l, price); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+} // namespace
+
+// The game's character trading window (animals, slaves bought, characters sold as slaves) made with
+// that handler's constructor, its prices (when given: by the character each entry names) set before
+// the window lays its rows out.
+bool OpenCharTradeWindow(Fn ctor, Character* seller, Character* buyer, const std::vector<Character*>& chars, int32_t basePrice,
+                         const std::vector<int32_t>* prices, void** handlerOut) {
     if (handlerOut) *handlerOut = nullptr;
-    if (!IsCharacter(seller) || !IsCharacter(buyer) || animals.empty() || animals.size() > 64) return false;
-    for (Character* a : animals) if (!IsCharacter(a)) return false;
-    std::vector<Character*> list = animals;   // read by the constructors only, never kept
+    if (!IsCharacter(seller) || !IsCharacter(buyer) || chars.empty() || chars.size() > 64) return false;
+    for (Character* a : chars) if (!IsCharacter(a)) return false;
+    std::vector<Character*> list = chars;   // read by the constructors only, never kept
     Lektor l;
     l.vt = Addr(kVtLektorCharacters);
     l.count = l.capacity = uint32_t(list.size());
     l.data = list.data();
     void* h = CallNew(kHandlerSize);
     if (!h) return false;
-    if (!AnimalCtorSeh(h, seller, buyer, &l, std::max(basePrice, 0))) {
-        kcp::Log("animal shop: the game's handler could not be made (exception caught; its memory is left)");
+    void* made = ctor == FnAnimalTradeCtor ? AnimalCtorSeh(h, seller, buyer, &l, std::max(basePrice, 0))
+                                           : TradeCtorSeh(FnAddr(ctor), h, seller, buyer, &l, std::max(basePrice, 0));
+    if (!made) {
+        kcp::Log("character trading window: the game's handler could not be made (exception caught; its memory is left)");
         return false;
+    }
+    if (prices && prices->size() == chars.size()) {
+        uint8_t* data = nullptr;
+        uint64_t n = 0;
+        if (Get(h, CTH_entries, data) && Get(h, CTH_count, n) && data && n <= 64)
+            for (uint64_t i = 0; i < n; ++i) {
+                kc::Handle eh;
+                HandleFromHand(data + i * kEntrySize, eh);
+                for (size_t k = 0; k < chars.size(); ++k)
+                    if (kc::Handle ch; GetHandle(chars[k], ch) && ch == eh) Put(data + i * kEntrySize, ENT_price, std::max((*prices)[k], 0));
+            }
     }
     void* w = CallNew(kWindowSize);
     if (!w || !WindowCtorSeh(w, h)) {
-        kcp::Log("animal shop: the game's window could not be made");
+        kcp::Log("character trading window: the game's window could not be made");
         return false;
     }
     if (handlerOut) *handlerOut = h;
     return ShowSeh(w, true);
+}
+
+bool CallSlaveConfirm(void* handler, bool sell, bool& done) {
+    done = false;
+    return handler && BoolSeh(FnAddr(sell ? FnSlaveSellConfirm : FnSlaveBuyConfirm), handler, done);
+}
+
+bool OpenAnimalShopWindow(Character* seller, Character* buyer, const std::vector<Character*>& animals, int32_t basePrice, void** handlerOut) {
+    return OpenCharTradeWindow(FnAnimalTradeCtor, seller, buyer, animals, basePrice, nullptr, handlerOut);
 }
 
 bool AnimalShopEntries(const void* handler, std::vector<ShopEntry>& out) {
@@ -295,17 +327,53 @@ struct HeldOffer {
     kenshi::Character* buyer = nullptr;
     kc::Handle sellerH, buyerH;
     int32_t basePrice = 0;
-    std::vector<kc::Handle> animals;
+    std::vector<kc::Handle> animals;   // (slave shops: the characters offered)
+    std::vector<int32_t> prices;        // slave shops: the game's price of each
     uint32_t generation = 0;
+    int kind = -1;                      // -1 an animal shop, else kc::kSlaveBuy / kSlaveSell
 };
 std::mutex g_shopMutex;
 std::map<void*, HeldOffer> g_noted;   // made, its window not shown yet
 std::map<void*, HeldOffer> g_held;    // its window hidden: offered to the player
 std::vector<kc::IWorld::AnimalOffer> g_newOffers;
+std::vector<kc::IWorld::SlaveOffer> g_newSlaveOffers;
 // ---- client: the window we opened for the host's offer
 void* g_clientHandler = nullptr;
 void* g_clientWindow = nullptr;
 std::vector<kc::IWorld::AnimalChoice> g_choices;
+void* g_slaveHandler = nullptr;   // the slave window we opened (0.3.5 lot 5)
+void* g_slaveWindow = nullptr;
+int g_slaveKind = 0;
+std::vector<kc::IWorld::SlaveChoice> g_slaveChoices;
+
+// Host: note a handler the game made for another player's character (its window will be kept hidden).
+bool NoteForeignHandler(void* self, kenshi::Character* a, kenshi::Character* b, int basePrice, int kind) {
+    auto v = KenshiWorld::View();
+    KenshiWorld* w = TheWorld();
+    if (InHostCall() || !v->active || v->client || !w) return false;
+    // the dialogue passes (its owner, the other one): the seller is the dialogue's NPC; whichever of
+    // the two is another player's character is the player's side
+    const bool fb = b && v->squadForeign.count(b), fa = !fb && a && v->squadForeign.count(a);
+    if (!fa && !fb) return false;
+    HeldOffer o;
+    o.buyer = fb ? b : a;
+    o.seller = fb ? a : b;
+    o.kind = kind;
+    kenshi::GetHandle(o.buyer, o.buyerH);
+    kenshi::GetHandle(o.seller, o.sellerH);
+    o.basePrice = basePrice;
+    o.generation = w->WorldGeneration();
+    std::vector<kenshi::ShopEntry> entries;
+    kenshi::AnimalShopEntries(self, entries);
+    for (const auto& e : entries) {
+        o.animals.push_back(e.animal);
+        o.prices.push_back(e.price);
+    }
+    std::lock_guard<std::mutex> lk(g_shopMutex);
+    if (g_noted.size() >= 8) g_noted.erase(g_noted.begin());   // (a handler whose window never came: forgotten, not freed)
+    g_noted[self] = std::move(o);
+    return true;
+}
 
 void ShopToast(const char* text) {
     if (KenshiWorld* w = TheWorld()) w->Toast(text);
@@ -321,34 +389,28 @@ using ShowFn = void (*)(void*, bool);
 ShowFn o_tradeWindowShow = nullptr;
 using ButtonFn = void (*)(void*, void*);
 ButtonFn o_prospectButton = nullptr;
+AnimalCtorFn o_slaveBuyCtor = nullptr, o_slaveSellCtor = nullptr;   // 0.3.5 lot 5 (same signature)
+BoolFn o_slaveBuyConfirm = nullptr, o_slaveSellConfirm = nullptr;
 
 // Host: an animal shop the game makes for another player's character is noted (the window that shows
 // it next is then kept hidden).
 void* hk_animalCtor(void* self, kenshi::Character* a, kenshi::Character* b, void* list, int basePrice) {
     void* r = o_animalCtor(self, a, b, list, basePrice);
-    auto v = KenshiWorld::View();
-    KenshiWorld* w = TheWorld();
-    if (!r || InHostCall() || !v->active || v->client || !w) return r;
-    // the dialogue passes (its owner, the other one): the seller is the dialogue's NPC; whichever of
-    // the two is another player's character buys
-    const bool fb = b && v->squadForeign.count(b), fa = !fb && a && v->squadForeign.count(a);
-    if (!fa && !fb) return r;
-    HeldOffer o;
-    o.buyer = fb ? b : a;
-    o.seller = fb ? a : b;
-    kenshi::GetHandle(o.buyer, o.buyerH);
-    kenshi::GetHandle(o.seller, o.sellerH);
-    o.basePrice = basePrice;
-    o.generation = w->WorldGeneration();
-    std::vector<kenshi::ShopEntry> entries;
-    kenshi::AnimalShopEntries(self, entries);
-    for (const auto& e : entries) o.animals.push_back(e.animal);
-    {
-        std::lock_guard<std::mutex> lk(g_shopMutex);
-        if (g_noted.size() >= 8) g_noted.erase(g_noted.begin());   // (a handler whose window never came: forgotten, not freed)
-        g_noted[self] = std::move(o);
-    }
-    Log("animal shop made for another player's character (%zu animals): its window will not show here", entries.size());
+    if (r && NoteForeignHandler(self, a, b, basePrice, -1)) Log("animal shop made for another player's character: its window will not show here");
+    return r;
+}
+
+// 0.3.5 lot 5 (A_FAIRE 16/10 point 4). Host: the slave window the dialogue makes for another player's
+// character (action 0x2A: the slaver's slaves; 0x29: that character's squad mates to sell) is noted the
+// same way: its window stays hidden, the offer goes to that player.
+void* hk_slaveBuyCtor(void* self, kenshi::Character* a, kenshi::Character* b, void* list, int basePrice) {
+    void* r = o_slaveBuyCtor(self, a, b, list, basePrice);
+    if (r && NoteForeignHandler(self, a, b, basePrice, kc::kSlaveBuy)) Log("slave shop (buying) made for another player's character: its window will not show here");
+    return r;
+}
+void* hk_slaveSellCtor(void* self, kenshi::Character* a, kenshi::Character* b, void* list, int basePrice) {
+    void* r = o_slaveSellCtor(self, a, b, list, basePrice);
+    if (r && NoteForeignHandler(self, a, b, basePrice, kc::kSlaveSell)) Log("slave shop (selling) made for another player's character: its window will not show here");
     return r;
 }
 
@@ -366,16 +428,29 @@ void hk_tradeWindowShow(void* win, bool on) {
             g_noted.erase(it);
             kenshi::DetachTradingWindowHandler(win);
             kenshi::HideTradingWindow(win);
-            kc::IWorld::AnimalOffer offer;
-            offer.key = reinterpret_cast<uint64_t>(h);
-            offer.seller = o.sellerH;
-            offer.buyer = o.buyerH;
-            offer.basePrice = o.basePrice;
-            offer.animals = o.animals;
-            if (g_newOffers.size() < 16) g_newOffers.push_back(std::move(offer));
+            const int kind = o.kind;
+            if (kind < 0) {
+                kc::IWorld::AnimalOffer offer;
+                offer.key = reinterpret_cast<uint64_t>(h);
+                offer.seller = o.sellerH;
+                offer.buyer = o.buyerH;
+                offer.basePrice = o.basePrice;
+                offer.animals = o.animals;
+                if (g_newOffers.size() < 16) g_newOffers.push_back(std::move(offer));
+            } else {
+                kc::IWorld::SlaveOffer offer;
+                offer.key = reinterpret_cast<uint64_t>(h);
+                offer.kind = uint8_t(kind);
+                offer.seller = o.sellerH;
+                offer.buyer = o.buyerH;
+                offer.basePrice = o.basePrice;
+                offer.slaves = o.animals;
+                offer.prices = o.prices;
+                if (g_newSlaveOffers.size() < 16) g_newSlaveOffers.push_back(std::move(offer));
+            }
             g_held[h] = std::move(o);
             lk.unlock();
-            Log("animal shop window of another player's character kept hidden here: offered to that player");
+            Log("%s window of another player's character kept hidden here: offered to that player", kind < 0 ? "animal shop" : "slave shop");
             return;
         }
     }
@@ -405,6 +480,34 @@ bool hk_animalConfirm(void* handler) {
     g_clientWindow = nullptr;
     return true;
 }
+
+// 0.3.5 lot 5: the slave windows' confirm. Client: nothing is bought or sold here; the ticked characters
+// go to the host (the window then closes as after a deal). Host: the game's own (its window, or
+// TradeSlaves).
+bool SlaveConfirm(void* handler, int kind, BoolFn original) {
+    if (InHostCall() || !KenshiWorld::ClientActive()) return original(handler);
+    std::vector<kenshi::ShopEntry> entries;
+    std::lock_guard<std::mutex> lk(g_shopMutex);
+    if (handler != g_slaveHandler || kind != g_slaveKind) {
+        Log("slave window confirm on a window the host did not offer: refused here");
+        ShopToast("Esclaves : passe par le marchand pendant la partie (le jeu de l'hôte fait l'échange).");
+        return false;
+    }
+    kc::IWorld::SlaveChoice c;
+    c.kind = uint8_t(kind);
+    if (kenshi::AnimalShopEntries(handler, entries))
+        for (const auto& e : entries)
+            // our copy of a host character (a stand-in) has its own local handle: the session knows the host's
+            if (e.ticked) { KenshiWorld* w = TheWorld(); c.slaves.push_back(w ? w->HostHandleOf(e.animal) : e.animal); c.price += e.price; }
+    if (c.slaves.empty()) return false;   // nothing ticked: the game does nothing either
+    Log("slave window: %zu character(s) chosen here for %d cats, asked of the host", c.slaves.size(), int(c.price));
+    if (g_slaveChoices.size() < 8) g_slaveChoices.push_back(std::move(c));
+    g_slaveHandler = nullptr;   // the window frees it now
+    g_slaveWindow = nullptr;
+    return true;
+}
+bool hk_slaveBuyConfirm(void* handler) { return SlaveConfirm(handler, kc::kSlaveBuy, o_slaveBuyConfirm); }
+bool hk_slaveSellConfirm(void* handler) { return SlaveConfirm(handler, kc::kSlaveSell, o_slaveSellConfirm); }
 
 // The PROSPECT button. Client: the window opens here at once for our character (the task the game
 // would give it never runs on a client). Host: never task 150 on another player's character.
@@ -570,6 +673,125 @@ void KenshiWorld::TakeAnimalChoices(std::vector<AnimalChoice>& out) {
     }
     out.swap(g_choices);
     g_choices.clear();
+}
+
+// ---- KenshiWorld (IWorld): slave shops (0.3.5 lot 5, A_FAIRE 16/10 point 4)
+void KenshiWorld::TakeSlaveOffers(std::vector<SlaveOffer>& out) {
+    std::lock_guard<std::mutex> lk(g_shopMutex);
+    out.swap(g_newSlaveOffers);
+    g_newSlaveOffers.clear();
+}
+
+// Host: the player's choice run by the game with the handler it made: the entries ticked, its confirm
+// (buy 0x6ADD20: each slave freed, ordered to follow the buyer, its "freed" conversation started with
+// the buyer, then the cats taken from the player faction, which it never checks; sell 0x6A7740: each
+// character chained as the slaver's slave, the cats added to the player faction).
+bool KenshiWorld::TradeSlaves(uint64_t key, const std::vector<kc::Handle>& slaves, int32_t& price, std::string& why) {
+    price = 0;
+    void* h = reinterpret_cast<void*>(key);
+    HeldOffer o;
+    {
+        std::lock_guard<std::mutex> lk(g_shopMutex);
+        auto it = g_held.find(h);
+        if (it == g_held.end() || it->second.kind < 0) { why = "l'offre a expiré"; return false; }
+        o = it->second;
+    }
+    const bool sell = o.kind == kc::kSlaveSell;
+    if (o.generation != generation_) { why = "le monde a été rechargé"; return false; }
+    // the handler keeps raw pointers to both characters: they must still be those
+    if (Find(o.sellerH) != o.seller || Find(o.buyerH) != o.buyer || kenshi::IsDead(o.buyer) || kenshi::IsDead(o.seller)) {
+        why = "le marchand ou ton personnage n'est plus là";
+        return false;
+    }
+    std::vector<kenshi::ShopEntry> entries;
+    if (!kenshi::AnimalShopEntries(h, entries)) { why = "offre illisible"; return false; }
+    int32_t total = 0;
+    size_t ticked = 0;
+    std::vector<kenshi::Character*> chosen;
+    for (size_t i = 0; i < entries.size(); ++i) {
+        const bool want = std::find(slaves.begin(), slaves.end(), entries[i].animal) != slaves.end();
+        kenshi::Character* a = want ? kenshi::Resolve(entries[i].animal) : nullptr;
+        // a slave bought is still nobody's; a character sold is still in the player faction
+        const bool ok = want && a && !kenshi::IsDead(a) && (sell ? kenshi::InPlayerSquad(a) : !kenshi::InPlayerSquad(a));
+        if (want && !ok) {
+            why = sell ? "un des personnages ne peut plus être vendu" : "un des esclaves n'est plus à vendre";
+            for (size_t k = 0; k < entries.size(); ++k) kenshi::TickAnimalEntry(h, k, false);
+            return false;
+        }
+        kenshi::TickAnimalEntry(h, i, ok);
+        if (ok) { total += entries[i].price; ++ticked; chosen.push_back(a); }
+    }
+    if (ticked != slaves.size()) { why = "un des personnages n'était pas proposé"; return false; }
+    int32_t before = 0, after = 0;
+    kenshi::ReadPlayerMoney(before);
+    if (!sell && before < total) {
+        why = "pas assez d'argent (" + std::to_string(total) + " cats demandés, " + std::to_string(before) + " en caisse)";
+        return false;
+    }
+    bool done = false, ran = false;
+    {
+        CallScopeGuard guard(sell ? "slave sale" : "slave purchase");
+        HostCallScope scope;
+        ran = kenshi::CallSlaveConfirm(h, sell, done);
+    }
+    kenshi::ReadPlayerMoney(after);
+    price = before - after;
+    Log("slave shop: the game %s %zu character(s) for %d cats (prices %d)%s", sell ? "bought from the player" : "sold to the player", ticked, int(price),
+        int(total), ran ? (done ? "" : ", confirm said no") : ", confirm faulted");
+    for (kenshi::Character* a : chosen) {   // where each one stands now (for the logs: freed and following, or chained)
+        kenshi::Captivity cap;
+        std::string name;
+        const bool alive = kenshi::IsCharacter(a);
+        if (alive) { kenshi::ReadCaptivity(a, cap); kenshi::CharacterName(a, name); }
+        Log("slave shop: %s now: slave state %d, chained %d, in the player's squads %d", alive ? name.c_str() : "(gone)", alive ? cap.slaveState : -1,
+            int(alive && cap.chained), int(alive && kenshi::InPlayerSquad(a)));
+    }
+    if (!ran || !done) {
+        why = ran ? "le jeu a refusé" : "erreur du jeu";
+        return false;
+    }
+    return true;
+}
+
+void KenshiWorld::DropSlaveOffer(uint64_t key) { DropAnimalOffer(key); }   // the same kept handlers (g_held)
+
+bool KenshiWorld::OpenSlaveShop(uint8_t kind, const kc::Handle& seller, const kc::Handle& buyer, const std::vector<kc::Handle>& slaves,
+                                const std::vector<int32_t>& prices, int32_t basePrice) {
+    kenshi::Character* s = Find(seller);
+    kenshi::Character* b = Find(buyer);
+    std::vector<kenshi::Character*> list;
+    std::vector<int32_t> listPrices;
+    for (size_t i = 0; i < slaves.size(); ++i)
+        if (kenshi::Character* a = Find(slaves[i]); a && !kenshi::IsDead(a)) {
+            list.push_back(a);
+            listPrices.push_back(i < prices.size() ? prices[i] : 0);
+        }
+    if (!s || !b || list.empty() || kind > kc::kSlaveSell) return false;
+    void* handler = nullptr;
+    const bool ok = kenshi::OpenCharTradeWindow(kind == kc::kSlaveSell ? kenshi::FnSlaveSellCtor : kenshi::FnSlaveBuyCtor, s, b, list, basePrice,
+                                                &listPrices, &handler);
+    std::lock_guard<std::mutex> lk(g_shopMutex);
+    g_slaveHandler = ok ? handler : nullptr;
+    g_slaveWindow = ok ? kenshi::TradingWindow() : nullptr;
+    g_slaveKind = kind;
+    return ok && g_slaveWindow;
+}
+
+void KenshiWorld::TakeSlaveChoices(std::vector<SlaveChoice>& out) {
+    std::lock_guard<std::mutex> lk(g_shopMutex);
+    // our window closed without a deal (cancel, the cross, another window replacing it)
+    if (g_slaveHandler) {
+        void* now = kenshi::TradingWindow();
+        if (now != g_slaveWindow || kenshi::TradingWindowHandler(now) != g_slaveHandler || !kenshi::TradingWindowVisible(now)) {
+            Log("slave window closed without a deal");
+            g_slaveHandler = g_slaveWindow = nullptr;
+            kc::IWorld::SlaveChoice none;
+            none.kind = uint8_t(g_slaveKind);
+            if (g_slaveChoices.size() < 8) g_slaveChoices.push_back(none);
+        }
+    }
+    out.swap(g_slaveChoices);
+    g_slaveChoices.clear();
 }
 
 } // namespace kcp

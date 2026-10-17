@@ -320,7 +320,7 @@ vendeur, +0x10 acheteur (pointeurs bruts), +0x18 booléen, +0x20 tableau d'entr�
 capacité +0x30), +0x38 titre, +0x60 texte ; entrée de 0x68 octets : `hand` de l'animal (+0), prix
 (+0x20, int), cochée (+0x24). Fenêtre : +0x38 widget, +0xD0 gestionnaire, +0xD8 cases. Les quatre
 fenêtres de ce type (vente et achat d'esclaves 0x29 / 0x2A, caution 0x2B, animaux 0x30) partagent la
-classe ; seule celle des animaux est détournée pour l'instant. Décalages par rapport à KenshiLib
+classe ; celles des animaux et, depuis 0.3.5, des esclaves sont détournées (la caution non). Décalages par rapport à KenshiLib
 1.0.65 : +0x11D0 (zone 0x72xxxx : `OrdersPanel`), +0x780 (`ProspectingWindow` 0x48xxxx), +0x4B0
 (`getSingleton`), +0x1260 (`ForgottenGUI`).
 
@@ -340,6 +340,44 @@ peloton du joueur, n'entrait jamais dans la liste. L'hôte n'ouvre plus cet édi
 pour un autre joueur (`NoEditorScope` autour du `confirm`, `hk_showEditor`) ; l'animal garde son nom.
 L'achat de l'hôte pour lui-même ouvre toujours l'éditeur, comme en solo.
 
+### Esclaves, barres de progression, déguisement, tâches retirées (0.3.5, lot 5, `plugin/shops.cpp`, `plugin/actions.cpp`)
+
+| Groupe | Enum | Fonction | RVA | Hook | Rôle |
+|---|---|---|---|---|---|
+| esclaves | `FnSlaveBuyCtor` | constructeur du gestionnaire d'achat d'esclaves (notre nom) `(this, Character* marchand, Character* perso, lektor<Character*>*, int prixDeBase)` | `0x6A7970` | hôte | [D] action de dialogue 0x2A (`0x681FB7`) : liste = les esclaves (`isSlave` 1, vivants) des « possessions » du marchand (`0x7956A0`) ; vtable `0x16FFA60`, titre « Buying Slaves » ; prix = prix de base s'il est > 0, sinon `0x6751F0(esclave)` (2500 par défaut), doublé pour un perso de la faction du joueur |
+| esclaves | `FnSlaveSellCtor` | constructeur du gestionnaire de vente (notre nom), même signature | `0x6A6F50` | hôte | [D] action 0x29 (`0x681B10`) : liste = les membres du peloton du perso (`0x791B10`) proches et vivants ; vtable `0x16FF920`, « Selling Slaves » ; prix = moitié de `0x6751F0`, entre 200 et 2500 |
+| esclaves | `FnSlaveBuyConfirm` | son `confirm()` (vt 0) | `0x6ADD20` | client | [D] pour chaque entrée cochée : `changeSlaveOwner(aucun)`, `Dialogue::sendEvent(acheteur, 0x33)` (la conversation de l'esclave libéré), cage déverrouillée, `setSlaveState(0)`, deux `removePermajob(0)`, ordre « suivre » (tâche 0x85) vers l'acheteur, relations ; puis `takeMoney(total)` sur la faction du joueur **sans vérifier l'argent**. Aucun `recruit` : l'esclave n'entre pas dans l'escouade (en solo non plus) |
+| esclaves | `FnSlaveSellConfirm` | son `confirm()` (vt 0) | `0x6A7740` | client | [D] pour chaque perso coché : `setChainedMode(true, faction du marchand)` (esclave du marchand), peloton, relations ; puis argent de la faction du joueur (+0x88) += total |
+| progression | `FnProgressTaskAdd` | `ProgressBarTask::<add progress>(Character*, float)` (notre nom) | `0x336E60` | hôte | [D] +0x80 += valeur ; si la barre +0x78 existe : `0x6E3530(barre, +0x80)`, position du perso (vt 0x38), visible selon le perso (vt 0x48)+0x1A8 |
+| progression | `FnProgressTaskSet` | `ProgressBarTask::<set progress>(Character*, float)` | `0x3375D0` | hôte | [D] +0x80 = valeur, puis la barre comme ci-dessus. Crocheter (`Task_PickLock` `0x359160`) : valeur = serrure+0x18 / serrure+0x1C |
+| progression | `FnFloatBarCreate` | `ForgottenGUI::<new floating progress bar>()` | `0x73FAB0` | — | [D] 0x58 octets (`0x6EAF00`, vtable `0x1703DE0`), inscrite dans la liste des objets flottants (`0x2133A20`) ; seul appelant du jeu : le début d'un `ProgressBarTask` (vt 8, `0x331CA0`), **seulement pour un perso de la faction du joueur** |
+| progression | `FnFloatBarSetProgress` | `FloatingProgressBar::<set progress>(float 0..1)` | `0x6E3530` | — | [D] +0x48 = 1000 × valeur bornée ; vt 0x10 `setVisible(bool)` (+8), vt 0x18 `setPosition(const Vector3&)` (+0xC) ; dessinée par vt 8 (`0x6E87C0`) si +8 et l'option des chiffres flottants `[0x2133AE0]` |
+| progression | `FnFloatBarDestroy` | `ForgottenGUI::<delete floating thing>(FloatingThing*)` | `0x6E9F10` | — | [D] mise en file (+0x288), supprimée à la mise à jour suivante du GUI ; ce que fait la fin d'un `ProgressBarTask` (vt 0x18, `0x331D50`) |
+| déguisement | `FnAiDisguiseUpdate` | `AI::<disguise and stealth update>(float)` (vt 0x48) | `0x5A51E0` | — | [D] appelée par `AI::periodicUpdate` (`0x5112B0`) ; voir ci-dessous |
+
+Tâches minutées : `Task_PickLock`, `Task_CutLock` (dérivé de `Task_CutShackles`), `Task_BruteForceLock`,
+`Task_PickLock_Shackles`, `Task_LockDoor`, `Task_AddMaterialsToBuilding`... dérivent toutes de
+`ProgressBarTask` (vtable `0x16BDCA8`) : progression +0x80 (float 0..1), barre +0x78. Chez un client la
+tâche ne tourne pas (le jeu de l'hôte mène nos persos) : aucune barre, d'où le point 5 du 16/10.
+
+**Déguisement [D]** (`StateBroadcastData`, `Character`+0x1A0) : +0x100 niveau de l'uniforme (float),
++0x108 faction dont le perso a l'air (`Faction*`), +0x110 secondes restantes de « déguisement percé »
+(sauvegardé sous `disguiseblown`). `AI` vt 0x48 (`0x5A51E0`), seulement pour un perso de la faction du
+joueur qui n'est pas un animal, remet +0x100 à 0 puis lit les emplacements portés
+(`Inventory::getSection` `0x745EF0`, premier objet `0x746D00`) : chapeau (section 3) +0.4, armure (5)
++0.4, jambes (6) +0.2 si de la même faction, bottes (9) rien ; la faction est `Item`+0x1E8 ; des pièces
+de deux factions divisent le niveau par 10 ; +0x108 = la faction trouvée. `StateBroadcastData::getDisguise`
+(`0x7C0520`) rend la faction si +0x110 ≤ 0 et +0x100 > 0,6 : c'est ce que lisent les PNJ et le panneau
+de discrétion (`0x88DF26` : « In Disguise », « You are currently disguised as » + nom de la faction
+(+0x1A8), « Disguise Blown » + minuterie). Chez un client l'IA ne tourne pas (`hk_aiPeriodic`) : ses copies
+n'avaient aucun déguisement. Chez l'hôte le calcul est périodique ; le mod le refait aussitôt après un
+déplacement d'objet demandé par un client.
+
+**Tâches retirées [D]** : `Character::removePermajob` (`0x5C9000`) → `AITaskSystem` (`AI`+0x20)
+`0x507300` : retire le `Tasker` de la liste des tâches (+0x98, nombre +0x90) et le détruit, sans
+toucher aux ordres en cours (+0x80, nombre +0x78 ; un `Tasker` : sujet `hand` +0x10, données +0x70 dont
+le `TaskType` +0x44). Un « suivre » lancé par la tâche continue donc, en solo aussi.
+`reThinkCurrentAIAction` (`0x5C8330`) vide ces ordres (`0x507530`) et fait réfléchir l'IA de nouveau.
 PROSPECT (tâche 150) : `checkPlayerOrderForProblems` (`0x5D1940`) refuse si le perso n'est pas dehors
 (vt 0x1D8, handle du lieu, type ≠ 0xB : « I need to go outside to do this. ») ou pas sur le sol ferme
 (`CharMovement`+0x340 ≠ 0xB : « I need to be stood on solid ground. ») ; la tâche (`0x348610`) ouvre

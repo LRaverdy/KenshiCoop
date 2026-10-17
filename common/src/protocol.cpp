@@ -966,6 +966,12 @@ const MessageRule kMessageRules[] = {
     {Msg::JobState, AuthRole::HostOnly, AuthSubject::None, "job state"},
     {Msg::AnimalShop, AuthRole::HostOnly, AuthSubject::None, "animal shop"},
     {Msg::PlayerStats, AuthRole::HostOnly, AuthSubject::None, "player stats"},
+    // 0.3.5 lot 5 (kc/actions.h)
+    {Msg::SlaveShop, AuthRole::HostOnly, AuthSubject::None, "slave shop"},
+    {Msg::SlaveTrade, AuthRole::InGame, AuthSubject::OwnCharacter, "trade slaves"},
+    {Msg::ActionProgress, AuthRole::HostOnly, AuthSubject::None, "action progress"},
+    {Msg::Disguise, AuthRole::HostOnly, AuthSubject::None, "disguise"},
+    {Msg::InvResend, AuthRole::InGame, AuthSubject::None, "inventories again"},
 };
 } // namespace
 const char* MsgName(Msg type) {
@@ -1044,6 +1050,11 @@ const char* MsgName(Msg type) {
     case Msg::AnimalShop: return "AnimalShop";
     case Msg::AnimalBuy: return "AnimalBuy";
     case Msg::PlayerStats: return "PlayerStats";
+    case Msg::SlaveShop: return "SlaveShop";
+    case Msg::SlaveTrade: return "SlaveTrade";
+    case Msg::ActionProgress: return "ActionProgress";
+    case Msg::Disguise: return "Disguise";
+    case Msg::InvResend: return "InvResend";
     }
 #pragma warning(pop)
     return nullptr;
