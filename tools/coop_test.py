@@ -6732,6 +6732,9 @@ def exp_soak(host, cli, minutes=20, phase_seconds=90, kinds=("Feu", "Tente", "Co
     own = own_index(host)
     own_c = own_index(cli)
     hidx = 0 if own != 0 else 1
+    # the squad is protected: the soak's fights (and a raid passing by) killed squad members on 17/10,
+    # the client's character among them, and every action on it failed afterwards
+    log("god mode:", cmd(host, "admin god all on"))
     sid = find_building(host, kinds)
     log(f"soak: {minutes} min, phases of {phase_seconds} s; client's character index host {own} client {own_c}, "
         f"host mover {hidx}, building {sid}")
@@ -6782,6 +6785,7 @@ def exp_soak(host, cli, minutes=20, phase_seconds=90, kinds=("Feu", "Tente", "Co
         log(f"[{s['t']}s] sample {label} speed x{s['speed']}: rtt ms host/client {s['rtt']} mem MB host/client {s['mem']} "
             f"client {s['client_state']} | chars {s['host_chars']}/{s['client_chars']} missing {s['missing_on_client']} "
             f"vitals {s['vital_flag_mismatch']} inv {s['inventory_mismatch']} squad_bad {s['squad_bad']} hours_diff {s['hours_diff']}")
+        s["away"] = bool(tp_state["back_at"])   # the client's character far away: NPCs near the host are not streamed to it
         samples.append(s)
 
     def burst(seconds=20):
@@ -6865,7 +6869,8 @@ def exp_soak(host, cli, minutes=20, phase_seconds=90, kinds=("Feu", "Tente", "Co
             time.sleep(5)
             cmd(cli, f"camto {own_c}")
             back = vec(cmd(host, f"where {own}")[1])
-            tp_state["back_dist"] = dist(back[::2], tp_state["home"][::2])
+            # tpplayer puts it next to squad member 0 (which has walked since the trip began, 17/10)
+            tp_state["back_dist"] = dist(back[::2], vec(cmd(host, f"where {hidx}")[1])[::2])
 
     actions = [act_moves, act_fight, act_trade, act_ko_loot, act_build, client_asks_speed, act_moves, act_teleport]
     crash = None
@@ -6912,8 +6917,11 @@ def exp_soak(host, cli, minutes=20, phase_seconds=90, kinds=("Feu", "Tente", "Co
     check("stabilite : aucun etat vital different", not bad("vital_flag_mismatch"), bad("vital_flag_mismatch")[:5])
     check("stabilite : aucun inventaire different", not bad("inventory_mismatch"),
           [(s["label"], s["inventory_mismatch_sample"]) for s in samples if s["inventory_mismatch"]][:5])
-    check("stabilite : personne ne manque chez le client", not bad("missing_on_client"),
-          [(s["label"], s["missing_sample"]) for s in samples if s["missing_on_client"]][:5])
+    # while the client's character is far away, the NPCs around the host are nobody's near this client:
+    # not streamed to it by design (per-player streaming); those samples are left out (17/10)
+    check("stabilite : personne ne manque chez le client (perso du client pres de l'hote)",
+          not [x for x in samples if x["missing_on_client"] and not x.get("away")],
+          [(x["label"], x["missing_sample"]) for x in samples if x["missing_on_client"] and not x.get("away")][:5])
     check("stabilite : meme heure de jeu (< 0.01 h)", all((s["hours_diff"] or 0) < 0.01 for s in samples),
           [(s["label"], s["hours_diff"]) for s in samples if (s["hours_diff"] or 0) >= 0.01][:5])
     worst_rtt = max([max(s["rtt"]) for s in samples] or [0])
