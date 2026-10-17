@@ -4,6 +4,35 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
 
 ## 16 octobre 2026, soir : test de la 0.3.5 avec rob1 et Geoffrey (journal de l'hôte `KenshiCoop.log`, 21:20-)
 
+### Vérification en jeu du 17 octobre (branche `night-integ`, DLL installé, hôte + client(s) réels)
+
+| Point | Expérience | Résultat |
+|---|---|---|
+| 1 éditeur après la file | `nj_editorqueue`, `up` + capture | **Corrigé et vérifié.** Vraie cause lue au désassemblage : en pause, le jeu saute la reconstruction des corps dont la scène de l'éditeur a besoin (`0x5C7B5E`). Scène montée jeu en pause, perso sur sa plateforme (capture). Le « ralenti » de la nuit est retiré. 6/6 |
+| 2 « suivre » retiré | `followjob` | Vérifié, 2/2 |
+| 3 vêtements | `wornrebuild` | Journal non inondé, chaque refus motivé (2/2). Tenue différente non reproduite |
+| 4 esclaves | `slaveshop` (`kctest_slavers`, créée le 17/10) | Fenêtre chez le client seul, achat par l'hôte, argent identique, vente : persos du client seulement. 5/5. Le test ouvre la fenêtre par la commande (la réponse du dialogue est « Je suis ici pour acheter ») |
+| 5 barre de progression | `lockprogress` | **Corrigé** : les crochets recevaient le `CharBody`, pas le perso. Crochetage : barre chez le client, disparaît à la fin. Scier / forcer : l'hôte accepte l'ordre mais son jeu ne lance pas la tâche dans le test : **non vérifié** |
+| 6 escouade au retour, chargement rapide | `nj_squadback`, `nj_quickload` | Vérifié, 12/12 et 6/6 |
+| 7 barre d'entraînement après resync | `trainresync` | Vérifié, 8/8 (test corrigé : l'entraînement se lit par les ouvriers de la machine) |
+| 8 furtivité | `sneakwatch` (2 clients) | Vérifié, 20/20 : `crouch_walk` chez l'hôte, le joueur et l'autre client, x1 à x3. Le diagnostic de l'hôte lit le drapeau d'animation (+0xE0 reste 0) |
+| 9 capturé remplacé | `nj_captive` | Vérifié, 6/6 |
+| 10 KO resté à terre | `kowake` | Vérifié, 15/15 |
+| 11 escouades loin, raid figé | `farsquads`, `farraid` | Raid : 3/3. Escouades loin : persos de tous les joueurs présents et placés (écarts dus à un bug du test, corrigé). Second passage arrêté par Claude Code faute de mémoire (3 instances) : **à relancer** |
+| 12 lits, remises en place | `nightbeds`, `farsquads` | Lits : 5/5. Les copies à faible cadence qui suivent l'hôte ne comptent plus comme « remises en place » |
+| 13 déguisement | `disguise` (`kctest_holy`, créée le 17/10) | **Non vérifié** : même le perso de l'hôte habillé comme les paladins n'est pas « déguisé » (niveau 0). Aucune attaque des paladins en 60 s |
+| 14 butin au sol | `lootground` | Vérifié, 4/4 |
+| 15 vente après TP lointain | `tradefartp` | Vérifié, 4/4 |
+| 16 perso abandonné invisible | `nj_editorleft` | Vérifié, 5/5 |
+| 17 Taureau de l'hôte, commerce entre joueurs | `teampack`, `teamtrade` | Vérifié, 4/4 (taureau recruté pour le test) et sans refus « price 0 » |
+| 18 eau et sortie de la ferme | `farmwater` | Vérifié : eau à 0,01 près, même récolte |
+| 19 clic sur un bâtiment | `buildingpeek` | Regarder sans marcher, puits sans marcher, prendre fait marcher puis arrive (passage de 12:10). Une prise lointaine attend tant que le perso marche (3 min max) |
+| 20 minerai qui retourne au stock | `storagetake` | Vérifié, 9/9 |
+| 21 travail de stockage | `storagejob` | **Corrigé** : Maj + clic droit rejoué par l'hôte n'ajoutait rien ; le travail 124 (ranger) est donné comme le bouton JOBS. 14/14 |
+
+Trouvé en route : un **plantage de l'hôte** (`kenshi_x64+0x6d1c7`) causé par la commande de test
+`machinegive` (objet passé par un sac plein) ; les objets vont maintenant directement dans la machine.
+
 1. **Geoffrey bloqué sur « un écran dans un désert » quand il arrive pendant l'éditeur de rob1.**
    - 21:23:55 Geoffrey arrive pendant que rob1 est dans l'éditeur de personnage : monde chargé, puis
      « join queue: position 2/2, waiting for rob1 » (partie en pause). 21:26:19 rob1 ferme l'éditeur,

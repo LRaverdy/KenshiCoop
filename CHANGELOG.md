@@ -8,6 +8,31 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 Protocole inchangé (36) : le nouveau message des stats est ignoré par un client 0.3.4.
 
+- **Vérification en jeu des correctifs de la nuit (17/10)**. Tableau point par point dans
+  [docs/A_FAIRE.md](docs/A_FAIRE.md). Corrigé en jeu :
+  - **Éditeur de personnage sur un jeu en pause (point 1)** : en pause, le jeu sautait la
+    reconstruction des corps qu'attend la scène de l'éditeur (`0x5C7B5E`, lu au désassembleur). Le mod
+    la laisse passer tant que la scène n'est pas montée (`kenshi::SetEditorPausedAnim`), sans lever la
+    pause ; pas de position de l'hôte écrite sur les persos de l'éditeur, pas de suivi de caméra
+    pendant ce temps. Le ralenti de la nuit est retiré. Détails : docs/MOTEUR.md « Éditeur et pause ».
+  - **Barre de progression (point 5)** : les deux crochets reçoivent le `CharBody` du perso, pas le
+    perso ; il est retrouvé parmi les persos des autres joueurs. Crochetage vérifié.
+  - **Travail de stockage (point 21)** : Maj + clic droit sur un stockage rejoué par l'hôte n'ajoutait
+    aucun travail ; le travail 124 (ranger) est donné comme le fait le bouton JOBS.
+  - **Panneau d'un bâtiment (point 19)** : une prise sur un bâtiment lointain attend tant que le perso
+    marche encore (3 min au plus) au lieu de 30 s.
+  - **Escouades loin (point 12)** : une copie à faible cadence mise à la nouvelle place de l'hôte
+    compte comme « suivie », sans ligne de journal ; « remise en place » reste pour les vrais écarts.
+  - **Furtivité (point 8)** : le diagnostic de l'hôte lit le drapeau d'animation (`AnimationClass`
+    +0x248) ; `Character`+0xE0 reste à 0 chez l'hôte pendant la marche accroupie.
+  - **Plantage de l'hôte en test** (`kenshi_x64+0x6d1c7`) : `machinegive` crée maintenant l'objet
+    directement dans la machine (`kenshi::GiveNewItemInto`).
+  - Expériences corrigées (index des entités par netId, compteurs de journal limités à 16, sections
+    des coffres, signaux d'entraînement et de lits, géographie du bac à sable) ; nouvelles
+    sauvegardes de test `kctest_slavers` (Marchés d'Esclaves) et `kctest_holy` (Colline de la Cloque).
+  - Non vérifié : déguisement (point 13), scier/forcer une serrure (point 5), second passage de
+    `farsquads` (arrêté faute de mémoire).
+
 - **Posture, furtivité, lits et entraînement des copies (partie du 16/10, branche `night-posture`,
   A_FAIRE points 7, 8, 10 et 12 ; à vérifier en jeu)**. Pas de nouveau message ; un bit de plus dans
   les modes de `Progress` (bit 7, ignoré par un client 0.3.4).
