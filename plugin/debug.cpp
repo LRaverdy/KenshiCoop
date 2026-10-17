@@ -3428,6 +3428,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         int32_t n = 1;
         in >> what >> n >> who;
         if (!s.isHost()) return "err host only";
+        const std::string rawSid = what;   // a template id may hold '_' itself ("2225-chris_r.mod")
         std::replace(what.begin(), what.end(), '_', ' ');
         auto squad = SortedSquad(w);
         kenshi::Character* target = nullptr;
@@ -3438,7 +3439,8 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         // "Building Materials", which the item factory refuses): items first (ItemTemplates), then
         // each candidate until one is an item the factory makes
         std::vector<std::string> cands;
-        if (kenshi::GameDataBySid(what)) cands.push_back(what);
+        if (kenshi::GameDataBySid(rawSid)) cands.push_back(rawSid);
+        else if (kenshi::GameDataBySid(what)) cands.push_back(what);
         std::vector<std::pair<std::string, std::string>> found;
         kenshi::ItemTemplates(what, found, 64);
         for (const auto& f : found) cands.push_back(f.first);

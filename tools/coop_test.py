@@ -7483,7 +7483,8 @@ def exp_disguise(host, cli, armour="Paladin"):
     cmd(cli, "editdone")
     time.sleep(3)
     own = own_index(host)
-    for part in (f"{armour}_Helmet", f"{armour}_Armour", f"{armour}_Leggings", "Casque_de_Paladin", "Armure_de_Paladin", "Pantalon_de_Paladin"):
+    # what the paladins of kctest_holy wear (17/10, read on one of them): Plastron Sacré, its helmet, legs, boots
+    for part in ("2166-gamedata.base", "2225-chris_r.mod", "2169-gamedata.base", "556-gamedata.base"):
         log("give", part, cmd(host, f"giveitem {part} 1 {own}"))
     time.sleep(3)
     items = cmd(cli, f"invitems squad{own}")[1]
@@ -7491,8 +7492,13 @@ def exp_disguise(host, cli, armour="Paladin"):
     for sec in ("head", "body", "legs"):
         log("client puts on", sec, cmd(cli, f"invmove squad{own} squad{own} main 1 0 0 {sec}"))
         time.sleep(1.5)
-    time.sleep(2)
-    dh, dc = cmd(host, f"disguisestate {own}")[1], cmd(cli, f"disguisestate {own}")[1]
+    for _ in range(20):   # the game works the disguise out on its AI's periodic update
+        time.sleep(1)
+        dh, dc = cmd(host, f"disguisestate {own}")[1], cmd(cli, f"disguisestate {own}")[1]
+        if "disguised=1" in dh and "disguised=1" in dc:
+            break
+    log("host's own character dressed the same, for comparison:", [cmd(host, f"giveitem {p_} 1 0")[0] for p_ in
+        ("2166-gamedata.base", "2225-chris_r.mod", "2169-gamedata.base", "556-gamedata.base")], cmd(host, "disguisestate 0")[1])
     log("host:", dh, "| client:", dc)
     check("deguisement : l'hote voit le perso du client deguise", "disguised=1" in dh, dh)
     check("deguisement : le client voit son perso deguise (indicateur)", "disguised=1" in dc and "Déguisé" in cmd(cli, "progressstate")[1], dc)
