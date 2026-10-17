@@ -5099,6 +5099,275 @@ def vec(t):
     return vec_of(t)
 
 
+# ---- 0.3.5 night-posture (A_FAIRE 16/10 points 7, 8, 10, 12)
+def _key_index(pid, key):
+    """The squad index of the character with that key on this machine (its sorted squad), or None."""
+    keys = sorted(dump(pid, "keyidx")["squad"])
+    return keys.index(key) if key in keys else None
+
+
+def _owned_keys(host, owner):
+    """The host's squad keys of the characters a player owns (owner "2", "3"...)."""
+    d = dump(host, f"owned_{owner}")
+    return [k for k in sorted(d["squad"]) if d["entity"].get(k, {}).get("owner") == str(owner)]
+
+
+def _lying(pid, key):
+    kv = kv_of(pid, f"orders {key}")
+    return kv.get("ragdoll") == 1 or kv.get("unconscious") == 1, kv
+
+
+def exp_kowake(host, cli):
+    """0.3.5 (A_FAIRE 16/10 point 10): the client's character knocked out on the host falls on the client,
+    and gets up there when the host's wakes: free, then as an escaped slave (plopette at 22:41 was
+    "slave-state=2 escaped sentence=160h" on the host and never got up on any client), by an immediate
+    wake (wakesquad) and by the knock-out's own end at speed 3; an NPC too. No "stays down here" line,
+    nothing the host has standing lies on the client (posturecheck)."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(2)
+    own = own_index(host)
+    key = sorted(dump(host, "kowake_keys")["squad"])[own]
+    log("client's character", own, key)
+    cmd(cli, "logcount stays_down_here")
+
+    def ko_and_wake(label, natural=False):
+        log(f"host: knock out ({label})", cmd(host, f"kosquad {own}"))
+        down = False
+        for _ in range(10):
+            time.sleep(1)
+            down, kv = _lying(cli, key)
+            if down:
+                break
+        check(f"KO ({label}) : a terre chez le client", down, kv)
+        time.sleep(2)
+        if natural:
+            cmd(host, "speed 3")
+            for _ in range(60):   # the knock-out's own end (60 s of game time)
+                time.sleep(1)
+                if not _lying(host, key)[0]:
+                    break
+            cmd(host, "speed 1")
+        else:
+            log("host: wake", cmd(host, f"wakesquad {own}"))
+            time.sleep(1)
+        hdown, hkv = _lying(host, key)
+        check(f"KO ({label}) : debout chez l'hote", not hdown, hkv)
+        up, kv = True, {}
+        for _ in range(10):
+            time.sleep(1)
+            up, kv = _lying(cli, key)
+            if not up:
+                break
+        check(f"KO ({label}) : releve chez le client en moins de 10 s", not up, kv)
+        log("client: walk", cmd(cli, f"moverel {own} 120 0"))
+        time.sleep(6)
+        e = dist(vec(cmd(host, f"where {own}")[1]), vec(cmd(cli, f"where {own}")[1]))
+        check(f"KO ({label}) : il marche au meme endroit chez le client", e < 5.0, f"{e:.2f}")
+
+    ko_and_wake("libre")
+    log("host: escaped slave (as plopette)", cmd(host, f"enslave {own} 2"))
+    time.sleep(7)   # the host's captivity reaches the client (full refresh every 5 s)
+    log("client: captive", cmd(cli, f"captive {own}")[1])
+    ko_and_wake("esclave evade")
+    ko_and_wake("esclave evade, fin du KO a x3", natural=True)
+    log("host: free again", cmd(host, f"enslave {own} 0"))
+    # an NPC next to the client's character
+    r = cmd(host, f"spawnnpc 15 15 {own}")
+    log("host: NPC", r)
+    if r[0]:
+        npc = r[1].split()[1]
+        time.sleep(6)
+        log("host: knock the NPC out", cmd(host, f"ko {npc}"))
+        down = False
+        for _ in range(10):
+            time.sleep(1)
+            down = _lying(cli, npc)[0]
+            if down:
+                break
+        check("KO (PNJ) : a terre chez le client", down, "")
+        log("host: wake the NPC", cmd(host, f"wake {npc}"))
+        up = True
+        for _ in range(10):
+            time.sleep(1)
+            up = _lying(cli, npc)[0]
+            if not up:
+                break
+        check("KO (PNJ) : releve chez le client en moins de 10 s", not up, "")
+    time.sleep(3)
+    pc = kv_of(cli, "posturecheck")
+    check("posture : rien que l'hote a debout n'est a terre chez le client", pc.get("n") == 0, pc)
+    n = cmd(cli, "logcount stays_down_here")[1]
+    log("client 'stays down here' lines:", n)
+    summary()
+
+
+def exp_trainresync(host, cli):
+    """0.3.5 (A_FAIRE 16/10 point 7): the client's character trains on a dummy (its own right click, task
+    97, run by the host); the host resyncs the client meanwhile. The gone player's character is stopped
+    the game's way (orders cleared, off the dummy) before the save goes to the client: after the reload no
+    training order and no progress bar on the client ("labels"), none left on the host either; the
+    client can train again."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(2)
+    own = own_index(host)
+    key = sorted(dump(host, "train_keys")["squad"])[own]
+    sid = None
+    for part in ("Mannequin", "Training", "Dummy"):
+        t = cmd(host, f"buildtypes {part}")[1]
+        log("dummy templates", part, ":", t[:300])
+        parts = t.split()
+        if t.startswith("ok") and len(parts) > 2:
+            sid = parts[2].split("=")[0]
+            break
+    check("entrainement : un modele de mannequin trouve", sid is not None, sid)
+    if not sid:
+        summary()
+        return
+    for pid in (host, cli):   # the same dummy on both games, next to squad member 0 (the same place everywhere)
+        log("dummy", pid, cmd(pid, f"buildspawn {sid} 60 40"))
+    time.sleep(3)
+    r = cmd(cli, f"objreq {own} 97 Mannequin")
+    log("client: train on the dummy", r)
+    training = False
+    for _ in range(30):
+        time.sleep(1)
+        kv = kv_of(host, f"orders {key}")
+        if kv.get("orders", 0) > 0 or kv.get("tasks", 0) > 0:
+            training = True
+            break
+    time.sleep(5)
+    lh = kv_of(host, "labels")
+    log("host labels while training:", lh, "| orders", kv_of(host, f"orders {key}"))
+    check("entrainement : le perso du client s'entraine chez l'hote", training, kv_of(host, f"orders {key}"))
+    log("host: resync", cmd(host, "resync 2"))
+    time.sleep(3)
+    wait_for(cli, lambda f: f.get("state") == "connected" and f.get("ready") == "1", 240, "client back in the host's world")
+    time.sleep(10)
+    hl = host_log()
+    gone = [l for l in hl.splitlines() if "player gone:" in l and key in l]
+    log("host:", gone[-1:] if gone else "no 'player gone' line")
+    check("resync : le perso parti est arrete a la maniere du jeu (ordres effaces)", any("the game's stop: ok" in l for l in gone), gone[-1:])
+    kh = kv_of(host, f"orders {key}")
+    check("resync : plus d'ordre d'entrainement chez l'hote", kh.get("orders") == 0, kh)
+    kc_ = kv_of(cli, f"orders {key}")
+    check("resync : aucune tache ni ordre garde chez le client", kc_.get("orders") == 0 and kc_.get("tasks") == 0, kc_)
+    lc = kv_of(cli, "labels")
+    check("resync : pas de barre d'entrainement chez le client", lc.get("shown") == 0, lc)
+    lh2 = kv_of(host, "labels")
+    check("resync : pas de barre d'entrainement chez l'hote", lh2.get("shown") == 0, lh2)
+    log("client nightstats:", cmd(cli, "nightstats")[1])
+    r = cmd(cli, f"objreq {own} 97 Mannequin")
+    again = False
+    for _ in range(30):
+        time.sleep(1)
+        kv = kv_of(host, f"orders {key}")
+        if kv.get("orders", 0) > 0 or kv.get("tasks", 0) > 0:
+            again = True
+            break
+    check("resync : le client peut s'entrainer de nouveau", again, r)
+    summary()
+
+
+def exp_sneakwatch(host, clis):
+    """0.3.5 (A_FAIRE 16/10 point 8): the first client's character goes into stealth (its own SNEAK toggle)
+    and walks (its own move order), at speeds 1, 2 and 3. Seen by the host, by that player and by the
+    other client: the stealth state (Character+0xE0, 1 = sneaking) is 1 everywhere, and each viewer plays
+    the host's animations (same names). Then stealth off: 0 everywhere. A host character with the order
+    on and walking upright is told in the host's log ("stealth: ... walks without sneaking")."""
+    time.sleep(6)
+    for c in clis:
+        cmd(c, "editdone")
+    time.sleep(3)
+    a = clis[0]
+    keys = _owned_keys(host, 2)
+    check("furtif : le perso du premier client trouve chez l'hote", bool(keys), keys)
+    if not keys:
+        summary()
+        return
+    key = keys[0]
+    ia = _key_index(a, key)
+    log("sneaker", key, "index on its player's game", ia)
+    log("client A: SNEAK on", cmd(a, f"orderreq {ia} 3"))
+    time.sleep(3)
+    viewers = [("hote", host), ("joueur", a)] + [(f"autre client {i}", c) for i, c in enumerate(clis[1:], 1)]
+    for speed in (1, 2, 3):
+        cmd(host, f"speed {speed}")
+        log(f"speed {speed}: client A walks", cmd(a, f"moverel {ia} {300 if speed == 1 else -300} 0"))
+        time.sleep(3.0 / speed + 1.0)
+        got = {name: kv_of(pid, f"sneak {key}") for name, pid in viewers}
+        for name, kv in got.items():
+            log(f"  x{speed} {name}: {kv}")
+        h = got["hote"]
+        check(f"furtif x{speed} : le perso marche accroupi chez l'hote (etat 1)", h.get("state") == 1 and h.get("order") == 1, h)
+        hanims = set(str(h.get("anims", "-")).split(","))
+        for name, kv in got.items():
+            if name == "hote":
+                continue
+            check(f"furtif x{speed} : etat furtif chez {name}", kv.get("state") == 1, kv)
+            canims = set(str(kv.get("anims", "-")).split(","))
+            same = len(hanims & canims) / max(1, len(hanims | canims))
+            check(f"furtif x{speed} : memes animations que l'hote chez {name}", same >= 0.5, f"{sorted(hanims)} / {sorted(canims)}")
+        time.sleep(3)
+    cmd(host, "speed 1")
+    log("client A: SNEAK off", cmd(a, f"orderreq {ia} 4"))
+    time.sleep(4)
+    for name, pid in viewers:
+        kv = kv_of(pid, f"sneak {key}")
+        check(f"furtif arrete : etat 0 chez {name}", kv.get("state") == 0 and kv.get("order") == 0, kv)
+    hl = host_log()
+    upright = [l for l in hl.splitlines() if "walks without sneaking on the host" in l]
+    log("host 'walks without sneaking' lines:", len(upright), upright[-2:])
+    for name, pid in viewers[1:]:
+        log(f"{name} nightstats:", cmd(pid, "nightstats")[1])
+    summary()
+
+
+def exp_nightbeds(host, cli, minutes=3):
+    """0.3.5 (A_FAIRE 16/10 point 12): a town at night (kctest_town, the host's clock set to 22:30) at x3
+    with the client's character there: the client's game no longer puts the host's NPCs into beds by
+    itself, so the bed ping-pong lines ("out of its bed first", "while the host has it free: taken out",
+    "put in its bed as on the host") stay rare; the host's sleepers sleep on the client too (as many in
+    beds); a bed entry the local game asks for a host character is refused ("localbed ... game")."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(2)
+    texts = ("out_of_its_bed_first", "while_the_host_has_it_free", "put_in_its_bed_as_on_the_host", "into_a_bed")
+    for t in texts:
+        cmd(cli, f"logcount {t}")
+    log("host: 22:30", cmd(host, "sethour 22.5"))
+    cmd(host, "speed 3")
+    peak_h = 0
+    samples = []
+    end = time.time() + minutes * 60
+    while time.time() < end:
+        time.sleep(30)
+        sh, sc = kv_of(host, "sleepers"), kv_of(cli, "sleepers")
+        samples.append((sh.get("sleepers", 0), sc.get("sleepers", 0)))
+        peak_h = max(peak_h, sh.get("sleepers", 0))
+        log(f"  sleepers host {sh} client {sc}")
+    cmd(host, "speed 1")
+    got = {t: cmd(cli, f"logcount {t}")[1] for t in texts}
+    n = {t: int(v.split()[1]) if v.startswith("ok") else -1 for t, v in got.items()}
+    log("client lines:", n, "|", cmd(cli, "nightstats")[1])
+    if peak_h == 0:
+        check("lits la nuit : NON TESTE (personne au lit chez l'hote)", False, samples)
+    else:
+        for t in ("out_of_its_bed_first", "while_the_host_has_it_free", "put_in_its_bed_as_on_the_host"):
+            check(f"lits la nuit : '{t}' rare chez le client ({n[t]} en {minutes} min)", 0 <= n[t] <= 6 * minutes, got[t])
+        sh, sc = samples[-1]
+        check("lits la nuit : autant de dormeurs chez le client que chez l'hote", abs(sh - sc) <= max(2, sh * 0.25), samples)
+    own = own_index(host)
+    other = next((i for i in range(8) if i != own and cmd(host, f"where {i}")[0]), None)
+    if other is not None:
+        r = cmd(cli, f"localbed {other} game")
+        log("client: the local game's bed for a host character", r)
+        time.sleep(1)
+        check("lit refuse : le jeu du client ne couche pas un perso de l'hote", cmd(cli, f"insomething {other}")[1] == "ok 0", r)
+    summary()
+
+
 # ---- fix G6
 def exp_resyncbar(host, cli):
     """Resync: the client reloads the host's world; afterwards its squad bar still shows its
@@ -9221,6 +9490,20 @@ def main():
         e2 = sub.add_parser(name)
         e2.add_argument("--save", default="kctest_town" if name in ("beds", "groundpick", "floorview", "bedfree") else "kctest_base")
         e2.add_argument("--keep", action="store_true")
+    # 0.3.5 night-posture (A_FAIRE 16/10 points 7, 8, 10, 12)
+    for name_, hlp_, save_ in (("kowake", "10: the client's character (free, escaped slave) and an NPC knocked out, then awake: up on the client", "kctest_base"),
+                               ("trainresync", "7: the client trains on a dummy, the host resyncs it: no training order nor progress bar left", "kctest_base")):
+        sp_ = sub.add_parser(name_, help=hlp_)
+        sp_.add_argument("--save", default=save_)
+        sp_.add_argument("--keep", action="store_true")
+    nb_ = sub.add_parser("nightbeds", help="12: a town at night at x3: the client's game puts no host NPC into a bed by itself (ping-pong lines rare)")
+    nb_.add_argument("--save", default="kctest_town")
+    nb_.add_argument("--keep", action="store_true")
+    nb_.add_argument("--minutes", type=float, default=3.0)
+    sw_ = sub.add_parser("sneakwatch", help="8: a client's character sneaks and walks at x1/x2/x3, seen by the host, its player and another client")
+    sw_.add_argument("--save", default="kctest_base")
+    sw_.add_argument("--keep", action="store_true")
+    sw_.add_argument("--clients", type=int, default=2)
     for name_, hlp_, save_ in (("camfocus", "3l: the client's camera focus is set once, then left to the player", "kctest_town"),
                                ("buildpause", "3n: the host's build mode does not pause anyone; a client's changes nothing for the host", "kctest_base"),
                                ("attackers", "3g: an NPC fighting the host's character is made on a client 6 km away", "kctest_base")):
@@ -9391,6 +9674,15 @@ def main():
             if not a.keep:
                 kill_launched()
         return
+    if a.what == "sneakwatch":   # 0.3.5 night-posture, point 8
+        host, clis, _ids = setup_multi(a.save, max(2, a.clients))
+        tile([host] + clis)
+        try:
+            exp_sneakwatch(host, clis)
+        finally:
+            if not a.keep:
+                kill_launched()
+        return
     if a.what == "quietlogs":
         # door and captivity log lines on every client, counted over a few minutes at x3
         host, clis, _ids = setup_multi(a.save, max(1, a.clients))
@@ -9492,6 +9784,12 @@ def main():
             exp_tpstop(host, cli)
         elif a.what == "bedfree":   # 0.3.4
             exp_bedfree(host, cli)
+        elif a.what == "kowake":   # 0.3.5 night-posture
+            exp_kowake(host, cli)
+        elif a.what == "trainresync":   # 0.3.5 night-posture
+            exp_trainresync(host, cli)
+        elif a.what == "nightbeds":   # 0.3.5 night-posture
+            exp_nightbeds(host, cli, a.minutes)
         elif a.what == "lootswap":
             exp_lootswap(host, cli)
         elif a.what == "groundpick":

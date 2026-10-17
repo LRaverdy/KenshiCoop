@@ -1403,6 +1403,28 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
     return {};
 }
 
+// 0.3.5 night-posture (A_FAIRE 16/10 point 7): a gone player's character is taken off every machine,
+// training dummy or chair near it that still lists it as an operator (UseableStuff::stopOperating, the
+// game's own removal from the operator set +0x3D0). Returns how many. Game thread, host.
+int KenshiWorld::LeaveMachinesOf(kenshi::Character* c) {
+    kc::Vec3 p;
+    kc::Handle me;
+    if (!c || !kenshi::GetPosition(c, p) || !kenshi::GetHandle(c, me)) return 0;
+    std::vector<void*> objs;
+    kenshi::ObjectsNear(p, 300.0f, objs);
+    uint8_t hand[kenshi::off::HandSize];
+    kenshi::MakeHand(me, hand);
+    int n = 0;
+    std::vector<kc::Handle> ops;
+    for (void* o : objs) {
+        if (!IsUseable(o)) continue;
+        ReadOperators(o, ops);
+        if (std::find(ops.begin(), ops.end(), me) == ops.end()) continue;
+        if (CallStopOperating(o, hand)) ++n;
+    }
+    return n;
+}
+
 // ---------------------------------------------------------------- hooks
 // On clients the research, the crafting orders and the power of the players' towns are the host's:
 // the game may not change them by itself; our own calls (HostCallScope) apply the host's state.

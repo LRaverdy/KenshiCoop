@@ -270,6 +270,8 @@ const FunctionSig kFunctions[FnCount] = {
     {"AnimationClass::<set position and direction>", 0x5B18F0, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48}},
     // ---- 0.3.4: the Tâches panel rebuilt when a job list changes from elsewhere
     {"ForgottenGUI::<refresh jobs panel>", 0x6E2050, {0x48, 0x8D, 0x91, 0xC0, 0x02, 0x00, 0x00, 0x48, 0x8B, 0x49, 0x10, 0xE9}},
+    // ---- 0.3.5 night-posture: stealth state of a character
+    {"Character::setStealthMode", 0x5C7E20, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48}},
 };
 
 namespace {
@@ -1918,6 +1920,52 @@ size_t LocalTaskCount(Character* c) {
 
 bool DropLocalTasks(Character* c) {
     return IsCharacter(c) && CallVoid(FnAddr(FnReThinkAIAction), c);
+}
+
+// ---- 0.3.5 night-posture (docs/MOTEUR.md, "Furtivité" and "Ordres d'un perso parti")
+size_t LocalOrderCount(Character* c) {
+    // Character -> AI (+0x650) -> AITaskSystem (+0x20) -> its orders (array +0x80, count +0x78)
+    void* ai = nullptr;
+    void* ts = nullptr;
+    uint32_t n = 0;
+    if (!IsCharacter(c) || !Rd(c, off::CH_ai, ai) || !ai || !Rd(ai, 0x20, ts) || !ts || !Rd(ts, 0x78, n) || n > 1000) return 0;
+    return n;
+}
+
+int StealthState(Character* c) {
+    int v = 0;   // Character+0xE0 (getStealthMode, vt 0x368): 0 not, 1 sneaking, 2-4 the game's other states
+    return IsCharacter(c) && Rd(c, 0xE0, v) ? v : -1;
+}
+
+int AnimStealthFlag(Character* c) {
+    void* ac = nullptr;   // AnimationClass+0x248: set by setStandingOrder 3/4 (0x51CC70)
+    int v = 0;
+    return IsCharacter(c) && Rd(c, 0x448, ac) && ac && Rd(ac, 0x248, v) ? v : -1;
+}
+
+void CountScreenLabels(int& nameTags, int& progressBars, int& progressShown) {
+    nameTags = progressBars = progressShown = 0;
+    // the game's list of labels drawn over the world (lektor<ScreenLabelInterface*>: count, array)
+    uint32_t n = 0;
+    void** arr = nullptr;
+    if (!Rd(reinterpret_cast<void*>(Addr(0x2133A28)), 0, n) || !Rd(reinterpret_cast<void*>(Addr(0x2133A30)), 0, arr) || !arr || n > 100000) return;
+    for (uint32_t i = 0; i < n; ++i) {
+        void* l = nullptr;
+        if (!Rd(arr, i * sizeof(void*), l) || !l) continue;
+        const uintptr_t vt = Vtable(l);
+        if (vt == Addr(0x1703950)) ++nameTags;
+        else if (vt == Addr(0x1703DE0)) {   // a task's progress bar (training on a dummy...)
+            ++progressBars;
+            uint8_t shown = 0;
+            if (Rd(l, 0x8, shown) && shown) ++progressShown;
+        }
+    }
+}
+
+bool ClearOrders(Character* c) {
+    void* ai = nullptr;
+    void* ts = nullptr;   // the game's stop button without the halt (AITaskSystem clear, 0x5074A0)
+    return IsCharacter(c) && Rd(c, off::CH_ai, ai) && ai && Rd(ai, 0x20, ts) && ts && CallVoid(FnAddr(FnAiTasksClear), ts);
 }
 
 bool ShowLoadWindow() {

@@ -88,6 +88,18 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      d'un mannequin (fin de tâche, retrait de l'opérateur) et l'appliquer au nettoyage d'un joueur
      parti ; vérifier aussi la même chose avec un lit, une chaise, une machine.
    - À reproduire en jeu : client qui s'entraîne, resync par l'hôte, regarder la barre chez les deux.
+   - **Fait (branche night-posture, à vérifier en jeu : expérience `trainresync`).** Cause probable,
+     lue au désassembleur (pas encore vue en jeu) : `reThinkCurrentAIAction` (`0x5C8330`), seul appel
+     de l'ancien arrêt, ne fait **rien** tant que la tâche en cours tient le corps (`CharBody`+0x68 →
+     +0x70 → octet +0x22) : le perso continuait de s'entraîner, la sauvegarde envoyée gardait l'ordre « s'entraîner », et la
+     barre (une étiquette de la tâche, vtable `0x1703DE0`, détruite seulement à la fin de la tâche)
+     restait chez le client, dont l'IA ne finit jamais rien. Maintenant `HaltCharacter` fait le
+     « stop » du jeu (`kenshi::StopCharacter` : arrêt + ordres effacés + tâche en cours terminée),
+     retire le perso de toute machine / mannequin / chaise qui le liste encore
+     (`UseableStuff::stopOperating`), le sort d'un lit s'il est éveillé, et l'écrit
+     (« the game's stop: ok; N order(s)… »). Chez le client, une copie qui garde des tâches ou des
+     ordres de la sauvegarde après deux `reThink` voit ses ordres effacés de la même façon
+     (`DropLeftoverTasks`, une ligne « tasks: … kept … »). Voir CHANGELOG 0.3.5.
 8. **Geoffrey en furtif sans les animations de furtivité.**
    - « [Geoffrey] mode "stealth" -> ok » (22:01:02, 22:09:08, 22:09:30), « knock out (stealth) »
      22:01:06 : le mode passe bien chez l'hôte, mais le perso marche/court normalement au lieu de se
@@ -98,6 +110,18 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      (vitesse/anim de marche imposées). Recopier l'état furtif de l'hôte sur toutes les copies et le
      garder ; tester en jeu : client en furtif qui marche, vu par l'hôte et par un autre client, aux
      vitesses 1, 2 et 3.
+   - **Fait en partie (branche night-posture, à vérifier en jeu : expérience `sneakwatch`).** Lu au
+     désassembleur : la marche accroupie suit l'état de furtivité du perso (`Character`+0xE0, 1 =
+     furtif ; `setStealthMode` `0x5C7E20`, vt 0x370), pas l'ordre permanent (+0xD4). Chez l'hôte ce
+     sont les actions de l'IA qui le mettent à 1 ; chez un client l'IA ne tourne pas et le
+     `Character::update` de la copie le remettait à 0 à chaque image. Désormais l'hôte envoie « furtif
+     en ce moment » (bit 7 des modes de `Progress`, ignoré par un client 0.3.4) et le crochet
+     `hk_setStealthMode` impose cet état aux copies (marche, icône de furtivité). **Cause supposée,
+     pas prouvée** : une copie proche joue déjà les animations de l'hôte ; si elle marchait debout,
+     c'est peut-être le jeu de l'hôte qui ne faisait pas marcher accroupi le perso du client. Pour le
+     savoir, l'hôte écrit maintenant une fois par minute « stealth: … has the stealth order on and
+     walks without sneaking on the host » ; `sneakwatch` compare l'état et les animations chez
+     l'hôte, le joueur et un autre client aux vitesses 1, 2 et 3.
 9. **Perso de Geoffrey capturé comme esclave → à son retour, nouveau perso (éditeur).**
    - 22:10:49 « captivity: plopette in Cage Prisonnier now caged slave-state=1 slave-of=1084 (Esclavagistes)
      sentence=110h », enchaîné à 22:11:00. Geoffrey quitte/revient plusieurs fois (22:11:02, 22:12:45,
@@ -134,6 +158,18 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
      carry, captivité, ragdoll refusé). Vérifier aussi « down » (à terre mais conscient) → debout.
    - À tester en jeu : perso d'un client assommé (et un PNJ), attendre le réveil, regarder chez
      l'hôte, le client concerné et un autre client ; aussi aux vitesses 2 et 3.
+   - **Fait (branche night-posture, à vérifier en jeu : expérience `kowake`).** Cause confirmée par le
+     journal : à 22:41 l'**hôte lui-même** avait plopette « slave-state=2 slave-of=1084 sentence=160h »
+     (esclave évadé qui marche, depuis 22:30:29), donc `hostCaptive_` le comptait captif et `held`
+     restait vrai : ce n'étaient pas des restes locaux, mais toute marque d'esclave ou de peine
+     comptait comme « tenu ». Maintenant seul ce qui tient vraiment la pose compte
+     (`kc::motion::PoseHoldOf`) : porté ici, en cage ou au lit chez l'hôte, enchaîné chez l'hôte ; les
+     marques de la copie ne comptent que tant que l'hôte n'a rien dit de ce perso. Quand l'hôte le
+     tient libre, les marques restées sur la copie (chaînes, esclave, peine, enlevé, évadé) sont
+     effacées (`ClearCaptivityTraces`, une ligne). Une copie K.-O. sans ragdoll (drapeau inconscient,
+     pose couchée) est relevée aussi, PNJ compris ; une copie qui reste à terre alors que l'hôte a la
+     sienne debout est écrite une fois par minute avec la raison (« posture: … stays down here while
+     the host's walks: shackled on the host »).
 11. **Geoffrey ne voit pas les persos de l'autre escouade de rob1 (vers 23:04).**
    - rob1 a plusieurs escouades (« Rob » + une autre, déplacements de persos entre elles 22:19).
      Le rapport de Geoffrey dit pourtant « 0 squad members missing, max offset 5 » : le mod ne voit
@@ -169,6 +205,14 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
        host has it free: taken out » 657, « out of its bed first » 520). Le jeu du client remet les PNJ
        au lit et le mod les en sort : ping-pong permanent. Empêcher l'IA locale de coucher une copie
        pilotée par l'hôte au lieu de corriger après coup.
+       **Fait (branche night-posture, à vérifier en jeu : expérience `nightbeds`).** Les appels de
+       `Character::setInBed(true)` (`0x32E2F0`) viennent de trois endroits : `Task_UseBed`
+       (`0x351770`), `Task_OperateMachine` (`0x358670`) et le chargement (`Character` vt 0x2B8,
+       `0x627B30`). Chez un client, le système de tâches fait encore tourner les tâches de la
+       sauvegarde : elles couchaient les copies dans le lit de leur choix. Le crochet `hk_setInBed`
+       refuse ce « au lit » sur une copie pilotée par l'hôte hors des appels du mod (le lit de
+       l'hôte passe toujours par `ApplyCaptive`) ; le chargement passe. Les tâches restées de la
+       sauvegarde sont aussi effacées (point 7).
      - **PNJ « dormants » non envoyés : 1 055** (« no longer sent to us … had moved N units here: put
        back »). Le jeu du client fait bouger des copies que l'hôte n'envoie plus ; même cause que le
        point 11 (envoi seulement autour des persos du joueur).

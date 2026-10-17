@@ -48,6 +48,9 @@ struct HookView {
     // client (3b): host characters present here that the host no longer streams to us (dormant, far
     // from our characters): hk_charUpdateView leaves them to the game's far update
     std::shared_ptr<const std::unordered_set<const void*>> farAway;
+    // client (0.3.5, A_FAIRE 16/10 point 8): host-driven characters the host has sneaking right now
+    // (hk_setStealthMode keeps our copies' stealth state on the host's)
+    std::unordered_set<const void*> sneaking;
 };
 
 class KenshiWorld final : public kc::IWorld {
@@ -568,7 +571,10 @@ private:
     // host's), limited per body and minute, never reset by a change of posture (kc::motion)
     std::unordered_map<kc::Handle, kc::motion::PostureBook, HandleHash> postureBook_;
     std::unordered_set<kc::Handle, HandleHash> hostKnockedOut_;      // client: unconscious in the host's vitals
-    std::unordered_set<kc::Handle, HandleHash> hostCaptive_;         // client: shackled, caged, slave or prisoner on the host
+    // client (0.3.5): the host's captivity that holds a body's pose, kc::motion::HostPoseBits (1 caged or in
+    // a bed, 2 shackled); a slave or a prisoner walking free is not in it
+    std::unordered_map<kc::Handle, uint8_t, HandleHash> hostCaptive_;
+    std::unordered_set<kc::Handle, HandleHash> hostCaptivityKnown_;   // client (0.3.5): the host told us its captivity (captive or free)
     std::unordered_map<kc::Handle, double, HandleHash> destCheckAt_; // client: last check that our copy walks to the host's destination
     double frameAt_ = 0, frameDt_ = 1.0 / 60.0;                     // real time between two frames (position pull)
     // inventory safety: the per-operation check (tests), the periodic sweep and what it repaired
@@ -579,7 +585,7 @@ private:
     int invRepairs_ = 0;
     void InventorySweep(double now);
     void CheckAfterOp(const char* what, void* a, void* b);
-    bool PostureHeld(const kc::Handle& h, kenshi::Character* c);
+    kc::motion::PoseHold PostureHeld(const kc::Handle& h, kenshi::Character* c);   // 0.3.5: what holds its pose (None: nothing)
     std::unordered_map<kc::Handle, kc::Vec3, HandleHash> fallFrom_;  // client: where our copy stood when we made it fall
     std::unordered_map<kc::Handle, kc::Vec3, HandleHash> fallShift_; // client: where its body then lay, relative to that (x, z)
     // client (0.3.4): the height of the floor our carrier stood on when it put this body down (the
@@ -870,6 +876,23 @@ private:
     std::mutex toastMutex_;
     std::vector<std::string> toasts_;
     std::vector<std::string> recentToasts_;   // tests: the last 8 (under toastMutex_)
+
+    // ---- 0.3.5 night-posture (A_FAIRE 16/10 points 7, 8, 10, 12)
+public:
+    int LeaveMachinesOf(kenshi::Character* c);   // host: off every machine / dummy / chair that lists it as operator (workshop.cpp)
+    static inline std::atomic<uint64_t> bedsRefused{0};      // client: local bed entries of host-driven copies refused (hk_setInBed)
+    static inline std::atomic<uint64_t> stealthImposed{0};   // client: local stealth states replaced by the host's (hk_setStealthMode)
+    uint64_t ordersCleared = 0;                               // client: copies whose leftover orders were cleared (tests)
+private:
+    std::unordered_set<kc::Handle, HandleHash> hostSneaking_;                  // client: the host's character sneaks (Progress kModeSneaking)
+    std::unordered_map<kc::Handle, double, HandleHash> stayDownToldAt_;        // client: last "stays down here while the host's stands" line
+    struct OrderDrop { int rethinks = 0, clears = 0; double clearedAt = -1e9; bool told = false; };
+    std::unordered_map<kc::Handle, OrderDrop, HandleHash> orderDrop_;          // client: leftover tasks and orders of a copy (save)
+    std::unordered_map<kc::Handle, double, HandleHash> traceClearedAt_;        // client: captivity leftovers cleared (EnsureFree)
+    std::unordered_map<kc::Handle, double, HandleHash> sneakToldAt_;           // host: "stealth order on but not sneaking" line
+    void NoteStealthOrder(const kc::Handle& h, kenshi::Character* c, uint16_t modes);   // host: diagnostics of point 8
+    void ClearCaptivityTraces(const kc::Handle& h, kenshi::Character* c);              // client: free on the host, marks here cleared (prisons.cpp)
+    void DropLeftoverTasks(const kc::Handle& h, kenshi::Character* c, double now);     // client: tasks and orders a copy brought from the save
 
     static inline std::atomic<std::shared_ptr<const HookView>> view_{std::make_shared<const HookView>()};
     static inline std::atomic<bool> clientActive_{false};

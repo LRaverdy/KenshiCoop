@@ -347,6 +347,10 @@ const char* StatNameFr(size_t index);   // the skill's name as the French game s
 enum ModeBits : uint16_t {
     kModeStealth = 1 << 0, kModeDefensive = 1 << 1, kModeRanged = 1 << 2, kModeTaunt = 1 << 3, kModeHold = 1 << 4,
     kModePassive = 1 << 5, kModeChase = 1 << 6,
+    // 0.3.5 (night-posture, A_FAIRE 16/10 point 8): not a standing order but the game's state, read on
+    // the host only: the character is sneaking right now (Character+0xE0 == 1). Copies sneak with it
+    // (hk_setStealthMode). A 0.3.4 client ignores the bit (no protocol change).
+    kModeSneaking = 1 << 7,
 };
 struct CharProgress {
     uint32_t netId = 0;

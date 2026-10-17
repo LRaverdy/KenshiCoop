@@ -9,6 +9,7 @@
 #include <fstream>
 
 #include "hooks.h"
+#include "kc/copy_rules.h"
 #include "kc/talk.h"
 
 namespace kcp {
@@ -252,6 +253,12 @@ void KenshiWorld::ResetWorldBound() {
     postureBook_.clear();
     hostKnockedOut_.clear();
     hostCaptive_.clear();
+    hostCaptivityKnown_.clear();   // 0.3.5 night-posture
+    hostSneaking_.clear();
+    stayDownToldAt_.clear();
+    orderDrop_.clear();
+    traceClearedAt_.clear();
+    sneakToldAt_.clear();
     destCheckAt_.clear();
     fallFrom_.clear();
     fallShift_.clear();
@@ -386,6 +393,9 @@ void KenshiWorld::EndFrame() {
         ++it;
     }
     v->gameSpeed = kenshi::GetFrameSpeed();
+    if (active_ && client_)   // 0.3.5 (point 8): copies whose host character sneaks
+        for (const kc::Handle& h : hostSneaking_)
+            if (kenshi::Character* c = Find(h); c && v->replicated.count(c)) v->sneaking.insert(c);
     if (active_ && !client_) v->remoteNear = remoteNear_;
     if (active_ && client_ && farLeaveEnabled) v->farAway = farSet_;
     if (active_ && client_) {
@@ -614,14 +624,28 @@ bool KenshiWorld::Spawn(const kc::Handle& h, const kc::SpawnInfo& info, const kc
     return true;
 }
 
-// Carried, shackled, caged, in a bed, a prisoner or a slave (here or on the host): its pose belongs
-// to the game's captivity code (a shackled captive sits, a carried body hangs on a shoulder), and
-// the posture code never stands it up or lays it down.
-bool KenshiWorld::PostureHeld(const kc::Handle& h, kenshi::Character* c) {
-    if (carriedHere_.count(h) || hostCaptive_.count(h)) return true;
-    kenshi::Captivity k;
-    if (!kenshi::ReadCaptivity(c, k)) return false;
-    return k.chained || k.inSomething != 0 || k.slaveState != 0 || k.kidnapped || k.sentence > 0;
+// Carried, shackled, caged or in a bed: its pose belongs to the game's captivity code (a shackled
+// captive sits, a carried body hangs on a shoulder), and the posture code never stands it up or lays
+// it down. 0.3.5 (A_FAIRE 16/10 point 10): the host's captivity wins over our copy's marks, and a
+// slave state or a prison sentence alone holds nothing (kc::motion::PoseHoldOf).
+kc::motion::PoseHold KenshiWorld::PostureHeld(const kc::Handle& h, kenshi::Character* c) {
+    kc::motion::PoseHoldFacts f;
+    f.carried = carriedHere_.count(h) != 0;
+    if (auto it = hostCaptive_.find(h); it != hostCaptive_.end()) {
+        f.hostKnown = true;
+        f.hostCaged = (it->second & 1) != 0;
+        f.hostChained = (it->second & 2) != 0;
+    } else {
+        f.hostKnown = hostCaptivityKnown_.count(h) != 0;
+    }
+    if (!f.carried && !f.hostKnown) {   // our copy's own marks, only until the host has said
+        kenshi::Captivity k;
+        if (kenshi::ReadCaptivity(c, k)) {
+            f.localIn = k.inSomething != 0;
+            f.localChained = k.chained;
+        }
+    }
+    return kc::motion::PoseHoldOf(f);
 }
 
 // A character must fall where the host's fell, so it is moved there first. The ragdoll takes its
@@ -1014,12 +1038,11 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     // The tasks it had in the save (sit on a stool, patrol, wander...) would keep running here and
     // fight the host's positions (characters jumping back and forth between two spots): it drops
     // them, the game's own way. Nothing gives it new ones on a client.
-    if (kenshi::LocalTaskCount(c) > 0) {
+    if (kenshi::LocalTaskCount(c) > 0 || kenshi::LocalOrderCount(c) > 0) {
         double& at = taskDropAt_[h];
         if (NowSeconds() - at > 2.0) {
             at = NowSeconds();
-            HostCallScope scope;
-            kenshi::DropLocalTasks(c);
+            DropLeftoverTasks(h, c, at);
         }
     }
     applied_.insert(c);
@@ -1041,10 +1064,14 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
     pf.hostDead = hostDead;
     pf.localDead = kenshi::IsDead(c);
     pf.localDown = kenshi::IsRagdoll(c) || pf.localDead;
-    // Carried, shackled, caged, in a bed, a prisoner or a slave: the game's captivity code owns its
-    // pose (a shackled captive sits). Forcing falls on them made nass4's captives fall, sit up and
-    // fall again every 2 s (10/10 session): the posture code leaves them alone.
-    pf.held = (hostDown || hostDead || pf.localDown) && PostureHeld(h, c);   // read only when posture matters
+    // 0.3.5: knocked out here without a ragdoll (the prone pose) while the host's stands: lying too
+    pf.localOut = !hostDown && !hostDead && !pf.localDown && kenshi::IsUnconscious(c);
+    // Carried, shackled, caged or in a bed: the game's captivity code owns its pose (a shackled captive
+    // sits). Forcing falls on them made nass4's captives fall, sit up and fall again every 2 s (10/10
+    // session): the posture code leaves them alone. 0.3.5: the host's captivity first (PostureHeld).
+    kc::motion::PoseHold hold = kc::motion::PoseHold::None;
+    if (hostDown || hostDead || pf.localDown || pf.localOut) hold = PostureHeld(h, c);   // read only when posture matters
+    pf.held = hold != kc::motion::PoseHold::None;
     kc::motion::PostureBook& book = postureBook_[h];
     // A ragdoll that is being set up must not be touched: moving the character then throws the
     // body across the map. Leave it alone while it falls; then see whether the fall took.
@@ -1077,7 +1104,19 @@ void KenshiWorld::Apply(const kc::Handle& h, const kc::EntityState& target, cons
         }
     }
     const bool localDown = pf.localDown;
-    if (hostDown != localDown && !hostDead && !pf.held) {
+    // 0.3.5 (A_FAIRE 16/10 point 10): a copy the host has standing that stays down here because
+    // something holds it (or it is dead here) is told once a minute, with what holds it; nothing at
+    // all was written for plopette, down for good on every client while the host's walked.
+    // (not a body the host itself keeps in a cage or a bed: a sleeper is expected to lie there)
+    if (const char* why = kc::motion::StaysDownReason(pf, hold); *why && hold != kc::motion::PoseHold::HostCaged) {
+        double& told = stayDownToldAt_[h];
+        if (now - told > 60.0) {
+            told = now;
+            Log("posture: %s stays down here while the host's %s: %s (ragdoll %d, unconscious %d)", KeyOf(h).c_str(),
+                (latest.flags & kc::kFlagMoving) ? "walks" : "stands", why, int(kenshi::IsRagdoll(c)), int(kenshi::IsUnconscious(c)));
+        }
+    }
+    if (kc::motion::PostureDiffers(pf) && !hostDead && !pf.held) {
         double& since = postureSince_[h];
         if (since == 0) since = now;
         double& fixed = postureFixed_[h];
@@ -2308,7 +2347,33 @@ bool KenshiWorld::ReadProgress(const kc::Handle& h, std::vector<float>& stats, u
     kenshi::Character* c = Find(h);
     if (!c || !kenshi::ReadStats(c, stats)) return false;
     modes = kenshi::ReadModes(c, style);
+    // 0.3.5 (A_FAIRE 16/10 point 8): sneaking right now (not a standing order: the game's own state,
+    // Character+0xE0 == 1), for the copies (hk_setStealthMode); a 0.3.4 client ignores the bit
+    if (!client_) {
+        if (kenshi::StealthState(c) == 1) modes |= kc::kModeSneaking;
+        NoteStealthOrder(h, c, modes);
+    }
     return true;
+}
+
+// Host (0.3.5, point 8 diagnostics): a character with the stealth order on that walks without sneaking
+// for a while is told, once a minute: if a viewer sees it walk upright, this says whether the host's
+// own game does not sneak it (the cause is here) or the copies lose it (the cause is on the client).
+void KenshiWorld::NoteStealthOrder(const kc::Handle& h, kenshi::Character* c, uint16_t modes) {
+    if (!(modes & kc::kModeStealth) || (modes & kc::kModeSneaking) || !kenshi::IsMoving(c) || !squad_.count(h)) {
+        if (modes & kc::kModeSneaking) sneakToldAt_.erase(h);
+        return;
+    }
+    const double now = NowSeconds();
+    auto it = sneakToldAt_.find(h);
+    if (it == sneakToldAt_.end()) {   // first seen walking upright with the order on: wait a little
+        sneakToldAt_[h] = now - 55.0;
+        return;
+    }
+    if (now - it->second < 60.0) return;
+    it->second = now;
+    Log("stealth: %s has the stealth order on and walks without sneaking on the host (stealth state %d, animation flag %d)", KeyOf(h).c_str(),
+        kenshi::StealthState(c), kenshi::AnimStealthFlag(c));
 }
 
 // Skill levels as values; standing orders (stealth, hold position, passive...) through the game's
@@ -2318,6 +2383,11 @@ void KenshiWorld::ApplyProgress(const kc::Handle& h, const std::vector<float>& s
     if (!c) return;
     kenshi::WriteStats(c, stats);
     modes = modePredict_.Filter(CharKey(h), modes, NowSeconds());   // a toggle just clicked here: kept until the host's has it
+    // 0.3.5 (point 8): the host's character sneaks: ours too (hk_setStealthMode, through the hook view);
+    // the stealth order just switched off here (a prediction): not sneaking any more either
+    if (!(modes & kc::kModeStealth)) modes = uint16_t(modes & ~kc::kModeSneaking);
+    if (modes & kc::kModeSneaking) hostSneaking_.insert(h);
+    else hostSneaking_.erase(h);
     uint8_t localStyle = 0;
     const uint16_t local = kenshi::ReadModes(c, localStyle);
     HostCallScope scope;
@@ -2480,6 +2550,7 @@ void KenshiWorld::PurgeDestroyed() {
         for (const void* c : dead) {
             v->replicated.erase(c);
             v->squadForeign.erase(c);
+            v->sneaking.erase(c);
         }
         // keyed by their animation and movement objects (freed with them): rebuilt by the next EndFrame
         v->anims.clear();
@@ -2491,14 +2562,60 @@ void KenshiWorld::PurgeDestroyed() {
 // A gone player's character (left, crashed, connection lost): it stops walking and drops the task
 // and the pick up it was given, and stays where it is. It still defends itself; what it carries
 // stays carried. Never on a dead one.
+// 0.3.5 (A_FAIRE 16/10 point 7): rob1 trained on a dummy when the host's resync took him away; the
+// character went on training (reThinkCurrentAIAction does nothing while the current task holds the
+// body), the save sent back to him had the training in it, and its progress bar stayed over his
+// character on his screen. Now the game's own stop: halt, every order cleared and the current task
+// ended (PlayerInterface::stopCharactersMovement's path: the task's end takes its progress bar and its
+// place on the dummy, machine or chair), then off any machine that still lists it as operator, and out
+// of a bed when awake (kc::copy::GoneLeavesBed). Its permanent jobs stay (the player's own list).
 void KenshiWorld::HaltCharacter(const kc::Handle& h) {
     kenshi::Character* c = FindSquad(h);
     pickups_.erase(h);
     if (!c || kenshi::IsDead(c)) return;
     HostCallScope scope;
-    kenshi::Halt(c);
+    int in = 0;
+    kenshi::ReadInSomething(c, in);
+    const size_t orders = kenshi::LocalOrderCount(c), tasks = kenshi::LocalTaskCount(c);
+    const bool stopped = kenshi::StopCharacter(c);
     kenshi::DropLocalTasks(c);
-    Log("player gone: %s halted where it stands", KeyOf(h).c_str());
+    const int machines = LeaveMachinesOf(c);
+    bool bed = false;
+    if (kc::copy::GoneLeavesBed(in, kenshi::IsUnconscious(c))) bed = kenshi::SetInBed(c, false, nullptr);
+    Log("player gone: %s halted where it stands (the game's stop: %s; %zu order(s) and %zu task(s) before, %zu and %zu after; off %d machine(s)%s)",
+        KeyOf(h).c_str(), stopped ? "ok" : "call failed", orders, tasks, kenshi::LocalOrderCount(c), kenshi::LocalTaskCount(c), machines,
+        bed ? ", out of its bed" : "");
+}
+
+// Client: tasks (the task system's actions) and orders a copy brought from the save (a training on a
+// dummy, a sleep, a patrol): the host's character runs them, ours never must. Dropped the game's way;
+// 0.3.5: when that does nothing (the current task holds the body: the training's progress bar stayed
+// over a rejoiner's character), its orders are cleared like the game's stop (kc::copy::ShouldClearOrders).
+void KenshiWorld::DropLeftoverTasks(const kc::Handle& h, kenshi::Character* c, double now) {
+    HostCallScope scope;
+    kenshi::DropLocalTasks(c);
+    const size_t tasks = kenshi::LocalTaskCount(c), orders = kenshi::LocalOrderCount(c);
+    if (tasks == 0 && orders == 0) {
+        orderDrop_.erase(h);
+        return;
+    }
+    OrderDrop& d = orderDrop_[h];
+    ++d.rethinks;
+    kc::Handle carriedLocal;
+    const bool carrying = carriedHere_.count(h) != 0 || kenshi::ReadCarried(c, carriedLocal);
+    if (!kc::copy::ShouldClearOrders(d.rethinks, now - d.clearedAt, carrying, d.clears)) return;
+    d.clearedAt = now;
+    ++d.clears;
+    const bool ok = kenshi::ClearOrders(c);
+    ++ordersCleared;
+    int bars = 0, barsShown = 0, tags = 0;
+    kenshi::CountScreenLabels(tags, bars, barsShown);
+    if (!d.told) {
+        d.told = true;
+        Log("tasks: %s kept %zu task(s) and %zu order(s) from the save after %d re-thinks: its orders cleared as the game's stop does (%s, now %zu and %zu; "
+            "progress bars here %d, %d shown)",
+            KeyOf(h).c_str(), tasks, orders, d.rethinks, ok ? "ok" : "call failed", kenshi::LocalTaskCount(c), kenshi::LocalOrderCount(c), bars, barsShown);
+    }
 }
 
 // What the subject of a client's order is (kc::TargetFlags), as this world sees it.

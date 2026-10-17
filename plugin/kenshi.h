@@ -316,6 +316,8 @@ enum Fn : int {
     FnAnimSetPosition,          // void AnimationClass::<set position and direction>(const Vector3& pos, const Vector3& dir)   (our name, 0x5B18F0: +0x258 = pos lowered by +0x2C8 - +0x2CC, the anchor the animation update 0x5B5590 puts the scene node back on; called by CharMovement's update 0x65FFA0; a zero dir leaves the orientation)
     // ---- 0.3.4: the Tâches panel rebuilt when a job list changes from elsewhere (kenshi::RefreshJobsPanel)
     FnGuiRefreshJobs,           // void ForgottenGUI::<refresh jobs panel>()   (our name, 0x6E2050 on TheGui 0x21337B0: MainBarGUI (+0x10)'s job list rebuilt for the GUI's hand +0x2C0, the character shown; what newPlayerTaskSelectedCharacters calls at its end)
+    // ---- 0.3.5 night-posture: a copy sneaks when the host's does (A_FAIRE 16/10 point 8)
+    FnSetStealthMode,           // void Character::setStealthMode(int)   (our name, 0x5C7E20, vt 0x370; writes +0xE0, 1 = sneaking; Character::update 0x5D00B0 calls it every frame)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -775,6 +777,12 @@ bool LastSaveName(std::string& out);                       // the save named by 
 bool ShowLoadWindow();                                      // opens the game's "Load" window
 size_t LocalTaskCount(Character* c);                        // tasks waiting in its own task system
 bool DropLocalTasks(Character* c);                          // it drops them (Character::reThinkCurrentAIAction)
+// 0.3.5 night-posture
+size_t LocalOrderCount(Character* c);                       // orders in its AITaskSystem (+0x80, count +0x78): a training, a bed...
+bool ClearOrders(Character* c);                             // the game's stop button without the halt (AITaskSystem clear 0x5074A0)
+int StealthState(Character* c);                             // Character+0xE0 (vt 0x368): 1 sneaking; -1 unreadable
+int AnimStealthFlag(Character* c);                          // AnimationClass+0x248 (stealth standing order on the animations); -1 unreadable
+void CountScreenLabels(int& nameTags, int& progressBars, int& progressShown);   // the game's labels over the world (tests)
 bool RequestSave(const std::string& name, std::string* folderOut);   // folder = where it will be written
 bool RequestLoad(const std::string& name);
 bool SaveFolder(std::string& out);                          // where this machine's saves live

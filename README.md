@@ -202,6 +202,10 @@ rapport avec les journaux de tout le monde dans `KenshiCoop_bugs\`, et le chat c
 - **Porter un corps** : un corps posé tombe chez toi où il est tombé chez l'hôte (v0.3.4 : s'il
   finit à plus de 5 unités, il se relève une fois et retombe à la bonne place ; il ne retourne plus
   là où il gisait avant d'être ramassé ; à vérifier en jeu).
+- **K.-O., furtivité, lits** (v0.3.5, à vérifier en jeu) : un perso assommé se relève chez tout le
+  monde quand l'hôte le relève, même s'il est un esclave évadé ; un perso en furtif marche accroupi
+  chez tous les joueurs ; la nuit, ton jeu ne couche plus lui-même les PNJ de l'hôte. Un perso qui
+  s'entraînait pendant une resync ne garde plus sa barre d'entraînement.
 - **Vol** : prendre dans un contenant qui n'est pas à toi est un vol, décidé par le jeu de l'hôte.
   Si on te voit, la fenêtre se ferme et l'objet reste.
 - **Objets au sol** : posés et ramassés, au même endroit pour tout le monde. Un objet que l'hôte ne

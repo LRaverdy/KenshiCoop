@@ -67,8 +67,12 @@ bool KenshiWorld::ReadCaptive(const kc::Handle& h, kc::CaptiveState& out) {
 // way: position, pose, occupancy), then the flags. Our own game never changes them (hooks).
 void KenshiWorld::ApplyCaptive(const kc::Handle& h, const kc::CaptiveState& s) {
     kenshi::Character* c = Find(h);
-    // the posture code leaves captives alone (KenshiWorld::PostureHeld): known even before our copy is found
-    if (s.caged || s.chained || s.slaveState != 0 || s.kidnapped || s.sentence > 0) hostCaptive_.insert(h);
+    // the posture code leaves a body whose pose the captivity holds alone (KenshiWorld::PostureHeld):
+    // known even before our copy is found. 0.3.5 (A_FAIRE 16/10 point 10): only a cage, a bed or
+    // shackles hold a pose; a slave or a prisoner walking free (plopette, "slave-state=2 escaped
+    // sentence=160h", never stood up on any client after a knock out) is stood up like anyone.
+    hostCaptivityKnown_.insert(h);
+    if (const uint8_t bits = kc::motion::HostPoseBits(s.caged, s.chained)) hostCaptive_[h] = bits;
     else hostCaptive_.erase(h);
     kenshi::Captivity local;
     if (!c || !kenshi::ReadCaptivity(c, local)) return;
@@ -123,9 +127,11 @@ void KenshiWorld::ApplyCaptive(const kc::Handle& h, const kc::CaptiveState& s) {
 bool KenshiWorld::EnsureFree(const kc::Handle& h) {
     // the host's captivity marks go: the posture code and Apply follow the host again
     hostCaptive_.erase(h);
+    hostCaptivityKnown_.insert(h);
     captiveHold_.erase(h);
     captiveMissing_.erase(h);
     kenshi::Character* c = Find(h);
+    if (c) ClearCaptivityTraces(h, c);
     int in = 0;
     if (!c || !kenshi::ReadInSomething(c, in) || (in != 1 && in != 2)) return false;
     if (carriedHere_.count(h)) return false;   // on a shoulder: the carry code owns it
@@ -148,6 +154,34 @@ bool KenshiWorld::EnsureFree(const kc::Handle& h) {
             held ? (" [" + std::to_string(held) + " more such lines not written]").c_str() : "");
     }
     return true;
+}
+
+// Client (0.3.5, A_FAIRE 16/10 point 10): the host holds that character in nothing, yet our copy still
+// carries captivity marks (shackles, a slave state, a sentence, kidnapped, escaped): leftovers of a
+// "free" that never reached us (a copy found after it, a lost update, a save from an older state).
+// The host's word is imposed: every mark cleared (the cage or bed is EnsureFree's). At most once per
+// body and 30 s (a game that writes them back is not fought every 2 s).
+void KenshiWorld::ClearCaptivityTraces(const kc::Handle& h, kenshi::Character* c) {
+    kenshi::Captivity k;
+    if (!kenshi::ReadCaptivity(c, k)) return;
+    if (!k.chained && k.slaveState == 0 && !k.slaveOf && !k.escaped && !k.kidnapped && k.sentence <= 0.0f && !k.slaveOwner.valid()) return;
+    const double t = NowSeconds();
+    double& at = traceClearedAt_[h];
+    if (t - at < 30.0) return;
+    at = t;
+    kenshi::Captivity want = k;
+    want.chained = false;
+    want.slaveOwner = kc::Handle{};
+    want.slaveState = 0;
+    want.slaveOf = nullptr;
+    want.escaped = false;
+    want.kidnapped = false;
+    want.sentence = 0.0f;
+    want.sentenceBegan = 0;
+    HostCallScope scope;
+    const bool ok = kenshi::WriteCaptivity(c, want);
+    Log("captivity: %s is free on the host but kept marks here (chained=%d slave-state=%d sentence=%.0fh kidnapped=%d escaped=%d): cleared (%s)",
+        Key(h).c_str(), int(k.chained), k.slaveState, double(k.sentence), int(k.kidnapped), int(k.escaped), ok ? "ok" : "write failed");
 }
 
 // A character the host keeps in a cage or a bed stays where the cage or bed holds it: no position

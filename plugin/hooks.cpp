@@ -11,6 +11,7 @@
 #include <mutex>
 #include <vector>
 
+#include "kc/copy_rules.h"
 #include "map.h"
 #include "ranged.h"
 #include "util.h"
@@ -954,6 +955,55 @@ StandingFn o_standing = nullptr;
 void hk_standing(void* c, int order, bool on) {
     if (KenshiWorld::ClientActive() && !g_hostCall && KenshiWorld::View()->replicated.count(c)) return;
     o_standing(c, order, on);
+}
+
+// ---- 0.3.5 night-posture
+// A_FAIRE 16/10 point 12: on clients the local task system still runs the tasks a copy brought from the
+// save (Task_UseBed 0x351770, Task_OperateMachine 0x358670), and they put host-driven copies into
+// beds of their own choosing every frame; the mod took them out again every 2 s (~2650 log lines in
+// one evening). The decision itself is refused now (kc::copy::RefuseLocalBed): Character::setInBed(true)
+// on a copy the host drives, outside the mod's own calls. The save's loading (Character vt 0x2B8,
+// 0x627B30, its call returns to 0x627D62) still lays a sleeper in its bed; the host's beds come through
+// ApplyCaptive (HostCallScope).
+using SetInBedFn = void (*)(void* c, bool on, void* bed);
+SetInBedFn o_setInBed = nullptr;
+constexpr uintptr_t kSetInBedFromLoad = 0x627D62;
+std::atomic<int> g_bedRefusalsLogged{0};
+void hk_setInBed(void* c, bool on, void* bed) {
+    if (on && KenshiWorld::ClientActive() && !g_hostCall) {
+        const uintptr_t from = reinterpret_cast<uintptr_t>(_ReturnAddress()) - kenshi::Addr(0);
+        const bool driven = KenshiWorld::View()->replicated.count(c) > 0;
+        if (kc::copy::RefuseLocalBed(true, false, on, driven, from == kSetInBedFromLoad)) {
+            KenshiWorld::bedsRefused.fetch_add(1, std::memory_order_relaxed);
+            if (g_bedRefusalsLogged.fetch_add(1, std::memory_order_relaxed) < 8) {
+                kc::Handle h;
+                kenshi::GetHandle(static_cast<kenshi::Character*>(c), h);
+                Log("beds: the local game put the host-driven %u:%u:%u:%u:%u into a bed (call from 0x%llX): refused, its bed is the host's", h.type,
+                    h.container, h.containerSerial, h.index, h.serial, static_cast<unsigned long long>(from));
+            }
+            return;
+        }
+    }
+    o_setInBed(c, on, bed);
+}
+// A_FAIRE 16/10 point 8: a copy's stealth state (Character+0xE0, 1 = sneaking: the sneaking walk and
+// the stealth icon) is the host's. The copy's own Character::update sets it every frame, from AI
+// actions that do not run on clients: it stayed 0 while the host's character sneaked. The state
+// asked here is replaced (kc::copy::CopyStealthMode) for copies the host drives.
+using SetStealthFn = void (*)(void* c, int mode);
+SetStealthFn o_setStealth = nullptr;
+void hk_setStealthMode(void* c, int mode) {
+    if (KenshiWorld::ClientActive() && !g_hostCall) {
+        auto v = KenshiWorld::View();
+        if (v->replicated.count(c)) {
+            const int want = kc::copy::CopyStealthMode(mode, v->sneaking.count(c) > 0);
+            if (want != mode) {
+                KenshiWorld::stealthImposed.fetch_add(1, std::memory_order_relaxed);
+                mode = want;
+            }
+        }
+    }
+    o_setStealth(c, mode);
 }
 
 // Experience is the host's too: every gain (combat, training, walking, first aid...) ends in
@@ -2068,6 +2118,9 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnProspectButton, reinterpret_cast<void*>(&shophooks::hk_prospectButton), reinterpret_cast<void**>(&shophooks::o_prospectButton)},
         // ---- crash report
         {kenshi::FnWriteCrashDump, reinterpret_cast<void*>(&hk_writeCrashDump), reinterpret_cast<void**>(&o_writeCrashDump)},
+        // ---- 0.3.5 night-posture: beds and stealth of host-driven copies
+        {kenshi::FnSetInBed, reinterpret_cast<void*>(&hk_setInBed), reinterpret_cast<void**>(&o_setInBed)},
+        {kenshi::FnSetStealthMode, reinterpret_cast<void*>(&hk_setStealthMode), reinterpret_cast<void**>(&o_setStealth)},
     };
     const MH_STATUS init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {

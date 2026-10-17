@@ -131,6 +131,12 @@ Ordre dans `Tick()` (`main.cpp`) :
   lui-même) ;
 - expérience : `increaseStat` ;
 - ordres permanents : `Character::setStandingOrder` ; ramasser un corps : `pickupObject` ;
+- (0.3.5) lits : `Character::setInBed(true)` sur une copie pilotée par l'hôte (`hk_setInBed` : les tâches
+  de la sauvegarde que le système de tâches du client fait encore tourner) ; le chargement et le lit de
+  l'hôte (`ApplyCaptive`) passent ;
+- (0.3.5) furtivité : l'état d'une copie pilotée par l'hôte (`Character::setStealthMode`, appelé à
+  chaque image par `Character::update`) est remplacé par celui de l'hôte (`hk_setStealthMode`,
+  `HookView::sneaking`, `kc::copy::CopyStealthMode`) ;
 - dialogues et décisions : `Dialogue::sendEvent/sendEventOverride/startConversation/
   startPlayerConversation/_doActions`, `SensoryData::dialogAssessmentUpdate/assessCrimes` ;
 - relations et crimes : `FactionRelations::affectRelations` (deux variantes), `setRelation`,
@@ -190,7 +196,9 @@ Ordre dans `Tick()` (`main.cpp`) :
   plus 90 s (un jeu bloqué pour de bon finit coupé). `Net::silentMs` : temps depuis le dernier
   paquet d'un pair.
 - Départ d'un joueur, propre ou non (`Session::OnDisconnect` → `ForgetPlayer`) : ses persos
-  reviennent à l'hôte et sont arrêtés au tick suivant (`IWorld::HaltCharacter`), mémorisés par
+  reviennent à l'hôte et sont arrêtés au tick suivant (`IWorld::HaltCharacter` ; 0.3.5 : le « stop »
+  du jeu, ordres effacés et tâche en cours terminée, retirés des machines, mannequins et chaises, sortis
+  d'un lit s'ils sont éveillés, avant que la sauvegarde parte pour un retour), mémorisés par
   compte (`leftOwned_`) et rendus s'il revient ; tout ce qui porte son id est effacé (ordres,
   `pendingInvOps_`, apparences, conteneurs demandés ou en route, `openBy`, `trades_`, poses et
   achats de bâtiments, portes, conversations, `buildSyncedPlayers_`, `factionsServed_`, `diploServed_`) : l'id
@@ -518,9 +526,12 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
   1. abandonne les tâches que le personnage avait dans la sauvegarde (`reThinkCurrentAIAction`,
      au plus toutes les 2 s) ;
   2. aligne la posture (à terre ou debout) après 0,3 s de différence ; une chute est d'abord
-     amenée à l'endroit de l'hôte (`ReadyToFall`). Jamais sur un perso tenu (`PostureHeld` :
-     porté, enchaîné, en cage, dans un lit, prisonnier, esclave, ici ou chez l'hôte), dont la
-     pose appartient au code de captivité du jeu. Par corps (`motion::PostureBook`) : 4 chutes et
+     amenée à l'endroit de l'hôte (`ReadyToFall`). Jamais sur un perso tenu (`PostureHeld`, 0.3.5 :
+     `kc::motion::PoseHoldOf` : porté ici, en cage ou au lit chez l'hôte, enchaîné chez l'hôte ; les
+     marques de la copie seulement tant que l'hôte n'a rien dit de sa captivité ; un esclave ou un
+     prisonnier qui marche librement n'est pas tenu), dont la pose appartient au code de captivité du
+     jeu. Une copie inconsciente sans ragdoll est relevée aussi ; une copie que l'hôte a debout et qui
+     reste à terre est écrite une fois par minute avec la raison. Par corps (`motion::PostureBook`) : 4 chutes et
      2 relevages par minute au plus ; deux chutes de suite qui ne tiennent pas (pas à terre 2 s
      après) : plus rien pendant la minute. Un corps est relevé pour retomber à la place de
      l'hôte seulement à plus de 20 unités, 10 s d'écart au moins. Un K.-O. de l'hôte tombe
@@ -565,6 +576,9 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 - 34 compétences, ordres permanents (bits) et style de combat.
 - Les ordres permanents sont posés avec `Character::setStandingOrder` sur le personnage lui-même,
   pas via la sélection.
+- (0.3.5) Bit `kModeSneaking` (7) : l'état « furtif en ce moment » du perso chez l'hôte
+  (`Character`+0xE0 == 1), lu dans `ReadProgress` ; le client le garde (`hostSneaking_`) et le publie
+  dans la `HookView` pour `hk_setStealthMode`. Un client 0.3.4 l'ignore.
 - L'argent de la faction du joueur, lu dans ses Ownerships.
 
 ### Escouades (`SendSquads`, `ApplySquads`)
@@ -1060,6 +1074,7 @@ les mêmes partout) ; rien ne part vers l'hôte. Chez l'hôte, le bouton refuse 
 | `plugin/player_stats_ui.cpp`, `player_stats_ui.h` | onglet « JOUEURS » de la fenêtre de gestion (MyGUI du jeu) |
 | `plugin/debug.cpp`, `debug.h` | canal de commandes de test |
 | `common/include/kc/bug_report.h`, `plugin/bug_report.cpp`, `bug_report.h` | rapport de bug (`/bug`) : règles pures (testées par `TestBugReport`), écriture du fichier chez l'hôte |
+| `common/include/kc/copy_rules.h` | (0.3.5) ce que le jeu local peut encore faire à une copie pilotée par l'hôte : lits, état de furtivité, perso d'un joueur parti, ordres restés de la sauvegarde (testés par `TestNightPosture`) |
 | `tests/test_main.cpp` | tests unitaires (protocole, fuzzing, sessions avec faux monde) |
 | `tools/coop_test.py` | harnais de test en jeu |
 | `build.ps1`, `install.ps1`, `package.ps1` | compilation, installation, zip pour les amis |

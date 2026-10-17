@@ -2006,11 +2006,20 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             if (d < bestD) { bestD = d; best = o; }
         }
         if (!best) return "err no free bed around";
-        HostCallScope scope;
-        const bool ok = kenshi::SetInBed(me, true, best);
+        // localbed <i> game (0.3.5): the call made as the local game's tasks make it (no HostCallScope):
+        // refused on a copy the host drives (hk_setInBed), the copy stays out of the bed
+        std::string how;
+        in >> how;
+        bool ok = false;
+        if (how == "game") {
+            ok = kenshi::SetInBed(me, true, best);
+        } else {
+            HostCallScope scope;
+            ok = kenshi::SetInBed(me, true, best);
+        }
         int v = -1;
         kenshi::ReadInSomething(me, v);
-        return (ok ? "ok inSomething=" : "err inSomething=") + std::to_string(v);
+        return (ok ? "ok inSomething=" : "err inSomething=") + std::to_string(v) + " refused=" + std::to_string(KenshiWorld::bedsRefused.load());
     }
     if (cmd == "insomething") {   // insomething <squadIndex>: 0 nothing, 1 in bed, 2 in a cage
         size_t idx = 0;
@@ -2071,6 +2080,94 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         const int n = w.PostureMismatches(keys);
         return "ok n=" + std::to_string(n) + " freed=" + std::to_string(w.captiveFreed) + " remade=" + std::to_string(s.standInsRemade()) +
                (keys.empty() ? std::string() : " keys=" + keys.substr(1));
+    }
+    // ---- 0.3.5 night-posture (A_FAIRE 16/10 points 7, 8, 10, 12)
+    if (cmd == "sneak") {   // sneak <squadIndex|key>: order=<stealth standing order> state=<Character+0xE0, 1 sneaking> anim=<AnimationClass+0x248> moving=<0/1> key=<its key> anims=<playing, weight >= 0.3>
+        std::string arg;
+        in >> arg;
+        kenshi::Character* c = nullptr;
+        kc::Handle h;
+        if (arg.find(':') != std::string::npos) {
+            sscanf(arg.c_str(), "%u:%u:%u:%u:%u", &h.type, &h.container, &h.containerSerial, &h.index, &h.serial);
+            c = w.Find(h);
+        } else {
+            auto squad = SortedSquad(w);
+            size_t idx = 0;
+            try { idx = size_t(std::stoul(arg)); } catch (...) { return "err sneak <squadIndex|key>"; }
+            if (idx >= squad.size()) return "err no such squad member";
+            h = squad[idx];
+            c = w.FindSquad(h);
+        }
+        if (!c) return "err not here";
+        uint8_t style = 0;
+        const uint16_t m = kenshi::ReadModes(c, style);
+        std::vector<kenshi::PlayingAnim> playing;
+        kenshi::ReadPlayingAnims(c, playing);
+        std::string names;
+        for (const auto& a : playing)
+            if (!a.fadingOut && a.weight >= 0.3f) {
+                std::string n = a.anim;
+                std::replace(n.begin(), n.end(), ' ', '_');
+                names += (names.empty() ? "" : ",") + n;
+            }
+        return "ok order=" + std::to_string((m & kc::kModeStealth) ? 1 : 0) + " state=" + std::to_string(kenshi::StealthState(c)) +
+               " anim=" + std::to_string(kenshi::AnimStealthFlag(c)) + " moving=" + std::to_string(kenshi::IsMoving(c) ? 1 : 0) + " key=" + Key(h) +
+               " anims=" + (names.empty() ? "-" : names);
+    }
+    if (cmd == "labels") {   // labels: the game's labels over the world here: nametags=N progress=<task progress bars> shown=<those shown>
+        int tags = 0, bars = 0, shown = 0;
+        kenshi::CountScreenLabels(tags, bars, shown);
+        return "ok nametags=" + std::to_string(tags) + " progress=" + std::to_string(bars) + " shown=" + std::to_string(shown);
+    }
+    if (cmd == "nightstats")   // nightstats: client, local bed entries refused, stealth states imposed, leftover orders cleared
+        return "ok bedsrefused=" + std::to_string(KenshiWorld::bedsRefused.load()) + " stealthimposed=" + std::to_string(KenshiWorld::stealthImposed.load()) +
+               " orderscleared=" + std::to_string(w.ordersCleared);
+    if (cmd == "orders") {   // orders <squadIndex|key>: orders=<AITaskSystem orders> tasks=<its actions> in=<inSomething> unconscious=<0/1> ragdoll=<0/1>
+        std::string arg;
+        in >> arg;
+        kenshi::Character* c = nullptr;
+        if (arg.find(':') != std::string::npos) {
+            kc::Handle h;
+            sscanf(arg.c_str(), "%u:%u:%u:%u:%u", &h.type, &h.container, &h.containerSerial, &h.index, &h.serial);
+            c = w.Find(h);
+        } else {
+            auto squad = SortedSquad(w);
+            size_t idx = 0;
+            try { idx = size_t(std::stoul(arg)); } catch (...) { return "err orders <squadIndex|key>"; }
+            if (idx < squad.size()) c = w.FindSquad(squad[idx]);
+        }
+        if (!c) return "err not here";
+        int inside = -1;
+        kenshi::ReadInSomething(c, inside);
+        return "ok orders=" + std::to_string(kenshi::LocalOrderCount(c)) + " tasks=" + std::to_string(kenshi::LocalTaskCount(c)) + " in=" +
+               std::to_string(inside) + " unconscious=" + std::to_string(kenshi::IsUnconscious(c) ? 1 : 0) + " ragdoll=" +
+               std::to_string(kenshi::IsRagdoll(c) ? 1 : 0) + " dead=" + std::to_string(kenshi::IsDead(c) ? 1 : 0);
+    }
+    if (cmd == "sleepers") {   // sleepers: characters in a bed here (inSomething 1), of all the active ones
+        std::vector<kenshi::Character*> all;
+        kenshi::ActiveCharacters(all);
+        int n = 0;
+        for (kenshi::Character* c : all) {
+            int inside = 0;
+            if (kenshi::ReadInSomething(c, inside) && inside == 1) ++n;
+        }
+        return "ok sleepers=" + std::to_string(n) + " active=" + std::to_string(all.size());
+    }
+    if (cmd == "sethour") {   // sethour <hour of day>: (host) the clock set to that hour today (clients follow the host's time)
+        double hour = 0, now = 0;
+        in >> hour;
+        if (!s.isHost() && s.state() != kc::SessionState::Idle) return "err host only";
+        if (!kenshi::GetGameHours(now) || hour < 0 || hour >= 24) return "err";
+        const double day = std::floor(now / 24.0);
+        return kenshi::SetGameHours(day * 24.0 + hour) ? "ok" : "err call failed";
+    }
+    if (cmd == "wakesquad") {   // wakesquad <squadIndex>: (host) that squad member gets up now (knocked out: conscious again, out of its ragdoll)
+        size_t idx = 0;
+        in >> idx;
+        auto squad = SortedSquad(w);
+        if (idx >= squad.size()) return "err no such squad member";
+        HostCallScope scope;
+        return kenshi::StandUp(w.FindSquad(squad[idx])) ? "ok" : "err";
     }
     if (cmd == "movestats")   // movestats: host, movement updates of characters near a client player since the start (3f)
         return "ok full=" + std::to_string(w.moveNearFull.load()) + " outofview=" + std::to_string(w.moveNearOutOfView.load()) +

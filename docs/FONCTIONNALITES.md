@@ -199,6 +199,10 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
 ### Santé, K.-O., mort ✅ (un correctif en cours 🔧)
 - Un personnage dans un lit ou une cage (le sommeil est un K.-O.) reçoit seulement l'état
   inconscient chez le client, jamais la chute qui le sortirait de là ; idem s'il est porté.
+- **Lits la nuit (0.3.5, branche night-posture, à vérifier en jeu : `nightbeds`)** : le jeu du client
+  ne couche plus lui-même les PNJ de l'hôte dans le lit de son choix (les tâches de la sauvegarde) ;
+  seul le lit de l'hôte compte. Avant, ~2 650 lignes « au lit / sorti du lit » par soirée chez un
+  client (16/10).
 - **Le joueur** voit chaque blessure de membre, saignement, faim, K.-O. et mort comme chez l'hôte.
   Un personnage tombe là où celui de l'hôte est tombé. Un corps couché à plus de 20 unités de
   celui de l'hôte est relevé et recouché (2 fois par minute au plus, 10 s d'écart) : il est remis
@@ -211,6 +215,13 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   retombaient toutes les 2 s (session du 10/10). Par corps : 4 chutes par minute au plus, et
   plus rien pendant la minute après deux chutes de suite qui ne tiennent pas. Un PNJ K.-O. chez
   l'hôte tombe inconscient chez le client (le jeu local ne le relève plus). Non revérifié en jeu.
+- **Réveil après un K.-O. (0.3.5, branche night-posture, à vérifier en jeu : `kowake`)** : un perso
+  que l'hôte relève se relève chez tout le monde, PNJ compris, aussi un esclave évadé ou un prisonnier
+  qui marche librement (seuls la cage, le lit, les chaînes et le portage tiennent la pose, et ce que
+  dit l'hôte l'emporte sur les restes de la copie) ; une copie inconsciente sans ragdoll est relevée
+  aussi. Avant, plopette restait au sol chez tous les clients pendant que l'hôte le faisait marcher
+  (16/10). Une copie qui reste à terre alors que l'hôte a la sienne debout est écrite au journal avec
+  la raison.
 - **Cadavres (0.3.1)** : un corps mort chez l'hôte reste mort et couché chez les clients, pour
   toujours : jamais relevé, jamais ranimé par la synchro de santé ; sa doublure recréée (zone
   déchargée puis rechargée) revient morte et couchée ; posé par son porteur, il tombe directement.
@@ -348,6 +359,10 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   attaque / défense / esquive.
 - **Le joueur** voit les mêmes cases cochées partout. Le jeu du client ne peut plus les changer
   seul (avant, un personnage passait parfois en furtif tout seul).
+- **Marche furtive (0.3.5, branche night-posture, à vérifier en jeu : `sneakwatch`)** : un perso
+  accroupi chez l'hôte l'est chez tout le monde (état de furtivité de l'hôte imposé aux copies : marche
+  et icône). Si l'hôte ne fait pas marcher accroupi un perso qui a l'ordre de furtivité, son journal
+  l'écrit (« walks without sneaking on the host »).
 - Vérifié par la suite (« modes »).
 
 ### Compétences, expérience, argent ✅
@@ -714,6 +729,11 @@ la fenêtre du client.
   rejoint aussitôt : il recharge le monde de l'hôte tel qu'il est maintenant et retrouve son
   personnage.
 - Vérifié par la suite.
+- **Perso occupé pendant une resync (0.3.5, branche night-posture, à vérifier en jeu :
+  `trainresync`)** : le perso d'un joueur parti est arrêté comme par le bouton « stop » du jeu (ordres
+  effacés, tâche en cours terminée), retiré du mannequin, de la machine ou de la chaise, sorti d'un lit
+  s'il est éveillé : la sauvegarde qu'il recharge n'a plus son entraînement, et plus de barre
+  d'entraînement restée au-dessus de son perso.
 
 ### Administration de l'hôte (dieu, TP, XP, soins, argent, objets) 🟡 implémenté, à vérifier en jeu
 - **L'hôte** a, dans la fenêtre Multijoueur, une liste des joueurs (nom, ping, personnages, persos

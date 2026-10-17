@@ -359,6 +359,9 @@ struct PostureFacts {
     bool held = false;
     bool hostDown = false, hostDead = false;
     bool localDown = false, localDead = false;
+    // 0.3.5 (A_FAIRE 16/10 point 10): knocked out here without a ragdoll (the unconscious flag set, the
+    // body in its prone pose): lying too, for the stand-up only (falls still follow the ragdoll)
+    bool localOut = false;
 };
 
 inline void PostureRoll(PostureBook& b, double now) {
@@ -440,7 +443,59 @@ inline float FallSpotHeight(float hostY, bool floorKnown, float floorY) {
     return floorKnown && hostY > floorY + kLyingAboveFloor ? floorY : hostY;
 }
 // May it be stood up because the host's is standing? Never a held one (a shackled captive sits).
-inline bool MayStand(const PostureFacts& f) { return !f.held && !f.hostDown && !f.hostDead && f.localDown && !f.localDead; }
+inline bool MayStand(const PostureFacts& f) { return !f.held && !f.hostDown && !f.hostDead && (f.localDown || f.localOut) && !f.localDead; }
+// Do the host's and our postures differ (posture code)? The host's down: ours must be in a ragdoll
+// (knocked out without one still falls). The host's up: ours must neither lie in a ragdoll nor be
+// knocked out in its prone pose.
+inline bool PostureDiffers(const PostureFacts& f) { return f.hostDown ? !f.localDown : (f.localDown || f.localOut); }
+
+// ---------------------------------------------------------------- what holds a pose (0.3.5)
+// A_FAIRE 16/10 point 10: plopette, knocked out at 22:41:29, never got up on any client while the
+// host's walked on. The host still had it "slave-state=2 escaped sentence=160h" (an escaped slave
+// walking free): every slave state and prison sentence counted as "held", so the posture code left it
+// on the ground for good. Only what really owns the body's pose holds it: a carrier here, a cage or a
+// bed, shackles. The host's word wins over what our copy says; our copy's own marks count only while
+// the host has said nothing about that character yet (just found, its captivity not in).
+enum class PoseHold : uint8_t { None, Carried, HostCaged, HostChained, LocalIn, LocalChained };
+struct PoseHoldFacts {
+    bool carried = false;       // on a shoulder here
+    bool hostKnown = false;     // the host told us its captivity (captive in some way, or free)
+    bool hostCaged = false;     // in a cage or a bed on the host
+    bool hostChained = false;   // shackled on the host
+    bool localIn = false;       // in a bed or a cage here
+    bool localChained = false;  // shackled here
+};
+inline PoseHold PoseHoldOf(const PoseHoldFacts& f) {
+    if (f.carried) return PoseHold::Carried;
+    if (f.hostCaged) return PoseHold::HostCaged;
+    if (f.hostChained) return PoseHold::HostChained;
+    if (f.hostKnown) return PoseHold::None;   // the host has it in nothing: whatever our copy says is a leftover
+    if (f.localIn) return PoseHold::LocalIn;
+    if (f.localChained) return PoseHold::LocalChained;
+    return PoseHold::None;
+}
+inline const char* PoseHoldName(PoseHold h) {
+    switch (h) {
+    case PoseHold::None: return "nothing";
+    case PoseHold::Carried: return "carried here";
+    case PoseHold::HostCaged: return "in a cage or a bed on the host";
+    case PoseHold::HostChained: return "shackled on the host";
+    case PoseHold::LocalIn: return "in a cage or a bed here (host not heard yet)";
+    case PoseHold::LocalChained: return "shackled here (host not heard yet)";
+    }
+    return "?";
+}
+// The host's captivity as the posture code reads it: which part of it holds the pose.
+inline uint8_t HostPoseBits(bool caged, bool chained) { return uint8_t((caged ? 1 : 0) | (chained ? 2 : 0)); }
+
+// Why a copy the host has standing stays down here (one line per body when it lasts): "" when
+// nothing keeps it down (it is being stood up, or it is up).
+inline const char* StaysDownReason(const PostureFacts& f, PoseHold hold) {
+    if (f.hostDown || f.hostDead || !(f.localDown || f.localOut)) return "";
+    if (f.localDead) return "dead here";
+    if (f.held) return PoseHoldName(hold);
+    return "";
+}
 
 // ---------------------------------------------------------------- dead bodies
 // A body dead on the host stays dead and lying here, forever: never stood up, never revived, and

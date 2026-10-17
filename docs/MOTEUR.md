@@ -314,6 +314,7 @@ Trouvées depuis KenshiLib (décalage +0x40 dans la zone `0xD0000`-`0xF8000` : `
 | prospection | `FnCameraTarget` | `GameWorld::<cible de la caméra>(Vector3* out)` (notre nom) | `0x785F90` | — | `PlayerInterface`+0x30 (caméra) +0x58 nœud → position |
 | prospection | `FnNearestSelected` | `PlayerInterface::<sélectionné le plus proche>(const Vector3&)` (notre nom) | `0x7F4BA0` | — | parcourt la sélection (+0x208) et rend le perso (type 1 ou 0x5B) le plus proche du point |
 | TP admin (0.3.4) | `FnAiTasksClear` | `AITaskSystem::<vider les ordres>()` (notre nom) | `0x5074A0` | — | [D] vide le conteneur +0x38 (`0xE750`), détruit chaque ordre du tableau +0x80 (nombre +0x78, destructeur virtuel avec 1), remet le nombre à 0, puis `0x7789(this, 1)` si +0x1C0 n'est pas nul. C'est ce que fait le bouton « stop » du jeu (`PlayerInterface::stopCharactersMovement` `0x7F6470`) pour chaque perso sélectionné : `CharMovement::halt` (`Character`+0x640, vt 0x98), puis cette fonction sur `Character`+0x650 (`AI`) → +0x20 (`AITaskSystem`), puis `CharBody` (+0x648) vt 0x60. Les travaux permanents (`getPermajob`) ne sont pas dans ce tableau : ils restent. `kenshi::StopCharacter` = halt + cette fonction, appelé par la TP admin |
+| furtivité (0.3.5) | `FnSetStealthMode` | `Character::setStealthMode(int)` (notre nom) | `0x5C7E20` | oui | [D] vt 0x370 (toutes les classes de perso) : écrit l'état de furtivité `Character`+0xE0 ; passer de 0 à non 0 (ou l'inverse) prévient l'étiquette du nom (+0x638, icône) et le mouvement (+0x640). Voir section 16 |
 
 Mise en page lue au désassemblage (KenshiLib n'a pas `CharacterTradingHandler`) : gestionnaire +0x08
 vendeur, +0x10 acheteur (pointeurs bruts), +0x18 booléen, +0x20 tableau d'entrées (nombre +0x28,
@@ -2254,3 +2255,66 @@ exactement comme le chargeur le fait pour les onglets du jeu.
   `findItemIndex` sur ce `TabControl`, la zone de texte parmi les enfants de l'onglet (Widget +0x3D8,
   `vector<Widget*>`). Fenêtre refaite ou nouveau monde : l'onglet est refait. Chaque appel est sous
   `__try/__except`.
+
+## 16. Furtivité, lits des copies, ordres d'un perso parti (0.3.5, branche night-posture) [D]
+
+Lu au désassembleur sur `kenshi_x64.exe` 1.0.68 (A_FAIRE 16/10 points 7, 8, 10, 12).
+
+**Furtivité**
+- `Character`+0xD4 (octet) : l'ordre permanent « furtif » (`setStandingOrder` 3 / 4, `0x5CAA50`). Le
+  cas 3 appelle `AnimationClass::<furtif>(bool)` (`0x51CC70` : `AnimationClass`+0x248 = 1, +0x240 =
+  -1,0) puis met +0xD4 à 1 et relance la tâche en cours (type 0x10) ; le cas 4 remet l'état (+0xE0) à 0
+  s'il valait 1, puis +0x248 et +0xD4 à 0.
+- `Character`+0xE0 (int) : l'état de furtivité. `getStealthMode` vt 0x368 (`0x5C7E10`, lit +0xE0),
+  `setStealthMode` vt 0x370 (`0x5C7E20`). 0 : pas furtif ; 1 : accroupi (marche furtive, icône) ; 2 :
+  posé par l'état « à terre » (vt 0x360 = octet +0x5B8) ; 3 et 4 : états de transition (4 : l'IA ne
+  peut pas agir, `0x598C20` faux : inconscient +0x161, mort +0x164 du `MedicalSystem`).
+- `Character::update` (vt 0x280, `0x5D00B0`, fil de travail) recalcule l'état **à chaque image**
+  (`0x5D045F`-`0x5D0611`) et appelle `setStealthMode` : 1 seulement depuis l'état 3 ou 4 quand +0xD4 est
+  mis, sinon il garde 1 (ou le remet à 0 selon les octets +0xEC et +0x278, sens non établis, ou s'il
+  est dans un meuble +0x2F8). Le passage de 0 à 1 vient des **actions de l'IA** (`0x334A20`,
+  `0x334B50` : l'octet +0x78 de l'action donne l'état 1 ou 0). `Character::wantsStealth` (`0x5C9750`,
+  notre nom) : faux si `0x2F220(c, 1, 1)`, sinon +0xD4 ; appelée par le système de tâches et l'IA.
+- Les ordres d'allure (`setStandingOrder` 0, 1, 2, 16 : `CharMovement`+0x20 = 2, 1, 0, 3) remettent
+  l'état à 0 s'il valait 1.
+- `AnimationClass::animationSelection` (`0x520500`) : état d'animation +0xF0 = 5 quand vt 0x368 rend 1
+  ou 2 (ou +0x5B8) ; les listes d'animations de déplacement (`AnimationClass`+0x2C0, +0x0 et +0x18)
+  sont jouées par `0x51D8E0` selon cet état ; chaque entrée est une `AnimationData` (`runAnimation`
+  avec sa couche +0x60), donc retrouvable par son nom chez un client.
+- Chez un client l'IA ne tourne pas : sans le mod, l'état d'une copie restait 0. Le mod impose celui de
+  l'hôte (bit `kModeSneaking` des modes, `hk_setStealthMode`).
+
+**Lits**
+- `Character::setInBed(true, lit)` (`0x32E2F0`) n'a que trois appelants « au lit » : `Task_UseBed`
+  (vtable `0x16C0998`, méthode +0x10 : `0x351770`, appel en `0x351851`), `Task_OperateMachine`
+  (vtable `0x16BE898`, méthode +0xD0 : `0x358670`, appel en `0x358A87`) et le chargement d'un perso
+  (`Character` vt 0x2B8, `0x627B30`, fonction de bâtiment 6 = lit, appel en `0x627D5D`, retour
+  `0x627D62`). « Hors du lit » : `0x2A2C4C`, `0x5CEEF8` (attache d'un corps porté), `0x7ADA92`.
+- Chez un client, le système de tâches (`AITaskSystem`) tourne encore (il fait marcher les persos) :
+  les tâches d'un perso venues de la sauvegarde couchent sa copie. Le mod refuse ces appels sur une
+  copie pilotée par l'hôte (`hk_setInBed`).
+
+**Ordres, tâches et barre de progression**
+- `Character::reThinkCurrentAIAction` (`0x5C8330`) : **ne fait rien** si `CharBody`(+0x648)+0x68 (la
+  tâche en cours) → +0x70 → octet +0x22 est mis ; sinon `0x50C730` (`AITaskSystem`+0x26C = 1),
+  `CharBody` vt 0x60, vide les actions (`AITaskSystem`+0x300, `0x50D1B0`) et les ordres (`0x507530` :
+  +0x80, nombre +0x78, puis `0x7789(this, 1)` si +0x1C0).
+- Le bouton « stop » (`PlayerInterface::stopCharactersMovement` `0x7F6470`) : `CharMovement` vt 0x98
+  (halt), `0x5074A0` sur `AITaskSystem` (ordres effacés, tâche en cours terminée), `CharBody` vt 0x60 ;
+  sans la condition de `reThink`.
+- Barre de progression d'une tâche (entraînement sur un mannequin…) : étiquette de vtable
+  `0x1703DE0` (constructeur `0x6EAF00`, 0x58 octets, mise à jour vt 1 `0x6E87C0` : widget
+  `Kenshi_ProgressBarPanel.layout` fait au premier passage (`0x6E8580`, 0xB0 octets), +0x8 affichée,
+  +0xC position, +0x18 à refaire, +0x48 valeur, +0x50 widget). Créée (`0x73FAB0`) par le début d'une
+  tâche (`0x331CA0`) seulement pour un perso de la faction du joueur (`Faction`+0x250), gardée dans la
+  tâche à +0x78 ; retirée de la liste (`0xF277`) par la fin de la tâche (`0x331D50`) ou son
+  destructeur (`0x331C30`, vtable `0x16BDCA8`). Liste des étiquettes : `lektor` nombre `0x2133A28`,
+  tableau `0x2133A30` (noms : vtable `0x1703950`). La donnée « has progress bar when used » d'un meuble
+  (chaîne `0x16B2198`, lue en `0x2A0AED`) décide qu'il en a une.
+- Occupation d'un meuble : `UseableStuff::stopOperating(hand)` (`0x2ACA90`) retire un perso de
+  l'ensemble des opérateurs (+0x3D0).
+
+**Captivité et posture**
+- Un esclave évadé (`StateBroadcastData`+0 = 2, « escaped », peine en cours) marche librement chez
+  l'hôte (plopette, 16/10 22:30-22:43) : l'état d'esclave et la peine ne tiennent pas la pose ; seuls
+  la cage ou le lit (`inSomething` 2 / 1) et les chaînes (+0x320) la tiennent.

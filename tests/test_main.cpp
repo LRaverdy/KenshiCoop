@@ -23,6 +23,7 @@
 #include "kc/loot.h"
 #include "kc/motion.h"
 #include "kc/call_scopes.h"
+#include "kc/copy_rules.h"
 #include "kc/protocol.h"
 #include "kc/pack.h"
 #include "kc/player_stats.h"
@@ -926,12 +927,19 @@ struct FakeWorld : IWorld {
     std::vector<TownPower> townPower;
     int machineApplies = 0;
     std::map<uint32_t, std::vector<float>> skills;   // ReadProgress: stats per character serial
+    std::map<uint32_t, uint16_t> modesOf;            // 0.3.5: ReadProgress's modes per character serial (host)
+    std::map<uint32_t, uint16_t> appliedModes;       // 0.3.5: the last modes ApplyProgress got per character serial (client)
     bool ReadProgress(const Handle& h, std::vector<float>& stats, uint16_t& modes, uint8_t& style) override {
         modes = 0; style = 0;
         auto it = skills.find(h.serial);
         if (it == skills.end()) { stats.clear(); return false; }
         stats = it->second;
+        if (auto m = modesOf.find(h.serial); m != modesOf.end()) modes = m->second;
         return true;
+    }
+    void ApplyProgress(const Handle& h, const std::vector<float>& stats, uint16_t modes, uint8_t style) override {
+        (void)stats; (void)style;
+        appliedModes[h.serial] = modes;
     }
     bool ReadResearch(ResearchState& out) override {
         out = research;
@@ -7186,6 +7194,131 @@ static void TestPlayerStatsSession() {
     for (const auto& p : view) if (p.host) CHECK(p.sessions == 2);
 }
 
+// 0.3.5, branch night-posture (A_FAIRE 16/10 points 7, 8, 10, 12)
+static void TestNightPosture() {
+    std::printf("motion: a copy the host has standing gets up (escaped slave, knocked out without ragdoll); what holds a pose\n");
+    using namespace kc::motion;
+    {
+        // point 10, plopette 22:41: the host had it "slave-state=2 escaped sentence=160h", walking free.
+        // Slave state and sentence are not in the pose facts at all; the host said "not caged, not
+        // shackled": nothing holds it, whatever our copy's marks say
+        PoseHoldFacts f;
+        f.hostKnown = true;
+        f.localChained = true;   // a leftover here
+        f.localIn = true;
+        CHECK(PoseHoldOf(f) == PoseHold::None);
+        PostureFacts p;
+        p.localDown = true;   // knocked out here, in a ragdoll
+        p.held = PoseHoldOf(f) != PoseHold::None;
+        CHECK(MayStand(p));
+        CHECK(PostureDiffers(p));
+        CHECK(*StaysDownReason(p, PoseHoldOf(f)) == '\0');
+        // the host's cage, bed or shackles hold it; a carrier here first of all
+        PoseHoldFacts caged;
+        caged.hostKnown = caged.hostCaged = true;
+        CHECK(PoseHoldOf(caged) == PoseHold::HostCaged);
+        PoseHoldFacts chained;
+        chained.hostKnown = chained.hostChained = true;
+        CHECK(PoseHoldOf(chained) == PoseHold::HostChained);
+        PoseHoldFacts carried = caged;
+        carried.carried = true;
+        CHECK(PoseHoldOf(carried) == PoseHold::Carried);
+        // the host has said nothing yet (just found): our copy's own cage, bed or shackles hold it
+        PoseHoldFacts unknown;
+        unknown.localIn = true;
+        CHECK(PoseHoldOf(unknown) == PoseHold::LocalIn);
+        unknown.localIn = false;
+        unknown.localChained = true;
+        CHECK(PoseHoldOf(unknown) == PoseHold::LocalChained);
+        CHECK(PoseHoldOf(PoseHoldFacts{}) == PoseHold::None);
+        PostureFacts held = p;
+        held.held = true;
+        CHECK(!MayStand(held));
+        CHECK(std::string(StaysDownReason(held, PoseHold::HostChained)) == "shackled on the host");
+        // knocked out here without a ragdoll (prone pose) while the host's stands: stood up too
+        PostureFacts out;
+        out.localOut = true;
+        CHECK(MayStand(out));
+        CHECK(PostureDiffers(out));
+        // the host's down and ours only knocked out (no ragdoll): it still falls, as before
+        PostureFacts fall;
+        fall.hostDown = true;
+        fall.localOut = true;
+        CHECK(PostureDiffers(fall));
+        PostureBook b;
+        CHECK(MayFall(b, fall, 0));
+        // "down but conscious" on the host gets up the same way: the host's flags no longer down
+        PostureFacts conscious;
+        conscious.localDown = true;
+        CHECK(MayStand(conscious) && PostureDiffers(conscious));
+        // never a dead one; told why
+        PostureFacts dead = conscious;
+        dead.localDead = true;
+        CHECK(!MayStand(dead));
+        CHECK(std::string(StaysDownReason(dead, PoseHold::None)) == "dead here");
+        // up on both sides: nothing to tell
+        CHECK(!PostureDiffers(PostureFacts{}));
+        CHECK(*StaysDownReason(PostureFacts{}, PoseHold::None) == '\0');
+        CHECK(HostPoseBits(true, false) == 1 && HostPoseBits(false, true) == 2 && HostPoseBits(false, false) == 0);
+    }
+    std::printf("copies: local beds refused, stealth state the host's, a gone player's character, leftover orders\n");
+    {
+        using namespace kc::copy;
+        // point 12: the local task's bed on a host-driven copy is refused; the mod's own calls, the
+        // save's loading, a getting up, the host itself and our own characters are not
+        CHECK(RefuseLocalBed(true, false, true, true, false));
+        CHECK(!RefuseLocalBed(true, true, true, true, false));    // HostCallScope (the host's bed)
+        CHECK(!RefuseLocalBed(true, false, true, true, true));    // loading the save
+        CHECK(!RefuseLocalBed(true, false, false, true, false));  // out of a bed
+        CHECK(!RefuseLocalBed(true, false, true, false, false));  // not driven by the host
+        CHECK(!RefuseLocalBed(false, false, true, true, false));  // the host's game
+        // point 8: the host's sneaking wins over the copy's every-frame state
+        CHECK(CopyStealthMode(0, true) == 1);
+        CHECK(CopyStealthMode(1, true) == 1);
+        CHECK(CopyStealthMode(1, false) == 0);
+        CHECK(CopyStealthMode(0, false) == 0);
+        CHECK(CopyStealthMode(4, true) == 4 && CopyStealthMode(2, false) == 2);   // the game's other states pass
+        // point 7: a gone player's character leaves a bed awake only, never a cage
+        CHECK(GoneLeavesBed(1, false));
+        CHECK(!GoneLeavesBed(1, true));
+        CHECK(!GoneLeavesBed(2, false));
+        CHECK(!GoneLeavesBed(0, false));
+        // point 7, the rejoiner: re-thinks first, then the orders cleared, 10 s apart, never on a carry
+        CHECK(!ShouldClearOrders(1, 1e9, false));
+        CHECK(ShouldClearOrders(2, 1e9, false));
+        CHECK(!ShouldClearOrders(3, 5.0, false));
+        CHECK(ShouldClearOrders(3, 10.0, false));
+        CHECK(!ShouldClearOrders(5, 1e9, true));
+        CHECK(ShouldClearOrders(9, 1e9, false, kMaxClears - 1));
+        CHECK(!ShouldClearOrders(9, 1e9, false, kMaxClears));   // given up after kMaxClears
+    }
+    std::printf("session: the host's sneaking reaches the client in the modes (bit 7), and goes\n");
+    {
+        FakeWorld hw, cw;
+        SetupHost(hw);
+        AtMenu(cw);
+        SessionConfig hc; hc.characterPerPlayer = false; hc.port = ++g_port;
+        SessionConfig cc; cc.port = hc.port; cc.name = "C";
+        Session host(hw, hc, Now, Quiet("host"));
+        Session cli(cw, cc, Now, Quiet("cli"));
+        std::string err;
+        host.Host(&err);
+        CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
+        hw.skills[2] = std::vector<float>(kStatCount, 5.0f);
+        hw.modesOf[2] = kModeStealth;   // the stealth order on, not sneaking yet
+        Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return cw.appliedModes.count(2) && cw.appliedModes[2] == kModeStealth; });
+        CHECK(cw.appliedModes.count(2) && cw.appliedModes[2] == kModeStealth);
+        hw.modesOf[2] = uint16_t(kModeStealth | kModeSneaking);   // it walks crouched on the host
+        Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return (cw.appliedModes[2] & kModeSneaking) != 0; });
+        CHECK((cw.appliedModes[2] & kModeSneaking) != 0 && (cw.appliedModes[2] & kModeStealth) != 0);
+        hw.modesOf[2] = 0;   // stealth off: neither
+        Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return cw.appliedModes[2] == 0; });
+        CHECK(cw.appliedModes[2] == 0);
+        // the bit is no standing order: no squad bar toggle maps to it
+        for (int order = 0; order < 32; ++order) CHECK(ModeBitOfOrder(order) != kModeSneaking);
+    }
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);   // every line out before a crash
     if (std::getenv("KC_ONLY_STREAMING")) {   // the 0.3.1 streaming tests alone
@@ -7199,6 +7332,11 @@ int main() {
     if (std::getenv("KC_ONLY_STATS")) {   // the 0.3.5 player statistics tests alone
         TestPlayerStats();
         TestPlayerStatsSession();
+        std::printf("%d checks, %d failed\n", g_checks, g_failed);
+        return g_failed ? 1 : 0;
+    }
+    if (std::getenv("KC_ONLY_NIGHT")) {   // the 0.3.5 night-posture tests alone
+        TestNightPosture();
         std::printf("%d checks, %d failed\n", g_checks, g_failed);
         return g_failed ? 1 : 0;
     }
@@ -7265,6 +7403,7 @@ int main() {
     TestMachineInventoryClosed();   // 0.3.4: a closed machine asks no moves; a forgotten one goes
     TestMessageRules();   // the authority table covers every message
     TestMotion();   // smooth motion, facing and posture on clients
+    TestNightPosture();   // 0.3.5: knocked-out copies get up, local beds, stealth state, gone players' orders
     TestLootCreatures();   // every creature kind lootable from a client (leviathans...)
     TestBigBodyDrop();
     TestTalkRules();   // 0.3.4: talk clicks without an order, NPC by kind and place, lines kept waiting

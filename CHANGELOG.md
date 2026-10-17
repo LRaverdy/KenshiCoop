@@ -8,6 +8,56 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 Protocole inchangé (36) : le nouveau message des stats est ignoré par un client 0.3.4.
 
+- **Posture, furtivité, lits et entraînement des copies (partie du 16/10, branche `night-posture`,
+  A_FAIRE points 7, 8, 10 et 12 ; à vérifier en jeu)**. Pas de nouveau message ; un bit de plus dans
+  les modes de `Progress` (bit 7, ignoré par un client 0.3.4).
+  - **Un perso K.-O. se relève chez tout le monde (point 10, expérience `kowake`)**. plopette,
+    assommé à 22:41:29, n'a jamais été relevé chez aucun client pendant que l'hôte le faisait
+    marcher. Le journal le dit : l'hôte l'avait encore « slave-state=2 escaped sentence=160h » (un
+    esclave évadé qui marche librement) et toute marque d'esclave ou de peine comptait comme « tenu
+    par la captivité » (`PostureHeld`), ce qui interdit au code de posture de le relever. Seul ce qui
+    tient vraiment la pose compte maintenant (`kc::motion::PoseHoldOf`) : porté ici, en cage ou au lit
+    chez l'hôte, enchaîné chez l'hôte ; les marques de la copie ne comptent que tant que l'hôte n'a
+    rien dit de ce perso (`hostCaptivityKnown_`). Un perso libre chez l'hôte dont la copie garde des
+    marques (chaînes, esclave, peine, enlevé, évadé) les perd (`ClearCaptivityTraces`, une ligne
+    « captivity: … is free on the host but kept marks here … cleared », au plus toutes les 30 s par
+    perso). Une copie inconsciente sans ragdoll (pose couchée) est relevée aussi
+    (`PostureFacts::localOut`, `MayStand`, `PostureDiffers`) ; une copie que l'hôte a debout et qui
+    reste à terre est écrite une fois par minute avec la raison (« posture: … stays down here while
+    the host's walks: shackled on the host », sauf un dormeur que l'hôte garde au lit).
+  - **Plus de barre d'entraînement restée après une resync (point 7, `trainresync`)**. Un joueur
+    parti (resync, coupure) : son perso est arrêté comme le fait le bouton « stop » du jeu
+    (`kenshi::StopCharacter` : arrêt, ordres effacés, tâche en cours terminée, ce qui retire sa barre
+    de progression et sa place sur le mannequin), puis retiré de toute machine / mannequin / chaise
+    qui le liste encore (`KenshiWorld::LeaveMachinesOf`, `UseableStuff::stopOperating`) et sorti d'un
+    lit s'il est éveillé (`kc::copy::GoneLeavesBed`). L'ancien arrêt (`reThinkCurrentAIAction`) ne
+    fait rien tant que la tâche en cours tient le corps : la sauvegarde envoyée au joueur gardait
+    l'entraînement. Ligne « player gone: … halted where it stands (the game's stop: ok; N order(s)
+    and N task(s) before, 0 and 0 after; off N machine(s)) ». Chez un client, une copie qui garde des
+    tâches ou des ordres de la sauvegarde après deux `reThink` a ses ordres effacés de la même façon
+    (`DropLeftoverTasks`, `kc::copy::ShouldClearOrders` : 10 s d'écart, 3 fois au plus par perso,
+    jamais sur un corps porté ou qui porte ; une ligne « tasks: … kept … »).
+  - **Furtivité (point 8, `sneakwatch`)**. La marche accroupie et l'icône de furtivité suivent l'état
+    de furtivité du perso (`Character`+0xE0, `setStealthMode` `0x5C7E20`), que l'IA de l'hôte met à 1
+    et que le `Character::update` d'une copie remettait à 0 à chaque image chez un client. L'hôte
+    envoie « furtif en ce moment » (`kc::kModeSneaking`, lu dans `ReadProgress`) ; le crochet
+    `hk_setStealthMode` impose cet état aux copies (`kc::copy::CopyStealthMode` ; compteur
+    `stealthimposed`). Cause **supposée** : une copie proche joue déjà les animations de l'hôte ;
+    l'hôte écrit donc aussi, une fois par minute, un perso de joueur qui a l'ordre de furtivité et
+    marche sans être furtif chez lui (« stealth: … walks without sneaking on the host »), pour
+    savoir à la prochaine partie de quel côté est le problème.
+  - **Lits : plus de ping-pong chez les clients (point 12, `nightbeds`)**. ~2 650 lignes le 16/10 : le
+    système de tâches du client fait encore tourner les tâches de la sauvegarde (`Task_UseBed`,
+    `Task_OperateMachine`), qui couchaient les copies dans le lit de leur choix ; le mod les en
+    sortait toutes les 2 s. Le crochet `hk_setInBed` (`Character::setInBed` `0x32E2F0`) refuse
+    désormais ce « au lit » sur une copie pilotée par l'hôte, hors des appels du mod
+    (`kc::copy::RefuseLocalBed`) ; le chargement de la sauvegarde (appel revenant en `0x627D62`) et
+    le lit de l'hôte (`ApplyCaptive`, `HostCallScope`) passent. Les 8 premiers refus sont écrits avec
+    l'adresse de l'appel ; compteur `bedsrefused`.
+  - Commandes de test : `sneak`, `labels`, `nightstats`, `orders`, `sleepers`, `sethour`,
+    `wakesquad`, `localbed <i> game` (voir docs/TESTS.md). Tests unitaires `TestNightPosture`
+    (`KC_ONLY_NIGHT=1`).
+
 - **Rapport de bug en une commande (branche `bugreport`)**. Quand un ami tombait sur un bug, il
   fallait lui demander son `KenshiCoop.log` après coup. Désormais, n'importe quel joueur tape
   `/bug <phrase>` dans la console du jeu (Ctrl+Shift+K) ou dans la console de l'hôte, et l'hôte
