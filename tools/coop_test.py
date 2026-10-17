@@ -7441,7 +7441,13 @@ def exp_lockprogress(host, cli):
     own = own_index(host)
     log("locks around (host):", cmd(host, "doors 0 lock")[1][:400])
     for task, what in ((76, "crocheter"), (285, "scier"), (286, "forcer")):
-        cmd(host, "doorset 0 lock lock")
+        ds = cmd(host, "doorset 0 lock lock")
+        # next to it first (17/10: the door was 673 units away, more than the 20 s the bar is waited for)
+        m = re.search(r"at=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)", ds[1])
+        if m:
+            x, y, z = (float(v) for v in m.groups())
+            log("client's character next to the lock:", cmd(host, f"teleport {own} {x + 12:.0f} {y + 5:.0f} {z + 12:.0f}"))
+            time.sleep(4)
         time.sleep(2)
         log(f"client orders {what} ({task}):", cmd(cli, f"doororder {own} {task} lock"))
         seen = ""

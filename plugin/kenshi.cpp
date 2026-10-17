@@ -1360,6 +1360,16 @@ uint32_t DropCharacterList(void* lektor) {
     return n;
 }
 
+void* BodyOf(Character* c) {
+    void* body = nullptr;
+    return IsCharacter(c) && Rd(c, off::CH_body, body) ? body : nullptr;
+}
+
+uintptr_t VtableRva(const void* obj) {
+    const uintptr_t vt = Vtable(obj);
+    return vt >= Addr(0) ? vt - Addr(0) : vt;
+}
+
 bool CharacterEditorOpen() {
     void* ed = nullptr;
     return Rd(reinterpret_cast<void*>(Addr(kTheGui)), GUI_editor, ed) && ed;

@@ -2972,7 +2972,7 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
                std::to_string(s.slaveShopOpen()) + " |" + list;
     }
     if (cmd == "progressstate") {   // progressstate: client: the bars shown (netId:permille); host: progress updates sent; the overlay's lines
-        std::string out = "ok shown=" + std::to_string(s.progressShown().size()) + " sent=" + std::to_string(s.progressSent());
+        std::string out = "ok shown=" + std::to_string(s.progressShown().size()) + " sent=" + std::to_string(s.progressSent()) + " " + ProgressHookStats();
         for (const auto& [id, v] : s.progressShown()) out += " " + std::to_string(id) + ":" + std::to_string(int(v * 1000.0f + 0.5f));
         for (const auto& l : s.actionLines()) out += " | " + l;
         return out;

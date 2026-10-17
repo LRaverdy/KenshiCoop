@@ -478,6 +478,7 @@ enum UpdatePriority : int { LOW_PRIORITY = 0, MED_PRIORITY = 1, HIGH_PRIORITY = 
 bool Init(std::string* err);   // resolves module base, verifies prologues
 uintptr_t Base();
 uintptr_t Addr(uintptr_t rva);
+uintptr_t VtableRva(const void* obj);   // logs: an object's vtable as an RVA of kenshi_x64.exe
 bool InGameImage(const void* p);   // inside kenshi_x64.exe's image (its code, vtables and globals)
 void* FnAddr(Fn f);
 
@@ -693,6 +694,7 @@ bool WriteAppearance(Character* c, const kc::AppearanceMsg& m);
 bool OpenCharacterEditor(Character* c);
 void EditorCharacters(std::vector<Character*>& out);           // who the open editor works on
 bool CharacterEditorOpen();
+void* BodyOf(Character* c);               // Character+0x648, its CharBody (what a timed task's progress names)
 bool EditorStageReady();                  // the open editor has built its stage (CharacterEditor+0x278 set)
 bool InCharacterEditor(Character* c);     // one of the open editor's characters (it owns them: on its stage)
 bool SetEditorPausedAnim(bool on);        // paused, the player's characters still rebuild their bodies for an editor (0x5C7B5E)

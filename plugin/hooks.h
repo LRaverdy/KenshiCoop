@@ -92,5 +92,6 @@ bool CallPlayerMoveOrder(kenshi::Character* c, const kc::Vec3& pos);
 // 0.3.5 lot 5 (plugin/actions.cpp). Host: a job (kind, subject; invalid subject: any) was just removed from
 // that character's job list: the order it was carrying out for it ends too (A_FAIRE 16/10 point 2).
 void JobRemoved(void* chr, int type, const kc::Handle& subject, const char* how);
+std::string ProgressHookStats();   // tests: what the progress bar hooks saw (actions.cpp)
 
 } // namespace kcp

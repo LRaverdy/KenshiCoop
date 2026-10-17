@@ -165,14 +165,27 @@ namespace {
 // ---- host: progress of the timed tasks of other players' characters, since the last TakeActionProgress
 std::mutex g_progressMutex;
 std::vector<kc::IWorld::ActionProgress> g_progress;
-uint64_t g_progressSeen = 0, g_progressNotChar = 0;
+uint64_t g_progressSeen = 0, g_progressNotChar = 0, g_progressCalls = 0, g_progressOwn = 0;
 
 void NoteProgress(void* task, void* who) {
+    ++g_progressCalls;
     auto v = KenshiWorld::View();
     if (!v->active || v->client || !who) return;
-    if (!kenshi::IsCharacter(who)) { ++g_progressNotChar; return; }
-    auto* c = static_cast<kenshi::Character*>(who);
-    if (!v->squadForeign.count(c)) return;   // the host's own: its game draws the bar here
+    // In game 17/10: the second argument is the worker's CharBody (Character+0x648, vtable 0x16F8A68
+    // under Task_PickLock), not the Character: found back among the other players' characters
+    kenshi::Character* c = kenshi::IsCharacter(who) ? static_cast<kenshi::Character*>(who) : nullptr;
+    if (!c)
+        for (const void* f : v->squadForeign) {
+            auto* fc = static_cast<kenshi::Character*>(const_cast<void*>(f));
+            if (kenshi::BodyOf(fc) == who) { c = fc; break; }
+        }
+    if (!c) {
+        if (g_progressNotChar++ < 3)
+            Log("action progress: neither a character nor one of the other players' bodies (vtable rva %#llx, task vtable rva %#llx)",
+                (unsigned long long)(kenshi::VtableRva(who)), (unsigned long long)(kenshi::VtableRva(task)));
+        return;
+    }
+    if (!v->squadForeign.count(c)) { ++g_progressOwn; return; }   // the host's own: its game draws the bar here
     float p = 0;
     kc::Handle h;
     if (!kenshi::Get(task, 0x80, p) || !std::isfinite(p) || !kenshi::GetHandle(c, h)) return;
@@ -183,6 +196,15 @@ void NoteProgress(void* task, void* who) {
     if (g_progress.size() < 64) g_progress.push_back({h, p});
 }
 
+} // namespace
+
+// tests ("progressstate"): what the two progress hooks saw on this machine
+std::string ProgressHookStats() {
+    return "calls=" + std::to_string(g_progressCalls) + " foreign=" + std::to_string(g_progressSeen) + " own=" + std::to_string(g_progressOwn) +
+           " notchar=" + std::to_string(g_progressNotChar);
+}
+
+namespace {
 // ---- client: the bars drawn above our copies
 struct ShownBar { kc::Handle who; void* bar = nullptr; };
 std::vector<ShownBar> g_bars;
