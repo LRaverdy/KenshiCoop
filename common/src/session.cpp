@@ -18,6 +18,7 @@ constexpr double kConnectTimeout = 10.0;
 constexpr double kPresenceInterval = 1.0;
 constexpr double kSpawnGrace = 1.5;   // zones stream in at slightly different times on each side
 constexpr double kVitalsRefresh = 2.0;
+constexpr double kSquadStaleAfter = 15.0;   // client (0.3.5): a squad member without state that long counts missing
 constexpr double kVitalsReapply = 0.25;      // client re-imposes host vitals this often
 constexpr float kInterestHysteresis = 1.25f; // NPCs are dropped only beyond radius * this
 
@@ -1128,7 +1129,18 @@ void Session::SendSnapshots(double now) {
         s.tick = ++tick_;
         s.hostTime = now;
         for (const auto& [id, st] : stateCache_) {
-            if (auto e = entities_.find(id); e != entities_.end() && !StreamsTo(e->second, pid)) continue;   // far from their characters
+            if (auto e = entities_.find(id); e != entities_.end() && !StreamsTo(e->second, pid)) {   // far from their characters
+                // 0.3.5 (night-stream): near another player's characters: at a low rate, marked so
+                if (pid >= 32 || !(e->second.farMask & (1u << pid))) continue;
+                Sent& last = sent[id];
+                if (!FarTierDue(st, last.state, now - last.at)) continue;
+                last.state = st;
+                last.at = now;
+                EntityState low = st;
+                low.flags |= kFlagFar;
+                s.entities.push_back(low);
+                continue;
+            }
             Sent& last = sent[id];
             const bool moving = (st.flags & kFlagMoving) != 0;
             if (!moving && !StateChanged(st, last.state) && now - last.at < cfg_.refreshInterval) continue;
@@ -1153,7 +1165,17 @@ void Session::SendVitals(double now) {
         VitalsMsg m;
         m.tick = tick_;
         for (const auto& [id, v] : vitalsCache_) {
-            if (auto e = entities_.find(id); e != entities_.end() && !StreamsTo(e->second, pid)) continue;
+            if (auto e = entities_.find(id); e != entities_.end() && !StreamsTo(e->second, pid)) {
+                // 0.3.5 (night-stream): near another player's characters: health now and then (a death)
+                if (pid >= 32 || !(e->second.farMask & (1u << pid))) continue;
+                Sent& last = sent[id];
+                if (now - last.vitalsAt < kFarTierVitalsEvery || (!VitalsChanged(v, last.vitals) && now - last.vitalsAt < 6.0 * kFarTierVitalsEvery))
+                    continue;
+                last.vitals = v;
+                last.vitalsAt = now;
+                m.entities.push_back(v);
+                continue;
+            }
             Sent& last = sent[id];
             if (!VitalsChanged(v, last.vitals) && now - last.vitalsAt < kVitalsRefresh) continue;
             last.vitals = v;
@@ -3217,6 +3239,22 @@ void Session::ClientTick(double now, bool live) {
         if (e.present) e.missingSince = -1;
         else if (e.missingSince < 0) e.missingSince = now;
         if (e.squad && !e.present) ++missing;
+        // 0.3.5 (night-stream, A_FAIRE 16/10 point 11): every player's characters are always sent to
+        // everyone, wherever they are; one here that the host has not updated for 15 s is as good as
+        // missing (counted, and said once)
+        else if (e.squad && e.streamAt > 0 && now - e.streamAt > kSquadStaleAfter && now - lastSnapshotAt_ < 2.0 && !HostPaused()) {
+            ++missing;
+            if (!e.staleTold) {
+                e.staleTold = true;
+                char b[200];
+                const std::string whose = e.owner == localId_ ? std::string("ours") : "player " + std::to_string(e.owner) + "'s";
+                snprintf(b, sizeof(b), "squad member %s (%s) has had no state from the host for %.0f s: counted missing", HandleKey(e.handle).c_str(),
+                         whose.c_str(), now - e.streamAt);
+                log_(b);
+            }
+        } else if (e.squad) {
+            e.staleTold = false;
+        }
         // a lost copy the host still sends us near our characters that has not come back in 20 s: said
         // once (what keeps it away), the body of point 2 was never seen again on rob's side
         if (fullCheck && !e.present && e.lostAt >= 0 && !e.lostTold && now - e.lostAt > 20.0 && InMyArea(e, now)) {
@@ -3319,7 +3357,10 @@ void Session::ClientTick(double now, bool live) {
     for (auto it = floors_.begin(); it != floors_.end();) {   // fix G6
         auto e = entities_.find(it->first);
         if (e == entities_.end()) { it = floors_.erase(it); continue; }
-        if (e->second.present) world_.ApplyFloor(e->second.handle, it->second);
+        // 0.3.5 (night-stream): not a copy held still (dormant or sent at a low rate): its host floor is
+        // an old one, and placing it halts and moves it for nobody (16/10: the same copy 68 units
+        // under the host's, placed 3 times, then "dormant: moved 68 units: put back" 69 times)
+        if (e->second.present && (e->second.squad || !Quiet(e->second, now))) world_.ApplyFloor(e->second.handle, it->second);
         ++it;
     }
     if (missing != missingSquad_ && missing > missingSquad_)
@@ -3402,7 +3443,9 @@ void Session::ClientTick(double now, bool live) {
             if (!e.present || e.buf.empty()) continue;
             // the host no longer sends it (far from our characters): it stays where it was last seen,
             // driven only now and then (300 characters driven every frame cost a client its FPS)
-            const bool dormant = !e.squad && Dormant(e, now);
+            // 0.3.5: also one sent to us at a low rate only (near another player's characters, kFlagFar):
+            // held on the host's latest spot the same way
+            const bool dormant = !e.squad && Quiet(e, now);
             if (dormant) {
                 if (now < e.dormantApplyAt) continue;
                 e.dormantApplyAt = now + 0.5;
@@ -3413,7 +3456,7 @@ void Session::ClientTick(double now, bool live) {
                 // the host stopped sending them): given to our game, its far update (3b) walked them
                 // there while those of the host stood far away. Still, no destination, no fight.
                 EntityState still = e.buf.back().s;
-                still.flags = uint8_t(still.flags & ~kFlagMoving);
+                still.flags = uint8_t(still.flags & ~kFlagMoving);   // kFlagFar kept: HoldStill says which
                 still.dest = still.pos;
                 still.combatTarget = 0;
                 world_.Apply(e.handle, still, still);
@@ -3802,6 +3845,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
         Snapshot s;
         if (state_ != SessionState::Connected || !Decode(r, s)) break;
         const double now = clock_();
+        lastSnapshotAt_ = now;   // 0.3.5: the host is sending (a host frozen by a load does not make squad members stale)
         // Clock sync: the least-delayed packet gives the best estimate of host-local offset.
         const double sample = s.hostTime - now;
         if (!offsetValid_ || sample > offset_) { offset_ = sample; offsetValid_ = true; }

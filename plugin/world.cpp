@@ -1,4 +1,4 @@
-﻿#include "world.h"
+#include "world.h"
 
 #include <windows.h>
 
@@ -276,6 +276,8 @@ void KenshiWorld::ResetWorldBound() {
     edited_.clear();
     containerReqs_.clear();
     taskDropAt_.clear();
+    dormantHold_.clear();
+    extraChecks_.clear();
     stuck_.clear();
     farSnapAt_.clear();
     roofBuilding_ = nullptr;
@@ -850,6 +852,16 @@ void KenshiWorld::Reconcile(const std::vector<kc::Handle>& known, const std::vec
                             std::vector<kc::Handle>& adopted) {
     constexpr double kLinger = 5.0;
     if (!client_ || !live_) return;
+    // 0.3.5: the copies that shared a squad with a stranger removed 2 s ago: all still here?
+    for (auto it = extraChecks_.begin(); it != extraChecks_.end();) {
+        if (now < it->at) { ++it; continue; }
+        int lost = 0;
+        for (const kc::Handle& c : it->copies) lost += kenshi::Resolve(c) ? 0 : 1;
+        extrasCopiesLost += lost;
+        Log("extra NPC '%s' removed 2 s ago from a squad with %zu of our copies: %s", it->name.c_str(), it->copies.size(),
+            lost ? (std::to_string(lost) + " of them LEFT OUR GAME with it").c_str() : "all still here");
+        it = extraChecks_.erase(it);
+    }
     std::unordered_set<kc::Handle, HandleHash> taken(known.begin(), known.end());
     for (const auto& [host, local] : alias_) taken.insert(local);
     struct Stranger { kenshi::Character* c; kc::Handle h; double since; bool used; };
@@ -929,13 +941,45 @@ void KenshiWorld::Reconcile(const std::vector<kc::Handle>& known, const std::vec
     };
     for (Stranger& s : strangers) {
         if (s.used || now - s.since < kLinger || !inHostArea(s.c)) continue;
+        std::vector<kc::Handle> watch;   // our copies in its squad, checked 2 s after it went
         if (sharesSquadWithCopy(s.c)) {
+            // 0.3.5 (night-stream, A_FAIRE 16/10 point 12: 303 such strangers left in the 16/10 session).
+            // What took rob's copy along on 12/10 was removing the last member standing of the squad
+            // (its copy lay on the ground): a stranger goes when one of our copies stands in that squad
+            // and stays in it; if the stranger leads it, our copy leads it first.
+            void* sq = kenshi::SquadOf(s.c);
+            std::vector<kenshi::Character*> members;
+            kenshi::SquadAllMembers(sq, members);
+            kenshi::Character* keeper = nullptr;
+            for (kenshi::Character* m : members) {
+                kc::Handle mh;
+                if (m == s.c || !kenshi::GetHandle(m, mh) || !taken.count(mh)) continue;
+                watch.push_back(mh);
+                if (!keeper && !kenshi::IsDead(m) && !kenshi::IsUnconscious(m) && !kenshi::IsRagdoll(m)) keeper = m;
+            }
             std::string name;
             kenshi::CharacterName(s.c, name);
-            Log("not removed: the local character '%s' the host does not have is in a squad here with our copy of a host character (removing it could take that copy along)",
-                name.c_str());
-            strangerSince_[s.h] = now + 60.0;
-            continue;
+            if (!keeper) {
+                ++extrasKept;
+                Log("not removed: the local character '%s' the host does not have is in a squad here with %zu of our copies of host characters, none of "
+                    "them standing (removing the last one standing could take them along): asked again in a minute",
+                    name.c_str(), watch.size());
+                strangerSince_[s.h] = now + 60.0;
+                continue;
+            }
+            if (kenshi::SquadLeader(sq) == s.c) {
+                HostCallScope scope;
+                std::string kname;
+                kenshi::CharacterName(keeper, kname);
+                const bool ok = kenshi::SetSquadLeader(sq, keeper) && kenshi::SquadLeader(sq) == keeper;
+                Log("the local character '%s' the host does not have led a squad with our copies: our copy '%s' leads it now (%s)", name.c_str(), kname.c_str(),
+                    ok ? "ok" : "refused: the stranger stays for now");
+                if (!ok) {
+                    ++extrasKept;
+                    strangerSince_[s.h] = now + 60.0;
+                    continue;
+                }
+            }
         }
         if (kenshi::InPlayerSquad(s.c)) {   // its portrait is in the squad bar: never deleted (kenshi::DestroyObject refuses it too)
             std::string name;
@@ -951,7 +995,15 @@ void KenshiWorld::Reconcile(const std::vector<kc::Handle>& known, const std::vec
         }
         std::string name;
         kenshi::CharacterName(s.c, name);
-        if (kenshi::DestroyObject(s.c)) { ++removed; Log("removed the local character '%s': the host does not have it", name.c_str()); }
+        if (kenshi::DestroyObject(s.c)) {
+            ++removed;
+            Log("removed the local character '%s': the host does not have it%s", name.c_str(),
+                watch.empty() ? "" : (" (from a squad with " + std::to_string(watch.size()) + " of our copies, one of them standing)").c_str());
+            if (!watch.empty()) {
+                ++extrasRemoved;
+                extraChecks_.push_back({now + 2.0, name, std::move(watch)});
+            }
+        }
         strangerSince_.erase(s.h);
     }
     if (removed) {
@@ -1417,8 +1469,14 @@ void KenshiWorld::CheckStaleCarryAnim(const kc::Handle& h, kenshi::Character* c,
 // game's far update (3b) may still have moved it a little since, or its walk may still run: halted,
 // and put back where the host last had it beyond a few units. Never a body (ragdoll physics), a
 // carried or caged one.
+// 0.3.5 (night-stream, A_FAIRE 16/10 point 12): ~54 000 put-backs in the 16/10 session (1055 lines
+// written), the same copy at the same distance every time (9 units, 48 units, for minutes): our game
+// kept it there (another floor, a far character that does not take written positions), nothing walked
+// it. Now flat distances, at most two put-backs per position of the host's; then the place our game
+// keeps it at is its anchor (said once), and only a copy that really walks off its anchor is stopped
+// (local tasks dropped too) and put back (kc::DormantStep). The copy may also be sent at a low rate
+// (kc::kFlagFar): `at` is then the host's latest position, and a new one starts over.
 void KenshiWorld::HoldStill(const kc::Handle& h, const kc::EntityState& at) {
-    constexpr float kDrift = 8.0f;
     kenshi::Character* c = Find(h);
     if (!c || carriedHere_.count(h) || CaptiveHold(h, c) || kenshi::IsRagdoll(c) || kenshi::IsDead(c)) return;
     kc::Vec3 p;
@@ -1429,15 +1487,34 @@ void KenshiWorld::HoldStill(const kc::Handle& h, const kc::EntityState& at) {
         lastDest_.erase(h);
         ++dormantHalts;
     }
-    const float d = Dist(p, at.pos);
-    if (d <= kDrift) return;
-    kenshi::Teleport(c, at.pos, at.rot);
-    lastDest_.erase(h);
-    ++dormantPutBack;
+    kc::DormantHold& book = dormantHold_[h];
+    const kc::HoldStep step = kc::DormantStep(book, p, at.pos);
+    const float d = kc::FlatDist(p, at.pos);
     uint32_t held = 0;
-    if (dormantLog_.Allow(NowSeconds(), &held))
-        Log("dormant: %s (no longer sent to us) had moved %.0f units here from where the host last had it: put back%s", KeyOf(h).c_str(), d,
-            held ? (" [" + std::to_string(held) + " more such lines not written]").c_str() : "");
+    switch (step) {
+    case kc::HoldStep::None: return;
+    case kc::HoldStep::Anchored:
+        ++dormantAnchored;
+        if (dormantLog_.Allow(NowSeconds(), &held))
+            Log("dormant: %s stays %.0f units from where the host has it after %d put-backs (our game keeps it there): left there until it moves "
+                "or the host's does%s",
+                KeyOf(h).c_str(), d, book.tries, held ? (" [" + std::to_string(held) + " more such lines not written]").c_str() : "");
+        return;
+    case kc::HoldStep::Moved:
+        // it walked away by itself: whatever our game still had it do goes too
+        kenshi::StopCharacter(c);
+        ++dormantMoved;
+        [[fallthrough]];
+    case kc::HoldStep::PutBack:
+        kenshi::Teleport(c, at.pos, at.rot);
+        lastDest_.erase(h);
+        ++dormantPutBack;
+        if (dormantLog_.Allow(NowSeconds(), &held))
+            Log("dormant: %s (%s) was %.0f units here from where the host has it%s: put back (%d/2)%s", KeyOf(h).c_str(),
+                (at.flags & kc::kFlagFar) ? "sent at a low rate" : "no longer sent to us", d, step == kc::HoldStep::Moved ? ", walking off on its own" : "",
+                book.tries, held ? (" [" + std::to_string(held) + " more such lines not written]").c_str() : "");
+        return;
+    }
 }
 
 // Tests ("posturecheck"): copies the host last had standing (not down, not dead, not held captive

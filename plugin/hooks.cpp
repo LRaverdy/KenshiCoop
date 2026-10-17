@@ -1223,6 +1223,56 @@ void* hk_createRandomCharacter(void* factory, void* faction, const float* pos, v
     return o_createChar(factory, faction, pos, owner, data, home, age);
 }
 
+// 0.3.5 (night-stream, A_FAIRE 16/10 point 12): the other way a client's game makes characters of its
+// own. 303 "not removed: the local character 'Vagabond Affamé' / 'Garde caravane' / 'Chasseur
+// Esclaves'... is in a squad here with our copy of a host character" in the 16/10 session: those are
+// not random characters (createRandomCharacter is refused above) but members an ActivePlatoon makes
+// itself (its member spawns, 0x36F6B0 and its siblings, call RootObjectFactory::create directly with
+// the squad as the owner). A squad that already holds a copy of one of the host's characters is the
+// host's squad: whoever joins it comes from the host, never from our game. A squad loading from the
+// save makes its members together, before any of them is linked to the host: not refused. Only at the
+// three call sites that ignore the result (kenshi::FactoryCreateResultUnused); the fourth one uses it
+// at once, so there it is only counted and told (the stranger is removed later, KenshiWorld::Reconcile).
+using FactoryCreateFn = void* (*)(void* factory, void* data, const float* pos, uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7, void* owner,
+                                  uint64_t a9, uint64_t a10, uint64_t a11, uint64_t a12);
+FactoryCreateFn o_factoryCreate = nullptr;
+std::mutex g_extraLogMutex;
+kc::LogLimiter g_extraLog{6, 30.0};
+void* hk_factoryCreate(void* factory, void* data, const float* pos, uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7, void* owner, uint64_t a9,
+                       uint64_t a10, uint64_t a11, uint64_t a12) {
+    if (owner && KenshiWorld::ClientActive() && !g_hostCall && kenshi::IsActivePlatoon(owner)) {
+        auto v = KenshiWorld::View();
+        if (v->active && v->client && !v->replicated.empty() && !kenshi::IsPlayerSquad(owner)) {
+            std::vector<kenshi::Character*> members;
+            kenshi::SquadAllMembers(owner, members);
+            kenshi::Character* copy = nullptr;
+            for (kenshi::Character* m : members)
+                if (v->replicated.count(m) && !kenshi::IsDead(m)) { copy = m; break; }
+            if (copy) {
+                const uintptr_t site = reinterpret_cast<uintptr_t>(_ReturnAddress()) - kenshi::Base();
+                const bool refuse = kenshi::FactoryCreateResultUnused(site);
+                KenshiWorld* w = TheWorld();
+                if (w) ++(refuse ? w->extrasRefused : w->extrasNotRefusable);
+                std::string what = kenshi::GameDataName(data);
+                void* recordData = nullptr;   // the member record's template (its first field)
+                if (what.empty() && a9 && kenshi::ReadRaw(reinterpret_cast<const void*>(a9), 0, &recordData, sizeof(recordData))) what = kenshi::GameDataName(recordData);
+                std::string who;
+                kenshi::CharacterName(copy, who);
+                {
+                    std::lock_guard<std::mutex> lk(g_extraLogMutex);
+                    uint32_t held = 0;
+                    if (g_extraLog.Allow(NowSeconds(), &held))
+                        Log("extra NPC: our game wanted to add '%s' to the squad of our copy '%s' (a host squad, %zu members): %s (call site kenshi_x64+0x%llX)%s",
+                            what.c_str(), who.c_str(), members.size(), refuse ? "refused" : "made (that call uses it at once): it goes later",
+                            static_cast<unsigned long long>(site), held ? (" [" + std::to_string(held) + " more such lines not written]").c_str() : "");
+                }
+                if (refuse) return nullptr;
+            }
+        }
+    }
+    return o_factoryCreate(factory, data, pos, a4, a5, a6, a7, owner, a9, a10, a11, a12);
+}
+
 void hk_ragdollMode(void* chr, bool on, int part) {
     // A body that is dead or unconscious here (only ever because the host's is: deaths and knockouts
     // are replayed in a HostCallScope) may go back into ragdoll whenever the game asks: refusing it
@@ -1996,6 +2046,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnLabelSetColor, reinterpret_cast<void*>(&hk_labelColor), reinterpret_cast<void**>(&o_labelColor)},
         {kenshi::FnRagdollMode, reinterpret_cast<void*>(&hk_ragdollMode), reinterpret_cast<void**>(&o_ragdollMode)},
         {kenshi::FnCreateRandomCharacter, reinterpret_cast<void*>(&hk_createRandomCharacter), reinterpret_cast<void**>(&o_createChar)},
+        {kenshi::FnFactoryCreate, reinterpret_cast<void*>(&hk_factoryCreate), reinterpret_cast<void**>(&o_factoryCreate)},   // 0.3.5
         {kenshi::FnRegionUpdateBT, reinterpret_cast<void*>(&hk_regionUpdateBT), reinterpret_cast<void**>(&o_regionUpdateBT)},
         {kenshi::FnSeasonGetNewWeather, reinterpret_cast<void*>(&hk_seasonGetNewWeather), reinterpret_cast<void**>(&o_seasonGetNewWeather)},
         {kenshi::FnEffectHandlerCtor, reinterpret_cast<void*>(&hk_effectCtor), reinterpret_cast<void**>(&o_effectCtor)},

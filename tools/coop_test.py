@@ -3987,6 +3987,186 @@ def exp_farfps(host, clis, seconds=60):
     summary()
 
 
+# ---- 0.3.5 (branch night-stream, A_FAIRE 16/10 points 11 and 12)
+def squadcheck_entries(pid):
+    """Debug "squadcheck": [(name, owner, present, inFaction)] in the session's order."""
+    t = cmd(pid, "squadcheck")[1] or ""
+    out = []
+    for tok in t.split("|", 1)[1].split() if "|" in t else []:
+        f = tok.rsplit(":", 3)
+        if len(f) == 4:
+            out.append((f[0], f[1], f[2] == "1", f[3] == "1"))
+    return out
+
+
+def exp_farsquads(host, clis, seconds=180):
+    """A_FAIRE 16/10 points 11 and 12 (night-stream). Two client players far apart, each with a squad;
+    the first one also gets one of the host's characters (give) and puts it in a new squad of its own
+    through the squad window (squadmove <name> new, the portrait dropped on "new squad"): that squad
+    stays at home while its own character goes to a far town, the second player goes to another one.
+    Each client must have every player's characters (both squads of the first player, the host's at
+    home) where the host has them ("squadsync": all present, offset < 30, no squad member missing), and
+    the people around the other players sent at a low rate ("standins" lowrate > 0, host "streamcount"
+    far > 0). Then `seconds` at x3, everyone where they are: dormant copies put back at most 3 times
+    each ("dormant", the 16/10 session put them back ~54 000 times), our games' own NPCs in the host's
+    squads refused or removed without a copy lost ("extras" copieslost 0, "not removed" lines counted),
+    the other players' characters still followed."""
+    clis = clis if isinstance(clis, (list, tuple)) else [clis]
+    if len(clis) < 2:
+        check("escouades loin : deux clients", False, len(clis))
+        summary()
+        return
+    time.sleep(6)
+    for c in clis:
+        cmd(c, "editdone")
+    time.sleep(3)
+    players = [FarPlayer(host, c, i) for i, c in enumerate(clis[:2])]
+    a, b = players
+    hidx = (own_indices(host) or [0])[0]
+    FAR_HOME[0] = where_vec(host, hidx) or (0.0, 0.0, 0.0)
+    log("god mode:", cmd(host, "admin god all on"), "| host camera home:", cmd(host, f"camto {hidx}"))
+    # 1. the first player gets one of the host's characters and makes it a squad of its own (real UI path)
+    entries = squadcheck_entries(host)
+    hostOwned = [e[0] for e in entries if e[1] == "1"]
+    gift = hostOwned[-1] if len(hostOwned) >= 2 else None
+    check("escouades loin : l'hote a un perso a donner (2 persos a lui au moins)", gift is not None, entries)
+    if gift:
+        ok_, gi = cmd(host, f"squadidx {gift}")
+        gidx = int(gi.split()[1]) if ok_ and len(gi.split()) > 1 else -1
+        log("host squadidx:", gi, "| give:", cmd(host, f"give {a.pid} {gidx}"))
+        time.sleep(4)
+        log(f"[{a.tag}] squadmove {gift} new:", cmd(a.cli, f"squadmove {gift} new"))
+        time.sleep(4)
+        log(f"[{a.tag}] squads here:", cmd(a.cli, "squads")[1][:300], "| host:", cmd(host, "squads")[1][:300])
+        check("escouades loin : le premier joueur a deux escouades (la nouvelle vue chez l'hote)",
+              cmd(host, "squads")[1].count("|") >= 1, cmd(host, "squads")[1][:300])
+    # 2. each player's own character to its far town (the gift and the host's squad stay at home)
+    towns = town_list(host)
+    cands = far_town_candidates(towns, FAR_HOME[0])
+    check("escouades loin : des villes a plus de 30000 de l'hote", bool(cands), len(towns))
+    taken, taken_lock = [], threading.Lock()
+    run_parallel(players, lambda p: far_go(p, cands, "escouades", False, taken, taken_lock), "voyage")
+    there = [p for p in players if p.town]
+    check("escouades loin : chaque joueur est dans sa ville", len(there) == 2, [p.town and p.town["name"] for p in players])
+    if len(there) < 2:
+        summary()
+        return
+    time.sleep(20)
+    # 3. every player's characters, everywhere, and the people around them at a low rate
+    def squads_seen(label):
+        for p in players:
+            s = kv_of(p.cli, "squadsync")
+            st = kv_of(p.cli, "standins")
+            sc = kv_of(host, f"streamcount {p.pid}")
+            p.log(f"[{label}] squadsync {s} | standins {st} | host streamcount {sc}")
+            p.check(f"{label} : tous les persos des autres joueurs presents ici", (s.get("others") or 0) >= 2 and s.get("present") == s.get("others"), s)
+            p.check(f"{label} : ou l'hote les a (ecart < 30)", (s.get("maxoff") or 99) < 30 and (s.get("over20") or 0) == 0, s)
+            p.check(f"{label} : aucun membre d'escouade manquant", (s.get("missingSquad") or 0) == 0, s)
+            p.check(f"{label} : les gens autour des autres joueurs envoyes a faible cadence (host far > 0, lowrate ici)",
+                    (sc.get("far") or 0) > 0 and (st.get("lowrate") or 0) > 0, f"{sc} | {st}")
+    squads_seen("escouades loin")
+    # 4. a few minutes at x3, everyone where they are: dormant put-backs and local extras counted
+    for p in players:
+        for t in ("dormant:", "not_removed:", "extra_NPC:"):
+            cmd(p.cli, f"logcount {t}")
+    d0 = {p.tag: kv_of(p.cli, "dormant") for p in players}
+    e0 = {p.tag: kv_of(p.cli, "extras") for p in players}
+    log("speed", cmd(host, "speed 3"))
+    worst = {p.tag: 0 for p in players}
+    for _ in range(max(1, seconds // 15)):
+        time.sleep(15)
+        for p in players:
+            s = kv_of(p.cli, "squadsync")
+            worst[p.tag] = max(worst[p.tag], int(s.get("maxoff") or 0))
+    log("speed", cmd(host, "speed 1"))
+    time.sleep(3)
+    for p in players:
+        d1, e1 = kv_of(p.cli, "dormant"), kv_of(p.cli, "extras")
+        lines = {t: cmd(p.cli, f"logcount {t}")[1] for t in ("dormant:", "not_removed:", "extra_NPC:")}
+        p.log(f"after {seconds} s at x3: dormant {d0[p.tag]} -> {d1} | extras {e0[p.tag]} -> {e1} | lines {lines} | worst offset of the others {worst[p.tag]}")
+        put = (d1.get("putback") or 0) - (d0[p.tag].get("putback") or 0)
+        n = max(1.0, d1.get("n") or 0)
+        p.check(f"x3 {seconds} s : copies en sommeil remises en place 3 fois au plus chacune", put <= 3 * n + 5, f"{put} pour {n:.0f} copies | {d1}")
+        p.check(f"x3 {seconds} s : aucune copie perdue en retirant un PNJ local en trop", (e1.get("copieslost") or 0) == (e0[p.tag].get("copieslost") or 0), e1)
+        p.check(f"x3 {seconds} s : les persos des autres joueurs suivis tout du long (ecart < 60)", worst[p.tag] < 60, worst[p.tag])
+    squads_seen("apres x3")
+    for p in players:
+        st = status(p.cli)
+        p.check("le client est toujours connecte", st.get("state") == "connected", st)
+    log("host god mode off:", cmd(host, "admin god all off"))
+    summary()
+
+
+def exp_farraid(host, clis, minutes=10):
+    """A_FAIRE 16/10 point 11 (map, night-stream): raid and hostile squad markers far from every player
+    must move as the game moves the squad. The game runs at x3 for `minutes` with everyone at home;
+    every 10 s the host's "mapthreats" (each marker and where its position comes from: chars, platoon
+    or unloaded) and every client's map feed ("mapfeed") are read. Raids happen when the game decides:
+    with none in the window the run says so (not a failure). Checks: the feed is the same everywhere;
+    a marker that comes from its squad (platoon/unloaded) moves (> 50 units within a minute); no raid
+    marker stays still for more than 2 minutes at x3 while it is "en route"."""
+    clis = clis if isinstance(clis, (list, tuple)) else [clis]
+    time.sleep(6)
+    for c in clis:
+        cmd(c, "editdone")
+    time.sleep(3)
+
+    def threats_of(text):
+        out = []
+        for tok in (text or "").split()[2:]:
+            f = tok.split(":")
+            if len(f) < 4 or "," not in f[0]:
+                continue
+            x, z = (float(v) for v in f[0].split(",", 1))
+            kv = dict(x_.split("=", 1) for x_ in f[1:] if "=" in x_)
+            out.append({"x": x, "z": z, "kind": kv.get("kind"), "n": kv.get("n"), "src": kv.get("src")})
+        return out
+
+    log("speed", cmd(host, "speed 3"))
+    tracks = []   # [(time, threats)]
+    mismatches = 0
+    for i in range(max(1, int(minutes * 6))):
+        time.sleep(10)
+        ok, t = cmd(host, "mapthreats")
+        th = threats_of(t)
+        tracks.append((time.time(), th))
+        hf = cmd(host, "mapfeed")[1] or ""
+        for c in clis:
+            cf = cmd(c, "mapfeed")[1] or ""
+            hn = re.search(r"threats=(\d+)", hf)
+            cn = re.search(r"threats=(\d+)", cf)
+            if hn and cn and hn.group(1) != cn.group(1):
+                mismatches += 1
+        if i % 6 == 0:
+            log(f"[{i * 10} s] mapthreats: {t[:300]}")
+    log("speed", cmd(host, "speed 1"))
+    moved, still, fromSquad = 0, 0, 0
+    for k in range(len(tracks)):
+        t0, a0 = tracks[k]
+        for th in a0:
+            if th["src"] not in ("platoon", "unloaded"):
+                continue
+            fromSquad += 1
+            later = [(t1, a1) for t1, a1 in tracks[k + 1:] if t1 - t0 <= 60]
+            if not later:
+                continue
+            near = [min((xz((x["x"], 0, x["z"]), (th["x"], 0, th["z"])) for x in a1 if x["kind"] == th["kind"]), default=1e9) for _t, a1 in later]
+            best = min(near) if near else 1e9
+            if best > 50 and best < 1e8:
+                moved += 1
+            elif best <= 1.0:
+                still += 1
+    log(f"markers from their squad: {fromSquad} samples, moved within a minute {moved}, unchanged {still}")
+    check("raids : la liste des escouades hostiles se lit chez l'hote (mapthreats)", all(isinstance(a_, list) for _t, a_ in tracks), len(tracks))
+    check("raids : meme nombre d'escouades hostiles chez les clients que chez l'hote (releves decales : 1 sur 5 au plus differe)",
+          mismatches <= max(1, len(tracks) * len(clis) // 5), f"{mismatches} / {len(tracks) * len(clis)}")
+    if not fromSquad:
+        log("raids : aucun marqueur tire de son escouade pendant la fenetre (pas de raid lointain) : non concluant")
+    else:
+        check("raids : un marqueur tire de son escouade bouge (> 50 en une minute)", moved > 0, f"{moved} / {fromSquad}")
+    summary()
+
+
 def exp_farwalls(host, clis, seconds=40):
     """3f: a client's character fights next to a building in a town far from the host's camera. The
     bonedog is spawned on the far side of the building (its box from "wallsnear"), so that the
@@ -9193,6 +9373,17 @@ def main():
     ff_.add_argument("--keep", action="store_true")
     ff_.add_argument("--clients", type=int, default=3)
     ff_.add_argument("--seconds", type=int, default=60, help="each measuring window")
+    fsq_ = sub.add_parser("farsquads", help="0.3.5 (A_FAIRE 16/10 11-12): two clients far apart, the first with two squads: each sees all the other's characters, "
+                                            "the people around them at a low rate; then x3: dormant put-backs, local extra NPCs")
+    fsq_.add_argument("--save", default="kctest_town")
+    fsq_.add_argument("--keep", action="store_true")
+    fsq_.add_argument("--clients", type=int, default=2)
+    fsq_.add_argument("--seconds", type=int, default=180, help="time at x3 counting put-backs and extras")
+    frd_ = sub.add_parser("farraid", help="0.3.5 (A_FAIRE 16/10 11, map): raid / hostile squad markers far from everyone move with their squad (x3, host mapthreats)")
+    frd_.add_argument("--save", default="kctest_town")
+    frd_.add_argument("--keep", action="store_true")
+    frd_.add_argument("--clients", type=int, default=1)
+    frd_.add_argument("--minutes", type=float, default=10)
     fwl_ = sub.add_parser("farwalls", help="3f: a client fights next to a building far from the host's camera: nobody crosses it (then with the camera there)")
     fwl_.add_argument("--save", default="kctest_town")
     fwl_.add_argument("--keep", action="store_true")
@@ -9418,6 +9609,18 @@ def main():
             exp_recruits(host, clis)
         finally:
             summary()
+            if not a.keep:
+                kill_launched()
+        return
+    if a.what in ("farsquads", "farraid"):
+        host, clis, _ids = setup_multi(a.save, max(2 if a.what == "farsquads" else 1, a.clients))
+        tile([host] + clis)
+        try:
+            if a.what == "farsquads":
+                exp_farsquads(host, clis, a.seconds)
+            else:
+                exp_farraid(host, clis, a.minutes)
+        finally:
             if not a.keep:
                 kill_launched()
         return

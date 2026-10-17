@@ -316,6 +316,9 @@ enum Fn : int {
     FnAnimSetPosition,          // void AnimationClass::<set position and direction>(const Vector3& pos, const Vector3& dir)   (our name, 0x5B18F0: +0x258 = pos lowered by +0x2C8 - +0x2CC, the anchor the animation update 0x5B5590 puts the scene node back on; called by CharMovement's update 0x65FFA0; a zero dir leaves the orientation)
     // ---- 0.3.4: the Tâches panel rebuilt when a job list changes from elsewhere (kenshi::RefreshJobsPanel)
     FnGuiRefreshJobs,           // void ForgottenGUI::<refresh jobs panel>()   (our name, 0x6E2050 on TheGui 0x21337B0: MainBarGUI (+0x10)'s job list rebuilt for the GUI's hand +0x2C0, the character shown; what newPlayerTaskSelectedCharacters calls at its end)
+    // ---- 0.3.5 (night-stream): squads of the host's characters filled by a client's own game
+    FnFactoryCreate,            // RootObject* RootObjectFactory::create(GameData*, const Vector3*, bool, a5, const Quaternion*, a7, RootObjectContainer* owner (an ActivePlatoon for a squad member), record, bool, a11, float)   (12 arguments, docs/MOTEUR.md)
+    FnSetSquadLeader,           // void ActivePlatoon::setSquadLeader(Character*)   (writes +0xA0 and the leader's hand in Platoon +0x130)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -1149,5 +1152,17 @@ bool ProspectingWindowVisible();
 bool ShowProspectingWindow(Character* c);
 bool ProspectingState(bool& visible, kc::Vec3& pos, float& skill, std::string& name);   // tests: what it shows
 bool PressProspectButton();                             // tests: the orders bar's PROSPECT button, through the hook
+
+// ---- 0.3.5 (night-stream, A_FAIRE 16/10 point 12): a client's own NPCs in the host's squads
+bool IsActivePlatoon(const void* p);                    // its vtable is ActivePlatoon's (0x16E2E08)
+bool IsPlayerSquad(void* squad);                        // an ActivePlatoon of the player faction (InPlayerSquad's test)
+void SquadAllMembers(void* squad, std::vector<Character*>& out);   // every member, any faction (ActivePlatoon +0x50)
+Character* SquadLeader(void* squad);                    // ActivePlatoon +0xA0
+bool SetSquadLeader(void* squad, Character* c);         // ActivePlatoon::setSquadLeader
+// RootObjectFactory::create, called from that return address (rva): one of the three ActivePlatoon
+// member spawns that ignore its result (0x36B207, 0x36F565, 0x36F88E, each checked to follow a call
+// to create's thunk), where a null result is safe. The fourth (0x36BEF1) uses it at once: never null.
+bool FactoryCreateResultUnused(uintptr_t returnRva);
+std::string GameDataName(const void* gd);               // GameData +0x28 (empty: none)
 
 } // namespace kenshi

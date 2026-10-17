@@ -462,6 +462,76 @@ void* CampaignSEH(void* warMgr, void* platoon) {
     }
 }
 
+// ---- 0.3.5 (night-stream, A_FAIRE 16/10 point 11): where the game has a squad as a whole
+// (docs/MOTEUR.md, "Carte" / "Position d'une escouade"). Platoon::update (vtable slot 0xD0, 0x7EBD40)
+// copies into Platoon+0x48 (what Platoon::getPosition, slot 0x40 = 0xD1E00, returns) either its
+// ActivePlatoon's +0xB4 (loaded: worked out from its characters) or its UnloadedPlatoon's +0x64 (the
+// abstract squad the game walks on the world map, UnloadedPlatoon::update 0x7EE790), then updates
+// that one. A raid far from every player has its characters where their zone was left: only the
+// platoon moves.
+constexpr uintptr_t kPlatoonPos = 0x48;         // Platoon: Vector3 (Platoon::getPosition)
+constexpr uintptr_t kPlatoonActive = 0x1D8;     // Platoon: ActivePlatoon* (its characters loaded)
+constexpr uintptr_t kPlatoonUnloaded = 0x1E0;   // Platoon: UnloadedPlatoon* (moved abstractly)
+constexpr uintptr_t kUnloadedPos = 0x64;        // UnloadedPlatoon: Vector3
+constexpr uintptr_t kActiveCount = 0x58;        // ActivePlatoon: number of members
+constexpr uintptr_t kWarCampaigns = 0x28;       // FactionWarMgr: std::map<Platoon*, CampaignInstance*> (getCurrentCampaign 0x283500)
+constexpr uintptr_t kCampaignFaction = 0x70;    // CampaignInstance: its faction
+
+bool ReadVec(const void* p, uintptr_t off, kc::Vec3& out) {
+    float v[3];
+    if (!p || !kenshi::ReadRaw(p, off, v, sizeof(v)) || !std::isfinite(v[0]) || !std::isfinite(v[1]) || !std::isfinite(v[2])) return false;
+    if (std::fabs(v[0]) > 1e7f || std::fabs(v[2]) > 1e7f) return false;
+    out = {v[0], v[1], v[2]};
+    return true;
+}
+
+// The squad's own position: the abstract one when the game has it unloaded, else Platoon::getPosition's.
+bool PlatoonPosition(void* platoon, kc::Vec3& out, bool& unloaded) {
+    // as Platoon::update decides: the ActivePlatoon first, the UnloadedPlatoon only without one
+    void *active = nullptr, *un = nullptr;
+    if (!Rd(platoon, kPlatoonActive, active)) return false;
+    unloaded = !active && Rd(platoon, kPlatoonUnloaded, un) && un != nullptr;
+    if (unloaded && ReadVec(un, kUnloadedPos, out)) return true;
+    unloaded = false;
+    return ReadVec(platoon, kPlatoonPos, out);
+}
+
+// Every (platoon, campaign) of a faction's war manager, read only (an MSVC std::map: head +8 of the
+// map, node: left +0, parent +8, right +0x10, key +0x18, value +0x20, "is nil" +0x29).
+template <class F>
+void ForEachCampaign(void* war, F&& fn) {
+    void* head = nullptr;
+    uint64_t size = 0;
+    if (!Rd(war, kWarCampaigns + 0x8, head) || !head || !Rd(war, kWarCampaigns + 0x10, size) || size == 0 || size > 4096) return;
+    void* root = nullptr;
+    if (!Rd(head, 0x8, root) || !root) return;
+    std::vector<void*> stack{root};
+    size_t visited = 0;
+    while (!stack.empty() && visited < 4096) {
+        void* n = stack.back();
+        stack.pop_back();
+        uint8_t nil = 1;
+        if (!n || n == head || !Rd(n, 0x29, nil) || nil) continue;
+        ++visited;
+        void *key = nullptr, *value = nullptr, *left = nullptr, *right = nullptr;
+        if (Rd(n, 0x18, key) && Rd(n, 0x20, value) && key && value) fn(key, value);
+        if (Rd(n, 0x0, left)) stack.push_back(left);
+        if (Rd(n, 0x10, right)) stack.push_back(right);
+    }
+}
+
+bool HostileRaid(void* camp, void* playerFaction) {
+    void *enemy = nullptr, *data = nullptr;
+    bool hostile = false;
+    return camp && Rd(camp, kCampaignEnemy, enemy) && enemy == playerFaction && Rd(camp, kCampaignData, data) && data &&
+           Rd(data, kCampaignDataHostile, hostile) && hostile;
+}
+
+// per platoon: which position its marker took lately (kc::PickThreatPosition), host only
+std::unordered_map<void*, kc::ThreatTrack> g_threatTracks;
+kc::LogLimiter g_threatLog{4, 30.0};
+std::string g_threatDebug;   // the last list, for the "mapthreats" test command
+
 void* ManagementScreen() {
     void* m = nullptr;
     if (!Rd(reinterpret_cast<void*>(kenshi::Addr(kenshi::rva::ManagementScreenSingleton)), 0, m) || !m) return nullptr;
@@ -694,7 +764,7 @@ void KenshiWorld::ReadMapThreats(const std::vector<kc::Vec3>& centers, float rad
     Rd(squad.front(), kRoOwner, playerFaction);
     const void* enemyColour = reinterpret_cast<const void*>(kenshi::Addr(kenshi::rva::MarkerColourEnemy));
     kenshi::ActiveCharacters(all);
-    struct Group { kc::Vec3 sum; int n = 0; int kind = 0; void* faction = nullptr; float nearest = 1e30f; };
+    struct Group { kc::Vec3 sum; int n = 0; int kind = 0; void* faction = nullptr; float nearest = 1e30f; void* platoon = nullptr; };
     std::unordered_map<void*, Group> groups;
     std::unordered_map<void*, bool> raidSquads;   // per squad: its campaign attacks the player faction
     for (kenshi::Character* c : all) {
@@ -732,19 +802,97 @@ void KenshiWorld::ReadMapThreats(const std::vector<kc::Vec3>& centers, float rad
         g.kind = std::max(g.kind, kind);
         g.nearest = std::min(g.nearest, nearest);
         if (!g.faction) Rd(c, kRoOwner, g.faction);
+        if (!g.platoon && sq) Rd(sq, kActivePlatoonMe, g.platoon);
+    }
+    // 0.3.5 (night-stream): raids the game moves as a whole, with no character loaded anywhere (an
+    // UnloadedPlatoon only): read from the war managers' campaigns, at most every 2 s
+    static double raidScanAt = 0;
+    static std::vector<std::pair<void*, void*>> abstractRaids;   // (platoon, faction)
+    const double now = NowSeconds();
+    if (playerFaction && now >= raidScanAt) {
+        raidScanAt = now + 2.0;
+        abstractRaids.clear();
+        std::unordered_set<void*> loaded;
+        for (const auto& [key, g] : groups) if (g.platoon) loaded.insert(g.platoon);
+        kenshi::GameWorld* gw = kenshi::World();
+        void* mgr = nullptr;
+        uint32_t nf = 0;
+        void** fdata = nullptr;
+        if (gw && Rd(gw, kenshi::off::GW_factionMgr, mgr) && mgr && Rd(mgr, kenshi::off::LK_count, nf) && nf <= 10000 &&
+            Rd(mgr, kenshi::off::LK_data, fdata) && fdata) {
+            for (uint32_t i = 0; i < nf; ++i) {
+                void *f = nullptr, *war = nullptr;
+                if (!Rd(fdata, i * sizeof(void*), f) || !f || f == playerFaction || !Rd(f, kFactionWarMgr, war) || !war) continue;
+                ForEachCampaign(war, [&](void* platoon, void* camp) {
+                    void* active = nullptr;
+                    if (loaded.count(platoon) || !HostileRaid(camp, playerFaction)) return;
+                    if (Rd(platoon, kPlatoonActive, active) && active) {
+                        int32_t members = 0;
+                        if (Rd(active, kActiveCount, members) && members > 0) return;   // its characters are loaded: counted above if alive
+                    }
+                    abstractRaids.emplace_back(platoon, f);
+                });
+            }
+        }
     }
     std::vector<std::pair<float, kc::MapThreat>> sorted;
+    std::ostringstream dbg;
+    auto label = [](void* faction, std::string& out) {
+        const std::string sid = kenshi::FactionSidOf(faction);
+        if (!kenshi::TemplateDisplayName(sid, out)) out = sid;
+        if (out.size() > kc::kMaxMapLabelLen) out.resize(kc::kMaxMapLabelLen);
+    };
     for (auto& [key, g] : groups) {
         kc::MapThreat t;
         t.pos = {g.sum.x / g.n, g.sum.y / g.n, g.sum.z / g.n};
+        // the squad's own position when the game moves it as a whole (kc::PickThreatPosition)
+        kc::Vec3 plat;
+        bool unloaded = false;
+        const bool platOk = g.platoon && PlatoonPosition(g.platoon, plat, unloaded);
+        if (g.platoon) {
+            kc::ThreatTrack& tr = g_threatTracks[g.platoon];
+            const bool before = tr.fromPlatoon;
+            const kc::Vec3 avg = t.pos;
+            t.pos = kc::PickThreatPosition(tr, avg, platOk, plat, unloaded, now);
+            uint32_t held = 0;
+            if (tr.fromPlatoon != before && g_threatLog.Allow(now, &held)) {
+                std::string l;
+                label(g.faction, l);
+                Log("map: hostile squad '%s' (%d characters, kind %d): marker %s (characters at %.0f,%.0f unmoved for %.0f s, the squad itself at %.0f,%.0f%s)%s",
+                    l.c_str(), g.n, g.kind, tr.fromPlatoon ? "follows the squad as the game moves it" : "back on its characters", avg.x, avg.z,
+                    std::min(9999.0, now - tr.avgMovedAt), plat.x, plat.z, unloaded ? ", unloaded" : "",
+                    held ? (" [" + std::to_string(held) + " more such lines not written]").c_str() : "");
+            }
+            if (tr.fromPlatoon) {
+                float nearest = 1e30f;
+                for (const auto& ctr : centers) nearest = std::min(nearest, Dist2D(t.pos, ctr));
+                g.nearest = nearest;
+            }
+            dbg << " " << int(t.pos.x) << "," << int(t.pos.z) << ":kind=" << g.kind << ":n=" << g.n << ":src=" << (tr.fromPlatoon ? (unloaded ? "unloaded" : "platoon") : "chars");
+        }
         t.count = uint8_t(std::min(g.n, 255));
         t.kind = kc::ThreatKind(g.kind);
-        const std::string sid = kenshi::FactionSidOf(g.faction);
-        if (!kenshi::TemplateDisplayName(sid, t.label)) t.label = sid;
-        if (t.label.size() > kc::kMaxMapLabelLen) t.label.resize(kc::kMaxMapLabelLen);
+        label(g.faction, t.label);
         // raids and fights first, then the closest
         sorted.push_back({float(3 - g.kind) * 1e7f + g.nearest, std::move(t)});
     }
+    for (const auto& [platoon, faction] : abstractRaids) {
+        kc::MapThreat t;
+        bool unloaded = false;
+        if (!PlatoonPosition(platoon, t.pos, unloaded)) continue;
+        kc::ThreatTrack& tr = g_threatTracks[platoon];
+        tr.seenAt = now;
+        tr.fromPlatoon = true;
+        float nearest = 1e30f;
+        for (const auto& ctr : centers) nearest = std::min(nearest, Dist2D(t.pos, ctr));
+        t.count = 0;   // nobody loaded: how many is the game's secret
+        t.kind = kc::ThreatKind::Raid;
+        label(faction, t.label);
+        dbg << " " << int(t.pos.x) << "," << int(t.pos.z) << ":kind=" << int(kc::ThreatKind::Raid) << ":n=0:src=" << (unloaded ? "unloaded" : "platoon");
+        sorted.push_back({float(3 - int(kc::ThreatKind::Raid)) * 1e7f + nearest, std::move(t)});
+    }
+    for (auto it = g_threatTracks.begin(); it != g_threatTracks.end();) it = now - it->second.seenAt > 60.0 ? g_threatTracks.erase(it) : std::next(it);
+    g_threatDebug = "ok " + std::to_string(sorted.size()) + dbg.str();
     std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
     for (auto& [k, t] : sorted) {
         if (out.size() >= kc::kMaxMapThreats) break;
@@ -1008,6 +1156,8 @@ void UpdateMapScene(kc::Session& session, KenshiWorld& world, const Config& cfg,
 }
 
 const MapScene& LastMapScene() { return g_scene; }
+
+std::string DescribeMapThreats() { return g_threatDebug.empty() ? std::string("ok 0") : g_threatDebug; }
 
 // Tests ("campos"): where this machine's 3D camera is, in world units (the eye, from the view matrix,
 // plus Kenshi's moving render origin). The far tests check that the host never looked at a client.

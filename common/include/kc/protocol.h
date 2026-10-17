@@ -256,6 +256,9 @@ enum EntityFlags : uint8_t {
     kFlagDown = 1 << 2,   // unconscious / ragdoll
     kFlagDead = 1 << 3,
     kFlagIndoors = 1 << 4,
+    // 0.3.5 (night-stream): sent at a low rate, far from this player's characters (kc::FarTierDue);
+    // a client without it treats the state as any other (no protocol change)
+    kFlagFar = 1 << 5,
 };
 
 struct EntityState {

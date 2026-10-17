@@ -294,6 +294,33 @@ Ordre dans `Tick()` (`main.cpp`) :
     recréée) est journalisée avec la durée d'absence (`NoteBackHere`) ; pas revenue 20 s après alors
     qu'elle est envoyée près de nos persos : une ligne. `Reconcile` ne retire plus un inconnu qui est
     dans la même escouade locale qu'une de nos copies.
+  - **0.3.5 (branche `night-stream`, A_FAIRE 16/10 points 11-12)** :
+    - Hôte, **palier lointain** : un PNJ à moins du rayon d'un perso de **n'importe quel** joueur (hôte
+      compris) va aussi aux joueurs qui ne le reçoivent pas en entier, à faible cadence
+      (`Entity::farMask`, `kc::FarTierDue` : position et état au plus toutes les 2 s s'ils ont changé,
+      au moins toutes les 10 s ; santé toutes les 5 s si elle change, 30 s sinon), marqué `kFlagFar`
+      (bit 5 de `EntityState::flags`, ignoré par un client plus ancien : pas de changement de
+      protocole). Les persos des joueurs (toutes les escouades de tous les joueurs) restent envoyés en
+      entier à tous. La ligne `stream:` de l'hôte dit combien à faible cadence ; commande `streamcount`.
+    - Client : `Session::Quiet` = en sommeil **ou** reçu à faible cadence. Un tel perso est traité
+      comme un perso en sommeil (mise à jour lointaine du jeu, piloté 2 fois/s, jamais recréé, jamais
+      compté manquant, pas de placement d'étage) mais tenu sur la **dernière** position de l'hôte.
+      Un membre d'escouade sans état de l'hôte depuis 15 s compte dans « squad members missing »
+      (ligne une fois). Ligne `sync perf` : « N sent at a low rate », remises en place et ancrages.
+    - Client, `HoldStill` (`kc::DormantStep`) : distance à plat (les étages ne comptent pas), deux
+      remises en place au plus par position de l'hôte, puis la copie est **ancrée** là où le jeu la
+      garde ; elle n'est remise que si elle quitte son ancre (ses tâches locales sont alors vidées,
+      `kenshi::StopCharacter`) ou si l'hôte la déplace.
+    - Carte (hôte) : `ReadMapThreats` tient pour chaque escouade hostile la position de son
+      `Platoon` (`kc::PickThreatPosition`) : celle-ci quand le jeu a l'escouade déchargée
+      (`UnloadedPlatoon`), ou quand ses persos ne bougent plus depuis 4 s alors que l'escouade bouge.
+      Les raids sans aucun perso chargé sont lus dans les campagnes des factions (toutes les 2 s) et
+      montrés avec un effectif inconnu. Commande `mapthreats`.
+    - Client, PNJ locaux en trop : `hk_factoryCreate` (sur `RootObjectFactory::create`) refuse un
+      nouveau membre que le jeu du client ajoute à une escouade qui contient déjà une copie d'un perso
+      de l'hôte (aux trois appels qui ignorent le résultat) ; `Reconcile` retire un inconnu d'une
+      telle escouade si une de nos copies y est debout (elle prend la tête d'abord si l'inconnu la
+      menait) et vérifie 2 s après que les copies sont toujours là. Commande `extras`.
   - Hôte (3f) : `hk_moveUpdate` coupe en morceaux de 0,4 s au plus (8 au plus) un pas de 0,5 s ou plus d'un perso proche d'un joueur client et dans la vue, pour qu'il reste sur la mise à jour complète (murs du navmesh) ; compteurs `movestats`.
   - Mesure (3b) : `main.cpp` chronomètre chaque tick vivant (session, `EndFrame`, hors canal de test) ; une ligne par minute `sync perf` (client) ou `host perf` (hôte) ; commande `perf`.
   - Resync automatique de zone (`kc::ZoneHealth`, `Session::ZoneResync`) : trois rapports de suite
