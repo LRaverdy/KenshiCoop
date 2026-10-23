@@ -835,6 +835,64 @@ bool SetEditorPausedAnim(bool on) {
     return true;
 }
 
+// 23/10 (plopette's freeze, docs/MOTEUR.md "Recherche"): ManagementScreen::refreshResearchList drops
+// queued techs whose requirements fail (0x49A544-0x49A5C6): after each stopResearch it starts again
+// (xor edi,edi at 0x49A5B0, then inc: index 1). A client swallows that stop (the queue is the host's,
+// workshophooks::hk_stop), so a failing tech at index 1 or more stayed there and the loop never ended:
+// the game froze for good. Nop'd on a client: the loop goes on to the next tech and ends.
+bool SetResearchRefreshNoRestart(bool on) {
+    static int state = -1;   // as in SetFarTalk
+    if (state == 2) return false;
+    if (state == int(on)) return true;
+    static constexpr uint8_t kGame[2] = {0x33, 0xFF};   // xor edi,edi (back to the first tech)
+    static constexpr uint8_t kNop[2] = {0x66, 0x90};
+    auto* at = reinterpret_cast<uint8_t*>(g_base + 0x49A5B0);
+    if (state == -1 && std::memcmp(at, kGame, 2) != 0 && std::memcmp(at, kNop, 2) != 0) {
+        state = 2;
+        return false;
+    }
+    DWORD old = 0;
+    if (!VirtualProtect(at, 2, PAGE_EXECUTE_READWRITE, &old)) return false;
+    std::memcpy(at, on ? kNop : kGame, 2);
+    VirtualProtect(at, 2, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), at, 2);
+    state = int(on);
+    return true;
+}
+
+// 23/10 (rob1 on Stock Cuivre, plopette on a chest: no storage job, no look, not one order): a right click
+// on a storage building (PlayerInterface 0x7FC6E0, branch 0x7FCE98) gives no order when the building is
+// not the player faction's (0x546DD0: its faction +0x250) and its inventory is empty (0x7469B0). A
+// client's copy holds nothing (the items are the host's) and need not be the player's here: the click
+// ended at 0x7FD07B. On a client both ownership checks of that branch (calls at 0x7FCEB3 and 0x7FCEE5)
+// answer yes (mov al,1): the click is the game's "loot" order 26 with Shift (addTaskNearestSelectedCharacter),
+// which the client's hooks send to the host; the host's game decides with its own building.
+bool SetClientStorageClicks(bool on) {
+    static int state = -1;   // as in SetFarTalk
+    if (state == 2) return false;
+    if (state == int(on)) return true;
+    static constexpr uintptr_t kAt[2] = {0x7FCEB3, 0x7FCEE5};
+    static constexpr uint8_t kGame[2][5] = {{0xE8, 0x97, 0x6A, 0x85, 0xFF}, {0xE8, 0x65, 0x6A, 0x85, 0xFF}};   // call 0x5394F (0x546DD0)
+    static constexpr uint8_t kYes[5] = {0xB0, 0x01, 0x0F, 0x1F, 0x00};   // mov al,1; nop
+    for (int i = 0; i < 2 && state == -1; ++i) {
+        const auto* at = reinterpret_cast<const uint8_t*>(g_base + kAt[i]);
+        if (std::memcmp(at, kGame[i], 5) != 0 && std::memcmp(at, kYes, 5) != 0) {
+            state = 2;
+            return false;
+        }
+    }
+    for (int i = 0; i < 2; ++i) {
+        auto* at = reinterpret_cast<uint8_t*>(g_base + kAt[i]);
+        DWORD old = 0;
+        if (!VirtualProtect(at, 5, PAGE_EXECUTE_READWRITE, &old)) return false;
+        std::memcpy(at, on ? kYes : kGame[i], 5);
+        VirtualProtect(at, 5, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), at, 5);
+    }
+    state = int(on);
+    return true;
+}
+
 bool GetPosition(Character* c, kc::Vec3& out) {
     if (!IsCharacter(c)) return false;
     void* fn = VSlot(c, slot::RO_getPosition);

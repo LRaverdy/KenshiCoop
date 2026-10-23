@@ -698,6 +698,8 @@ void* BodyOf(Character* c);               // Character+0x648, its CharBody (what
 bool EditorStageReady();                  // the open editor has built its stage (CharacterEditor+0x278 set)
 bool InCharacterEditor(Character* c);     // one of the open editor's characters (it owns them: on its stage)
 bool SetEditorPausedAnim(bool on);        // paused, the player's characters still rebuild their bodies for an editor (0x5C7B5E)
+bool SetResearchRefreshNoRestart(bool on);   // client: the research list's requirement check never restarts (0x49A5B0, freeze)
+bool SetClientStorageClicks(bool on);        // client: a right click on a storage always gives the game's order 26 (0x7FCEB3, 0x7FCEE5)
 // 0.3.4: a lektor<Character*> passed by value to the editor (showCharacterEditor) that will not be
 // opened: its storage freed as the callee would (the game's delete). Returns how many it held.
 uint32_t DropCharacterList(void* lektor);

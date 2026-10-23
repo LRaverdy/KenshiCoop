@@ -2,6 +2,32 @@
 
 Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a vu.
 
+## 23 octobre 2026, soir : partie avec rob1 et plopette (Geoffrey) (journal de l'hôte `KenshiCoop.log`, 21:40-)
+
+1. **Gel total de plopette** (22:04:03, déconnecté à 22:05:19) juste après sa 2e recherche en file
+   (« Mine Pierre Améliorée »). Cause trouvée au désassembleur : boucle sans fin de
+   `refreshResearchList` chez un client (détails : CHANGELOG, docs/MOTEUR.md, `0x49A5B0`). Correctif
+   écrit (`kenshi::SetResearchRefreshNoRestart`), **pas encore compilé ni testé** : un client, onglet
+   Recherche ouvert, 2 technos ou plus en file.
+2. **Travail permanent sur un stockage impossible pour un client** (rob1 sur Stock Cuivre, plopette
+   sur un coffre ; l'hôte y arrive). Maj + clic droit : aucune ligne du client (ni « client order
+   task », ni « Shift + right click on a container ») entre 22:10 et 22:12 ; les clics simples n'ont
+   fait qu'ouvrir le panneau (« opens Stock Cuivre », 22:09:54-22:10:00). Le clic n'atteint donc aucun
+   crochet du mod : le correctif du point 21 (17/10, testé avec des appels simulés) ne couvre pas le
+   vrai chemin de l'interface. À reproduire avec deux Kenshi et de vrais clics : quelle fonction du
+   jeu le Maj + clic droit appelle, et si le jeu du client refuse lui-même (stockage pas à la faction
+   du joueur chez lui ?).
+   **Cause trouvée** (désassemblage de `0x7FC6E0`) : stockage pas à la faction du joueur chez le
+   client + inventaire local vide = aucun ordre. Correctif `kenshi::SetClientStorageClicks`, à tester.
+   Les amis avaient la v0.3.4 (l'hôte `night-integ` du 17/10) : les correctifs client du 17/10
+   (clic gauche qui fait courir, point 19 ; portraits ; escouades loin) n'étaient pas chez eux.
+3. **Geoffrey impossible à donner à rob1** (Ctrl+Shift+G, 22:01:48, 22:02:06, 22:06:14) : « Geoffrey
+   est le personnage de plopette ». Or le perso principal de plopette est maintenant « plopette » ;
+   Geoffrey est un ancien perso principal (celui de l'éditeur du 16/10). `Roster::ReservedFor`
+   réservait tous les persos principaux de l'historique ; corrigé : seul le plus récent (test
+   unitaire ajouté), **pas encore compilé ni testé**. Donner le perso principal actuel d'un joueur
+   reste refusé (pas d'option pour forcer : à décider avec l'utilisateur).
+
 ## 16 octobre 2026, soir : test de la 0.3.5 avec rob1 et Geoffrey (journal de l'hôte `KenshiCoop.log`, 21:20-)
 
 ### Vérification en jeu du 17 octobre (branche `night-integ`, DLL installé, hôte + client(s) réels)

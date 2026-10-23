@@ -372,6 +372,13 @@ void KenshiWorld::EndFrame() {
         farTalk_ = farTalk;
         Log("conversations far from the host's camera: %s", ok ? (farTalk ? "allowed" : "the game's rule again") : "CANNOT PATCH (unexpected bytes)");
     }
+    if (const bool noRestart = active_ && client_; noRestart != researchNoRestart_) {   // see kenshi::SetResearchRefreshNoRestart
+        const bool ok = kenshi::SetResearchRefreshNoRestart(noRestart);
+        researchNoRestart_ = noRestart;
+        Log("research list check: %s", ok ? (noRestart ? "client's (never restarts)" : "the game's again") : "CANNOT PATCH (unexpected bytes)");
+        const bool ok2 = kenshi::SetClientStorageClicks(noRestart);   // same rule: client only
+        Log("right click on a storage: %s", ok2 ? (noRestart ? "always the game's order, sent to the host" : "the game's checks again") : "CANNOT PATCH (unexpected bytes)");
+    }
     if (active_ && !client_ && live_ && !pendingTalks_.empty()) UpdatePendingTalks();
     if (active_ && !client_ && live_) UpdateRemoteDialogs();   // 0.3.4: lines waiting for a player's answer
     if (active_ && !client_ && live_ && !reRagdoll_.empty()) UpdateReRagdolls();

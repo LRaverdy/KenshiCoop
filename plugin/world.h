@@ -569,6 +569,7 @@ private:
     std::shared_ptr<const std::unordered_set<const void*>> remoteNear_;   // host: see HookView::remoteNear
     std::shared_ptr<const std::unordered_set<const void*>> farSet_;       // client: see HookView::farAway
     bool farTalk_ = false;   // kenshi::SetFarTalk applied (while hosting)
+    bool researchNoRestart_ = false;   // kenshi::SetResearchRefreshNoRestart applied (client)
     std::unordered_set<kc::Handle, kc::HandleHash> navRefreshed_;   // finished buildings whose navigation mesh was regenerated (buildings.cpp)
     // Characters the game destroyed or unloaded with their zone since the last frame (any thread,
     // under destroyedMutex_): every state of ours that holds their address is dropped before it is

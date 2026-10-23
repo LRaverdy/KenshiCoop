@@ -118,7 +118,8 @@ Résultats de la suite automatique (`python tools/coop_test.py suite`, détail d
   reste. Le perso dont l'éditeur n'a pas été fini reste réservé à son joueur (l'éditeur rouvre à son
   retour, même après un redémarrage de la session) ; Ctrl+Shift+G et `give` ne donnent jamais le
   perso d'un joueur, ni celui de son éditeur, à un autre (« X est le personnage de Y : il lui reste
-  réservé. »).
+  réservé. »). Seul son perso principal le plus récent est réservé : un ancien (23/10 : Geoffrey,
+  avant « plopette ») se donne comme les autres.
 - 🟡 **L'hôte charge une autre sauvegarde** (night-join) : chaque joueur dans le monde lit « L'hôte a
   chargé une autre partie : rechargement de son monde... » et recharge le nouveau monde (resync) ; un
   joueur en train d'arriver reçoit le nouveau. L'hôte qui quitte sa partie (menu) : « L'hôte a quitté

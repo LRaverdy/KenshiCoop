@@ -191,12 +191,13 @@ RosterPlayer* Roster::Find(const std::string& key) {
 }
 
 std::string Roster::ReservedFor(const Handle& h, RosterKind* kind) const {
+    // only the newest own character: an older one (23/10: Geoffrey, plopette's before plopette) is one
+    // of their characters like any other, the host may give it
     for (const auto& [k, p] : players_)
-        for (const auto& c : p.chars)
-            if (c.handle == h && c.kind != RosterKind::Member) {
-                if (kind) *kind = c.kind;
-                return k;
-            }
+        if (const RosterChar* own = p.LatestOwn(); own && own->handle == h) {
+            if (kind) *kind = own->kind;
+            return k;
+        }
     return {};
 }
 

@@ -7912,6 +7912,11 @@ static void TestRosterFile() {
     Handle ed = FakeWorld::H(70);
     r.Note("steam:5", 5, "Nouveau", ed, "Nouveau", RosterKind::Editor);
     CHECK(r.Find("steam:5")->LatestOwn()->kind == RosterKind::Editor);
+    // 23/10: a newer own character; the older one is no longer reserved (the host may give it)
+    Handle older = FakeWorld::H(71), newer = FakeWorld::H(72);
+    r.Note("steam:6", 6, "plopette", older, "Geoffrey", RosterKind::Own);
+    r.Note("steam:6", 6, "plopette", newer, "plopette", RosterKind::Own);
+    CHECK(r.ReservedFor(newer) == "steam:6" && r.ReservedFor(older).empty() && r.AnyRecordOf(older) == "steam:6");
     // written and read back the same (0.3.4 readers skip the new lines: not a handle after the id)
     Roster back;
     back.Parse(r.Serialize());

@@ -4,9 +4,33 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
-## v0.3.5 (en cours)
+## v0.3.5 (23 octobre 2026)
 
 Protocole inchangé (36) : le nouveau message des stats est ignoré par un client 0.3.4.
+
+- **Gel total d'un client après une 2e recherche en file (session du 23/10, plopette)**. Journal de
+  l'hôte : dernière ligne de plopette à 22:04:03, juste après « research: queue Mine Pierre
+  Améliorée -> done » (2e de la file), puis plus rien jusqu'à la déconnexion à 22:05:19. Cause, lue
+  au désassembleur : `refreshResearchList` retire chaque techno de la file dont les prérequis
+  échouent, puis **reprend sa boucle** (`xor edi,edi` à `0x49A5B0`). Le client ignore ce retrait (la
+  file est celle de l'hôte), donc une techno en 2e place ou plus qui échoue ne partait jamais : boucle
+  sans fin. Chez un client, le mod neutralise la reprise (`kenshi::SetResearchRefreshNoRestart`) :
+  la boucle passe à la suivante et se termine. L'hôte garde le code du jeu. Journal : « research list
+  check: client's (never restarts) ». À vérifier en jeu.
+- **Clic droit d'un client sur un stockage sans effet (23/10, rob1 sur Stock Cuivre, plopette sur un
+  coffre)**. Désassemblage de `0x7FC6E0` (le clic sur un bâtiment) : pour un stockage, aucun ordre si
+  le bâtiment n'est pas à la faction du joueur (`0x546DD0`) **et** que son inventaire est vide
+  (`0x7469B0`), sortie en `0x7FD07B`. La copie d'un client est vide (les objets sont ceux de l'hôte) :
+  ni coup d'œil, ni travail permanent avec Maj. Chez un client, les deux contrôles de propriété de ce
+  passage (`0x7FCEB3`, `0x7FCEE5`) répondent oui (`kenshi::SetClientStorageClicks`) : le clic devient
+  l'ordre 26 du jeu (avec Maj : le travail), envoyé à l'hôte, dont le jeu décide. Journal : « right
+  click on a storage: always the game's order, sent to the host ». À vérifier en jeu. NB : ce soir-là
+  les amis avaient la v0.3.4 (l'hôte la build du 17/10) : aucun correctif client du 17/10 chez eux.
+- **Ancien perso principal d'un joueur réservé à vie (23/10)**. L'hôte ne pouvait pas donner Geoffrey
+  à rob1 : « Geoffrey est le personnage de plopette », alors que le perso principal de plopette est
+  maintenant « plopette ». `Roster::ReservedFor` réserve seulement le perso principal le plus récent
+  de chaque joueur (ou celui de son éditeur) ; les anciens restent ses persos, comme les autres, et
+  l'hôte peut les donner. Test unitaire ajouté. À vérifier en jeu.
 
 - **Vérification en jeu des correctifs de la nuit (17/10)**. Tableau point par point dans
   [docs/A_FAIRE.md](docs/A_FAIRE.md). Corrigé en jeu :
