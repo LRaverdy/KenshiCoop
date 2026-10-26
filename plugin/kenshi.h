@@ -335,6 +335,8 @@ enum Fn : int {
     FnFloatBarSetProgress,      // void FloatingProgressBar::<set progress>(float 0..1)   (our name, 0x6E3530: +0x48 = clamp(1000 x value))
     FnFloatBarDestroy,          // void ForgottenGUI::<delete floating thing>(FloatingThing*)   (our name, 0x6E9F10: queued, deleted by the GUI's update)
     FnAiDisguiseUpdate,         // void AI::<disguise and stealth update>(float)   (vt 0x48, 0x5A51E0: StateBroadcastData +0x100 / +0x108 from the worn uniform)
+    // ---- 23/10: a client's right click on a building
+    FnBuildingCursor,           // bool PlayerInterface::<building under the cursor>(Building*, const Vector3&, bool)   (our name, 0x7FC6E0: the cursor over a building; with +0x2F3, right click this frame, it gives the order: loot 26, operate, build...)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];
@@ -730,6 +732,7 @@ int CallCanTalk(Character* c);
 // tests (0.3.4, "talkclick"): a right click on that character, as the mouse gives it (the cursor
 // function on the frame of a right click, through our hooks). False when it could not be called.
 bool CallCharacterRightClick(Character* target);
+bool CallBuildingRightClick(void* building);   // tests (0.3.6): a right click on a building through the game's own cursor function (our hook, the ownership check, the Shift state)
 // tests: `npc` sends that dialogue event to `pc` (EventTriggerEnum: 1 talk to me, 3 "I see a
 // neutral squad", the guards' check...), forced past the repeat timers
 bool CallDialogueEvent(Character* npc, Character* pc, int ev);
@@ -881,6 +884,11 @@ bool WriteRotation(Character* c, const kc::Quat& q);    // RO_rot, the body's dr
 void* MovementOf(const Character* c);                    // CharMovement*
 kc::Vec3 ForwardOf(const kc::Quat& q);                   // where a character with this rotation faces
 bool ReadPace(const Character* c, uint8_t& gait, float& pace);         // speed order and desired speed
+// 0.3.6 group speed ("run at the same pace", standing order 16 = gait 3): the movement's own group (+0x10, made by the game's
+// selection move and unknown to orders replayed one character at a time), its walking speed (+0xB4) and speed cap (+0xBC)
+bool ReadGroupSpeed(const Character* c, bool& groupOrder, bool& ownGroup, bool& moving, float& walk, float& cap);
+bool WriteSpeedCap(Character* c, float cap);
+bool WriteSpeedCapOf(void* movement, float cap);   // the same, from the movement object (hk_moveUpdate)
 
 // Animations (AnimationClass, reached from the character; its owner is at a fixed offset).
 Character* AnimOwner(const void* animationClass);

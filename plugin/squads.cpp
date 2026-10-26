@@ -382,9 +382,16 @@ void KenshiWorld::ApplyJobList(const kc::Handle& h, const std::vector<kc::JobEnt
         }
         return v;
     };
-    auto same = [](const kc::JobEntry& e, const LocalJob& l) {
+    // 24/10 (rob1's medic job 58 never in his panel): the host's job names a character that is not here
+    // (or not known here), and the task does without one: given here without a subject (the host's game
+    // does the work), and taken as the same job afterwards
+    auto subjectless = [&](const kc::JobEntry& e) {
+        return e.subjectSid.empty() && e.subject.valid() && !Find(e.subject) && kc::TaskTargetAllowed(kc::TaskVia::AddJob, e.task, 0, nullptr);
+    };
+    auto same = [&](const kc::JobEntry& e, const LocalJob& l) {
         if (e.task != l.task) return false;
         if (!e.subjectSid.empty()) return l.sid == e.subjectSid && Distance(l.pos, e.subjectPos) < 40.0f;
+        if (l.sid.empty() && !l.subject.valid() && subjectless(e)) return true;
         return l.sid.empty() && l.subject == e.subject;
     };
     // a job given here a moment ago: the host's list may not have it yet (kept a few seconds)
@@ -430,7 +437,7 @@ void KenshiWorld::ApplyJobList(const kc::Handle& h, const std::vector<kc::JobEnt
         } else if (e.subject.valid()) {
             subject = Find(e.subject);
         }
-        if ((e.subject.valid() || !e.subjectSid.empty()) && !subject) { ++missing; continue; }   // not here (yet): next time
+        if ((e.subject.valid() || !e.subjectSid.empty()) && !subject && !subjectless(e)) { ++missing; continue; }   // not here (yet): next time
         // what this copy found must be of the kind the task expects: a character found for a
         // building's job (a stand-in, a handle that names something else here) is never handed to
         // the game (a BUILD job on an NPC crashes it: kenshi_x64+0x883B78)

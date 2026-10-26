@@ -2445,7 +2445,10 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
     case Msg::ClientLog: {
         ClientLog m;
         if (!Decode(r, m)) break;
-        for (const auto& l : m.lines) log_("[" + pl->name + "] " + l);
+        for (const auto& l : m.lines) {
+            log_("[" + pl->name + "] " + l);
+            if (clientLogSink_) clientLogSink_(pl->name, l);
+        }
         break;
     }
     case Msg::ClientReport: {

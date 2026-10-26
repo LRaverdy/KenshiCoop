@@ -289,6 +289,8 @@ const FunctionSig kFunctions[FnCount] = {
     {"FloatingProgressBar::<set progress>", 0x6E3530, {0x48, 0x89, 0x5C, 0x24, 0x20, 0x57, 0x48, 0x83, 0xEC, 0x20, 0xF3, 0x0F}},
     {"ForgottenGUI::<delete floating thing>", 0x6E9F10, {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48}},
     {"AI::<disguise and stealth update>", 0x5A51E0, {0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x60, 0x48}},
+    // ---- 23/10: a client's right click on a building
+    {"PlayerInterface::<building under the cursor>", 0x7FC6E0, {0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56}},
 };
 
 namespace {
@@ -1887,6 +1889,32 @@ bool CallCharacterRightClick(Character* target) {
     Wr(pi, PI_rightClick, uint8_t(1));
     Wr(pi, PI_leftClick, uint8_t(0));
     const bool ok = CursorSeh(FnAddr(FnCharacterCursor), pi, target);   // through our hook (hk_charCursor)
+    Wr(pi, PI_rightClick, right);
+    Wr(pi, PI_leftClick, left);
+    return ok;
+}
+
+namespace {
+bool BuildingCursorSeh(void* fn, void* pi, void* building, const float* pos) {
+    __try {
+        reinterpret_cast<bool (*)(void*, void*, const float*, bool)>(fn)(pi, building, pos, false);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool CallBuildingRightClick(void* building) {
+    PlayerInterface* pi = Player();
+    uint8_t right = 0, left = 0;
+    kc::Vec3 at;
+    if (!pi || !building || IsCharacter(building) || !ObjectPosition(building, at) || !Rd(pi, PI_rightClick, right) || !Rd(pi, PI_leftClick, left))
+        return false;
+    const float pos[3] = {at.x, at.y, at.z};
+    Wr(pi, PI_rightClick, uint8_t(1));   // the frame of a right click, as for a character
+    Wr(pi, PI_leftClick, uint8_t(0));
+    const bool ok = BuildingCursorSeh(FnAddr(FnBuildingCursor), pi, building, pos);   // through our hook (hk_buildingCursor)
     Wr(pi, PI_rightClick, right);
     Wr(pi, PI_leftClick, left);
     return ok;
@@ -4324,6 +4352,29 @@ bool ReadPace(const Character* c, uint8_t& gait, float& pace) {
     if (!m || !Rd(m, CM_speedOrders, order) || !Rd(m, CM_desiredSpeed, pace) || !std::isfinite(pace)) return false;
     gait = uint8_t(order >= 0 && order < kMoveSpeedCount ? order : 0);
     return true;
+}
+
+bool ReadGroupSpeed(const Character* c, bool& groupOrder, bool& ownGroup, bool& moving, float& walk, float& cap) {
+    void* m = Movement(c);
+    int32_t order = 0;
+    void* group = nullptr;
+    kc::Vec3 dest;
+    float speed = 0;
+    if (!m || !Rd(m, CM_speedOrders, order) || !Rd(m, 0x10, group) || !Rd(m, 0xB4, walk) || !Rd(m, 0xBC, cap) || !std::isfinite(walk) ||
+        !GetMovement(c, dest, moving, speed))
+        return false;
+    groupOrder = order == 3;
+    ownGroup = group != nullptr;
+    return true;
+}
+
+bool WriteSpeedCap(Character* c, float cap) {
+    void* m = Movement(c);
+    return m && std::isfinite(cap) && cap > 0 && Wr(m, 0xBC, cap);
+}
+
+bool WriteSpeedCapOf(void* movement, float cap) {
+    return movement && std::isfinite(cap) && cap > 0 && Wr(movement, 0xBC, cap);
 }
 
 bool WritePace(Character* c, uint8_t gait, float pace) {

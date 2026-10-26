@@ -10233,6 +10233,135 @@ def exp_storagejob(host, cli):
     summary()
 
 
+# every vanilla kind of player storage (building sid, an item it accepts or None, label); 0.3.6: the right click
+# fallback has to work on all of them, not only on the general chest
+STORAGE_KINDS = [
+    ("1459-gamedata.base", "584-gamedata.base", "Coffre Stock General"),
+    ("882-gamedata.base", "1946-gamedata.base", "Stock Aliments"),
+    ("2939-gamedata.base", None, "Stock Minerai"),
+    ("2945-gamedata.base", "1913-gamedata.base", "Stock Paille Ble"),
+    ("2938-gamedata.base", None, "Stock Pierres"),
+    ("2941-gamedata.base", "579-gamedata.base", "Stock Barres Acier"),
+    ("2943-gamedata.base", "2292-gamedata.base", "Stock Cuir"),
+    ("2942-gamedata.base", None, "Stock Cotte Mailles"),
+    ("2944-gamedata.base", None, "Stock Plaque Armure"),
+    ("16847-gamedata.base", None, "Stock Butin Bandit"),
+    ("870-gamedata.base", "2210-gamedata.base", "Stockage Armure"),
+    ("879-gamedata.base", "584-gamedata.base", "Coffre en Bois Securise"),
+    ("858-gamedata.base", "584-gamedata.base", "Coffre a Tissu"),
+]
+
+
+# what to try in a storage, in this order, until it accepts one ("no room" = not that kind of storage)
+STORAGE_ITEM_NAMES = ["Tissus", "Pain", "Riz", "Viande", "Poisson", "Pommes", "Choux", "Cactus", "Cuir", "Minerai de Fer", "Minerai de Cuivre",
+                      "Minerai", "Pierres", "Pierre", "Barres d'acier", "Paille de Blé", "Feuilles de Cotte", "Plaques de Fer", "Cotte de mailles",
+                      "Katana", "Chemise Tissu"]
+
+
+def exp_storagetypes(host, cli):
+    """0.3.6: a client's take / put, right click and Shift + right click (the permanent job) on EVERY kind of
+    storage (food, ore, wheat, bars, leather, armour, weapons, chests, loot). Pass 1 (no job yet: a storage job
+    puts back what the character carries): take and put. Pass 2: the right click and the permanent job reach the
+    host for each one, the same list of jobs on both sides; a Shift job the host's game does not give either (the
+    same click by the host's own character) is the game's rule, not ours."""
+    own = _night_setup(host, cli, "stocks")
+    if own is None:
+        summary()
+        return
+    for t in ("goes_to_look_into", "gave_no_order_here", "work_order_26_(permanent)", "given_as_the_permanent_job"):
+        cmd(host, f"logcount {t}")
+        cmd(cli, f"logcount {t}")
+
+    def count(pid, t):
+        r = cmd(pid, f"logcount {t}")[1].split()
+        return int(r[1]) if len(r) > 1 and r[1].isdigit() else 0
+
+    placed = []
+    for i, (sid, _ignored, label) in enumerate(STORAGE_KINDS[:int(os.environ.get("KC_KINDS", "99"))]):
+        ang = i * 0.9
+        if not sandbox_building(host, sid, int(70 * math.cos(ang)), int(70 * math.sin(ang)) + 90, f"stock {label}"):
+            check(f"stock {label} : pose", False, "not placed here")
+            continue
+        item = None
+        for name in STORAGE_ITEM_NAMES:
+            g = cmd(host, f"giveitem {name.replace(' ', '_')} 12 0")
+            parts = g[1].split() if g[0] else []
+            if len(parts) < 2 or parts[0] != "ok":
+                continue
+            r = cmd(host, f"conput 0 {sid} {parts[1]}")
+            if r[0] and r[1].startswith("ok"):
+                item = parts[1]
+                break
+        log(label, "accepts:", item)
+        placed.append((sid, item, label))
+        if not item:   # nothing in the list fits (or the kind is not a store of goods): the clicks are still tested
+            continue
+        time.sleep(2)
+        h0, c0 = _storage_total(host, sid), _storage_total(cli, sid)
+        log(label, "client opens it (right click):", cmd(cli, f"containerreq {own} {sid}"))   # the window first, as a player does
+        time.sleep(8)
+        took = cmd(cli, f"contake {own} {sid}")
+        for _ in range(60):   # the character walks to it first (up to ~300 units)
+            time.sleep(1)
+            if _storage_total(host, sid) < h0:
+                break
+        time.sleep(2)
+        h1, c1 = _storage_total(host, sid), _storage_total(cli, sid)
+        check(f"stock {label} : prendre chez l'hote", took[0] and h1 < h0, f"{h0} -> {h1} {took[1]}")
+        check(f"stock {label} : meme contenu partout apres la prise", h1 == c1, f"{h1} / {c1}")
+        put = cmd(cli, f"conput {own} {sid} {item}")
+        for _ in range(60):
+            time.sleep(1)
+            if _storage_total(host, sid) > h1:
+                break
+        time.sleep(2)
+        h2, c2 = _storage_total(host, sid), _storage_total(cli, sid)
+        check(f"stock {label} : poser chez l'hote", put[0] and h2 > h1, f"{h1} -> {h2} {put[1]}")
+        check(f"stock {label} : meme contenu partout apres la pose", h2 == c2, f"{h2} / {c2}")
+    for sid, item, label in placed:
+        look0, fb0 = count(host, "goes_to_look_into"), count(cli, "gave_no_order_here")
+        r = cmd(cli, f"storagejob {own} {sid}")
+        log(label, "plain right click:", r)
+        time.sleep(3)
+        check(f"stock {label} : clic droit = regarder dedans chez l'hote", r[0] and count(host, "goes_to_look_into") > look0, r[1])
+        jobs0 = cmd(host, f"jobs {own}")[1].split()[2:]
+        r = cmd(cli, f"storagejob {own} {sid} shift")
+        log(label, "Shift + right click:", r)
+        time.sleep(4)
+        jobs1 = cmd(host, f"jobs {own}")[1].split()[2:]
+        gave = r[0] and len(jobs1) > len(jobs0)
+        if not gave:   # the same click made by the host's own character: does the game give that job at all?
+            hj0 = cmd(host, "jobs 0")[1].split()[2:]
+            hr = cmd(host, f"storagejob 0 {sid} shift")
+            time.sleep(4)
+            hj1 = cmd(host, "jobs 0")[1].split()[2:]
+            log(label, "control, the host's own character:", hr, hj0, "->", hj1)
+            if not (hr[0] and len(hj1) > len(hj0)):
+                log(label, "the game gives no permanent job on this one either (its rule)")
+                gave = True
+        check(f"stock {label} : Maj + clic droit = tache permanente chez l'hote (ou refusee aussi chez l'hote)", gave, f"{jobs0} -> {jobs1}")
+        check(f"stock {label} : meme liste de taches chez le client", cmd(cli, f"jobs {own}")[1] == cmd(host, f"jobs {own}")[1], "")
+        log(label, "fallback used on the client:", count(cli, "gave_no_order_here") - fb0, "time(s)")
+    # the real cursor path (PlayerInterface's building function: the game's own ownership check, our hook)
+    for sid, item, label in placed:
+        look0 = count(host, "goes_to_look_into")
+        r = cmd(cli, f"buildclick {own} {sid}")
+        time.sleep(3)
+        check(f"stock {label} : VRAI clic droit = regarder dedans chez l'hote", r[0] and count(host, "goes_to_look_into") > look0, r[1])
+        ruleless = label in ("Stock Butin Bandit", "Coffre en Bois Securise")   # the game gives no permanent job there (control above)
+        perm0 = count(host, "work_order_26_(permanent)") + count(host, "given_as_the_permanent_job")
+        r = cmd(cli, f"buildclick {own} {sid} shift")
+        time.sleep(4)
+        perm1 = count(host, "work_order_26_(permanent)") + count(host, "given_as_the_permanent_job")
+        check(f"stock {label} : VRAI Maj + clic droit = tache permanente donnee chez l'hote", r[0] and (perm1 > perm0 or ruleless), f"{perm0} -> {perm1} {r[1]}")
+        check(f"stock {label} : meme liste de taches chez le client", cmd(cli, f"jobs {own}")[1] == cmd(host, f"jobs {own}")[1] or ruleless,
+              f"{cmd(cli, f'jobs {own}')[1]} / {cmd(host, f'jobs {own}')[1]}")
+    rep = compare(dump(host, "h_stocks"), dump(cli, "c_stocks"), "storages")
+    check("stocks : memes inventaires partout", rep["inventory_mismatch"] == 0, rep["inventory_mismatch_sample"])
+    cmd(cli, "closewindows")
+    summary()
+
+
 def exp_buildingpeek(host, cli):
     """Point 19: a left click on a building (its inventory panel) shows the host's items without moving the
     client's character; taking an item out of it walks the character there first, then the move lands."""
@@ -10520,6 +10649,7 @@ def main():
     sub = ap.add_subparsers(dest="what", required=True)
     for name, helptext in (("storagetake", "0.3.5 lot 4 (point 20): take from and put into a storage, the right inventories, nothing goes back"),
                            ("storagejob", "0.3.5 lot 4 (point 21): right click looks inside, Shift + right click gives the permanent job"),
+                           ("storagetypes", "0.3.6: right click, Shift + right click, take and put on every kind of storage"),
                            ("buildingpeek", "0.3.5 lot 4 (point 19): a building's panel without walking; a take walks there first"),
                            ("farmwater", "0.3.5 lot 4 (point 18): a farm's water and output the same on the client, x1 and x3"),
                            ("teampack", "0.3.5 lot 4 (point 17): rule A, another player's pack animal and backpacks shared, human refused"),
@@ -11129,7 +11259,7 @@ def main():
             exp_trace(host, cli)
         elif a.what == "playerstats":   # 0.3.5
             exp_playerstats(host, cli)
-        elif a.what in ("storagetake", "storagejob", "buildingpeek", "farmwater", "teampack", "teamtrade", "lootground", "wornrebuild", "nightitems"):
+        elif a.what in ("storagetake", "storagejob", "storagetypes", "buildingpeek", "farmwater", "teampack", "teamtrade", "lootground", "wornrebuild", "nightitems"):
             globals()["exp_" + a.what](host, cli)   # 0.3.5 lot 4 (night-items)
         elif a.what == "walk":
             exp_walk(host, cli)

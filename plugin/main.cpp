@@ -33,7 +33,7 @@ namespace kcp {
 
 namespace {
 
-constexpr const char* kVersion = "0.3.5";
+constexpr const char* kVersion = "0.3.6";
 
 Config g_cfg;
 std::wstring g_iniPath;
@@ -751,11 +751,92 @@ void SteamUpkeep() {
     }
 }
 
+// Host (0.3.6): each client's log lines in a file of its own, written as they arrive:
+// KenshiCoop-clients\<name>-<date of its first line>.log (the host's own log keeps them too, mixed).
+// Files untouched for 30 days go; one file stops growing at 40 MB.
+struct ClientLogFile {
+    FILE* f = nullptr;
+    size_t bytes = 0;
+};
+std::map<std::string, ClientLogFile> g_clientLogFiles;
+void WriteClientLogLine(const std::string& player, const std::string& line) {
+    constexpr size_t kMaxBytes = 40u << 20;
+    auto it = g_clientLogFiles.find(player);
+    if (it == g_clientLogFiles.end()) {
+        const std::wstring dir = GameDir() + L"KenshiCoop-clients";
+        CreateDirectoryW(dir.c_str(), nullptr);
+        if (g_clientLogFiles.empty()) {   // first one this run: old files go
+            FILETIME nowFt{};
+            GetSystemTimeAsFileTime(&nowFt);
+            ULARGE_INTEGER now{};
+            now.LowPart = nowFt.dwLowDateTime;
+            now.HighPart = nowFt.dwHighDateTime;
+            WIN32_FIND_DATAW fd{};
+            if (HANDLE h = FindFirstFileW((dir + L"\\*.log").c_str(), &fd); h != INVALID_HANDLE_VALUE) {
+                do {
+                    ULARGE_INTEGER w{};
+                    w.LowPart = fd.ftLastWriteTime.dwLowDateTime;
+                    w.HighPart = fd.ftLastWriteTime.dwHighDateTime;
+                    if (now.QuadPart > w.QuadPart && now.QuadPart - w.QuadPart > 30ull * 24 * 3600 * 10000000ull) DeleteFileW((dir + L"\\" + fd.cFileName).c_str());
+                } while (FindNextFileW(h, &fd));
+                FindClose(h);
+            }
+        }
+        std::string safe;
+        for (char c : player) safe += (std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.') ? c : '_';
+        if (safe.empty()) safe = "player";
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        wchar_t stamp[40];
+        swprintf(stamp, 40, L"-%04d-%02d-%02d_%02d-%02d-%02d.log", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+        ClientLogFile cf;
+        cf.f = _wfsopen((dir + L"\\" + std::wstring(safe.begin(), safe.end()) + stamp).c_str(), L"ab", _SH_DENYWR);
+        it = g_clientLogFiles.emplace(player, cf).first;
+    }
+    ClientLogFile& cf = it->second;
+    if (!cf.f || cf.bytes >= kMaxBytes) return;
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char stamp[24];
+    snprintf(stamp, sizeof(stamp), "%02d:%02d:%02d.%03d  ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+    const std::string out = stamp + line + "\n";
+    fwrite(out.data(), 1, out.size(), cf.f);
+    fflush(cf.f);   // a crash must not lose the last lines
+    cf.bytes += out.size();
+    if (cf.bytes >= kMaxBytes) fputs("(this file stopped growing at 40 MB)\n", cf.f);
+}
+
+// Client (0.3.6): what the previous run left when it crashed (ReportCrash writes it), sent to the host
+// once we are connected: its crash is then in the host's log and in our file there.
+std::vector<std::string> g_previousCrash;
+void LoadPreviousCrash() {
+    const std::wstring path = GameDir() + L"KenshiCoop-lastcrash.txt";
+    FILE* f = _wfopen(path.c_str(), L"rb");
+    if (!f) return;
+    std::string all;
+    char buf[4096];
+    for (size_t n; (n = fread(buf, 1, sizeof(buf), f)) > 0 && all.size() < (256u << 10);) all.append(buf, n);
+    fclose(f);   // (deleted once sent, ForwardClientLog)
+    std::istringstream in(all);
+    for (std::string l; std::getline(in, l);) {
+        if (!l.empty() && l.back() == '\r') l.pop_back();
+        if (!l.empty()) g_previousCrash.push_back(l);
+    }
+    Log("the previous run of the game crashed: its last %zu log lines will go to the host once connected", g_previousCrash.size());
+}
+
 // Client: every new line of our log goes to the host's log too (what goes wrong on each machine is
 // then in one place, live). Host: the console window shows the session and runs its commands.
 uint64_t g_forwardedSeq = 0;
 bool g_consoleAutoOpened = false;
 void ForwardClientLog() {
+    if (g_session->isClient() && !g_previousCrash.empty()) {
+        g_session->QueueLog("---- the previous run of this game crashed; its last log lines:");
+        for (const auto& l : g_previousCrash) g_session->QueueLog("previous run> " + l);
+        g_session->QueueLog("---- end of the previous run's lines");
+        g_previousCrash.clear();
+        DeleteFileW((GameDir() + L"KenshiCoop-lastcrash.txt").c_str());
+    }
     uint64_t seq = 0;
     RecentLog(0, &seq);
     if (g_session->isClient() && seq > g_forwardedSeq) {
@@ -1112,6 +1193,15 @@ void ReportCrash(void* exceptionPointers, const char* source) {
         const std::string m = ModuleOf(v);
         if (m != "?") { Log("  stack[%d] %s", i, m.c_str()); ++shown; }
     }
+    // 0.3.6: the last lines of the log, for the next run to send to the host (a client's crash would
+    // otherwise stay on its PC): KenshiCoop-lastcrash.txt
+    const auto tail = LogTail(120.0);
+    const std::wstring path = GameDir() + L"KenshiCoop-lastcrash.txt";
+    if (FILE* f = _wfopen(path.c_str(), L"wb")) {
+        const size_t from = tail.size() > 250 ? tail.size() - 250 : 0;
+        for (size_t i = from; i < tail.size(); ++i) fprintf(f, "%s\n", tail[i].c_str());
+        fclose(f);
+    }
 }
 
 namespace {
@@ -1166,6 +1256,8 @@ bool Start() {
     // tests: two games on one PC share one Steam account; the harness gives each a fake one
     if (char buf[32]; g_cfg.debugCommands && GetEnvironmentVariableA("KC_FAKE_STEAM_ID", buf, sizeof(buf)) > 0) sc.steamId = std::stoull(buf);
     g_session = std::make_unique<kc::Session>(*g_world, sc, NowSeconds, [](const std::string& s) { Log("%s", s.c_str()); });
+    g_session->SetClientLogSink(&WriteClientLogLine);
+    LoadPreviousCrash();
 
     if (!InstallHooks(&TickEntry, &err)) { Log("disabled: %s", err.c_str()); g_session.reset(); g_world.reset(); return false; }
     if (!OverlayInstall(&err)) Log("overlay unavailable: %s (multiplayer still works, see this log)", err.c_str());

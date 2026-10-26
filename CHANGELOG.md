@@ -4,6 +4,75 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
+## v0.3.6 (26 octobre 2026)
+
+Protocole inchangé (36).
+
+- **Carte : rouge seulement pour les vrais hostiles (24/10)**. Le point rouge venait aussi de la
+  règle du jeu pour sa propre carte (`MapScreen::getMarkerColor` `0x48F320` → `isEnemy` : relation
+  de la faction ≤ −30), qui colore en rouge une patrouille de la Nation Sacrée qui passe sans nous
+  attaquer. Ces escouades « ennemies proches » (type `Near`) sont maintenant un anneau creux beige
+  (carte et minicarte, légende, infobulle « faction ennemie proche, n'attaque pas ») ; le rouge reste
+  pour celles qui se battent contre un des nôtres ou dont la campagne vise notre faction. Dessin
+  seulement (`plugin/overlay_map.cpp`), le flux de carte ne change pas.
+- **« Courir à la même allure » (ordre 16) enfin suivi pour les persos d'un client (24/10, rob1)**. Le jeu
+  fait un groupe des persos à qui l'on donne un ordre de marche ensemble (`CharMovement`+0x10, créé par la
+  fonction de déplacement de la sélection) et chacun marche à la vitesse du plus lent (`+0xB4`, plafond
+  `+0xBC`). L'hôte rejoue l'ordre d'un client perso par perso : aucun groupe, donc aucun effet (relevé
+  en jeu : `groupe = 0` pour tous, plafond 999). L'hôte (`KenshiWorld::UpdateGroupSpeed`) retient
+  maintenant à la vitesse du plus lent les persos d'un même joueur qui ont l'ordre, marchent et n'ont pas
+  de groupe du jeu ; le plafond est écrit par `hk_moveUpdate` juste avant chaque mise à jour du
+  déplacement (le jeu le remet à 999 entre deux). Vu en jeu : trois persos en ordre 16, plafonds égaux
+  (61,2 à 61,3), persos sans l'ordre intacts. Les clients voient la vitesse de l'hôte comme d'habitude.
+  Commande de test : `groupspeed`.
+- **Journaux des clients, en direct chez l'hôte, un fichier par joueur (26/10)**. Les lignes du journal
+  d'un client arrivaient déjà dans le journal de l'hôte (`[nom] …`), mélangées. L'hôte les écrit aussi,
+  au fur et à mesure, dans `KenshiCoop-clients\<nom>-<date>.log` (un fichier par joueur et par session,
+  vidé à chaque ligne pour qu'un plantage n'en perde pas, 40 Mo au plus, effacés après 30 jours).
+  **Plantage d'un client** : le gestionnaire de plantage écrit les 120 dernières secondes de son journal
+  dans `KenshiCoop-lastcrash.txt` ; au lancement suivant, dès qu'il est connecté à un hôte, le client les
+  envoie (« previous run> … ») et efface le fichier : le plantage est donc dans le journal de l'hôte et
+  dans le fichier du joueur, sans qu'on lui demande rien. Vu en jeu avec la commande de test
+  `crashtest`. Reste sur le PC du joueur : le dump du jeu (`crashDump*.zip`, 50 Mo).
+- **Tâche permanente sur un stockage, absente chez le client (26/10, test sur 13 types de stockage)**.
+  Le Maj + clic droit du jeu sur un stockage donne chez l'hôte un travail de tâche 238 avec le
+  stockage pour sujet ; le client le refusait chaque seconde (« task 238 (loot animals (job)) needs no
+  subject or a character (subject flags 0x9603) ») et son panneau Tâches n'avait pas la ligne. La
+  règle accepte maintenant un conteneur ou un bâtiment comme sujet des tâches 177/238 : même liste de
+  tâches des deux côtés. Test : `python tools/coop_test.py storagetypes` (coffres, Stock Aliments,
+  Minerai, Paille, Pierres, Barres, Cuir, Cotte de mailles, Plaque d'armure, Butin Bandit, Stockage
+  Armure, Coffre en Bois Sécurisé, Coffre à Tissu) : clic droit = regarder dedans et Maj + clic droit
+  par l'appel d'ordre **et** par le vrai chemin du curseur (nouvelle commande de test `buildclick`).
+  Le jeu ne donne aucune tâche permanente sur « Stock Butin Bandit » et « Coffre en Bois Sécurisé »,
+  même à un perso de l'hôte : règle du jeu, pas un défaut du mod.
+- **Porter un perso de son escouade (plopette, 24/10 00:40)**. L'hôte refusait « task 225 (carry
+  someone) needs another character lying on the ground (subject flags 0x4f) » : la cible lui apparaissait
+  consciente. Un membre d'une escouade de joueur est maintenant accepté même ainsi (jambes hors d'usage,
+  couché sans être assommé) ; la tâche du jeu décide. Test unitaire mis à jour.
+- **Plantage d'un client au chargement : ordres de fabrication défectueux dans la sauvegarde
+  (plopette, 22:51-22:57, en boucle à chaque arrivée)**. `CraftingBuilding::_addCraft` (`0x2B5CA0`)
+  prend son 5e paramètre (`YesNoMaybe` critique) **par adresse** (`0x2B5E75` lit `[rsp+0x180]` puis
+  le déréférence). Le mod le passait par valeur : (1) l'ajout d'un ordre demandé par un client lisait
+  l'adresse 2, l'exception était rattrapée mais l'ordre, déjà dans la file, restait à moitié fait
+  (« refused » et pourtant « crafting orders 0 -> 1 ») et partait dans la sauvegarde envoyée aux
+  arrivants ; (2) notre crochet tronquait le pointeur du jeu à 32 bits quand le jeu ajoutait un ordre
+  lui-même (chargement d'une sauvegarde) : `c0000005` à `kenshi_x64+0x2b5e7d` depuis
+  `KenshiCoop.dll+0x1897a5`, 0,2 s après « world unloaded ». Signature corrigée (`const int*`) dans
+  le crochet et nos appels ; un échec retire aussi l'ordre à moitié fait. Contournement en 0.3.5 :
+  l'hôte vide la file de l'établi (ici la Cuisinière) avant qu'un joueur rejoigne.
+- **Clic droit d'un client sur n'importe quel stockage** (rob1 sur Stock Aliments : rien, alors que le
+  Coffre Stock Général marchait en 0.3.5). Crochet de `PlayerInterface::<bâtiment sous le curseur>`
+  (`0x7FC6E0`, comme pour un personnage) : un clic droit sur un bâtiment qui a un inventaire et qui
+  n'est entré dans aucune fonction d'ordre est envoyé comme l'ordre 26 du jeu (coup d'œil par l'hôte,
+  ou avec Maj le travail permanent, que le jeu de l'hôte décide). Journal client : « right click on
+  X gave no order here (the game's checks on our copy): sent as its order 26 … ». À vérifier en jeu.
+
+- **Travail « médecin » jamais affiché chez le client (rob1, 24/10 00:11)**. L'hôte avait bien le
+  travail 58, mais sa cible (un personnage) n'existe pas chez le client : la copie du travail
+  attendait cette cible pour toujours (« some targets are not here yet » toutes les 2 s). Un travail
+  dont la cible manque ici et qui se fait aussi sans cible (`TaskTargetAllowed`) est maintenant copié
+  sans cible, puis reconnu comme le même. À vérifier en jeu.
+
 ## v0.3.5 (23 octobre 2026)
 
 Protocole inchangé (36) : le nouveau message des stats est ignoré par un client 0.3.4.

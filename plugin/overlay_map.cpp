@@ -26,6 +26,20 @@ namespace {
 constexpr float kPi = 3.14159265f;
 constexpr ImU32 kEnemy = IM_COL32(235, 45, 40, 255);
 constexpr ImU32 kShadow = IM_COL32(0, 0, 0, 200);
+// a squad only near us whose faction is at relation <= -30 (what makes the game's own dot red) but
+// that neither fights us nor raids us, e.g. a Holy Nation patrol passing by: a hollow beige ring,
+// not a red dot (orange is a player's colour, kc::PlayerColor)
+constexpr ImU32 kWary = IM_COL32(215, 195, 150, 255);
+ImU32 ThreatCol(int kind) { return kind == int(kc::ThreatKind::Near) ? kWary : kEnemy; }
+void ThreatDot(ImDrawList* dl, ImVec2 p, float r, int kind) {
+    if (kind == int(kc::ThreatKind::Near)) {
+        dl->AddCircle(p, r, kShadow, 16, 4.0f);
+        dl->AddCircle(p, r, kWary, 16, 2.0f);
+        return;
+    }
+    dl->AddCircleFilled(p, r, kEnemy, 16);
+    dl->AddCircle(p, r, kShadow, 16, 1.5f);
+}
 constexpr float kHeadHeight = 22.0f;      // world units above a character's feet (~2.2 m)
 constexpr float kMinZoom = 300.0f, kMaxZoom = 30000.0f;
 constexpr float kUnitsPerMetre = 10.0f;   // docs/MOTEUR.md: 1 world unit ~ 10 cm
@@ -182,10 +196,10 @@ void DrawMapScreen(const MapScene& s, float w, float h) {
         if (!WorldToMapScreen(s, t.pos, x, y) || !InMapClip(s, x, y)) continue;
         ++g_frameMarkers;
         const float r = t.kind == 3 ? 7.0f : 6.0f;
-        if (t.kind == 3) dl->AddCircle(ImVec2(x, y), r + 3.0f + 2.0f * std::sin(float(ImGui::GetTime()) * 5.0f), kEnemy, 20, 2.0f);
-        dl->AddCircleFilled(ImVec2(x, y), r, kEnemy, 16);
-        dl->AddCircle(ImVec2(x, y), r, kShadow, 16, 1.5f);
-        if (t.count > 1) { char b[8]; snprintf(b, sizeof(b), "%d", t.count); TextCentred(dl, ImVec2(x, y - r - 8), kEnemy, b); }
+        const ImU32 col = ThreatCol(t.kind);
+        if (t.kind == 3) dl->AddCircle(ImVec2(x, y), r + 3.0f + 2.0f * std::sin(float(ImGui::GetTime()) * 5.0f), col, 20, 2.0f);
+        ThreatDot(dl, ImVec2(x, y), r, t.kind);
+        if (t.count > 1) { char b[8]; snprintf(b, sizeof(b), "%d", t.count); TextCentred(dl, ImVec2(x, y - r - 8), col, b); }
         const float d = std::hypot(x - cx, y - cy);
         if (d < bestD) {
             bestD = d;
@@ -247,7 +261,15 @@ void DrawMapScreen(const MapScene& s, float w, float h) {
         ImGui::Text("%s%s", name.c_str(), id == s.me ? " (toi)" : "");
     }
     swatch(kEnemy);
-    ImGui::TextUnformatted("Ennemis qui nous visent");
+    ImGui::TextUnformatted("Hostiles : nous attaquent ou raid");
+    {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float hh = ImGui::GetTextLineHeight();
+        wl->AddCircle(ImVec2(p.x + hh * 0.5f, p.y + hh * 0.5f), hh * 0.3f, kWary, 12, 2.0f);
+        ImGui::Dummy(ImVec2(hh, hh));
+        ImGui::SameLine();
+    }
+    ImGui::TextUnformatted("Faction ennemie proche, n'attaque pas");
     ImGui::TextDisabled("Gros point : perso du joueur, petit : recrue");
     if (s.showPings) ImGui::TextDisabled("Ping : Ctrl+clic molette ou Alt+clic");
     ImGui::End();
@@ -407,8 +429,7 @@ void DrawMinimap(const MapScene& s, float w, float h, ID3D11Device* dev) {
         float x, y;
         MinimapProject(f, s.centre, t.pos, x, y);
         if (!inside(x, y)) continue;
-        dl->AddCircleFilled(ImVec2(x, y), 5.0f, kEnemy, 12);
-        dl->AddCircle(ImVec2(x, y), 5.0f, kShadow, 12, 1.2f);
+        ThreatDot(dl, ImVec2(x, y), 5.0f, t.kind);
         if (const float d = std::hypot(x - mx, y - my); d < bestD) {
             bestD = d;
             tip = {t.label.empty() ? "Hostiles" : t.label, (t.count ? std::to_string(t.count) + " perso(s), " : std::string("loin, effectif inconnu, ")) + ThreatKindName(t.kind), "Distance : " + Metres(Dist2D(t.pos, s.centre))};

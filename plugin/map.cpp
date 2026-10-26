@@ -46,7 +46,7 @@ const char* PingKindName(int kind) {
 
 const char* ThreatKindName(int kind) {
     switch (kind) {
-    case 1: return "hostiles proches";
+    case 1: return "faction ennemie proche, n'attaque pas";
     case 2: return "attaquent";
     case 3: return "raid en route";
     }

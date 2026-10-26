@@ -240,7 +240,7 @@ et le clic du mode construction ; prologues relevés dans `kenshi_x64.exe` et v�
 | recherche | `FnResearchIsInQueue` | `Research::isInQueue(GameData*)` | `0x82EAA0` | — | parcourt la file (+0x38) |
 | recherche | `FnResearchCheckRequirements` | `Research::checkRequirements(GameData*, bool twoLevels, bool checkCost)` | `0x832FA0` | — | tests seulement (`researchpick`) |
 | recherche | `FnLearnResearch` | `Item::learnResearch()` | `0x2B65D0` | oui | un plan lu (« Failed to learn from blueprint… », « Research already known ») : `checkRequirements` puis `completeResearch` de sa technologie ; l'appelant (`0x714A20`, clic droit dans l'inventaire sur un objet de type 0x15) retire ensuite le plan par `Inventory` vt 0x30 `removeItemAutoDestroy(item, 1)` |
-| établi | `FnCraftAdd` | `CraftingBuilding::_addCraft(GameData* base, GameData* matériau, float progress, YesNoMaybe crit)` | `0x2B5CA0` | oui | ajoute un `CraftingItem` (crée l'objet) ; appelée par le chargement, `addFinishedCraftItem` (répéter) et le bouton « ajouter » de la fenêtre Fabrication |
+| établi | `FnCraftAdd` | `CraftingBuilding::_addCraft(GameData* base, GameData* matériau, float progress, const YesNoMaybe& crit)` | `0x2B5CA0` | oui | ajoute un `CraftingItem` (crée l'objet) ; appelée par le chargement, `addFinishedCraftItem` (répéter) et le bouton « ajouter » de la fenêtre Fabrication. **`crit` par adresse** [D] (`0x2B5E75` : `mov rax,[rsp+0x180]` puis `mov ecx,[rax]`, après l'ajout à la file en `0x2B5E10`) : passé par valeur, l'ordre restait à moitié fait dans la file et le chargement plantait (23/10) |
 | établi | `FnCraftRemove` | `CraftingBuilding::_removeCraft(int)` | `0x2B6A20` | oui | retire l'ordre n (l'ordre 0 libère aussi `+0x448`) ; chaîne « _removeCraft » |
 | établi | `FnCraftQueueAdd` | `CraftingQueue::addCraftButton(Widget*)` (nom du mod) | `0x2B9770` | oui | lit les chaînes « id » / « id2 » du bouton, établi = `hand` à `CraftingQueue+0x60`, appelle `_addCraft(base, mat, 0, 2)` |
 | établi | `FnCraftQueueRemove` | `CraftingQueue::removeCraftButton(Widget*)` (nom du mod) | `0x2B9940` | oui | lit « index », appelle `_removeCraft` |
@@ -442,6 +442,7 @@ la fenêtre après 1 s de mise à jour du perso.
 | Groupe | Enum | Fonction | RVA | Hook | Rôle |
 |---|---|---|---|---|---|
 | parler | `FnCharacterCursor` | `PlayerInterface::<personnage sous le curseur>(Character*)` (notre nom) | `0x7FB410` | client | [D] appelée chaque image par `PlayerInterface::update` (`0x800250`, appel `0x80098F`) et par `0x7FC6E0` (appel `0x7FCA90`), deux arguments, ne rend rien. Choisit le curseur, et à l'image d'un clic droit donne l'ordre (voir plus bas). Prologue `40 55 53 41 54 48 8D 6C 24 B9 48 81` |
+| stockage | `FnBuildingCursor` | `PlayerInterface::<bâtiment sous le curseur>(Building*, const Vector3&, bool)` (notre nom) | `0x7FC6E0` | client | [D] le pendant de `0x7FB410` pour un bâtiment : curseur, et à l'image d'un clic droit (+0x2F3) l'ordre (`newPlayerTask`, `addOrderSelected`, `addTaskNearest` 26 avec l'octet Maj). Stockage (type vt+0x2F0 = 0x12 ou vt+0x358 = 0xC, 9, 7, branche `0x7FCE98`) : aucun ordre si le bâtiment n'est pas à la faction du joueur (`0x546DD0`) et que son inventaire est vide (`0x7469B0`), sortie `0x7FD07B`. Un client : `SetClientStorageClicks` et, pour les autres chemins, le crochet envoie lui-même l'ordre 26 |
 | parler | `FnCharacterCanTalk` | `Character::<peut qu'on lui parle>()` (notre nom) | `0x67AC00` | — | [D] `mov rcx,[rcx+0x280]` puis saut à `0x67AA50` (son `Dialogue`) : le contrôle du jeu avant l'ordre « parler » |
 
 **Ce que fait un clic droit sur un personnage** (`0x7FB410`, `rcx` = `PlayerInterface`, `rdx` = la cible) [D] :
@@ -979,6 +980,15 @@ d'après les boutons du joueur **local**. Le client envoie donc la valeur voulue
 valeur absolue dans `add`, calculée sur le premier perso choisi) et l'hôte appelle
 `Character::setStandingOrder(ordre, valeur)` directement ; un ancien client (sans `shift`) : l'hôte
 calcule `on = !état actuel`.
+
+**Vitesse de groupe (0.3.6)** : `CharMovement`+0x20 = 3. La mise à jour du déplacement (`0x65EF80`, aussi
+`0x660000` environ) fait, pour 3 et si `CharMovement`+0x10 (le groupe) n'est pas nul, `+0xBC` =
+`0x7F5740(groupe, 0)` = le plus petit `+0xB4` des membres (liste de mains +0x18/+0x20/+0x38, mémorisé en
++0x58 avec l'image courante +0x5C) ; `+0xB8` = min(`+0xB4`, `+0xBC`). Le groupe est fait par la fonction de
+déplacement de la sélection du `PlayerInterface` (`0x7F9830` environ : repère les persos en ordre 3,
+partage un objet à compte de références). Un ordre rejoué perso par perso (le cas d'un client chez l'hôte)
+n'en crée pas : `+0x10` nul, `+0xBC` = 999 en marche et 45 à l'arrêt. Le jeu remet `+0xBC` entre deux
+mises à jour : l'écrire dans `hk_moveUpdate`, avant l'original.
 
 `setStandingOrder` (`0x5CAA50`, table de sauts de 18 cas) [D] : 0/1/2/16 écrivent `CharMovement`
 (+0x640) +0x20 (2 courir, 1 trottiner, 0 marcher, 3 vitesse du groupe ; c'est le `gait` des

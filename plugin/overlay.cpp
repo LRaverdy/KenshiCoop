@@ -675,7 +675,7 @@ void DrawDisplaySettings(const OverlayModel& m) {
         if (ImGui::Checkbox(label, &v)) option(key, v ? 1.0f : 0.0f);
         if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
     };
-    box("Joueurs et ennemis sur la carte (bouton CARTE)", "map_markers", m.optMap, "Tous les persos des joueurs, à leur couleur, et en rouge les escouades hostiles qui nous visent.");
+    box("Joueurs et ennemis sur la carte (bouton CARTE)", "map_markers", m.optMap, "Tous les persos des joueurs, à leur couleur, en rouge les escouades qui nous attaquent ou montent un raid, en anneau beige les factions ennemies proches qui n'attaquent pas.");
     box("Noms des persos à la couleur de leur joueur", "head_markers", m.optHeads,
         "Le nom au-dessus de la tête de chaque perso d'un joueur prend sa couleur ; son perso principal a en plus un cadre.");
     box("Contour de couleur des cartes des joueurs (barre d'escouade)", "portrait_colours", m.optPortraits, "Le cadre du portrait des persos des joueurs ; les recrues gardent le cadre normal.");

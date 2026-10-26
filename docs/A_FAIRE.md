@@ -27,6 +27,71 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
    réservait tous les persos principaux de l'historique ; corrigé : seul le plus récent (test
    unitaire ajouté), **pas encore compilé ni testé**. Donner le perso principal actuel d'un joueur
    reste refusé (pas d'option pour forcer : à décider avec l'utilisateur).
+4. **Améliorer un bâtiment (bouton UPGRADE) impossible pour un client** (signalé le 23/10 au soir,
+   amis en v0.3.4). Le journal de l'hôte n'a aucune ligne « upgrade » : la demande n'arrive pas
+   chez l'hôte. À voir : quelle fonction du jeu le bouton appelle (sans doute à faire passer par
+   l'hôte comme l'achat et le démontage, `BuildActionKind`), puis tester en 0.3.5.
+7. **rob1 figé ~20 s (00:02:44-00:02:59, 0.3.5)** puis reconnecté seul (« silent for 21967 ms »),
+   ping 1474 ms. La minute d'avant : un corps posé après un port, des chutes reproduites et relevées
+   (« stood up to fall where the host's lies »). Son journal est à demander.
+8. **« Grosse desync de tout le monde » (vers 00:09, resync manuelle à 00:09:52)**. Le mod ne voyait
+   rien (0 manquant, écart max 1.5) ; gros combat contre les Bandits des Poussières : les corps
+   tombent à 6-9 unités du point de l'hôte et sont relevés pour retomber, plusieurs fois par minute.
+   Ce qu'ont vu les joueurs est à préciser.
+9. **Geoffrey rendu à plopette après une resync générale (00:09:56)**. Donné à rob1 par
+   Ctrl+Shift+G, il est revenu à plopette (« 5 other character(s) of theirs given back (Geoffrey…) »)
+   parce que plopette est revenu le premier, rob1 encore absent : le don ne retire pas Geoffrey de
+   l'historique de plopette (`ReturnPlayer`). Un perso donné à un autre joueur doit sortir de la
+   liste de l'ancien.
+10. **« Courir à la même allure » (ordre 16, allure de groupe) sans effet chez un client** (rob1,
+    24/10 00:19:25 : « client task 16 (via 5) run for a character: ok » pour ses 5 persos). Piste :
+    l'hôte joue le déplacement d'un client perso par perso (`RunPlayerTask` pour chacun seul), alors
+    que le jeu n'aligne les allures que pour une sélection qui reçoit l'ordre de marche ensemble.
+    À faire : un seul ordre de groupe pour les persos d'un même client qui bougent ensemble.
+    **Fait en 0.3.6 (26/10, vu en jeu, pas encore chez un vrai client)** : le groupe du jeu
+    (`CharMovement`+0x10) n'existe pas pour des ordres rejoués un à un ; l'hôte plafonne la vitesse
+    (`+0xBC`) des persos d'un joueur qui ont l'ordre 16 et marchent au plus lent (`UpdateGroupSpeed`, écrit
+    dans `hk_moveUpdate`). Voir CHANGELOG.
+11. **Plantage de l'hôte (24/10 00:31:01, 0.3.5)** : `c0000005` écriture en `0x2F` à
+    `kenshi_x64+0xb4335`, rapport du jeu (« game crash reporter »), pile surtout rendu / MyGUI
+    (`kenshi_x64+0xa79851`, `0xa77d8c`, `0xa7c890`, `0xa7792a`, `0xa75e49`). Juste avant : un corps posé
+    après un port chez les clients (« put down from a carry stays 8.7 units from its fall spot »).
+    Journal archivé : `KenshiCoop-logs\KenshiCoop-2026-10-24_00-31-01.log`. **Dump du jeu lu**
+    (`crashDump1.0.68_x64.zip`) : `0xb4330` est un incrément de compteur de références (`lock xadd
+    [rcx+18h]`) appelé par une copie de `shared_ptr` (`0xa797d0`, code non optimisé) sur un objet dont
+    le bloc de contrôle vaut `0xF` : un élément d'interface détruit encore utilisé, pendant un
+    événement MyGUI. Aucun cadre du mod. Pistes : nos fermetures / réouvertures de fenêtres du jeu
+    (échange, conteneur), le rafraîchissement du panneau Tâches, les étiquettes de noms. Demander à
+    l'utilisateur ce qui était ouvert.
+12. **Plantage d'un fil réseau de notre DLL à la fermeture du jeu** (dump Windows
+    `CrashDumps\kenshi_x64.exe.10348.dmp`, 00:31:15, 14 s après le plantage ci-dessus) : exception à
+    une adresse hors de tout module, pile `ws2_32` + `KenshiCoop.dll+0x123ada`/`+0x121481` (0.3.5) :
+    notre fil continue après le déchargement d'un module. Aussi `kenshi_x64.exe.21576.dmp` à 22:20:36
+    (fermeture de l'hôte pour installer la 0.3.5), à lire.
+13. **plopette ne peut pas porter un perso de son escouade** (24/10 00:40:34, :38, :44) : « task 225
+    (carry someone) needs another character lying on the ground (subject flags 0x4f) » = chez l'hôte
+    la cible est debout et consciente (`TargetFlagsOf` : ni `IsDown`, ni `IsUnconscious`, ni
+    `IsRagdoll`), alors que le jeu du client propose « porter ». Soit une désync de posture (relevé
+    chez l'hôte, couché chez le client), soit un perso couché mais conscient (jambes hors d'usage)
+    que notre contrôle ne compte pas comme au sol. Demander ce que montre l'écran de l'hôte.
+    **Contourné en 0.3.6 (26/10, à vérifier en jeu)** : l'hôte accepte un porter sur un membre d'une
+    escouade de joueur même s'il le voit conscient (`common/src/protocol.cpp`, tâches 68/213/225/240) ;
+    la tâche du jeu décide ensuite. Cause exacte (posture ou jambes) toujours inconnue.
+6. **Plantage de plopette en combat (23:35:48, 0.3.5)**. Son journal (`kenshi-crash-logs.zip`) :
+   `c0000005` lecture de `0x50` à `kenshi_x64+0x14b286` (calcul de vecteur Havok, `0x14B280`, sur
+   `rdx` = objet nul + 0x50), pile `0x1441d5`, `0x7f592c`, `0x14b303`, `0x9b1b39`, `0x66004f`,
+   `0x5b40f2` … `0x5c7c88`, `0x787bc6`, passée par notre `hk_moveUpdate` (`KenshiCoop.dll+0xd399c`
+   en 0.3.5 = l'appel de `o_moveUpdate` côté client, sans rien d'autre). Donc la mise à jour des
+   déplacements du jeu sur un perso sans corps physique. 2 s plus tôt : sa recrue
+   `1:77:624023424:3` tombe (« falls 5.3 units from its fall spot: the game kept it »). À chercher :
+   quel perso, et si notre suivi des chutes / ragdolls lui retire son corps.
+5. **Plantage de plopette au chargement après une resync** (0.3.5 partout). **Cause trouvée et
+   corrigée en 0.3.6** (ordres de fabrication défectueux de la Cuisinière, voir CHANGELOG) ; vider la
+   file de l'établi a suffi à le faire revenir. Détails d'origine : 22:51:14 son journal
+   dit « 1 squad members missing » ; 22:51:23 `resync 2` ; 22:51:28 retour (plopette captif + Oron,
+   Soto, Hotlongs, Ruka rendus ; 10 persos notés absents de ce monde) ; monde reçu à 22:51:33 ; parti
+   à 22:51:50 pendant le chargement (« crashed while loading »). Il faut son `KenshiCoop.log` (ou
+   l'archive dans `KenshiCoop-logs`) et son dump `%LOCALAPPDATA%\CrashDumps\kenshi_x64.exe.*.dmp`.
 
 ## 16 octobre 2026, soir : test de la 0.3.5 avec rob1 et Geoffrey (journal de l'hôte `KenshiCoop.log`, 21:20-)
 

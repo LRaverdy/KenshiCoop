@@ -1104,6 +1104,49 @@ void hk_charCursor(void* pi, void* target) {
     if (t_orderHooks != before) return;
     if (KenshiWorld* w = TheWorld()) ClickGaveNoOrderSafe(w, target, otherMode);
 }
+// 23/10: the cursor over a building (PlayerInterface, 0x7FC6E0), as hk_charCursor for a character. On
+// the frame of a right click it gives the game's order through the hooks above, unless its own checks
+// on our copy say no: Stock Aliments gave rob1 nothing at all, while the host's game would take the
+// order (a client's copy of a storage is empty and need not be the player's here). A right click on a
+// building with an inventory that entered no order hook is sent as the game's order 26 would be: a
+// look inside through the host, or with Shift its permanent job (the host's game decides).
+using BuildingCursorFn = bool (*)(void* pi, void* building, const float* pos, bool flag);
+BuildingCursorFn o_buildingCursor = nullptr;
+void StorageClickGaveNoOrder(void* building, bool shift) {
+    static void* last = nullptr;
+    static unsigned long long lastAt = 0;
+    const unsigned long long now = GetTickCount64();
+    if (building == last && now - lastAt < 300) return;   // one click, one order
+    last = building;
+    lastAt = now;
+    std::string sid;
+    kenshi::ObjectTemplate(building, sid);
+    KenshiWorld* w = TheWorld();
+    Log("right click on %s gave no order here (the game's checks on our copy): sent as its order 26%s", w ? w->TemplateName(sid).c_str() : sid.c_str(),
+        shift ? " with Shift (its permanent job)" : " (a look inside)");
+    if (ClientLootContainer(kTaskLootTarget, building, shift)) return;   // no Shift: a look inside
+    kc::Vec3 at;
+    kenshi::ObjectPosition(building, at);
+    const float loc[3] = {at.x, at.y, at.z};
+    RouteOrder(kc::TaskVia::TaskNearest, kTaskLootTarget, building, nullptr, nullptr, loc, true, false);
+}
+bool hk_buildingCursor(void* pi, void* building, const float* pos, bool flag) {
+    if (g_hostCall || !KenshiWorld::ClientActive()) return o_buildingCursor(pi, building, pos, flag);
+    bool right = false, left = false, otherMode = false;
+    if (!kenshi::ReadCursorClick(pi, right, left, otherMode) || !right || left || otherMode || !building || kenshi::IsCharacter(building))
+        return o_buildingCursor(pi, building, pos, flag);
+    const unsigned before = t_orderHooks;
+    const bool r = o_buildingCursor(pi, building, pos, flag);
+    if (t_orderHooks != before) return r;
+    std::vector<kc::ItemState> items;
+    if (!kenshi::ReadInventory(building, items)) return r;   // not a storage
+    try {   // C++ exceptions must never unwind into game code
+        StorageClickGaveNoOrder(building, kenshi::ShiftHeld());
+    } catch (...) {
+        Log("click on a building: exception caught");
+    }
+    return r;
+}
 // Items on the ground belong to the host's world: its pickups and drops are replayed on clients,
 // whose own are refused (any character's: an item taken here only would sit in an inventory the
 // host does not have, and the next sync would delete it). An item the game just made, never out
@@ -1633,6 +1676,8 @@ void HostNearMove(void* mov, kenshi::Character* c, float dt) {
 void hk_moveUpdate(void* mov, float dt) {
     if (mov && !KenshiWorld::ClientActive()) {
         auto v = KenshiWorld::View();
+        if (!v->speedCap.empty())   // 0.3.6: "run at the same pace" for characters the game has no group for
+            if (auto cap = v->speedCap.find(mov); cap != v->speedCap.end()) kenshi::WriteSpeedCapOf(mov, cap->second);
         if (v->active && v->remoteNear && !v->remoteNear->empty())
             if (kenshi::Character* c = kenshi::MovementOwner(mov); c && v->remoteNear->count(c)) {
                 HostNearMove(mov, c, dt);
@@ -2076,7 +2121,7 @@ void hk_stop(void*, void*);
 bool hk_pay(void*, void*);
 void hk_progress(void*, float);
 bool hk_learn(void*);
-void* hk_addCraft(void*, void*, void*, float, int);
+void* hk_addCraft(void*, void*, void*, float, const int*);
 void hk_removeCraft(void*, int);
 void hk_queueAdd(void*, void*);
 void hk_queueRemove(void*, void*);
@@ -2090,7 +2135,7 @@ extern void (*o_stop)(void*, void*);
 extern bool (*o_pay)(void*, void*);
 extern void (*o_progress)(void*, float);
 extern bool (*o_learn)(void*);
-extern void* (*o_addCraft)(void*, void*, void*, float, int);
+extern void* (*o_addCraft)(void*, void*, void*, float, const int*);
 extern void (*o_removeCraft)(void*, int);
 extern void (*o_queueAdd)(void*, void*);
 extern void (*o_queueRemove)(void*, void*);
@@ -2131,6 +2176,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnShowInventoryBuilding, reinterpret_cast<void*>(&hk_showInvBuilding), reinterpret_cast<void**>(&o_showInvBuilding)},
         {kenshi::FnRecruit, reinterpret_cast<void*>(&hk_recruit), reinterpret_cast<void**>(&o_recruit)},
         {kenshi::FnCharacterCursor, reinterpret_cast<void*>(&hk_charCursor), reinterpret_cast<void**>(&o_charCursor)},   // 0.3.4
+        {kenshi::FnBuildingCursor, reinterpret_cast<void*>(&hk_buildingCursor), reinterpret_cast<void**>(&o_buildingCursor)},   // 23/10
         // ---- fix G5
         {kenshi::FnCharRemovePermajob, reinterpret_cast<void*>(&hk_removePermajob), reinterpret_cast<void**>(&o_removePermajob)},
         {kenshi::FnCharMovePermajob, reinterpret_cast<void*>(&hk_movePermajob), reinterpret_cast<void**>(&o_movePermajob)},

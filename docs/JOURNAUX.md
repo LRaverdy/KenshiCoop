@@ -125,6 +125,8 @@ Lignes correspondantes :
 | `bug report requested by X: <phrase>` | (hôte) la demande reçue (ou tapée par l'hôte lui-même) |
 | `==== BUG REPORT from X: <phrase> -> bug-….txt ====` | (hôte) le repère dans le journal : ce qui précède est ce que le rapport montre |
 | `bug report written: <chemin> (N log lines)` | (hôte) fichier écrit |
+| `group speed: N characters of player P held to the slowest walking speed (V)` | (hôte, 0.3.6) des persos d'un joueur avec l'ordre « même allure » sont plafonnés à la vitesse du plus lent |
+| `the previous run of the game crashed: its last N log lines will go to the host once connected` | (client, 0.3.6) `KenshiCoop-lastcrash.txt` trouvé au lancement ; envoyé puis effacé à la connexion (« previous run> … » dans le journal de l'hôte) |
 | `bug report: cannot write <chemin>` | (hôte) écriture impossible (droits du dossier de Kenshi ?) ; les joueurs en sont avertis |
 | `bug report from X not made: their previous one was N s ago` | (hôte) moins de 30 s après le précédent : refusé, le joueur en est averti |
 

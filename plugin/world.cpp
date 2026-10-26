@@ -379,6 +379,7 @@ void KenshiWorld::EndFrame() {
         const bool ok2 = kenshi::SetClientStorageClicks(noRestart);   // same rule: client only
         Log("right click on a storage: %s", ok2 ? (noRestart ? "always the game's order, sent to the host" : "the game's checks again") : "CANNOT PATCH (unexpected bytes)");
     }
+    if (active_ && !client_ && live_) UpdateGroupSpeed();
     if (active_ && !client_ && live_ && !pendingTalks_.empty()) UpdatePendingTalks();
     if (active_ && !client_ && live_) UpdateRemoteDialogs();   // 0.3.4: lines waiting for a player's answer
     if (active_ && !client_ && live_ && !reRagdoll_.empty()) UpdateReRagdolls();
@@ -387,6 +388,7 @@ void KenshiWorld::EndFrame() {
     if (active_ && !client_ && live_) UpdateHostRoof();
     if (active_ && live_) UpdateJobsPanel();   // 0.3.4: host and client, after this frame's job lists and orders
     auto v = std::make_shared<HookView>();
+    if (active_ && !client_) v->speedCap = groupCaps_;
     v->active = active_;
     v->client = client_;
     // A character stays "driven by the host" for a second after its last update: a frame without
@@ -2759,6 +2761,68 @@ void KenshiWorld::DropLeftoverTasks(const kc::Handle& h, kenshi::Character* c, d
         Log("tasks: %s kept %zu task(s) and %zu order(s) from the save after %d re-thinks: its orders cleared as the game's stop does (%s, now %zu and %zu; "
             "progress bars here %d, %d shown)",
             KeyOf(h).c_str(), tasks, orders, d.rethinks, ok ? "ok" : "call failed", kenshi::LocalTaskCount(c), kenshi::LocalOrderCount(c), bars, barsShown);
+    }
+}
+
+// "Run at the same pace" (standing order 16): the game makes a group of the characters given a move
+// order together, and each walks at the slowest one's speed. The host replays a client's move order one
+// character at a time, so no group exists: here the characters of one player that have the order, are
+// walking and have no group of the game's get the slowest walking speed among them as their cap.
+void KenshiWorld::UpdateGroupSpeed() {
+    constexpr float kNoCap = 999.0f;   // what the movement keeps when nothing limits it (seen in game)
+    if (speedCapped_.empty() && !groupSpeedSeen_) {   // nobody uses it: one cheap look a second
+        static double next = 0;
+        const double now = NowSeconds();
+        if (now < next) return;
+        next = now + 1.0;
+    }
+    std::vector<kenshi::Character*> squad;
+    kenshi::PlayerCharacters(squad);
+    struct Member { kenshi::Character* c; float walk; };
+    std::unordered_map<int, std::vector<Member>> groups;
+    const auto view = View();
+    for (auto* c : squad) {
+        bool order = false, own = false, moving = false;
+        float walk = 0, cap = 0;
+        if (!kenshi::ReadGroupSpeed(c, order, own, moving, walk, cap)) continue;
+        if (!order || own || !moving || walk <= 0) {
+            if (speedCapped_.erase(c) && !own) kenshi::WriteSpeedCap(c, kNoCap);   // no longer walking with the group
+            continue;
+        }
+        int owner = -1;
+        if (view) {
+            const auto o = view->squadOwner.find(c);
+            if (o != view->squadOwner.end()) owner = int(o->second);
+        }
+        groups[owner].push_back({c, walk});
+    }
+    groupSpeedSeen_ = !groups.empty();
+    groupCaps_.clear();
+    for (auto& [owner, members] : groups) {
+        float slowest = kNoCap;
+        for (const auto& m : members) slowest = std::min(slowest, m.walk);
+        for (const auto& m : members) {
+            if (members.size() < 2) {   // alone: nobody to wait for
+                if (speedCapped_.erase(m.c)) kenshi::WriteSpeedCap(m.c, kNoCap);
+                continue;
+            }
+            const bool fresh = !speedCapped_.count(m.c);
+            if (kenshi::WriteSpeedCap(m.c, slowest)) speedCapped_.insert(m.c);
+            if (void* mv = kenshi::MovementOf(m.c)) groupCaps_[mv] = slowest;
+            if (fresh) {
+                bool o2 = false, g2 = false, mv2 = false;
+                float w2 = 0, cap2 = 0;
+                kenshi::ReadGroupSpeed(m.c, o2, g2, mv2, w2, cap2);
+                Log("group speed: %zu characters of player %d held to the slowest walking speed (%.1f); one reads cap %.1f after the write", members.size(), owner,
+                    double(slowest), double(cap2));
+            }
+        }
+    }
+    // characters that were capped and are gone from the list (dead, given away, no order any more)
+    std::unordered_set<kenshi::Character*> live(squad.begin(), squad.end());
+    for (auto it = speedCapped_.begin(); it != speedCapped_.end();) {
+        if (!live.count(*it)) it = speedCapped_.erase(it);
+        else ++it;
     }
 }
 

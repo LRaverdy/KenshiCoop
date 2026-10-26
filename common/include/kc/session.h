@@ -741,6 +741,10 @@ public:
     // Client: lines of our log for the host's log (sent a few times a second); frames counted for
     // the sync reports.
     void QueueLog(std::string line);
+    // Host (0.3.6): every line a client sends, with that player's name, for a file of its own
+    // (the plugin writes KenshiCoop-clients\<name>-<date>.log as the lines arrive)
+    using ClientLogFn = std::function<void(const std::string& player, const std::string& line)>;
+    void SetClientLogSink(ClientLogFn f) { clientLogSink_ = std::move(f); }
     void CountFrame() { ++frames_; }
     // Client: open the game's character editor on our own character (its looks go to everyone).
     bool EditOwnCharacter();
@@ -1072,6 +1076,7 @@ private:
     SessionConfig cfg_;
     ClockFn clock_;
     LogFn log_;
+    ClientLogFn clientLogSink_;
     Net net_;
     Net::Callbacks cb_;
 

@@ -96,7 +96,9 @@ constexpr uintptr_t kVtCraftingBuilding = 0x16B5A58;
 constexpr uintptr_t kVtResearchBuilding = 0x16B28C8;
 constexpr uintptr_t kVtTown = 0x1735BA8;
 constexpr uintptr_t kVtFarmBuilding = 0x1689948;
-constexpr int kCritMaybe = 2;                   // YesNoMaybe: let the game roll the critical success
+// YesNoMaybe: let the game roll the critical success. _addCraft takes it BY ADDRESS (0x2B5E75 reads
+// [rsp+0x180] and dereferences it): passed as a value it read a bad address (23/10, plopette's crashes)
+constexpr int kCritMaybe = 2;
 
 bool SafeCopy(void* dst, const void* src, size_t n) {
     __try { std::memcpy(dst, src, n); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -137,7 +139,7 @@ bool CallSelect(void* b) {
 using FnBoolGd = bool (*)(void*, void*);
 using FnVoidGd = void (*)(void*, void*);
 using FnBoolItem = bool (*)(void*);
-using FnAddCraft = void* (*)(void*, void*, void*, float, int);
+using FnAddCraft = void* (*)(void*, void*, void*, float, const int*);
 using FnRemoveCraft = void (*)(void*, int);
 using FnHandArg = void (*)(void*, const void*);
 using FnSetInsert = void* (*)(void*, void*, const void*, bool);
@@ -155,7 +157,7 @@ bool CallLearn(void* item, bool& out) {
     __try { out = reinterpret_cast<FnBoolItem>(kenshi::FnAddr(kenshi::FnLearnResearch))(item); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 bool CallAddCraft(void* bench, void* base, void* mat, float progress, void*& out) {
-    __try { out = reinterpret_cast<FnAddCraft>(kenshi::FnAddr(kenshi::FnCraftAdd))(bench, base, mat, progress, kCritMaybe); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    __try { out = reinterpret_cast<FnAddCraft>(kenshi::FnAddr(kenshi::FnCraftAdd))(bench, base, mat, progress, &kCritMaybe); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 bool CallRemoveCraft(void* bench, int index) {
     __try { reinterpret_cast<FnRemoveCraft>(kenshi::FnAddr(kenshi::FnCraftRemove))(bench, index); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -825,7 +827,14 @@ bool KenshiWorld::ExecuteMachineRequest(const kc::MachineRequest& req, const kc:
         void* mat = req.materialSid.empty() ? nullptr : kenshi::GameDataBySid(req.materialSid);
         void* ci = nullptr;
         if (!base || (!req.materialSid.empty() && !mat)) { why = "Objet à fabriquer inconnu chez l'hôte."; return false; }
-        if (!CallAddCraft(b, base, mat, 0.0f, ci) || !ci) { why = "L'établi refuse cet ordre de fabrication."; return false; }
+        const uint64_t before = DequeSize(dq);
+        if (!CallAddCraft(b, base, mat, 0.0f, ci) || !ci) {
+            // 23/10: a failed call had already queued a half-made order, saved with the world: every
+            // client then crashed loading it (plopette). Taken out again.
+            if (DequeSize(dq) > before) CallRemoveCraft(b, int(DequeSize(dq) - 1));
+            why = "L'établi refuse cet ordre de fabrication.";
+            return false;
+        }
         return true;
     }
     case kc::MachineAction::RemoveCraft: {
@@ -1472,7 +1481,7 @@ using StopFn = void (*)(void*, void*);
 using PayFn = bool (*)(void*, void*);
 using ProgressFn = void (*)(void*, float);
 using LearnFn = bool (*)(void*);
-using AddCraftFn = void* (*)(void*, void*, void*, float, int);
+using AddCraftFn = void* (*)(void*, void*, void*, float, const int*);
 using RemoveCraftFn = void (*)(void*, int);
 using WidgetFn = void (*)(void*, void*);
 using RemovedFn = void (*)(void*, int, void*);
@@ -1526,7 +1535,7 @@ bool hk_learn(void* item) {
     if (KenshiWorld* w = TheWorld()) w->QueueBlueprintAsk(item);
     return false;
 }
-void* hk_addCraft(void* bench, void* base, void* mat, float progress, int crit) {
+void* hk_addCraft(void* bench, void* base, void* mat, float progress, const int* crit) {
     if (Refused() && t_craftWindow > 0) {   // the crafting window's add: asked of the host
         if (KenshiWorld* w = TheWorld()) w->QueueMachineAsk(bench, kc::MachineAction::AddCraft, base, mat, 0, false);
         return nullptr;

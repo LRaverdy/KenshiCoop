@@ -2265,6 +2265,8 @@ static void TestBugReport() {
     std::vector<std::string> hostLog;
     Session host(hw, hc, Now, [&](const std::string& l) { hostLog.push_back(l); });
     Session cli(cw, cc, Now, Quiet("cli"));
+    std::vector<std::pair<std::string, std::string>> sunk;   // 0.3.6: the host's per-client file sink
+    host.SetClientLogSink([&](const std::string& p, const std::string& l) { sunk.emplace_back(p, l); });
     std::string err;
     CHECK(host.Host(&err));
     CHECK(JoinAndWait(host, hw, cli, cw, hc.port, 3));
@@ -2279,6 +2281,7 @@ static void TestBugReport() {
         if (hostLog[i] == "bug report requested by rob1: la porte") request = i + 1;
     }
     CHECK(lastLine && request && lastLine < request);   // flushed first (two ClientLog batches), then the request
+    CHECK(sunk.size() >= 100 && sunk.front().first == "rob1" && std::count(sunk.begin(), sunk.end(), std::make_pair(std::string("rob1"), std::string("client line 99"))) == 1);
     CHECK(host.TakeBugRequests().empty());   // not before kWriteDelay
     for (const auto& l : host.chatLog()) CHECK(l.find("/bug") == std::string::npos);
     Run(all, bug::kWriteDelay + 0.2);
@@ -4919,7 +4922,7 @@ static void TestTaskTargets() {
         {26, {"npc standing", "npc down", "npc dead", "squad mate standing", "container"}},
         {25, {"self", "npc standing", "npc down", "squad mate standing"}},
         {44, {"npc standing", "npc down", "squad mate standing"}},
-        {225, {"npc down", "npc dead"}},
+        {225, {"npc down", "npc dead", "squad mate standing"}},   // 0.3.6: a squad mate even when it looks conscious (crippled legs)
         {72, {"door"}},
         {107, {"cage"}},
         {6, {"none", "self"}},

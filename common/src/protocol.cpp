@@ -769,12 +769,18 @@ bool TaskTargetAllowed(TaskVia via, int task, uint32_t t, std::string* why) {
     case 284:   // loot a container
         return cont ? true : fail("a container");
     case 177: case 238:   // loot the dead, loot animals (jobs)
-        return none || other ? true : fail("no subject or a character");
+        // 0.3.6: 238 is also what the game's own Shift + right click on a storage gives (the permanent job on a
+        // container, 26/10: the host's list had it, the client refused it every second: "task 238 needs no
+        // subject or a character (subject flags 0x9603)" and its Tâches panel lacked the job)
+        return none || other || cont || bld ? true : fail("no subject, a character, a container or a building");
     case 88: case 114: case 184: case 241:   // haul resources and loot to storage
         return none || cont || bld || item ? true : fail("no subject, an item, a container or a building");
     // ---- carrying people
     case 68: case 213: case 225: case 240:   // carry someone
-        return other && lying ? true : fail("another character lying on the ground");
+        // 0.3.6: a character of a player's squad is allowed even when the host sees it as conscious: crippled legs
+        // keep one lying on the ground without the unconscious flag (plopette, 24/10: "task 225 needs another
+        // character lying on the ground (subject flags 0x4f)"); the game's own task decides
+        return other && (lying || (t & kTgtSquad)) ? true : fail("another character lying on the ground");
     case 69:   // put down what is carried (on the ground, by someone, in a building)
         return none || ch || bld ? true : fail("no subject, a character or a building");
     // ---- beds

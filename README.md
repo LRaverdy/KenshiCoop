@@ -225,7 +225,7 @@ rapport avec les journaux de tout le monde dans `KenshiCoop_bugs\`, et le chat c
   plus.
 - **Cadavres** : restent synchronisés et se fouillent, près des joueurs.
 - **Carte et repères** : sur la carte du jeu (onglet CARTE de la fenêtre de gestion, bouton MAP), tous les persos de tous les joueurs à la couleur
-  de leur joueur et les escouades hostiles qui nous visent en rouge (un raid encore loin suit sa route) ; une minicarte ronde ; le nom
+  de leur joueur, en rouge les escouades qui nous attaquent ou montent un raid (un raid encore loin suit sa route), en anneau beige les factions ennemies proches qui n'attaquent pas ; une minicarte ronde ; le nom
   au-dessus de la tête de chaque perso d'un joueur à sa couleur (son perso principal encadré, aussi
   pour un joueur arrivé après toi, v0.3.4) ;
   leur cadre de portrait coloré ; des pings
@@ -281,8 +281,9 @@ Détail fonctionnalité par fonctionnalité, avec ce qui est vérifié et ce qui
 
 - Journal : `KenshiCoop.log` dans le dossier de Kenshi (`KenshiCoop-<pid>.log` si deux Kenshi
   tournent). Les sessions précédentes sont dans `KenshiCoop-logs\` (les 30 dernières). L'hôte voit
-  aussi les lignes de chaque client dans son propre journal et dans sa console hors du jeu. Voir
-  [docs/JOURNAUX.md](docs/JOURNAUX.md).
+  aussi les lignes de chaque client dans son propre journal et dans sa console hors du jeu, et dans un
+  fichier par joueur, en direct : `KenshiCoop-clients\<nom>-<date>.log`. Si un client plante, ses dernières
+  lignes arrivent chez l'hôte à son prochain lancement. Voir [docs/JOURNAUX.md](docs/JOURNAUX.md).
 - Rapports de bug (`/bug`) : chez l'hôte, dans `KenshiCoop_bugs\` (dossier de Kenshi).
 - « version/mods différents » : vérifier que les deux joueurs ont exactement les mêmes mods.
 - Rien ne se passe en rejoignant par IP : vérifier l'IP, le port UDP 27960 ouvert chez l'hôte et

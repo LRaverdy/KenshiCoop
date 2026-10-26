@@ -1097,6 +1097,10 @@ les mêmes partout) ; rien ne part vers l'hôte. Chez l'hôte, le bouton refuse 
 ### Journaux des clients et rapports
 - Le client recopie chaque nouvelle ligne de son journal, sans l'horodatage et sans les lignes du
   canal de test, et les envoie en `ClientLog`. L'hôte les écrit sous la forme `[nom] ...`.
+- **Un fichier par client chez l'hôte** (0.3.6) : `Session::SetClientLogSink`, appelé pour chaque ligne reçue,
+  écrit `KenshiCoop-clients\<nom>-<date>.log` (plugin/main.cpp, `WriteClientLogLine`). **Plantage d'un client** :
+  `ReportCrash` écrit `KenshiCoop-lastcrash.txt` (120 s de journal) ; au lancement suivant `LoadPreviousCrash`
+  le garde et `ForwardClientLog` l'envoie dès que le client est connecté (puis efface le fichier).
 - `ClientReport` donne le nombre de personnages suivis, les PNJ et membres d'escouade manquants,
   les personnages décalés de plus de 5 unités, la plus grande correction et le nombre d'images par
   seconde. Détails dans [JOURNAUX.md](JOURNAUX.md).

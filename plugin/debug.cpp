@@ -1332,6 +1332,35 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         reinterpret_cast<FnAddAt>(kenshi::FnAddr(kenshi::FnSquadAddCharacterAt))(target, c, int(members.size()));
         return "ok";
     }
+    if (cmd == "crashtest") {   // crashtest: (test) this game crashes now, as a stray write would (the crash report and KenshiCoop-lastcrash.txt)
+        // on a thread of its own: the command channel catches what its own thread throws
+        CreateThread(nullptr, 0, [](LPVOID) -> DWORD { *static_cast<volatile int*>(nullptr) = 1; return 0; }, nullptr, 0, nullptr);
+        return "ok crashing";
+    }
+    if (cmd == "groupspeed") {   // groupspeed: per squad member, the movement's order (+0x20, 3 = group speed), its group object (+0x10), the group's member count (+0x20), speeds (+0xB4, +0xB8, +0xBC)
+        std::string out = "ok";
+        auto squad = SortedSquad(w);
+        for (size_t i = 0; i < squad.size(); ++i) {
+            kenshi::Character* c = w.FindSquad(squad[i]);
+            void* m = c ? kenshi::MovementOf(c) : nullptr;
+            int32_t order = -1;
+            void* grp = nullptr;
+            uint64_t members = 0;
+            float a = 0, b = 0, d = 0;
+            if (m) {
+                kenshi::ReadRaw(m, 0x20, &order, sizeof(order));
+                kenshi::ReadRaw(m, 0x10, &grp, sizeof(grp));
+                if (grp) kenshi::ReadRaw(grp, 0x20, &members, sizeof(members));
+                kenshi::ReadRaw(m, 0xB4, &a, sizeof(a));
+                kenshi::ReadRaw(m, 0xB8, &b, sizeof(b));
+                kenshi::ReadRaw(m, 0xBC, &d, sizeof(d));
+            }
+            char t[160];
+            snprintf(t, sizeof(t), " [%zu order=%d group=%p members=%llu speed=%.1f/%.1f/%.1f]", i, order, grp, (unsigned long long)members, double(a), double(b), double(d));
+            out += t;
+        }
+        return out;
+    }
     if (cmd == "orderreq") {   // orderreq <selectIndex> <standingOrder>: the squad bar's toggle for that member alone, as the UI does
         size_t sel = 0;
         int order = 0;
@@ -2089,6 +2118,38 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             void* dest = kenshi::FurnitureParent(best);
             kenshi::WithSelection(me, [&] { ok = kenshi::CallNewPlayerTaskOn(26, best, op, dest); });
         }
+        return (ok ? "ok " : "err ") + bestName + " at " + std::to_string(int(std::sqrt(bestD)));
+    }
+    if (cmd == "buildclick") {
+        // buildclick <selectIndex> <name part|sid> [shift]: (0.3.6) the right click of the real cursor path
+        // (PlayerInterface's building function, not the order call): its checks, our hook and its fallback
+        size_t sel = 0;
+        std::string part, flag;
+        in >> sel >> part >> flag;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        if (sel >= squad.size() || part.empty()) return "err usage: buildclick <selectIndex> <name part|sid> [shift]";
+        kenshi::Character* me = w.FindSquad(squad[sel]);
+        kc::Vec3 p, op;
+        if (!kenshi::GetPosition(me, p)) return "err";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(p, 3000, objs);
+        void* best = nullptr;
+        float bestD = 1e30f;
+        std::string bestName;
+        for (void* o : objs) {
+            std::string sid, name;
+            std::vector<kc::ItemState> items;
+            if (kenshi::IsCharacter(o) || !kenshi::ObjectTemplate(o, sid) || !kenshi::TemplateDisplayName(sid, name) ||
+                (sid != part && name.find(part) == std::string::npos) || !kenshi::ObjectPosition(o, op) || !kenshi::ReadInventory(o, items))
+                continue;
+            const float d = (op.x - p.x) * (op.x - p.x) + (op.z - p.z) * (op.z - p.z);
+            if (d < bestD) { bestD = d; best = o; bestName = name; }
+        }
+        if (!best) return "err no building with an inventory called " + part;
+        bool ok = false;
+        kenshi::ScopedShift shift(flag == "shift");
+        kenshi::WithSelection(me, [&] { ok = kenshi::CallBuildingRightClick(best); });
         return (ok ? "ok " : "err ") + bestName + " at " + std::to_string(int(std::sqrt(bestD)));
     }
     if (cmd == "mousedrop") {

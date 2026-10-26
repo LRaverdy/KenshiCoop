@@ -1287,7 +1287,10 @@ la fenêtre du client.
   les **escouades hostiles qui nous visent** : un raid ou une vague d'attaque du jeu dont la cible
   est notre faction (cercle qui pulse), une escouade qui se bat contre un de nos persos, ou une
   escouade que le jeu marque « ennemie » à moins de ~250 m d'un de nos persos ; le nombre de
-  persos au-dessus. (0.3.5, branche `night-stream`, à vérifier en jeu : `farraid`) Un raid loin de
+  persos au-dessus. (0.3.6) Seules celles qui **nous attaquent ou montent un raid** sont un point
+  rouge ; une escouade seulement proche dont la faction est « ennemie » (relation ≤ −30, ce qui
+  rend rouge le point du jeu : `MapScreen::getMarkerColor` → `FactionRelations::isEnemy`), mais qui
+  ne nous attaque pas (patrouille de la Nation Sacrée qui passe), est un **anneau creux beige**. (0.3.5, branche `night-stream`, à vérifier en jeu : `farraid`) Un raid loin de
   tout joueur suit la route que le jeu lui fait prendre (position de son escouade, pas celle de ses
   persos restés là où leur zone s'est déchargée) ; un raid sans aucun perso chargé est montré aussi,
   « loin, effectif inconnu ». Une **légende** dans le coin de la carte ; au survol d'un point, une

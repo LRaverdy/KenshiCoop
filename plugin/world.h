@@ -45,6 +45,9 @@ struct HookView {
     // host (0.3.2): the player owning each squad character (Session::ownerOf), for the conversation
     // hooks: a second character of the same player is refused silently (ConversationAllowed)
     std::unordered_map<const void*, uint8_t> squadOwner;
+    // host (0.3.6): movement -> speed cap for the characters held to a group's slowest walking speed,
+    // written by hk_moveUpdate just before each movement update (the game resets the cap in between)
+    std::unordered_map<const void*, float> speedCap;
     // client (3b): host characters present here that the host no longer streams to us (dormant, far
     // from our characters): hk_charUpdateView leaves them to the game's far update
     std::shared_ptr<const std::unordered_set<const void*>> farAway;
@@ -432,6 +435,7 @@ public:
         return false;
     }
     void UpdatePendingPickups();   // host: characters walking to an item a client asked them to take
+    void UpdateGroupSpeed();       // host (0.3.6): "run at the same pace" for the characters of each player that the game's own group does not cover
     bool HostBodyPos(const kc::Handle& local, kc::Vec3& out) const;   // client: the host's position of that character (last state)
     void UpdatePendingTalks();     // host: a client's character next to the NPC it was told to talk to, no conversation yet
     std::string PickedItemWhere(kenshi::Character* c, const kc::Handle& itemHandle);
@@ -569,6 +573,9 @@ private:
     std::shared_ptr<const std::unordered_set<const void*>> remoteNear_;   // host: see HookView::remoteNear
     std::shared_ptr<const std::unordered_set<const void*>> farSet_;       // client: see HookView::farAway
     bool farTalk_ = false;   // kenshi::SetFarTalk applied (while hosting)
+    bool groupSpeedSeen_ = false;
+    std::unordered_map<const void*, float> groupCaps_;   // movement -> cap, published to the hooks
+    std::unordered_set<kenshi::Character*> speedCapped_;   // host (0.3.6): characters whose speed cap UpdateGroupSpeed set
     bool researchNoRestart_ = false;   // kenshi::SetResearchRefreshNoRestart applied (client)
     std::unordered_set<kc::Handle, kc::HandleHash> navRefreshed_;   // finished buildings whose navigation mesh was regenerated (buildings.cpp)
     // Characters the game destroyed or unloaded with their zone since the last frame (any thread,
