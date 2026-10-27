@@ -2,6 +2,98 @@
 
 Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a vu.
 
+## 26 octobre 2026, soir : première partie en 0.3.6 avec rob1, plopette et nass4 (journal de l'hôte `KenshiCoop.log`, 20:55-)
+
+Les journaux des clients sont maintenant dans `KenshiCoop-clients\<nom>-<date>.log` (dossier de Kenshi).
+
+1. **Un corps posé par rob1 est introuvable** (21:02:16 : « put down » (69) de `1:355`, la copie du `1:332`
+   de l'hôte). Au journal : `1:332` **marche** chez l'hôte (« walking to 3347 / 4280 units away ») : ce
+   n'est donc pas un mort mais un perso assommé qui se relève. Chez les clients la copie disparaît :
+   plopette 21:02:47 (« stand-in … is gone here »), rob1 21:04:22 (recréée 2 s plus tard, « adopted »).
+   Un perso posé après un portage reste à 23 unités (médiane, jusqu'à 54) de l'endroit où l'hôte l'a
+   fait tomber (11 cas). À préciser avec l'utilisateur : mort ou assommé, où, quel perso.
+2. **Les objets s'empilent « des fois oui, des fois non »** (dit en jeu, sans détail). Les déplacements
+   d'un client partent un par un (« x1 ») vers une case précise ; aucun refus ni correction au journal.
+   À demander : qui, quel geste (glisser, ramasser, stockage, achat), quel objet, pile cible pleine ?
+3. **Gel de plopette puis fermeture du jeu (21:42:15 → 21:42:47)** : plus aucune ligne de son jeu pendant
+   30 s alors que sa connexion tenait (ping 219 ms, 1 % perdu), puis déconnexion. Cause inconnue. Si elle
+   a la 0.3.6 et que le jeu a planté, ses dernières lignes arrivent à son prochain lancement (« previous
+   run> » dans le journal de l'hôte et dans son fichier) ; à lire quand elle est revenue.
+4. **Désync pendant les gros combats (21:44-21:51, Bandits des Poussières, 28 persos)** : 3 à 6 persos à
+   plus de 5 unités chez chaque client (pire écart 46), deux resynchros automatiques de zone pour nass4,
+   nass4 à 56-77 images/s. 462 chutes de corps tombées en moyenne à 3 unités (jusqu'à 40) du point voulu,
+   60 corrections « relevé pour retomber là où le tien est couché » (médiane 30 unités, une à 1116).
+   Aucun perso manquant. Même tableau que le point 8 du 23 octobre. Cause non établie (corps qui tombent
+   différemment, portage et pose de corps) ; à préciser : ce que les joueurs ont vu (saut, téléportation,
+   coup donné chez eux et pas chez l'hôte).
+5. **« Courir à la même allure » à confirmer avec de vrais clients** : vu en jeu entre deux instances d'un
+   même PC seulement (plafonds de vitesse égaux). Les vrais persos de nass4 : « 2 characters of player 2
+   held … (53.5) » au journal. Journal trop bavard (jusqu'à 10 lignes par seconde quand un groupe
+   s'arrête et repart) : limité à 3 par minute dans le code, **pas encore compilé ni installé**.
+6. **Améliorer un bâtiment (UPGRADE) par un client** : toujours pas résolu (point 4 du 23 octobre). **Trouvé
+   le 27/10 (désassemblage + essai en jeu)** : (a) l'amélioration ne se fait **pas** en posant le nouveau
+   bâtiment par-dessus (`buildcheck` : « on top of another building », hôte et client) ; (b) le mot
+   « Upgrade » (`0x16BA680`) est écrit par deux fonctions du panneau d'infos d'un bâtiment (`0x2FF760`,
+   `0x303030`, aussi « Upgradeable to: », « Upgrades To: », coûts) qui donnent comme rappels **deux
+   fonctions virtuelles de `Building`** (vtable `0x16EA4A8`, fentes `0x258` = `0x2A49E0` et `0x260` =
+   `0x2A4DB0`, comme `buyMeCallback` fente `0x288`) ; (c) `0x2A49E0` fait l'amélioration : change le
+   `GameData` du bâtiment (+0x40, valeur de la fente `0x268`), relit sa fonction, ses stocks et ses
+   étages ; (d) aucun bouton « upgrade » dans les mises en page (`data/gui/layout`), le bouton est fait
+   par le code. **FAIT en 0.3.7 (27/10, vu en jeu avec la commande `buildupgrade` qui passe par le même
+   délégué que le bouton)** : le clic d'un client part à l'hôte (`BuildAction` genre 3), l'hôte le fait,
+   tous les clients le rejouent ; le puits `1921` devient `1925` puis `1924` identiquement partout.
+   Reste à confirmer avec un vrai clic de souris d'un vrai client (le chemin de la souris au délégué
+   n'est pas testé, seulement le délégué).
+7. **Stockages : prendre / poser vérifié seulement sur le coffre général** (`storagetypes` : le banc n'a
+   trouvé d'objet accepté que par 3 coffres ; Stock Aliments, Minerai, Paille… non vérifiés pour prendre
+   et poser). Le clic droit et Maj + clic droit sont vérifiés sur 13 types.
+8. **Plantage du client de test à 16:27 (Ogre / d3d11, aucun cadre du mod)** : à surveiller, pas de cause.
+10. **Achats de persos / animaux / esclaves : la fenêtre doit s'ouvrir chez le client qui achète**
+   (demandé le 27/10 : « là c'est que l'hôte qui gère »). Prévu en 0.3.5 pour les marchands d'esclaves et
+   d'animaux (« à vérifier en jeu » : fenêtre chez le client, cachée chez l'hôte, argent de la faction) ;
+   le recrutement au centre d'emploi (tâche 55) est encore **refusé côté client**. Au journal du 26/10
+   (22:18-23:42) aucune ligne d'esclave ni d'animal : seulement des fenêtres de commerce (« trade window
+   type 1 … sent to that player », qui marchent). À préciser : quel achat, chez quel PNJ, qui a vu la
+   fenêtre (l'hôte seul ?). À faire : relancer les expériences `animalshop` et l'équivalent esclaves,
+   puis faire le recrutement au centre d'emploi pour un client.
+9. **PRIORITÉ : audit complet de la désynchronisation** (demandé le 26/10 vers 23:40 : « il y a beaucoup de
+   problèmes de désynchro, là c'est injouable »). À lancer, puis à décider ce qu'on améliore. Plan :
+   - **Mesurer d'abord** (journal de l'hôte depuis 22:18, 3 clients, 200+ persos suivis) : 73 « sync NEEDS A
+     LOOK » ; 2 resynchros automatiques ; 396 « clock: … set to its … » (l'horloge d'un client recalée
+     sans cesse) ; 676 « gets nowhere » (copies qui n'avancent pas) ; 120 « is gone here » (copies
+     disparues chez le client) ; 33 « floor: … put on the host's floor » (étage différent chez le client,
+     parfois 111 unités d'écart) ; 17 « stood up to fall » ; débit 336 Ko/s par client avec 208 persos
+     suivis (125-143 avant), ping de rob1 jusqu'à 680 ms et 14 % de perte. Les écarts de position montent à
+     46-99 unités pendant les combats.
+   - **Classer les causes** : (a) réseau (débit, perte, message de resync lent derrière le flux : voir le
+     resync de rob1 à 22:39) ; (b) corps à terre et portage (écart de physique, point 4 et 1 ci-dessus) ;
+     (c) horloge (396 recalages) ; (d) copies détruites/recréées par le jeu du client (`is gone here`, zones
+     déchargées) ; (e) étages ; (f) persos dormants remis en place sans fin (« put back (2/2) », « stays 14
+     units… »).
+   - **Banc** : un scénario de combat à 28 PNJ avec 3 clients (`soak`, `faraway`, `combat`) qui sort les mêmes
+     compteurs (écart max, persos hors place, resynchros, ko / corps, débit) pour comparer avant / après ;
+     ajouter un client à ping 300 ms et 10 % de perte (`clumsy` ou équivalent) pour reproduire le réseau.
+   - **Pistes à chiffrer** : débit par client (rayon de flux, fréquence selon la distance, delta des
+     positions), priorité des messages d'état (un resync ne doit pas attendre le flux de positions), recalage
+     de l'horloge moins nerveux, correction des corps par interpolation au lieu d'un relevé, ordres
+     d'étage, réutilisation des copies déchargées au lieu de les recréer.
+   - **CORRECTION (27/10) : la cause était un VPN actif sur le PC de l'hôte** (Proton VPN, tout le trafic
+     dedans) : 1,4 Mbit/s d'envoi et 103 ms mesurés avec lui, 2 à 4 ms et plus de 240 Mbit/s sans. Le
+     paragraphe suivant (débit saturé) décrit la mesure faite avec le VPN : la réduction du débit n'est plus
+     la priorité. À refaire : une partie sans VPN, puis relire les compteurs ci-dessus ; vérifier que les
+     clients n'ont pas de VPN non plus (ping 220-275 ms, rob1 6 % de perte).
+   - **Cause trouvée côté hôte (test de débit de l'utilisateur, 27/10)** : sa connexion donne 1,4 Mbit/s
+     d'envoi en moyenne (2,2 au mieux), 4,8 en réception, 103 ms de latence minimale. Le mod envoyait
+     203 Ko/s en médiane au total (81 + 80 + 42), soit 1,6 Mbit/s : déjà au-dessus de ce que la ligne
+     tient, et jusqu'à 473 Ko/s par client en pointe (plus de 10 Mbit/s pour trois). L'envoi de l'hôte est
+     saturé en permanence : pertes et pings qui montent chez tout le monde, resync en retard. **Priorité
+     du mod : réduire le débit par client d'un facteur 5 à 10** (cible : 30 Ko/s par client en médiane,
+     100 Ko/s en pointe) : moins de persos loin, mises à jour moins fréquentes selon la distance, rien si
+     rien n'a changé, compression, débit adapté à la perte de chaque client, messages importants avant les
+     positions.
+   - **À demander aux joueurs** (une fois) ce qu'ils ont vu : sauts, téléportations, corps absents, coups
+     donnés d'un côté seulement ; avec les heures.
+
 ## 23 octobre 2026, soir : partie avec rob1 et plopette (Geoffrey) (journal de l'hôte `KenshiCoop.log`, 21:40-)
 
 1. **Gel total de plopette** (22:04:03, déconnecté à 22:05:19) juste après sa 2e recherche en file
@@ -43,6 +135,7 @@ Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a
    parce que plopette est revenu le premier, rob1 encore absent : le don ne retire pas Geoffrey de
    l'historique de plopette (`ReturnPlayer`). Un perso donné à un autre joueur doit sortir de la
    liste de l'ancien.
+   **Corrigé en 0.3.7 (27/10, test unitaire)** : voir CHANGELOG.
 10. **« Courir à la même allure » (ordre 16, allure de groupe) sans effet chez un client** (rob1,
     24/10 00:19:25 : « client task 16 (via 5) run for a character: ok » pour ses 5 persos). Piste :
     l'hôte joue le déplacement d'un client perso par perso (`RunPlayerTask` pour chacun seul), alors

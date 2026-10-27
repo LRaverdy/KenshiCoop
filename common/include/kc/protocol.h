@@ -972,7 +972,7 @@ struct BuildRemove {
     std::string sid;
     Vec3 pos;
 };
-enum class BuildActionKind : uint8_t { Buy = 1, Dismantle = 2 };
+enum class BuildActionKind : uint8_t { Buy = 1, Dismantle = 2, Upgrade = 3 };   // Upgrade (0.3.7): arg = 1 or 2, the building's upgrade function (vtable slot 0x258 or 0x260)
 struct BuildAction {
     BuildActionKind kind = BuildActionKind::Buy;
     int32_t arg = 0;             // the confirmation dialog's answer

@@ -10362,6 +10362,46 @@ def exp_storagetypes(host, cli):
     summary()
 
 
+def exp_upgrade(host, cli):
+    """0.3.7: the UPGRADE button of a building's panel, by a client and by the host. Every technology is
+    finished first (an upgrade needs its research); a well (1921) is built; the client's click (the same
+    delegate the button goes through) is asked of the host, which upgrades it (1925) and has the client do the
+    same; the host's own click on the finished II (1924) is replayed by the client."""
+    own = _night_setup(host, cli, "amelioration")
+    if own is None:
+        summary()
+        return
+    log("research:", cmd(host, "researchall"))
+    time.sleep(8)
+    if not sandbox_building(host, WELL, 0, 150, "amelioration"):
+        check("amelioration : puits pose", False, "")
+        summary()
+        return
+    time.sleep(3)
+
+    def where(pid):
+        return cmd(pid, "buildlist Puits 600")[1]
+
+    def sid_of(pid):
+        m = re.search(r"(\d+-gamedata\.base)@", where(pid))
+        return m.group(1) if m else ""
+
+    check("amelioration : le meme puits chez l'hote et le client", sid_of(host) == sid_of(cli) == WELL, f"{where(host)} / {where(cli)}")
+    tgt = cmd(host, "buildupgrade Puits 0")[1]
+    check("amelioration : le jeu le laisse devenir le puits II (recherche faite)", "target268=1925-gamedata.base" in tgt, tgt)
+    log("client clicks UPGRADE:", cmd(cli, "buildupgrade Puits 1"))
+    time.sleep(7)
+    check("amelioration (client) : le puits devient le II chez l'hote", sid_of(host) == "1925-gamedata.base", where(host))
+    check("amelioration (client) : et chez le client", sid_of(cli) == "1925-gamedata.base", where(cli))
+    cmd(host, "buildprogress 1925-gamedata.base 100000")
+    time.sleep(4)
+    log("host clicks UPGRADE:", cmd(host, "buildupgrade Puits 1"))
+    time.sleep(7)
+    check("amelioration (hote) : le puits devient le III chez l'hote", sid_of(host) == "1924-gamedata.base", where(host))
+    check("amelioration (hote) : et chez le client", sid_of(cli) == "1924-gamedata.base", where(cli))
+    summary()
+
+
 def exp_buildingpeek(host, cli):
     """Point 19: a left click on a building (its inventory panel) shows the host's items without moving the
     client's character; taking an item out of it walks the character there first, then the move lands."""
@@ -10650,6 +10690,7 @@ def main():
     for name, helptext in (("storagetake", "0.3.5 lot 4 (point 20): take from and put into a storage, the right inventories, nothing goes back"),
                            ("storagejob", "0.3.5 lot 4 (point 21): right click looks inside, Shift + right click gives the permanent job"),
                            ("storagetypes", "0.3.6: right click, Shift + right click, take and put on every kind of storage"),
+                           ("upgrade", "0.3.7: the UPGRADE button by a client and by the host, on both"),
                            ("buildingpeek", "0.3.5 lot 4 (point 19): a building's panel without walking; a take walks there first"),
                            ("farmwater", "0.3.5 lot 4 (point 18): a farm's water and output the same on the client, x1 and x3"),
                            ("teampack", "0.3.5 lot 4 (point 17): rule A, another player's pack animal and backpacks shared, human refused"),
@@ -11259,7 +11300,7 @@ def main():
             exp_trace(host, cli)
         elif a.what == "playerstats":   # 0.3.5
             exp_playerstats(host, cli)
-        elif a.what in ("storagetake", "storagejob", "storagetypes", "buildingpeek", "farmwater", "teampack", "teamtrade", "lootground", "wornrebuild", "nightitems"):
+        elif a.what in ("storagetake", "storagejob", "storagetypes", "upgrade", "buildingpeek", "farmwater", "teampack", "teamtrade", "lootground", "wornrebuild", "nightitems"):
             globals()["exp_" + a.what](host, cli)   # 0.3.5 lot 4 (night-items)
         elif a.what == "walk":
             exp_walk(host, cli)

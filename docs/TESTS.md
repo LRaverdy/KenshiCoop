@@ -503,6 +503,8 @@ l'escouade triée par handle.
 | `bodysize <cible\|spawned>` | race, échelle, âge, rayon, coque, portée de fouille (`kc::loot`), mort / K.-O. / ragdoll de ce perso |
 | `lootstats` | (client) ordres de fouille en attente, fenêtres ouvertes, ordres abandonnés |
 | `containerreq <sélection> <nom>` | clic droit sur le contenant le plus proche de ce nom |
+| `buildupgrade <nom\|sid> [0\|1\|2]` | (0.3.7) le clic UPGRADE sur le bâtiment le plus proche, par le même délégué que le bouton du jeu (1 : améliorer, 2 : revenir au niveau d'avant ; 0 : seulement ce qu'il deviendrait, `vt+0x268` / `0x270`) |
+| `researchall` | (0.3.7, hôte) toutes les technologies pas encore finies sont terminées (débloque les améliorations de bâtiments) |
 | `groupspeed` | (0.3.6) par membre de l'escouade : ordre d'allure (+0x20, 3 = groupe), groupe (+0x10), vitesses +0xB4 / +0xB8 / +0xBC |
 | `crashtest` | (0.3.6) ce jeu plante tout de suite, sur un fil à lui (le rapport, `KenshiCoop-lastcrash.txt`, son envoi au prochain lancement) |
 | `buildclick <sélection> <nom\|modèle> [shift]` | (0.3.6) le vrai chemin du clic droit sur un bâtiment : la fonction curseur du jeu (`PlayerInterface` `0x7FC6E0`, sa vérification de propriété, notre crochet et son repli), pas l'appel d'ordre direct de `storagejob` |

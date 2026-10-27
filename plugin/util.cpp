@@ -201,6 +201,7 @@ Config LoadConfig(const std::wstring& ini) {
     c.destEpsilon = float(num(L"sync", L"destination_epsilon", c.destEpsilon));
     c.interestRadius = float(num(L"sync", L"interest_radius", c.interestRadius));
     c.streamRadius = std::max(0.0f, float(num(L"sync", L"stream_radius", c.streamRadius)));
+    c.fullUpdateRadius = std::max(0.0f, float(num(L"sync", L"full_update_radius", c.fullUpdateRadius)));
     c.standInRadius = std::max(0.0f, float(num(L"sync", L"standin_radius", c.standInRadius)));
     c.spawnsPerFrame = std::clamp(int(num(L"sync", L"spawns_per_frame", c.spawnsPerFrame)), 1, 50);
     c.autoZoneResync = num(L"sync", L"auto_zone_resync", 1) != 0;

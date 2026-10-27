@@ -29,6 +29,10 @@ struct HookView {
     std::unordered_set<kc::Handle, HandleHash> controllable;  // handles this machine may command
     std::unordered_set<kc::Handle, HandleHash> shared;        // nobody's characters: their AI settings are anyone's
     std::unordered_set<const void*> replicated;    // client: characters driven by the host's state
+    // client (0.3.7): positions of our own characters and the radius (squared) in which a host character is forced into the game's
+    // full update (hk_charUpdateView); radius 0: everywhere
+    std::vector<kc::Vec3> ownPositions;
+    float fullRadius2 = 0;
     std::unordered_set<kc::Handle, HandleHash> dropSources;   // client: local handles of the inventories a drop can be asked from
     std::unordered_map<const void*, kc::Vec3> facing;   // client: CharMovement -> where the host's character faces
     std::unordered_map<const void*, std::pair<void*, kc::Quat>> orient;   // client: CharMovement -> (its character, the host's rotation)
@@ -435,6 +439,7 @@ public:
         return false;
     }
     void UpdatePendingPickups();   // host: characters walking to an item a client asked them to take
+    bool NoteUiUpgrade(void* building, int variant);   // 0.3.7: a UPGRADE click on a building (the delegate thunks): client = asked of the host (true: not run here); host = replayed by every client
     void UpdateGroupSpeed();       // host (0.3.6): "run at the same pace" for the characters of each player that the game's own group does not cover
     bool HostBodyPos(const kc::Handle& local, kc::Vec3& out) const;   // client: the host's position of that character (last state)
     void UpdatePendingTalks();     // host: a client's character next to the NPC it was told to talk to, no conversation yet

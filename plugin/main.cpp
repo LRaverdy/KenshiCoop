@@ -33,7 +33,7 @@ namespace kcp {
 
 namespace {
 
-constexpr const char* kVersion = "0.3.6";
+constexpr const char* kVersion = "0.3.7";
 
 Config g_cfg;
 std::wstring g_iniPath;
@@ -1297,6 +1297,10 @@ extern "C" __declspec(dllexport) void dllStartPlugin() {
 
 extern "C" __declspec(dllexport) void dllStopPlugin() {
     if (kcp::g_session) kcp::g_session->Leave();
+    // 0.3.7: the Steam link's pump thread is stopped and joined here: left running, it was still reading
+    // sockets (ws2_32) while the game exited and the process went down with a crash dump (23/10 22:20,
+    // 24/10 00:31: kenshi_x64.exe.21576.dmp, .10348.dmp, a thread of this DLL with no module under it)
+    kcp::steam::Stop();
     kcp::HostConsoleShutdown();
     kcp::OverlayShutdown();
     kcp::RemoveHooks();

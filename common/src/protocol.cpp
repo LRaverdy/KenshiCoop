@@ -1877,7 +1877,7 @@ void Encode(Writer& w, const BuildAction& m) {
 }
 bool Decode(Reader& r, BuildAction& m) {
     const uint8_t k = r.u8();
-    if (k < 1 || k > 2) return false;
+    if (k < 1 || k > 3) return false;
     m.kind = BuildActionKind(k);
     m.arg = r.i32();
     m.sid = r.str(kMaxSidLen);

@@ -4,6 +4,59 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
+## v0.3.7 (27 octobre 2026)
+
+Protocole inchangé (36).
+
+- **Améliorer un bâtiment (bouton UPGRADE) marche pour un client** (signalé le 23/10 : rien n'arrivait chez
+  l'hôte). Le bouton du panneau d'infos d'un bâtiment appelle, par un délégué MyGUI, une fonction virtuelle de
+  `Building` (fentes `0x258` : améliorer, `0x2A49E0`, et `0x260` : revenir au niveau d'avant, `0x2A4DB0`) qui
+  change le `GameData` du bâtiment (`vt+0x268` = ce qu'il devient, seulement une fois la recherche faite) et le
+  remet en chantier. Un client changeait donc sa copie tout seul. Maintenant le clic d'un client est envoyé à
+  l'hôte (`BuildAction` de genre `Upgrade`, arg 1 ou 2, même route que l'achat), qui le fait ; l'hôte le
+  fait rejouer par **tous** les clients sur leur copie, y compris quand c'est l'hôte qui clique. Vu en jeu
+  (recherche toute faite, puits `1921` → `1925` → `1924`) : le clic d'un client, puis celui de l'hôte,
+  changent le bâtiment de la même façon chez les deux, l'état de chantier suit. Le protocole reste 36 (un
+  hôte qui ne connaît pas le genre 3 ignore la demande). Commandes de test : `buildupgrade <nom> [0|1|2]`,
+  `researchall` (hôte). Un bâtiment qui a sa propre version de la fonction (classe dérivée) n'est pas
+  intercepté : une ligne « upgrade: this building's slot … is not the game's upgrade » le dit une fois.
+- **Un perso donné à un autre joueur n'est plus rendu à l'ancien par une resynchronisation** (Geoffrey,
+  24/10 00:09 : donné par plopette à rob1, puis « given back » à plopette au resync général). Le registre
+  gardait l'enregistrement « perso à lui » (`Own`) de plopette pour un de ses anciens persos ; donné comme
+  recrue (`Member`) à un autre joueur, un ancien `Own` (le joueur en a un plus récent) change aussi de mains.
+  Son perso principal reste le sien. Test unitaire ajouté.
+- **Moins de travail pour le jeu d'un client, au choix** : `[sync] full_update_radius` (**0 par défaut = comme avant** ; mettre 2000 sur un PC faible).
+  Le client forçait la mise à jour complète du jeu (physique, étages, murs, à chaque image) pour **toutes** les
+  copies de persos de l'hôte, jusqu'à 3000 unités de ses persos : au journal du 26/10, « full updates forced »
+  3000 à 6000 par seconde (100 persos à chaque image) alors que le travail du mod lui-même ne dépassait pas
+  0,3 à 0,9 ms par image (6 % de l'image la plus lente, nass4 à 70 images par seconde). Au-delà de 2000
+  unités de tous ses persos (le plus loin que sa caméra atteint), une copie garde maintenant la mise à jour
+  économe du jeu, comme celles que l'hôte ne diffuse plus ; elle redevient complète en s'approchant.
+  Mesuré le 27/10 sur le banc (`faraway`) : 29 % de mises à jour forcées en moins (5212 contre 7302 par
+  seconde) mais pas de gain d'images par seconde mesurable, et un perso à 2000-3000 unités du client
+  resté 68 unités trop haut (le contrôle du banc couvre 3000) : donc **désactivé par défaut**, à essayer
+  chez nass4 (70 images par seconde) avant de l'activer pour tous.
+- **Plantage de rob1 (26/10 22:15) et de plopette (23/10 23:35), même cause : la vitesse de groupe du jeu**.
+  `kenshi_x64+0x14B286` (lecture de `null + 0x50`, pile `0x1441D5`, `0x7F592C`, `0x14B303`, `0x9B1B39`,
+  `0x66004F`) : la fonction `0x7F5740` du jeu (le plus lent des membres d'un groupe de déplacement, pour
+  « courir à la même allure ») lit le déplacement d'un membre qui n'existe plus (perso détruit avec sa zone,
+  monde rechargé : rob1 plantait 32 s après que l'hôte a chargé une autre sauvegarde). Elle est maintenant
+  enveloppée (`hk_groupSpeed`) : un membre disparu = pas de limite de vitesse pour cette image, une ligne au
+  journal (3 par minute au plus), plus de plantage. À vérifier avec de vrais clients (le plantage ne se
+  reproduit pas sur le banc).
+- **Moins de fausses alertes de désynchro et de resynchros de zone inutiles**. Un perso éloigné que le jeu du
+  client garde à son endroit (« dormant … stays 298 units from where the host has it ») comptait comme
+  « écart » à chaque rapport : « sync NEEDS A LOOK » et resynchro automatique de zone (80 à 150 persos
+  renvoyés d'un coup). Ces copies « ancrées » ne comptent plus dans le rapport.
+- **Plantage à la fermeture du jeu** (dumps Windows `kenshi_x64.exe.21576.dmp`, `.10348.dmp` des 23 et 24/10 :
+  un fil de la DLL, `ws2_32`, plus de module dessous) : le fil de la liaison Steam n'était pas arrêté à
+  `dllStopPlugin` ; il l'est maintenant (`steam::Stop()`). À confirmer sur plusieurs fermetures.
+- **Journal moins bavard** : « group speed: N characters … held » au plus 3 lignes par minute ; la ligne
+  « skill up (host) » nomme maintenant le perso et la stat.
+- **Cause réelle du « lag » du 26/10, hors mod** : un VPN (Proton VPN) actif sur le PC de l'hôte, tout le
+  trafic passait dedans (envoi 1,4 Mbit/s, latence 103 ms). Sans lui : 2 à 4 ms et plus de 240 Mbit/s en envoi
+  (mesuré le 27/10). À vérifier chez les clients.
+
 ## v0.3.6 (26 octobre 2026)
 
 Protocole inchangé (36).

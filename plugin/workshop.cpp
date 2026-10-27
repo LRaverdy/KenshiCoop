@@ -1226,6 +1226,20 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
         if (!w.ReadResearch(st)) return "err no research";
         return std::string("ok ") + (std::binary_search(st.finished.begin(), st.finished.end(), sid) ? "1" : "0");
     }
+    if (cmd == "researchall") {   // researchall: (host, test) every technology not yet finished is completed (unlocks the building upgrades)
+        if (!s.isHost() || !r) return "err host only / no research";
+        kc::ResearchState st;
+        w.ReadResearch(st);
+        std::vector<void*> all;
+        kenshi::GameDataOfType(21, all, 100000);
+        int done = 0;
+        for (void* gd : all) {
+            const std::string sid = SidOf(gd);
+            if (sid.empty() || std::binary_search(st.finished.begin(), st.finished.end(), sid)) continue;
+            if (CallVoidGd(kenshi::FnResearchComplete, r, gd)) ++done;
+        }
+        return "ok completed " + std::to_string(done);
+    }
     if (cmd == "researchpick") {   // researchpick [n] [cost]: techs whose requirements are met here ("cost": and whose cost the benches hold)
         size_t n = 5;
         std::string opt;

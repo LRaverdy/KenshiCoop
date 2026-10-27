@@ -389,6 +389,12 @@ void KenshiWorld::EndFrame() {
     if (active_ && live_) UpdateJobsPanel();   // 0.3.4: host and client, after this frame's job lists and orders
     auto v = std::make_shared<HookView>();
     if (active_ && !client_) v->speedCap = groupCaps_;
+    if (active_ && client_ && cfg_.fullUpdateRadius > 0) {
+        v->fullRadius2 = cfg_.fullUpdateRadius * cfg_.fullUpdateRadius;
+        kc::Vec3 q;
+        for (const auto& [h, c] : squad_)
+            if (kenshi::GetPosition(c, q)) v->ownPositions.push_back(q);
+    }
     v->active = active_;
     v->client = client_;
     // A character stays "driven by the host" for a second after its last update: a frame without
@@ -1665,7 +1671,13 @@ void KenshiWorld::UpdateEditorStage(double now) {
 void KenshiWorld::TakeSyncStats(float& maxErr, uint16_t& farOff) {
     maxErr = 0;
     farOff = 0;
+    // 0.3.6: a dormant copy our game keeps off its spot after the put-backs (another floor, a far
+    // character that takes no written position) is not a desync anyone sees and nothing here can fix:
+    // it counted as "off" every report, and four of them made the host resend 80-150 characters (the
+    // automatic zone resync, a burst of data) for nothing (26/10: one such copy, 298 units, on all
+    // three clients for minutes)
     for (auto& [h, e] : syncErr_) {
+        if (const auto d = dormantHold_.find(h); d != dormantHold_.end() && d->second.anchored) continue;
         farOff += e > 5.0f;
         maxErr = std::max(maxErr, e);
     }
@@ -2809,12 +2821,11 @@ void KenshiWorld::UpdateGroupSpeed() {
             const bool fresh = !speedCapped_.count(m.c);
             if (kenshi::WriteSpeedCap(m.c, slowest)) speedCapped_.insert(m.c);
             if (void* mv = kenshi::MovementOf(m.c)) groupCaps_[mv] = slowest;
-            if (fresh) {
-                bool o2 = false, g2 = false, mv2 = false;
-                float w2 = 0, cap2 = 0;
-                kenshi::ReadGroupSpeed(m.c, o2, g2, mv2, w2, cap2);
-                Log("group speed: %zu characters of player %d held to the slowest walking speed (%.1f); one reads cap %.1f after the write", members.size(), owner,
-                    double(slowest), double(cap2));
+            static kc::LogLimiter capLog{3, 60.0};   // (a group that stops and starts again would write a line a second)
+            uint32_t held = 0;
+            if (fresh && capLog.Allow(NowSeconds(), &held)) {
+                Log("group speed: %zu characters of player %d held to the slowest walking speed (%.1f)%s", members.size(), owner, double(slowest),
+                    held ? (" [" + std::to_string(held) + " more such lines not written]").c_str() : "");
             }
         }
     }

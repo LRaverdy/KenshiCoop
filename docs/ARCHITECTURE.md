@@ -1183,6 +1183,7 @@ les mêmes partout) ; rien ne part vers l'hôte. Chez l'hôte, le bouton refuse 
 | `[sync] snap_distance` | 15 | au-delà, un personnage est téléporté au lieu d'être interpolé |
 | `[sync] destination_epsilon` | 2 | une destination n'est redonnée que si elle bouge de plus que ça |
 | `[sync] interest_radius` | 0 | 0 : tous les personnages actifs sont répliqués |
+| `[sync] full_update_radius` | 0 | client (0.3.7) : un personnage de l'hôte à plus de ça de tous nos persos garde la mise à jour économe du jeu (au lieu de la mise à jour complète forcée : physique, étages, murs, à chaque image) ; 0 : partout comme avant |
 | `[sync] stream_radius` | 3000 | hôte : un PNJ est envoyé à un joueur à moins de ça d'un de ses persos ou d'un membre de l'escouade près d'eux (0 : tout à tous) |
 | `[sync] standin_radius` | 3000 | client : PNJ de l'hôte recréés seulement à moins de ça de nos persos et des membres de l'escouade près d'eux (0 : partout) |
 | `[sync] spawns_per_frame` | 2 | client : persos créés par image au plus |

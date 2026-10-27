@@ -185,14 +185,14 @@ void Session::HostBuildings(double now) {
     // every client (ownership, doors), a dismantling comes back through the construction state.
     for (auto& [pid, a] : pendingBuildActions_) {
         std::string refused;
-        const char* what = a.kind == BuildActionKind::Buy ? "buys" : "dismantles";
+        const char* what = a.kind == BuildActionKind::Buy ? "buys" : (a.kind == BuildActionKind::Upgrade ? "upgrades" : "dismantles");
         if (!world_.ExecuteBuildAction(a, refused)) {
             log_("[" + nameOf(pid) + "] " + what + " " + world_.TemplateName(a.sid) + ": refused (" + (refused.empty() ? "not found" : refused) + ")");
             tell(pid, refused.empty() ? "Ce bâtiment est introuvable chez l'hôte." : refused);
             continue;
         }
         log_("[" + nameOf(pid) + "] " + what + " " + world_.TemplateName(a.sid));
-        if (a.kind == BuildActionKind::Buy) {
+        if (a.kind == BuildActionKind::Buy || a.kind == BuildActionKind::Upgrade) {   // replayed by every client on its copy
             Writer w;
             Encode(w, a);
             BroadcastReliable(w, true);
@@ -202,8 +202,8 @@ void Session::HostBuildings(double now) {
     // The host player's own purchases: replayed by every client too.
     world_.TakeLocalBuildActions(scratchBuildActions_);
     for (const auto& a : scratchBuildActions_) {
-        if (a.kind != BuildActionKind::Buy) continue;
-        log_("the host buys " + world_.TemplateName(a.sid));
+        if (a.kind != BuildActionKind::Buy && a.kind != BuildActionKind::Upgrade) continue;
+        log_(std::string(a.kind == BuildActionKind::Buy ? "the host buys " : "the host upgrades ") + world_.TemplateName(a.sid));
         Writer w;
         Encode(w, a);
         BroadcastReliable(w, true);
@@ -304,7 +304,8 @@ void Session::ClientBuildings(double now) {
         Writer w;
         Encode(w, a);
         SendReliable(net_.serverPeer(), w);
-        log_(std::string(a.kind == BuildActionKind::Buy ? "purchase" : "dismantling") + " of " + world_.TemplateName(a.sid) + " asked of the host");
+        log_(std::string(a.kind == BuildActionKind::Buy ? "purchase" : (a.kind == BuildActionKind::Upgrade ? "upgrade" : "dismantling")) + " of " +
+             world_.TemplateName(a.sid) + " asked of the host");
     }
     // The host's new buildings: built here the same way (unless we already have it: a save).
     for (const auto& p : hostPlaces_) {
@@ -330,7 +331,8 @@ void Session::ClientBuildings(double now) {
     for (const auto& a : hostActions_) {
         std::string why;
         const bool ok = world_.ExecuteBuildAction(a, why);
-        log_(std::string("replayed the purchase of ") + world_.TemplateName(a.sid) + (ok ? "" : ": FAILED (" + why + ")"));
+        log_(std::string(a.kind == BuildActionKind::Upgrade ? "replayed the upgrade of " : "replayed the purchase of ") + world_.TemplateName(a.sid) +
+             (ok ? "" : ": FAILED (" + why + ")"));
     }
     hostActions_.clear();
     // Construction states.

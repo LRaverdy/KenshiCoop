@@ -337,6 +337,9 @@ enum Fn : int {
     FnAiDisguiseUpdate,         // void AI::<disguise and stealth update>(float)   (vt 0x48, 0x5A51E0: StateBroadcastData +0x100 / +0x108 from the worn uniform)
     // ---- 23/10: a client's right click on a building
     FnBuildingCursor,           // bool PlayerInterface::<building under the cursor>(Building*, const Vector3&, bool)   (our name, 0x7FC6E0: the cursor over a building; with +0x2F3, right click this frame, it gives the order: loot 26, operate, build...)
+    FnGroupSpeed,               // float <movement group>::slowestWalkingSpeed(bool)   (our name, 0x7F5740: "run at the same pace" = the smallest +0xB4 of the group's members; a member whose movement is gone is a null read at 0x14B286, the crash of 23/10 and 26/10)
+    FnUpgradeThunkA,            // void <delegate thunk>(Building*, Widget*)   (our name, 0x313D50: `mov rax,[rcx]; jmp [rax+258h]`, what a MyGUI delegate on a virtual member calls: for a Building, its upgrade (0x2A49E0))
+    FnUpgradeThunkB,            // the same <delegate thunk> for vtable slot 0x260 (0x313D90, a Building's second upgrade function 0x2A4DB0)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];

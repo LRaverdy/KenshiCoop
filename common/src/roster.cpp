@@ -93,11 +93,19 @@ void Roster::Trim(RosterPlayer& p) {
 bool Roster::Note(const std::string& key, uint64_t steamId, const std::string& playerName, const Handle& h, const std::string& name, RosterKind kind) {
     if (key.empty() || !h.valid()) return false;
     bool changed = false;
-    // another player's Member record of it: the character changed hands
+    // another player's Member record of it: the character changed hands. 0.3.7 (24/10, Geoffrey given by
+    // plopette to rob1 and handed back to plopette by the next resync): given as a Member, an OLDER own
+    // character of another player (they have a newer one) changed hands too; their newest own stays theirs.
     for (auto& [k, o] : players_) {
         if (k == key) continue;
+        const RosterChar* latest = o.LatestOwn();
+        const Handle latestHandle = latest ? latest->handle : Handle{};
         const size_t before = o.chars.size();
-        o.chars.erase(std::remove_if(o.chars.begin(), o.chars.end(), [&](const RosterChar& c) { return c.handle == h && c.kind == RosterKind::Member; }),
+        o.chars.erase(std::remove_if(o.chars.begin(), o.chars.end(),
+                                     [&](const RosterChar& c) {
+                                         if (!(c.handle == h)) return false;
+                                         return c.kind == RosterKind::Member || (kind == RosterKind::Member && !(c.handle == latestHandle));
+                                     }),
                       o.chars.end());
         changed |= o.chars.size() != before;
     }

@@ -25,6 +25,27 @@
 namespace kcp {
 
 namespace {
+// what the building's upgrade slots (vtable 0x268 / 0x270) answer: the GameData it would become
+void* UpgradeTargetSeh(void* building, uintptr_t slot) {
+    __try {
+        void* vt = *reinterpret_cast<void**>(building);
+        void* fn = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(vt) + slot);
+        return reinterpret_cast<void* (*)(void*)>(fn)(building);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+// the UPGRADE click as the game's button makes it: the delegate thunk called with the building
+bool UpgradeClickSeh(void* thunk, void* building) {
+    __try {
+        reinterpret_cast<void (*)(void*, void*)>(thunk)(building, nullptr);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 
 double g_nextPoll = 0;
 kc::Handle lastSpawned_;
@@ -2119,6 +2140,39 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             kenshi::WithSelection(me, [&] { ok = kenshi::CallNewPlayerTaskOn(26, best, op, dest); });
         }
         return (ok ? "ok " : "err ") + bestName + " at " + std::to_string(int(std::sqrt(bestD)));
+    }
+    if (cmd == "buildupgrade") {
+        // buildupgrade <name part|sid> [1|2]: (0.3.7) the UPGRADE click on the nearest such building of ours (squad member 0's
+        // surroundings), through the delegate thunk the game's button goes through (our hook, the host's replay)
+        std::string part;
+        int variant = 1;
+        in >> part >> variant;
+        std::replace(part.begin(), part.end(), '_', ' ');
+        auto squad = SortedSquad(w);
+        if (squad.empty() || part.empty()) return "err usage: buildupgrade <name part|sid> [1|2]";
+        kc::Vec3 p, op;
+        if (!kenshi::GetPosition(w.FindSquad(squad[0]), p)) return "err";
+        std::vector<void*> objs;
+        kenshi::ObjectsNear(p, 3000, objs);
+        void* best = nullptr;
+        float bestD = 1e30f;
+        for (void* o : objs) {
+            std::string sid, name;
+            kc::Handle oh;
+            if (kenshi::IsCharacter(o) || !kenshi::ObjectHandle(o, oh) || oh.type != 0 || !kenshi::ObjectTemplate(o, sid) || !kenshi::TemplateDisplayName(sid, name) ||
+                (sid != part && name.find(part) == std::string::npos) || !kenshi::ObjectPosition(o, op))
+                continue;
+            const float d = (op.x - p.x) * (op.x - p.x) + (op.z - p.z) * (op.z - p.z);
+            if (d < bestD) { bestD = d; best = o; }
+        }
+        if (!best) return "err no building called " + part;
+        if (variant == 0) {   // what it would become, no click
+            std::string a, b2;
+            if (void* g = UpgradeTargetSeh(best, 0x268)) kenshi::GameDataSidOf(g, a);
+            if (void* g = UpgradeTargetSeh(best, 0x270)) kenshi::GameDataSidOf(g, b2);
+            return "ok target268=" + (a.empty() ? std::string("none") : a) + " target270=" + (b2.empty() ? std::string("none") : b2);
+        }
+        return UpgradeClickSeh(kenshi::FnAddr(variant == 2 ? kenshi::FnUpgradeThunkB : kenshi::FnUpgradeThunkA), best) ? "ok" : "err the click crashed";
     }
     if (cmd == "buildclick") {
         // buildclick <selectIndex> <name part|sid> [shift]: (0.3.6) the right click of the real cursor path

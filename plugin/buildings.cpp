@@ -116,6 +116,9 @@ void* PlayerFaction() {
     return pi && Rd(pi, PI_faction, f) ? f : nullptr;
 }
 
+// the base Building's vtable entries of the two upgrade functions (thunks to 0x2A49E0 and 0x2A4DB0)
+constexpr uintptr_t kUpgradeSlotA = 0x27EDA, kUpgradeSlotB = 0x1D791;
+
 bool IsBuilding(const void* obj) {
     kc::Handle h;
     return obj && !kenshi::IsCharacter(obj) && kenshi::ObjectHandle(obj, h) && h.type == 0;
@@ -792,6 +795,33 @@ void KenshiWorld::NoteLocalBuildAction(void* building, kc::BuildActionKind kind,
     if (localBuildActions_.size() < 32) localBuildActions_.push_back(std::move(a));
 }
 
+// 0.3.7: the UPGRADE button of a building's info panel calls a virtual function of the Building through a
+// MyGUI delegate (vtable slots 0x258 and 0x260, 0x2A49E0 / 0x2A4DB0: the game changes the building's GameData
+// (+0x40) and makes it a construction site again). A client's copy would change alone: the request goes to
+// the host, which does it and has every client do the same (like a purchase). Returns true when the click
+// is not to run here (a client).
+bool KenshiWorld::NoteUiUpgrade(void* b, int variant) {
+    if (variant != 1 && variant != 2) return false;
+    if (!IsBuilding(b)) return false;
+    void* fn = Slot(b, variant == 1 ? 0x258 : 0x260);
+    if (!fn || uintptr_t(fn) != kenshi::Addr(variant == 1 ? kUpgradeSlotA : kUpgradeSlotB)) {
+        static bool said = false;
+        if (!said) { said = true; Log("upgrade: this building's slot %d is not the game's upgrade (a building class of its own): left to the game", variant); }
+        return false;
+    }
+    kc::BuildAction a;
+    a.kind = kc::BuildActionKind::Upgrade;
+    a.arg = variant;
+    if (!KindAndPlace(b, a.sid, a.pos)) return false;
+    if (client_ && !IsOurs(b)) return false;   // not the players': the game's own message
+    Log("upgrade %d of %s clicked here: %s", variant, a.sid.c_str(), client_ ? "asked of the host" : "done here, replayed by every client");
+    {
+        std::lock_guard<std::mutex> lk(buildMutex_);
+        if (localBuildActions_.size() < 32) localBuildActions_.push_back(std::move(a));
+    }
+    return client_;
+}
+
 void KenshiWorld::NoteHostBought(void* building) {
     if (ForSale(building)) return;   // the purchase did not go through (not enough cats)
     NoteLocalBuildAction(building, kc::BuildActionKind::Buy, kAnswerYes);
@@ -830,6 +860,15 @@ bool KenshiWorld::ExecuteBuildAction(const kc::BuildAction& a, std::string& refu
     if (!IsOurs(b)) {
         refused = "Ce bâtiment n'est pas à nous.";
         return false;
+    }
+    if (a.kind == kc::BuildActionKind::Upgrade) {
+        void* fn = Slot(b, a.arg == 2 ? 0x260 : 0x258);
+        if (!fn || uintptr_t(fn) != kenshi::Addr(a.arg == 2 ? kUpgradeSlotB : kUpgradeSlotA)) {
+            refused = "Ce bâtiment ne s'améliore pas ainsi.";
+            return false;
+        }
+        HostCallScope scope;   // (not through the delegate thunk our hook watches)
+        return VoidSeh(fn, b);
     }
     HostCallScope scope;
     return IntArgSeh(kenshi::FnAddr(kenshi::FnConfirmDismantle), b, a.arg ? a.arg : kAnswerYes);

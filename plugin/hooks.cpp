@@ -1130,6 +1130,32 @@ void StorageClickGaveNoOrder(void* building, bool shift) {
     const float loc[3] = {at.x, at.y, at.z};
     RouteOrder(kc::TaskVia::TaskNearest, kTaskLootTarget, building, nullptr, nullptr, loc, true, false);
 }
+// "Run at the same pace": the game's own group computes the slowest walking speed of its members every
+// frame. A member whose movement is gone (destroyed with its zone, or the world reloaded) makes it read
+// null + 0x50 in Havok's vector code (kenshi_x64+0x14B286, via 0x7F592C): plopette 23/10 23:35 in a fight,
+// rob1 26/10 22:15 when the host loaded another save. The game goes on without a limit then.
+using GroupSpeedFn = float (*)(void* group, int flag);
+GroupSpeedFn o_groupSpeed = nullptr;
+float GroupSpeedSeh(void* group, int flag, bool* failed) {
+    __try {
+        return o_groupSpeed(group, flag);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *failed = true;
+        return 999.0f;   // no limit (the value an unlimited movement keeps)
+    }
+}
+float hk_groupSpeed(void* group, int flag) {
+    bool failed = false;
+    const float r = GroupSpeedSeh(group, flag, &failed);
+    if (failed) {
+        static kc::LogLimiter limit{3, 60.0};
+        uint32_t held = 0;
+        if (limit.Allow(NowSeconds(), &held))
+            Log("group speed: a member of the game's movement group has no movement any more (the crash of 23/10 and 26/10): no limit this frame%s",
+                held ? (" [" + std::to_string(held) + " more such lines not written]").c_str() : "");
+    }
+    return r;
+}
 bool hk_buildingCursor(void* pi, void* building, const float* pos, bool flag) {
     if (g_hostCall || !KenshiWorld::ClientActive()) return o_buildingCursor(pi, building, pos, flag);
     bool right = false, left = false, otherMode = false;
@@ -1286,7 +1312,21 @@ uint8_t hk_charUpdateView(void* chr) {
             // most of its frame rate when the players spread out (11 October evening)
             const bool leftFar = v->active && v->client && v->farAway && v->farAway->count(chr) > 0;
             forced = v->active && !leftFar && (v->client ? v->replicated.count(chr) > 0 : (v->remoteNear && v->remoteNear->count(chr) > 0));
-            if (forced || leftFar)
+            // 0.3.7 (client): the full update (physics, floors and walls, every frame) is for what our camera can
+            // reach: a host character further than full_update_radius from all of our own characters keeps the
+            // game's cheap update, like one the host no longer streams. The 26/10 game had ~100 copies in full
+            // update at all times ("full updates forced 3000-6000/s"), most of the frame time of the weakest PC.
+            bool farFromUs = false;
+            if (forced && v->client && v->fullRadius2 > 0 && !v->ownPositions.empty()) {
+                kc::Vec3 p;
+                if (kenshi::GetPosition(reinterpret_cast<kenshi::Character*>(chr), p)) {
+                    float best = 1e30f;
+                    for (const kc::Vec3& o : v->ownPositions) best = std::min(best, (p.x - o.x) * (p.x - o.x) + (p.z - o.z) * (p.z - o.z));
+                    farFromUs = best > v->fullRadius2;
+                }
+            }
+            if (farFromUs) forced = false;
+            if (forced || leftFar || farFromUs)
                 if (KenshiWorld* w = TheWorld()) ++(forced ? w->charsForcedInView : w->charsLeftFar);
             if (forced) *f = 1;
         }
@@ -1809,6 +1849,21 @@ void hk_confirmDismantle(void* building, int answer) {
     if (g_hostCall || !v->active || !v->client || !w) return o_confirmDismantle(building, answer);
     if (answer == 2) w->NoteLocalBuildAction(building, kc::BuildActionKind::Dismantle, answer);
 }
+// 0.3.7: the UPGRADE button of a building's panel (a MyGUI delegate on a virtual member: the thunks
+// `mov rax,[rcx]; jmp [rax+258h]` / `[rax+260h]`, shared by every class that has such a delegate; only a
+// Building's upgrade function is acted on, see KenshiWorld::NoteUiUpgrade)
+using UpgradeThunkFn = void (*)(void* self, void* widget);
+UpgradeThunkFn o_upgradeThunkA = nullptr, o_upgradeThunkB = nullptr;
+void hk_upgradeThunkA(void* self, void* widget) {
+    KenshiWorld* w = TheWorld();
+    if (!g_hostCall && KenshiWorld::View()->active && w && self && w->NoteUiUpgrade(self, 1)) return;
+    o_upgradeThunkA(self, widget);
+}
+void hk_upgradeThunkB(void* self, void* widget) {
+    KenshiWorld* w = TheWorld();
+    if (!g_hostCall && KenshiWorld::View()->active && w && self && w->NoteUiUpgrade(self, 2)) return;
+    o_upgradeThunkB(self, widget);
+}
 using BuildProgressFn = void (*)(void* building, float amount);
 BuildProgressFn o_addConstruction = nullptr;
 void hk_addConstruction(void* building, float amount) {
@@ -2177,6 +2232,9 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnRecruit, reinterpret_cast<void*>(&hk_recruit), reinterpret_cast<void**>(&o_recruit)},
         {kenshi::FnCharacterCursor, reinterpret_cast<void*>(&hk_charCursor), reinterpret_cast<void**>(&o_charCursor)},   // 0.3.4
         {kenshi::FnBuildingCursor, reinterpret_cast<void*>(&hk_buildingCursor), reinterpret_cast<void**>(&o_buildingCursor)},   // 23/10
+        {kenshi::FnGroupSpeed, reinterpret_cast<void*>(&hk_groupSpeed), reinterpret_cast<void**>(&o_groupSpeed)},   // 26/10
+        {kenshi::FnUpgradeThunkA, reinterpret_cast<void*>(&hk_upgradeThunkA), reinterpret_cast<void**>(&o_upgradeThunkA)},   // 27/10
+        {kenshi::FnUpgradeThunkB, reinterpret_cast<void*>(&hk_upgradeThunkB), reinterpret_cast<void**>(&o_upgradeThunkB)},
         // ---- fix G5
         {kenshi::FnCharRemovePermajob, reinterpret_cast<void*>(&hk_removePermajob), reinterpret_cast<void**>(&o_removePermajob)},
         {kenshi::FnCharMovePermajob, reinterpret_cast<void*>(&hk_movePermajob), reinterpret_cast<void**>(&o_movePermajob)},

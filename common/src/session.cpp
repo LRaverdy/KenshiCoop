@@ -4220,7 +4220,8 @@ void Session::ClientPacket(Msg type, Reader& r) {
                     const std::string name = world_.CharacterNameOf(it->second.handle);
                     AddChat("* " + (name.empty() ? std::string("Ton personnage") : name) + " : " + StatNameFr(i) + " " + std::to_string(before) + " -> " +
                                 std::to_string(after),
-                            "skill up (host): stat " + std::to_string(i) + " " + std::to_string(before) + " -> " + std::to_string(after));
+                            "skill up (host): " + (name.empty() ? std::string("?") : name) + " " + StatNameFr(i) + " (stat " + std::to_string(i) + ") " + std::to_string(before) + " -> " +
+                                std::to_string(after));
                 }
             }
             it->second.stats = std::move(c.stats);

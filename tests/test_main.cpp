@@ -7920,6 +7920,9 @@ static void TestRosterFile() {
     r.Note("steam:6", 6, "plopette", older, "Geoffrey", RosterKind::Own);
     r.Note("steam:6", 6, "plopette", newer, "plopette", RosterKind::Own);
     CHECK(r.ReservedFor(newer) == "steam:6" && r.ReservedFor(older).empty() && r.AnyRecordOf(older) == "steam:6");
+    // 0.3.7: the older own character given to another player is theirs now, not handed back by a resync
+    r.Note("steam:7", 7, "rob1", older, "Geoffrey", RosterKind::Member);
+    CHECK(r.AnyRecordOf(older) == "steam:7" && r.ReservedFor(newer) == "steam:6");
     // written and read back the same (0.3.4 readers skip the new lines: not a handle after the id)
     Roster back;
     back.Parse(r.Serialize());
