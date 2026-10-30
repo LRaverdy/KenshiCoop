@@ -199,7 +199,8 @@ Lignes correspondantes :
 | `[X] walks away from the conversation with Y` / `conversation N ended by the mod (ok)` | le joueur part : l'hôte termine la conversation |
 | `conversation N ends: <raison>` | fermeture forcée (combat, TP, K.-O., perso disparu, fin sans fermeture) |
 | `[X] order "talk" (12) -> refused: Y is busy talking with Z` / `conversation refused: that NPC is in conversation N with another player's character` | une conversation à la fois par PNJ (« occupé ») |
-| `the host's own conversation: the game is not paused in co-op` | la pause que le jeu met en ouvrant la fenêtre de l'hôte est levée |
+| `the host's own conversation: the game is not paused in co-op` | la pause que le jeu met en ouvrant la fenêtre de l'hôte est levée (0.3.8 : à la fin de l'image, sur le fil principal) |
+| `skill up (seen on the host): <perso> of <joueur> <compétence> a -> b` | (0.3.8, hôte) un perso d'un joueur gagne un niveau entier dans le jeu de l'hôte |
 | `NPC Y joined the player faction: a squad character now` / `a new squad character (Y) goes to X, who was talking with it (recruited)` | recrue d'une conversation |
 | `[X] goes to look into Y` → `[X] opens Y` → `[X] closes the container` | contenant |
 | `[X] steals Y (unseen)` / `[X] caught stealing Y` | vol réussi / vol repéré (la fenêtre se ferme) |

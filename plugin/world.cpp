@@ -359,6 +359,10 @@ void KenshiWorld::EndFrame() {
                 kenshi::CallSetFrameSpeed(hostTime_.speed);
         }
     }
+    if (dialogUnpausePending.exchange(false) && active_ && !client_ && !holding_ && kenshi::GetPaused() && kenshi::CallUserPause(false)) {
+        ++hostDialogUnpaused;
+        Log("the host's own conversation: the game is not paused in co-op");
+    }
     UpdateEditorStage(NowSeconds());   // night-join: the character editor's stage, paused or not
     // While players join, the host's world stays frozen even if someone presses unpause.
     if (holding_ && !kenshi::GetPaused()) {

@@ -764,7 +764,14 @@ Emplacements de vtable :
   (`0x727875`, `dl = 1`) avant d'ouvrir la fenêtre, et `0x721F20` `userPause(false)` en la fermant.
   En solo, parler à quelqu'un fige donc le monde. En coop, la fenêtre d'une conversation d'un client
   n'est jamais ouverte chez l'hôte (pas de pause) ; celle de l'hôte lui-même l'est, et le mod lève la
-  pause aussitôt quand d'autres joueurs sont là (voir FONCTIONNALITES « Dialogues »).
+  pause quand d'autres joueurs sont là (voir FONCTIONNALITES « Dialogues »). **Pas dans `setInDialog`** :
+  `userPause(false)` appelé là, pendant la création de la fenêtre, a fait planter le rendu de l'hôte trois
+  fois (26 et 30/10) ; depuis la 0.3.8 c'est `EndFrame` qui le fait, sur le fil principal.
+- **Bouton UPGRADE** : les thunks `0x313D50` / `0x313D90` (`mov rax,[rcx]; jmp [rax+258h/260h]`) servent à
+  tous les délégués sur une fonction virtuelle à ces places, pas seulement aux bâtiments : ne pas les
+  crocheter. Depuis la 0.3.8 le mod remplace les entrées `0x258` / `0x260` de la vtable du `Building` de base
+  (`0x16EA4A8`, entrées `0x27EDA` → `0x2A49E0` et `0x1D791` → `0x2A4DB0`). Le jeu appelle aussi ces
+  fonctions directement (`0xDEF25`, `0xDF035`, `0x2A5ECA`), sans passer par la vtable.
 
 ### Inventaires
 - `Inventory` : +0x10 tous les objets (`lektor<Item*>`) ; +0x28 sections (table nom →

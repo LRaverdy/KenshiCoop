@@ -804,7 +804,7 @@ bool KenshiWorld::NoteUiUpgrade(void* b, int variant) {
     if (variant != 1 && variant != 2) return false;
     if (!IsBuilding(b)) return false;
     void* fn = Slot(b, variant == 1 ? 0x258 : 0x260);
-    if (!fn || uintptr_t(fn) != kenshi::Addr(variant == 1 ? kUpgradeSlotA : kUpgradeSlotB)) {
+    if (!fn || !IsBaseUpgradeEntry(fn, variant)) {
         static bool said = false;
         if (!said) { said = true; Log("upgrade: this building's slot %d is not the game's upgrade (a building class of its own): left to the game", variant); }
         return false;
@@ -863,12 +863,12 @@ bool KenshiWorld::ExecuteBuildAction(const kc::BuildAction& a, std::string& refu
     }
     if (a.kind == kc::BuildActionKind::Upgrade) {
         void* fn = Slot(b, a.arg == 2 ? 0x260 : 0x258);
-        if (!fn || uintptr_t(fn) != kenshi::Addr(a.arg == 2 ? kUpgradeSlotB : kUpgradeSlotA)) {
+        if (!fn || !IsBaseUpgradeEntry(fn, a.arg == 2 ? 2 : 1)) {
             refused = "Ce bâtiment ne s'améliore pas ainsi.";
             return false;
         }
-        HostCallScope scope;   // (not through the delegate thunk our hook watches)
-        return VoidSeh(fn, b);
+        HostCallScope scope;   // the game's entry itself, not ours in the vtable
+        return VoidSeh(reinterpret_cast<void*>(kenshi::Addr(a.arg == 2 ? kUpgradeSlotB : kUpgradeSlotA)), b);
     }
     HostCallScope scope;
     return IntArgSeh(kenshi::FnAddr(kenshi::FnConfirmDismantle), b, a.arg ? a.arg : kAnswerYes);

@@ -672,10 +672,9 @@ void hk_setInDialog(void* d, bool on) {
         if (on && w && !v->squadForeign.empty()) {
             const bool before = kenshi::GetPaused();
             o_setInDialog(d, on);
-            if (!before && kenshi::GetPaused() && kenshi::CallUserPause(false)) {
-                ++w->hostDialogUnpaused;
-                Log("the host's own conversation: the game is not paused in co-op");
-            }
+            // 0.3.8: not here: userPause(false) in the middle of the window's creation crashed the
+            // host's renderer three times (16-120 ms later, 26 and 30 Oct); EndFrame does it
+            if (!before && kenshi::GetPaused()) w->dialogUnpausePending = true;
             return;
         }
     }
@@ -1850,19 +1849,48 @@ void hk_confirmDismantle(void* building, int answer) {
     if (answer == 2) w->NoteLocalBuildAction(building, kc::BuildActionKind::Dismantle, answer);
 }
 // 0.3.7: the UPGRADE button of a building's panel (a MyGUI delegate on a virtual member: the thunks
-// `mov rax,[rcx]; jmp [rax+258h]` / `[rax+260h]`, shared by every class that has such a delegate; only a
-// Building's upgrade function is acted on, see KenshiWorld::NoteUiUpgrade)
-using UpgradeThunkFn = void (*)(void* self, void* widget);
-UpgradeThunkFn o_upgradeThunkA = nullptr, o_upgradeThunkB = nullptr;
-void hk_upgradeThunkA(void* self, void* widget) {
+// `mov rax,[rcx]; jmp [rax+258h]` / `[rax+260h]` call the Building's vtable slots 0x258 / 0x260).
+// 0.3.8: no longer a hook on those thunks: shared by every class with such a delegate, any call of
+// theirs went through our C++ (arguments past the second, float registers, a struct return not kept).
+// The base Building's vtable entries are swapped for these instead: only a Building's upgrade comes
+// here (see KenshiWorld::NoteUiUpgrade); the game's own direct calls (0xDEF25, 0xDF035, 0x2A5ECA) do not.
+using UpgradeFn = void (*)(void* self, void* widget);
+constexpr uintptr_t kBuildingVtable = 0x16EA4A8, kUpgradeEntryA = 0x27EDA, kUpgradeEntryB = 0x1D791;
+void hk_upgradeA(void* self, void* widget) {
     KenshiWorld* w = TheWorld();
     if (!g_hostCall && KenshiWorld::View()->active && w && self && w->NoteUiUpgrade(self, 1)) return;
-    o_upgradeThunkA(self, widget);
+    reinterpret_cast<UpgradeFn>(kenshi::Addr(kUpgradeEntryA))(self, widget);
 }
-void hk_upgradeThunkB(void* self, void* widget) {
+void hk_upgradeB(void* self, void* widget) {
     KenshiWorld* w = TheWorld();
     if (!g_hostCall && KenshiWorld::View()->active && w && self && w->NoteUiUpgrade(self, 2)) return;
-    o_upgradeThunkB(self, widget);
+    reinterpret_cast<UpgradeFn>(kenshi::Addr(kUpgradeEntryB))(self, widget);
+}
+bool g_upgradeSlotsPatched = false;
+// write `to` over the vtable entry when it holds `from` (the vtable is in .rdata: read-only)
+bool SwapVtableEntry(uintptr_t slotRva, uintptr_t from, uintptr_t to) {
+    auto* at = reinterpret_cast<uintptr_t*>(kenshi::Addr(slotRva));
+    if (*at != from) return false;
+    DWORD old = 0;
+    if (!VirtualProtect(at, sizeof(uintptr_t), PAGE_READWRITE, &old)) return false;
+    *at = to;
+    VirtualProtect(at, sizeof(uintptr_t), old, &old);
+    return true;
+}
+void PatchUpgradeSlots(bool on) {
+    if (on == g_upgradeSlotsPatched) return;
+    const uintptr_t a = kenshi::Addr(kUpgradeEntryA), b = kenshi::Addr(kUpgradeEntryB);
+    const uintptr_t ha = reinterpret_cast<uintptr_t>(&hk_upgradeA), hb = reinterpret_cast<uintptr_t>(&hk_upgradeB);
+    bool ok = true;
+    if (on) {
+        ok = SwapVtableEntry(kBuildingVtable + 0x258, a, ha);
+        ok = SwapVtableEntry(kBuildingVtable + 0x260, b, hb) && ok;
+    } else {
+        SwapVtableEntry(kBuildingVtable + 0x258, ha, a);
+        SwapVtableEntry(kBuildingVtable + 0x260, hb, b);
+    }
+    g_upgradeSlotsPatched = on;
+    if (on && !ok) Log("upgrade: the Building vtable does not hold the game's upgrade entries: UPGRADE left to the game");
 }
 using BuildProgressFn = void (*)(void* building, float amount);
 BuildProgressFn o_addConstruction = nullptr;
@@ -2233,8 +2261,6 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnCharacterCursor, reinterpret_cast<void*>(&hk_charCursor), reinterpret_cast<void**>(&o_charCursor)},   // 0.3.4
         {kenshi::FnBuildingCursor, reinterpret_cast<void*>(&hk_buildingCursor), reinterpret_cast<void**>(&o_buildingCursor)},   // 23/10
         {kenshi::FnGroupSpeed, reinterpret_cast<void*>(&hk_groupSpeed), reinterpret_cast<void**>(&o_groupSpeed)},   // 26/10
-        {kenshi::FnUpgradeThunkA, reinterpret_cast<void*>(&hk_upgradeThunkA), reinterpret_cast<void**>(&o_upgradeThunkA)},   // 27/10
-        {kenshi::FnUpgradeThunkB, reinterpret_cast<void*>(&hk_upgradeThunkB), reinterpret_cast<void**>(&o_upgradeThunkB)},
         // ---- fix G5
         {kenshi::FnCharRemovePermajob, reinterpret_cast<void*>(&hk_removePermajob), reinterpret_cast<void**>(&o_removePermajob)},
         {kenshi::FnCharMovePermajob, reinterpret_cast<void*>(&hk_movePermajob), reinterpret_cast<void**>(&o_movePermajob)},
@@ -2382,14 +2408,23 @@ bool InstallHooks(TickFn tick, std::string* err) {
         RemoveHooks();
         return false;
     }
+    PatchUpgradeSlots(true);
     return true;
 }
 
 void RemoveHooks() {
+    PatchUpgradeSlots(false);
     MH_DisableHook(MH_ALL_HOOKS);
     for (void* t : g_installed) MH_RemoveHook(t);
     g_installed.clear();
     g_tick = nullptr;
+}
+
+// 0.3.8: a vtable slot holding the game's upgrade entry or ours in its place (see PatchUpgradeSlots)
+bool IsBaseUpgradeEntry(const void* fn, int variant) {
+    const uintptr_t f = reinterpret_cast<uintptr_t>(fn);
+    return variant == 2 ? f == kenshi::Addr(kUpgradeEntryB) || f == reinterpret_cast<uintptr_t>(&hk_upgradeB)
+                        : f == kenshi::Addr(kUpgradeEntryA) || f == reinterpret_cast<uintptr_t>(&hk_upgradeA);
 }
 
 } // namespace kcp

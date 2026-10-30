@@ -1102,6 +1102,7 @@ private:
     bool moneySent_ = false;
     int32_t lastMoney_ = 0;
     double moneyAt_ = -1e9;
+    std::unordered_map<uint32_t, std::vector<float>> levelsSeen_;   // host: whole skill levels last seen per entity (log of level ups)
     DialogView dialog_;                    // client
     SquadsMsg lastSquads_;                 // host: last sent / client: last received
     bool haveSquads_ = false;

@@ -4,6 +4,28 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
+## v0.3.8 (30 octobre 2026)
+
+Protocole inchangé (36). Correctif rapide après la partie du 30/10.
+
+- **Plantage de l'hôte en parlant à un PNJ** (30/10 23:11 avec l'Inquisiteur, 23:20 avec un autre ; déjà le
+  26/10 22:18). Trois plantages dans le rendu (Ogre / D3D11 / pilote NVIDIA), à chaque fois 16 à 120 ms après
+  la ligne « the host's own conversation: the game is not paused in co-op ». En coop, le mod enlève la pause
+  que le jeu met en ouvrant la fenêtre de conversation de l'hôte ; il le faisait **dans** l'appel qui crée la
+  fenêtre (`setInDialog`, que le jeu fait aussi depuis d'autres fils), en plein milieu de sa construction.
+  Maintenant ce n'est plus fait là : la demande est notée, et `EndFrame` enlève la pause à la fin de l'image,
+  sur le fil principal. La conversation reste sans pause pour les autres joueurs (une image de pause au plus).
+- **Bouton UPGRADE : plus de crochet sur du code partagé du jeu.** En 0.3.7, le clic était intercepté sur les
+  deux petites fonctions (`0x313D50` / `0x313D90`, `mov rax,[rcx]; jmp [rax+258h]`) que **toutes** les classes
+  du jeu utilisent pour un délégué sur une fonction virtuelle à ces places : chacun de ces appels passait par
+  notre code, qui ne transmettait que deux arguments. Maintenant ce sont les deux entrées de la vtable du
+  `Building` de base (`0x16EA4A8` + `0x258` / `0x260`) qui pointent sur nos fonctions : seul un bâtiment y
+  passe. Même comportement (le clic d'un client part à l'hôte, l'hôte le fait rejouer par tous). Les entrées
+  d'origine sont remises à l'arrêt du mod.
+- **Journal : montées de compétence vues par l'hôte.** Une ligne « skill up (seen on the host): <perso> of
+  <joueur> <compétence> a -> b » pour chaque niveau entier gagné par un perso d'un joueur (rob1 ne voit pas
+  Oron prendre d'XP : à la prochaine partie on saura si le jeu de l'hôte lui en donne).
+
 ## v0.3.7 (27 octobre 2026)
 
 Protocole inchangé (36).

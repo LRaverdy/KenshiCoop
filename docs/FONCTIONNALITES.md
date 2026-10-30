@@ -507,7 +507,8 @@ que son joueur, le monde continue pour les autres.
 - Celle d'un client n'ouvre pas non plus la fenêtre du jeu chez lui : sa vitesse reste celle de l'hôte.
 - La propre conversation de l'hôte, quand d'autres joueurs ont des persos : le mod lève aussitôt la
   pause que le jeu vient de mettre (journal « the host's own conversation: the game is not paused in
-  co-op »). Seul, l'hôte garde le comportement du jeu.
+  co-op »), à la fin de l'image sur le fil principal (0.3.8 : le faire pendant la création de la fenêtre
+  faisait planter le rendu de l'hôte). Seul, l'hôte garde le comportement du jeu.
 
 **Vue de l'hôte** : quand un client parle près de lui, l'hôte voit les bulles (son jeu les dit), pas
 la fenêtre du client.

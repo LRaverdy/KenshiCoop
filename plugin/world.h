@@ -485,6 +485,7 @@ public:
     // say: `talkto` / `npcevent ... dlg` pick it).
     kc::Handle LastDialogNpc();
     int dialogsBusyRefused = 0, dialogsSwept = 0, hostDialogUnpaused = 0;
+    std::atomic<bool> dialogUnpausePending{false};   // 0.3.8: the unpause is done by EndFrame, not inside the window's creation
     int hostBuildUnpaused = 0;   // host: build mode opened in co-op, its pause lifted (hooks.cpp hk_buildActivate)
     int saysApplied = 0;          // tests (client): speech bubbles replayed
     // tests ("floaters"): damage numbers. Host: made by addWound and sent (floatersMade), made off its

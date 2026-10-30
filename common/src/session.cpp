@@ -2033,6 +2033,20 @@ void Session::SendProgress(double now) {
         p.netId = id;
         if (world_.ReadProgress(e.handle, p.stats, p.modes, p.style) && p.stats.size() == kStatCount) {
             world_.ReadTool(e.handle, p.tool);
+            // 0.3.8: the host's own record of whose characters level up, to tell "the host's game gains
+            // nothing for it" from "the player was not told" when a player says they see no experience
+            auto& seen = levelsSeen_[id];
+            if (seen.size() == kStatCount && e.squad && e.owner != hostId_) {
+                int told = 0;
+                for (size_t i = 0; i < kStatCount && told < 2; ++i)
+                    if (int(std::floor(p.stats[i])) > int(std::floor(seen[i]))) {
+                        ++told;
+                        const auto pl = players_.find(e.owner);
+                        log_("skill up (seen on the host): " + world_.CharacterNameOf(e.handle) + " of " + (pl != players_.end() ? pl->second.name : std::string("?")) + " " +
+                             StatNameFr(i) + " " + std::to_string(int(std::floor(seen[i]))) + " -> " + std::to_string(int(std::floor(p.stats[i]))));
+                    }
+            }
+            seen = p.stats;
             cur[id] = std::move(p);
         }
     }
