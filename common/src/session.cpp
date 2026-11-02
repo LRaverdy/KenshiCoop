@@ -1150,6 +1150,7 @@ void Session::SendSnapshots(double now) {
                 Sent& last = sent[id];
                 if (!FarTierDue(st, last.state, now - last.at)) continue;
                 last.state = st;
+                if (last.at < -1e8) last.firstAt = now;
                 last.at = now;
                 EntityState low = st;
                 low.flags |= kFlagFar;
@@ -1160,6 +1161,7 @@ void Session::SendSnapshots(double now) {
             const bool moving = (st.flags & kFlagMoving) != 0;
             if (!moving && !StateChanged(st, last.state) && now - last.at < cfg_.refreshInterval) continue;
             last.state = st;
+            if (last.at < -1e8) last.firstAt = now;
             last.at = now;
             s.entities.push_back(st);
         }
@@ -2039,7 +2041,7 @@ void Session::SendProgress(double now) {
             if (seen.size() == kStatCount && e.squad && e.owner != hostId_) {
                 int told = 0;
                 for (size_t i = 0; i < kStatCount && told < 2; ++i)
-                    if (int(std::floor(p.stats[i])) > int(std::floor(seen[i]))) {
+                    if (seen[i] >= 0.0f && p.stats[i] >= 0.0f && int(std::floor(p.stats[i])) > int(std::floor(seen[i]))) {
                         ++told;
                         const auto pl = players_.find(e.owner);
                         log_("skill up (seen on the host): " + world_.CharacterNameOf(e.handle) + " of " + (pl != players_.end() ? pl->second.name : std::string("?")) + " " +
@@ -2048,6 +2050,10 @@ void Session::SendProgress(double now) {
             }
             seen = p.stats;
             cur[id] = std::move(p);
+        } else if (e.squad && progressUnreadTold_.insert(id).second) {
+            // 0.3.9: a squad character whose skills the host cannot read goes without them on every client
+            log_("progress: " + world_.CharacterNameOf(e.handle) + " (netId " + std::to_string(id) + ", owner " + std::to_string(e.owner) +
+                 "): skills not readable on the host (character not found under its handle, or no skill block): not sent");
         }
     }
     int32_t money = 0;
@@ -2060,8 +2066,18 @@ void Session::SendProgress(double now) {
         ProgressMsg m;
         m.hasMoney = haveMoney;
         m.money = money;
+        int unknownSquad = 0, sentNow = 0;
         for (const auto& [id, prog] : cur) {
-            Sent& last = sent[id];
+            // 0.3.9: not before the player has had the character for a moment: a Progress for a netId
+            // the client does not know yet is dropped there, and was marked sent here (20 s without
+            // skills, modes or tool)
+            auto known = sent.find(id);
+            if (known == sent.end() || known->second.at < -1e8 || now - known->second.firstAt < 2.0) {
+                if (auto e = entities_.find(id); e != entities_.end() && e->second.squad) ++unknownSquad;
+                continue;
+            }
+            ++sentNow;
+            Sent& last = known->second;
             if (!StatsChanged(prog.stats, last.stats) && prog.modes == last.modes && prog.style == last.style && prog.tool == last.tool &&
                 now - last.statsAt < 20.0)
                 continue;
@@ -2076,6 +2092,15 @@ void Session::SendProgress(double now) {
                 Encode(w, m);
                 SendReliable(p.peer, w);
                 m.chars.clear();
+            }
+        }
+        // 0.3.9: squad characters held back because this player never got their state (rob1: no skills)
+        if (unknownSquad > 0) {
+            double& told = progressHeldToldAt_[pid];
+            if (now - told > 60.0) {
+                told = now;
+                log_("progress: to " + p.name + ": " + std::to_string(unknownSquad) + " squad character(s) held back (their state not sent to this player yet), " +
+                     std::to_string(sentNow) + " character(s) eligible");
             }
         }
         if (m.chars.empty() && !moneyNew) continue;
@@ -4229,7 +4254,7 @@ void Session::ClientPacket(Msg type, Reader& r) {
                 int told = 0;
                 for (size_t i = 0; i < kStatCount && told < 3; ++i) {
                     const int before = int(std::floor(it->second.stats[i])), after = int(std::floor(c.stats[i]));
-                    if (after <= before) continue;
+                    if (after <= before || before < 0) continue;   // (a negative value: a skill the host could not read)
                     ++told;
                     const std::string name = world_.CharacterNameOf(it->second.handle);
                     AddChat("* " + (name.empty() ? std::string("Ton personnage") : name) + " : " + StatNameFr(i) + " " + std::to_string(before) + " -> " +

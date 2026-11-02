@@ -2500,3 +2500,23 @@ Lu au désassembleur sur `kenshi_x64.exe` 1.0.68 (A_FAIRE 16/10 points 7, 8, 10,
 - Un esclave évadé (`StateBroadcastData`+0 = 2, « escaped », peine en cours) marche librement chez
   l'hôte (plopette, 16/10 22:30-22:43) : l'état d'esclave et la peine ne tiennent pas la pose ; seuls
   la cage ou le lit (`inSomething` 2 / 1) et les chaînes (+0x320) la tiennent.
+
+## Membres coupés et zones (0.3.9)
+
+- `0xCD870` (vtable `SeveredLimbItem` 0x1685358, fente +0x208, par le thunk `0x4ED5`) : retire un membre coupé
+  de toutes les zones. Appelé par `GameWorld::destroy` (`0x799AF0`, retour `0x79A2A2`) quand une zone se
+  décharge (`ZoneMapContent::deactivate` `0x9FE980`, appel `0x9FEC4F`). Il copie les zones du gestionnaire
+  (`*0x1421349C0`, `0xA0A710`), puis pour chacune lit `rdi = *entry` (`ZoneMapContent*`) **sans test de nul**
+  (`0xCD956`, et la boucle de vérification `0xCDD36`) et cherche le membre dans la table de la zone (+0x128
+  nombre de seaux, +0x130 taille, +0x148 seaux). Crash `0xCDA22` (`mov r12,[rdi+0x128]`, rdi = 0) le 26 et le
+  30/10. Le mod (0.3.9) détourne ces deux lectures vers un code qui saute la zone (incréments `0xCDAB6`, qui
+  attend `ebx = 0x9E3779C4`, et `0xCDE8D`).
+
+## Niveaux de compétence un peu négatifs (0.3.9)
+
+- Les 34 flottants de `CharStats` (`kStatOffsets`) ne sont pas toujours dans 0..100 : le jeu a de vraies
+  valeurs un peu sous 0 (Ingénierie -0,53, Forge d'armes -1,58, Vol -0,84 ; 7 dans le monde de la partie du
+  30/10, des PNJ et des persos de l'escouade). L'interface affiche 0. Le mod les lit et les écrit dans
+  -100..1000 (`StatValueOk`) ; sur le réseau elles partent comme 0 (`ProgressWireStat`), car un client
+  jusqu'à la 0.3.8 jette tout un message de compétences au moindre niveau hors 0..1000.
+

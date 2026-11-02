@@ -72,6 +72,14 @@ void* Slot(const void* obj, uintptr_t slot) {
     void* fn = nullptr;
     return obj && Rd(obj, 0, vt) && kenshi::InGameImage(vt) && Rd(vt, slot, fn) && kenshi::InGameImage(fn) ? fn : nullptr;
 }
+// 0.3.9: the upgrade slots hold our own entries (hk_upgradeA/B, in this DLL, not the game's image): Slot
+// refused them, so every UPGRADE click was left to the game alone since 0.3.8. IsBaseUpgradeEntry checks
+// the value itself.
+void* UpgradeSlot(const void* obj, uintptr_t slot) {
+    void* vt = nullptr;
+    void* fn = nullptr;
+    return obj && Rd(obj, 0, vt) && kenshi::InGameImage(vt) && Rd(vt, slot, fn) ? fn : nullptr;
+}
 
 void* CreateSeh(void* fn, void* factory, void* data, const float* pos, void* town, void* faction, const float* rot, void* cb, void* layout,
                 void* indoors, int floor, bool outside, bool completed = false) {
@@ -623,10 +631,12 @@ bool KenshiWorld::SpawnFinishedBuilding(const std::string& sid, const kc::Vec3& 
 bool KenshiWorld::ReadBuildState(const kc::Handle& h, float& progress, uint8_t& flags) {
     void* b = kenshi::ResolveObject(h);
     if (!ReadBuildStateOf(b, progress, flags)) return false;
+    if (!client_ && !(flags & kc::kSiteComplete)) sitesSeenOpen_.insert(h);
     // host: a followed building finished here gets its collision too (nothing if the game did it)
     if (!client_ && (flags & kc::kSiteComplete) && !(flags & kc::kSiteDismantling)) {
         HostCallScope scope;
-        if (navRefreshed_.insert(h).second && RefreshNavmesh(b)) {
+        // 0.3.9: only a site seen open in this world (not every finished building of a save just loaded)
+        if (sitesSeenOpen_.count(h) && navRefreshed_.insert(h).second && RefreshNavmesh(b)) {
             std::string sid;
             kenshi::ObjectTemplate(b, sid);
             Log("building %s finished: the navigation mesh around it regenerated", sid.c_str());
@@ -684,6 +694,7 @@ void KenshiWorld::ApplyBuildState(const kc::Handle& h, float progress, uint8_t f
     float cur = 0;
     uint8_t complete = 0;
     if (!st || !Rd(st, CS_progress, cur) || !Rd(st, CS_complete, complete)) return;
+    const bool wasComplete = complete != 0;
     HostCallScope scope;
     if (std::fabs(cur - progress) > 0.01f) {
         if (void* fn = Slot(b, BV_setConstructionProgress)) FloatArgSeh(fn, b, progress);   // completes it when it reaches the total
@@ -699,7 +710,10 @@ void KenshiWorld::ApplyBuildState(const kc::Handle& h, float progress, uint8_t f
     const uint8_t paused = (flags & kc::kSitePaused) ? 1 : 0, dismantled = (flags & kc::kSiteDismantling) ? 1 : 0;
     Wr(st, CS_paused, paused);
     Wr(st, CS_dismantled, dismantled);
-    if ((flags & kc::kSiteComplete) && !(flags & kc::kSiteDismantling) && navRefreshed_.insert(h).second && RefreshNavmesh(b)) {
+    // 0.3.9: only a building that was finished here just now (nass4 31/10 00:19, a resync: the 8 finished
+    // buildings of the save regenerated as the world loaded, and the game's navmesh thread crashed 1.3 s
+    // later adding an instance, kenshi_x64+0x3AE88B "NavMeshMain"); one finished in the save has its own
+    if ((flags & kc::kSiteComplete) && !(flags & kc::kSiteDismantling) && navRefreshed_.insert(h).second && !wasComplete && RefreshNavmesh(b)) {
         std::string sid;
         kenshi::ObjectTemplate(b, sid);
         Log("building %s finished here: the navigation mesh around it regenerated", sid.c_str());
@@ -803,7 +817,7 @@ void KenshiWorld::NoteLocalBuildAction(void* building, kc::BuildActionKind kind,
 bool KenshiWorld::NoteUiUpgrade(void* b, int variant) {
     if (variant != 1 && variant != 2) return false;
     if (!IsBuilding(b)) return false;
-    void* fn = Slot(b, variant == 1 ? 0x258 : 0x260);
+    void* fn = UpgradeSlot(b, variant == 1 ? 0x258 : 0x260);
     if (!fn || !IsBaseUpgradeEntry(fn, variant)) {
         static bool said = false;
         if (!said) { said = true; Log("upgrade: this building's slot %d is not the game's upgrade (a building class of its own): left to the game", variant); }
@@ -862,7 +876,7 @@ bool KenshiWorld::ExecuteBuildAction(const kc::BuildAction& a, std::string& refu
         return false;
     }
     if (a.kind == kc::BuildActionKind::Upgrade) {
-        void* fn = Slot(b, a.arg == 2 ? 0x260 : 0x258);
+        void* fn = UpgradeSlot(b, a.arg == 2 ? 0x260 : 0x258);
         if (!fn || !IsBaseUpgradeEntry(fn, a.arg == 2 ? 2 : 1)) {
             refused = "Ce bâtiment ne s'améliore pas ainsi.";
             return false;

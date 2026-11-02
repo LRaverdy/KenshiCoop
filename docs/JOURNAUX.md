@@ -201,6 +201,10 @@ Lignes correspondantes :
 | `[X] order "talk" (12) -> refused: Y is busy talking with Z` / `conversation refused: that NPC is in conversation N with another player's character` | une conversation à la fois par PNJ (« occupé ») |
 | `the host's own conversation: the game is not paused in co-op` | la pause que le jeu met en ouvrant la fenêtre de l'hôte est levée (0.3.8 : à la fin de l'image, sur le fil principal) |
 | `skill up (seen on the host): <perso> of <joueur> <compétence> a -> b` | (0.3.8, hôte) un perso d'un joueur gagne un niveau entier dans le jeu de l'hôte |
+| `progress: <nom> (…): skill N (…) reads V, out of -100..1000: sent as 0 (sent as unknown)` / `progress: <nom> (…) has no readable skill block` | (0.3.9, hôte) une compétence vraiment bizarre (les valeurs un peu négatives du jeu sont normales et ne sont pas signalées), ou pas de bloc de compétences : dit une fois par perso |
+| `progress: to <joueur>: N squad character(s) held back …, M character(s) eligible` | (0.3.9, hôte, au plus une fois par minute) des persos de l'escouade n'ont pas encore reçu leur premier état chez ce joueur, donc pas leurs compétences : normal pendant l'éditeur de perso, anormal s'il revient ensuite |
+| `progress: <nom> (netId N, owner P): skills not readable on the host …` | (0.3.9, hôte) un perso de l'escouade dont l'hôte ne lit pas les compétences : ce joueur ne verra pas son XP |
+| `severed limbs: the zone walk skips a zone with no content` | (0.3.9, démarrage) le patch du plantage 0xCDA22 est posé (sinon « … not as expected ») |
 | `NPC Y joined the player faction: a squad character now` / `a new squad character (Y) goes to X, who was talking with it (recruited)` | recrue d'une conversation |
 | `[X] goes to look into Y` → `[X] opens Y` → `[X] closes the container` | contenant |
 | `[X] steals Y (unseen)` / `[X] caught stealing Y` | vol réussi / vol repéré (la fenêtre se ferme) |

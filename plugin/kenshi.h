@@ -592,6 +592,14 @@ Character* MedicalCharacter(const void* medical);
 bool ReadVitals(Character* c, kc::EntityVitals& out);
 // Skill levels (kc::kStatCount floats, in kStatOffsets order) and the player faction's money.
 bool ReadStats(Character* c, std::vector<float>& out);
+constexpr float kStatUnknown = -1.0e6f;   // 0.3.9: a skill field the host could not read (WriteStats skips it)
+// 0.3.9: the game's own skill values go slightly below 0 (Engineering -0.53, Weaponsmithing -1.58 seen 31/10):
+// those are real values (read and written as they are here; on the wire ProgressWireStat keeps every
+// level within 0..1000, which a 0.3.8 client needs); only a value outside this range is odd
+constexpr float kStatMin = -100.0f, kStatMax = 1000.0f;
+inline bool StatValueOk(float v) { return v == v && v >= kStatMin && v <= kStatMax; }   // (NaN fails v == v; +-inf fail the range)
+bool ReadStatsLenient(Character* c, std::vector<float>& out, int& badField, float& badValue);   // every field; an odd one as kStatUnknown
+bool StatsBlockOk(Character* c);   // the character has its CharStats (CharStats::me == c)
 bool WriteStats(Character* c, const std::vector<float>& stats);
 bool ReadPlayerMoney(int32_t& out);
 bool WritePlayerMoney(int32_t money);
@@ -962,6 +970,7 @@ bool SetBuildingFloorVisible(void* building, int floor, bool visible);   // Buil
 // mod's start alike). On while hosting: that jump is replaced by a NOP; off: the game's bytes back.
 // Main thread only. False if the bytes there are not the expected ones (another game version).
 bool SetFarTalk(bool on);
+bool PatchLimbZoneNullChecks();   // 0.3.9: the game's severed-limb zone walk skips a zone with no content (crash 0xCDA22)
 // MedicalSystem::addWound skips its whole visual part (damage numbers included) when the wounded one
 // is more than 4000 units from the camera (0x651348: squaredDistance > 16e6 at 0x16EAC6C, jbe
 // 0x651359 -> 0x651F69). hk_addWound lifts it for the call, for characters near a client player's

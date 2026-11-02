@@ -941,6 +941,7 @@ private:
     struct Sent {                            // host: what a player last received for an entity
         EntityState state;
         double at = -1e9;
+        double firstAt = -1e9;               // 0.3.9: when its state was first sent to this player
         EntityVitals vitals;
         double vitalsAt = -1e9;
         std::vector<float> stats;
@@ -1103,6 +1104,8 @@ private:
     int32_t lastMoney_ = 0;
     double moneyAt_ = -1e9;
     std::unordered_map<uint32_t, std::vector<float>> levelsSeen_;   // host: whole skill levels last seen per entity (log of level ups)
+    std::unordered_set<uint32_t> progressUnreadTold_;              // 0.3.9: squad characters whose skills could not be read, said once
+    std::unordered_map<uint8_t, double> progressHeldToldAt_;       // 0.3.9: per player, when "squad characters held back" was last said
     DialogView dialog_;                    // client
     SquadsMsg lastSquads_;                 // host: last sent / client: last received
     bool haveSquads_ = false;

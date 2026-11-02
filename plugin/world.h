@@ -485,7 +485,8 @@ public:
     // say: `talkto` / `npcevent ... dlg` pick it).
     kc::Handle LastDialogNpc();
     int dialogsBusyRefused = 0, dialogsSwept = 0, hostDialogUnpaused = 0;
-    std::atomic<bool> dialogUnpausePending{false};   // 0.3.8: the unpause is done by EndFrame, not inside the window's creation
+    std::atomic<bool> dialogUnpausePending{false};
+    std::atomic<bool> buildUnpausePending{false};    // 0.3.9: the same for the host's build mode (togglePause(false))   // 0.3.8: the unpause is done by EndFrame, not inside the window's creation
     int hostBuildUnpaused = 0;   // host: build mode opened in co-op, its pause lifted (hooks.cpp hk_buildActivate)
     int saysApplied = 0;          // tests (client): speech bubbles replayed
     // tests ("floaters"): damage numbers. Host: made by addWound and sent (floatersMade), made off its
@@ -583,6 +584,7 @@ private:
     std::unordered_map<const void*, float> groupCaps_;   // movement -> cap, published to the hooks
     std::unordered_set<kenshi::Character*> speedCapped_;   // host (0.3.6): characters whose speed cap UpdateGroupSpeed set
     bool researchNoRestart_ = false;   // kenshi::SetResearchRefreshNoRestart applied (client)
+    std::unordered_set<kc::Handle, kc::HandleHash> sitesSeenOpen_;   // host 0.3.9: buildings seen unfinished in this world
     std::unordered_set<kc::Handle, kc::HandleHash> navRefreshed_;   // finished buildings whose navigation mesh was regenerated (buildings.cpp)
     // Characters the game destroyed or unloaded with their zone since the last frame (any thread,
     // under destroyedMutex_): every state of ours that holds their address is dropped before it is
@@ -942,6 +944,7 @@ private:
     struct OrderDrop { int rethinks = 0, clears = 0; double clearedAt = -1e9; bool told = false; };
     std::unordered_map<kc::Handle, OrderDrop, HandleHash> orderDrop_;          // client: leftover tasks and orders of a copy (save)
     std::unordered_map<kc::Handle, double, HandleHash> traceClearedAt_;        // client: captivity leftovers cleared (EnsureFree)
+    std::unordered_set<kc::Handle, HandleHash> statsToldBad_;                   // host 0.3.9: "skill block not readable" said once per character
     std::unordered_map<kc::Handle, double, HandleHash> sneakToldAt_;           // host: "stealth order on but not sneaking" line
     void NoteStealthOrder(const kc::Handle& h, kenshi::Character* c, uint16_t modes);   // host: diagnostics of point 8
     void ClearCaptivityTraces(const kc::Handle& h, kenshi::Character* c);              // client: free on the host, marks here cleared (prisons.cpp)

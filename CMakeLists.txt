@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(KenshiCoop VERSION 0.3.8 LANGUAGES C CXX)
+project(KenshiCoop VERSION 0.3.9 LANGUAGES C CXX)
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "KenshiCoop must be built for x64 (Kenshi is 64-bit)")
@@ -11,6 +11,10 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # Static CRT: the plugin must not depend on a VC++ redistributable being installed.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+# 0.3.9 (audit 30/10): /EHa, not /EHsc: an access violation caught by the tick's __except unwinds our
+# frames with their destructors (lock_guards released, scopes closed); with /EHsc every mutex held at
+# the faulting point stayed locked for good.
+string(REPLACE "/EHsc" "/EHa" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 
 option(KC_ASAN "Build tests with AddressSanitizer" OFF)
 

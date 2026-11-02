@@ -4,6 +4,47 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
+## v0.3.9 (31 octobre 2026)
+
+Protocole inchangé (36). Corrections de l'audit du 30/10 (détails : [docs/AUDIT_2026-10-30.md](docs/AUDIT_2026-10-30.md)).
+
+- **Bouton UPGRADE cassé depuis la 0.3.8** (trouvé au test en jeu `upgrade`, 4/7) : l'amélioration d'un
+  client ne se faisait que chez lui, jamais chez l'hôte. Deux causes : seule la vtable du bâtiment de base
+  était patchée, alors qu'un puits, une ferme… ont chacun la leur (`FindUpgradeVtables` cherche maintenant
+  dans `.rdata` toutes celles qui portent les deux entrées du jeu : 15 ; journal « upgrade: UPGRADE goes
+  through the mod on N building vtables ») ; et la lecture de l'entrée refusait une adresse hors de l'exe du
+  jeu, donc notre propre crochet (`UpgradeSlot` dans `buildings.cpp`). Test `upgrade` : 7/7.
+
+- **Plantage d'un client après une resynchro** (nass4, 31/10 00:19, `kenshi_x64+0x3AE88B` dans le fil
+  « NavMeshMain » du jeu, 1,3 s après le chargement) : le mod régénérait la carte de navigation de **tous** les
+  bâtiments finis du monde qui venait de se charger, pendant que le jeu la chargeait encore. Seul un bâtiment
+  qui vient d'être fini (chantier vu ouvert, ou terminé chez le client sur l'ordre de l'hôte) est régénéré.
+- **Plantage `kenshi_x64+0xCDA22`** (hôte 26/10 22:32, plopette 30/10 23:13) : quand une zone se décharge, le
+  jeu retire les membres coupés qui y traînent en parcourant toutes les zones, sans vérifier qu'une zone a
+  un contenu. Les deux lectures fautives passent par un petit code qui saute une telle zone (octets vérifiés
+  avant ; journal « severed limbs: … »).
+- **XP d'Oron** : une seule compétence hors 0..1000 faisait taire tout le perso (compétences, modes, outil
+  jamais envoyés, sans un mot). Or le jeu a de **vraies valeurs un peu négatives** (Ingénierie -0,53, Forge
+  d'armes -1,58 : vu sur 7 valeurs dans le monde de la partie du 30/10). Chaque compétence est lue à part,
+  dans -100..1000 ; seule une valeur vraiment bizarre est signalée. Journal une fois par perso (« progress: … »).
+- **XP perdue pour toute l'escouade (trouvé le 2/11 avant la partie, test en jeu `clientxp` sur une copie du
+  monde du 30/10)** : le client jetait le message de compétences **entier** (jusqu'à 64 persos) dès qu'une
+  seule valeur sortait de 0..1000, et la première version de ce correctif envoyait justement -1 : plus aucune
+  XP n'arrivait chez personne. Sur le réseau, chaque valeur est maintenant ramenée dans 0..1000 (-0,53 part
+  comme 0), ce qu'un client 0.3.8 accepte aussi ; le client corrige une valeur bizarre au lieu de tout jeter
+  (`ProgressWireStat`).
+- **Journaux de la progression** (hôte) : « progress: to <joueur>: N squad character(s) held back » (au plus
+  une fois par minute) quand des persos de l'escouade attendent encore leur premier état chez ce joueur
+  (normal pendant l'éditeur de perso), et « skills not readable on the host » une fois pour un perso de
+  l'escouade dont l'hôte ne lit pas les compétences.
+- **Compétences d'un perso juste arrivé chez un joueur** : envoyées 2 s après le perso, plus avant (elles se
+  perdaient et ne revenaient qu'au bout de 20 s).
+- **Gels après une erreur rattrapée** : compilé en `/EHa`, une erreur rattrapée dans le tick rend maintenant
+  les verrous qu'elle tenait.
+- **Pointeurs de persos détruits** retirés aussi des tables de rotation et de vitesse de groupe des crochets.
+- **Mode construction de l'hôte** : pause levée en fin d'image (comme le dialogue en 0.3.8).
+- **Six appels au jeu sans protection** protégés (don d'objet, réplique, caméra, désélection, XP).
+
 ## v0.3.8 (30 octobre 2026)
 
 Protocole inchangé (36). Correctif rapide après la partie du 30/10.

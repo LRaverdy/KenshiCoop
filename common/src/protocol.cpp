@@ -372,6 +372,11 @@ bool Decode(Reader& r, VitalsMsg& m) {
     return Done(r);
 }
 
+float ProgressWireStat(float v) {
+    if (!(v >= 0.0f)) return 0.0f;   // below 0, or not a number
+    return v > 1000.0f ? 1000.0f : v;
+}
+
 void Encode(Writer& w, const ProgressMsg& m) {
     w.u8(uint8_t(Msg::Progress));
     w.boolean(m.hasMoney);
@@ -379,7 +384,10 @@ void Encode(Writer& w, const ProgressMsg& m) {
     w.varint(m.chars.size());
     for (const auto& c : m.chars) {
         w.varint(c.netId);
-        for (size_t i = 0; i < kStatCount; ++i) w.f32(i < c.stats.size() ? c.stats[i] : 0.0f);
+        // 0.3.9: always within 0..1000 on the wire. A client up to 0.3.8 drops the WHOLE message (up to
+        // 64 characters) on one value outside it, and the game has real values slightly below 0
+        // (Engineering -0.53...): those go as 0, an odd value (not a number) as 0 too.
+        for (size_t i = 0; i < kStatCount; ++i) w.f32(ProgressWireStat(i < c.stats.size() ? c.stats[i] : 0.0f));
         w.u16(c.modes);
         w.u8(c.style);
         w.str(c.tool);
@@ -393,10 +401,7 @@ bool Decode(Reader& r, ProgressMsg& m) {
     for (auto& c : m.chars) {
         c.netId = GetU32Var(r);
         c.stats.resize(kStatCount);
-        for (auto& s : c.stats) {
-            s = r.f32();
-            if (!std::isfinite(s) || s < 0.0f || s > 1000.0f) return false;
-        }
+        for (auto& s : c.stats) s = ProgressWireStat(r.f32());   // 0.3.9: one odd value no longer loses the whole message
         c.modes = r.u16();
         c.style = r.u8();
         c.tool = r.str(kMaxSidLen);

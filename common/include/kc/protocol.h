@@ -703,6 +703,7 @@ void Encode(Writer& w, const GroundMsg& m);
 
 // Snapshots are split into packets that each fit `budget` bytes; every packet is self-contained.
 std::vector<std::vector<uint8_t>> EncodeSnapshot(const Snapshot& s, size_t budget = kSnapshotBudget);
+float ProgressWireStat(float v);   // 0.3.9: a skill level as sent and read: within 0..1000 (below 0 or not a number: 0)
 void Encode(Writer& w, const ProgressMsg& m);
 void Encode(Writer& w, const SquadsMsg& m);
 void Encode(Writer& w, const AppearanceMsg& m);

@@ -814,6 +814,83 @@ bool SetFarWoundVisuals(bool on) {
     return true;
 }
 
+// 0.3.9 (audit 30/10, crash kenshi_x64+0xCDA22 reading [0+0x128]: host 26/10 22:32, plopette 30/10 23:13):
+// a severed limb's remove-from-zones (0xCD870, SeveredLimbItem vtable +0x208, reached from
+// GameWorld::destroy when a zone unloads) walks every zone of the zone manager and reads each one's
+// ZoneMapContent with no null check (twice: the removal loop, then the "still in zone" check). A zone
+// with no content at that moment crashed the game. Both loads go through a small stub that skips such a
+// zone (the loop's own increment), as the game does for a zone without the limb.
+namespace {
+void* AllocNear(uintptr_t target, size_t size) {   // within rel32 reach of the game's code
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    const uintptr_t gran = si.dwAllocationGranularity;
+    for (uintptr_t at = (target & ~(gran - 1)) - gran; at > gran && target - at < 0x70000000ull; at -= gran) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (!VirtualQuery(reinterpret_cast<void*>(at), &mbi, sizeof(mbi))) break;
+        if (mbi.State != MEM_FREE) continue;
+        if (void* p = VirtualAlloc(reinterpret_cast<void*>(at), size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)) return p;
+    }
+    return nullptr;
+}
+void PutRel32(uint8_t* at, uint8_t op, uintptr_t to) {
+    at[0] = op;
+    const int32_t rel = int32_t(intptr_t(to) - intptr_t(at + 5));
+    std::memcpy(at + 1, &rel, 4);
+}
+} // namespace
+
+bool PatchLimbZoneNullChecks() {
+    static int state = -1;   // 1 patched, 0 refused
+    if (state >= 0) return state == 1;
+    state = 0;
+    // mov rdi,[rax]; movsxd r9,dword ptr [rbp-0x80]   (then cmp r9d,0Bh)
+    static constexpr uint8_t kSite[7] = {0x48, 0x8B, 0x38, 0x4C, 0x63, 0x4D, 0x80};
+    static constexpr uint8_t kInc[6] = {0x41, 0xFF, 0xC5, 0x49, 0x83, 0xC6};   // inc r13d; add r14,8
+    struct Site { uintptr_t at, increment; bool setEbx; };
+    // the first loop's increment expects ebx = 0x9E3779C4 (set by its own skip path, 0xCDAB1)
+    static constexpr Site kSites[2] = {{0xCD956, 0xCDAB6, true}, {0xCDD36, 0xCDE8D, false}};
+    for (const auto& st : kSites)
+        if (std::memcmp(reinterpret_cast<void*>(g_base + st.at), kSite, 7) != 0 || std::memcmp(reinterpret_cast<void*>(g_base + st.increment), kInc, 6) != 0)
+            return false;
+    auto* cave = static_cast<uint8_t*>(AllocNear(g_base + 0xCD000, 0x1000));
+    if (!cave) return false;
+    uint8_t* c = cave;
+    for (const auto& st : kSites) {
+        uint8_t* stub = c;
+        const uint8_t head[] = {0x48, 0x8B, 0x38,                        // mov rdi,[rax]
+                                0x48, 0x85, 0xFF,                        // test rdi,rdi
+                                0x74, 0x09,                              // jz skip
+                                0x4C, 0x63, 0x4D, 0x80};                 // movsxd r9,[rbp-0x80]
+        std::memcpy(c, head, sizeof(head));
+        c += sizeof(head);
+        PutRel32(c, 0xE9, g_base + st.at + 7);   // back after the two instructions
+        c += 5;
+        if (st.setEbx) {                         // skip:
+            const uint8_t ebx[] = {0xBB, 0xC4, 0x79, 0x37, 0x9E};   // mov ebx,9E3779C4h
+            std::memcpy(c, ebx, sizeof(ebx));
+            c += sizeof(ebx);
+        }
+        PutRel32(c, 0xE9, g_base + st.increment);   // the loop's next zone
+        c += 5;
+        c = reinterpret_cast<uint8_t*>((reinterpret_cast<uintptr_t>(c) + 15) & ~uintptr_t(15));
+        auto* at = reinterpret_cast<uint8_t*>(g_base + st.at);
+        DWORD old = 0;
+        if (!VirtualProtect(at, 7, PAGE_EXECUTE_READWRITE, &old)) return false;
+        uint8_t patch[7];
+        PutRel32(patch, 0xE9, reinterpret_cast<uintptr_t>(stub));
+        patch[5] = patch[6] = 0x90;
+        std::memcpy(at, patch, 7);
+        VirtualProtect(at, 7, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), at, 7);
+    }
+    DWORD old = 0;
+    VirtualProtect(cave, 0x1000, PAGE_EXECUTE_READ, &old);
+    FlushInstructionCache(GetCurrentProcess(), cave, 0x1000);
+    state = 1;
+    return true;
+}
+
 // 17/10 (A_FAIRE 16/10 point 1, docs/MOTEUR.md "Éditeur et pause"): the character editor builds its
 // stage (0x5F03C0, from CharacterEditor::update 0x5F16A0) once every character's body is rebuilt, and
 // that rebuild runs from the character's animation update. Paused, the game's update (0x5C7B20) skips
@@ -1009,10 +1086,31 @@ bool ReadStats(Character* c, std::vector<float>& out) {
     if (!s) return false;
     out.resize(kc::kStatCount);
     for (size_t i = 0; i < kc::kStatCount; ++i)
-        if (!Rd(s, kStatOffsets[i], out[i]) || !std::isfinite(out[i]) || out[i] < 0.0f || out[i] > 1000.0f) {
+        if (!Rd(s, kStatOffsets[i], out[i]) || !StatValueOk(out[i])) {
             out.clear();
             return false;
         }
+    return true;
+}
+
+// 0.3.9: one odd field no longer loses the whole character (Oron, rob1's second character: no skill
+// level ever sent, 26-30/10): that field goes as kStatUnknown, which WriteStats leaves alone.
+bool StatsBlockOk(Character* c) { return StatsOf(c) != nullptr; }
+
+bool ReadStatsLenient(Character* c, std::vector<float>& out, int& badField, float& badValue) {
+    out.clear();
+    badField = -1;
+    void* s = StatsOf(c);
+    if (!s) return false;
+    out.resize(kc::kStatCount);
+    for (size_t i = 0; i < kc::kStatCount; ++i) {
+        float v = kStatUnknown;
+        if (!Rd(s, kStatOffsets[i], v) || !StatValueOk(v)) {
+            if (badField < 0) { badField = int(i); badValue = v; }
+            v = kStatUnknown;
+        }
+        out[i] = v;
+    }
     return true;
 }
 
@@ -1020,6 +1118,8 @@ bool WriteStats(Character* c, const std::vector<float>& stats) {
     void* s = StatsOf(c);
     if (!s || stats.size() != kc::kStatCount) return false;
     for (size_t i = 0; i < kc::kStatCount; ++i) {
+        // 0.3.9: values off the network checked as ReadStats checks them (kStatUnknown: not read on the host)
+        if (!StatValueOk(stats[i])) continue;
         float cur = 0;
         if (Rd(s, kStatOffsets[i], cur) && cur != stats[i]) Wr(s, kStatOffsets[i], stats[i]);
     }
@@ -1063,18 +1163,35 @@ bool ReadStat(Character* c, size_t statIndex, float& out) {
 
 bool WriteStat(Character* c, size_t statIndex, float value) {
     void* s = StatsOf(c);
-    if (!s || statIndex >= kc::kStatCount || !std::isfinite(value)) return false;
+    if (!s || statIndex >= kc::kStatCount || !StatValueOk(value)) return false;
     Wr(s, kStatOffsets[statIndex], value);
     return true;
 }
 
+// 0.3.9 (audit 30/10): game calls that had no SEH of their own
+namespace {
+bool IncreaseStatSeh(void* fn, float* field, float amount) {
+    __try { reinterpret_cast<void (*)(float*, float, float)>(fn)(field, amount, 100.0f); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool SaySeh(void* fn, void* d, const void* gs) {
+    __try { reinterpret_cast<void (*)(void*, const void*, void*)>(fn)(d, gs, nullptr); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool PtrCallSeh(void* fn, void* p) {
+    __try { reinterpret_cast<void (*)(void*)>(fn)(p); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool GiveItemSeh(void* fn, void* c, void* item, bool& given) {
+    __try { given = reinterpret_cast<bool (*)(void*, void*, bool, bool)>(fn)(c, item, false, false); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool UnselectSeh(void* fn, void* pi, void* obj) {
+    __try { reinterpret_cast<void (*)(void*, void*, bool)>(fn)(pi, obj, false); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+} // namespace
+
 bool GainExperience(Character* c, size_t statIndex, float amount) {
     void* s = StatsOf(c);
     if (!s || statIndex >= kc::kStatCount) return false;
-    using FnIncrease = void (*)(float*, float, float);
     auto* field = reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(s) + kStatOffsets[statIndex]);
-    reinterpret_cast<FnIncrease>(FnAddr(FnIncreaseStat))(field, amount, 100.0f);
-    return true;
+    return std::isfinite(amount) && IncreaseStatSeh(FnAddr(FnIncreaseStat), field, amount);
 }
 
 bool CallSay(Character* c, const std::string& text) {
@@ -1082,9 +1199,7 @@ bool CallSay(Character* c, const std::string& text) {
     if (!d) return false;
     alignas(8) uint8_t gs[0x28];
     GameStringView(text, gs);
-    using FnSay = void (*)(void*, const void*, void*);
-    reinterpret_cast<FnSay>(FnAddr(FnDialogueSay))(d, gs, nullptr);
-    return true;
+    return SaySeh(FnAddr(FnDialogueSay), d, gs);
 }
 
 namespace {
@@ -1149,7 +1264,7 @@ bool OrderPickupItem(Character* c, void* item) {
 bool FocusCamera(Character* c) {
     PlayerInterface* pi = Player();
     if (!pi || !IsCharacter(c)) return false;
-    return WithSelection(c, [&] { reinterpret_cast<void (*)(void*)>(FnAddr(FnFocusCamera))(pi); });
+    return WithSelection(c, [&] { PtrCallSeh(FnAddr(FnFocusCamera), pi); });
 }
 
 namespace {
@@ -4872,8 +4987,8 @@ bool CallDropItem(Character* c, void* item) {
 }
 
 bool CallGiveItem(Character* c, void* item) {
-    using FnGive = bool (*)(void*, void*, bool, bool);
-    return IsCharacter(c) && item && reinterpret_cast<FnGive>(FnAddr(FnGiveItem))(c, item, false, false);
+    bool given = false;
+    return IsCharacter(c) && item && GiveItemSeh(FnAddr(FnGiveItem), c, item, given) && given;
 }
 
 bool GiveNewItem(Character* c, const std::string& sid, int32_t qty, std::string* why) {
@@ -4885,8 +5000,8 @@ bool GiveNewItem(Character* c, const std::string& sid, int32_t qty, std::string*
     if (!item) return false;
     // A refused new item is destroyed here: made by the factory and held by nobody, it stayed in the world (the
     // host crashed in its next frame, kenshi_x64+0x6d1c7 reading +0x1F8, after a refused machinegive)
-    using FnGive = bool (*)(void*, void*, bool, bool);
-    if (!reinterpret_cast<FnGive>(FnAddr(FnGiveItem))(c, item, false, false)) {
+    bool given = false;
+    if (!GiveItemSeh(FnAddr(FnGiveItem), c, item, given) || !given) {
         if (GameWorld* w = World()) CallDestroy(FnAddr(FnWorldDestroy), w, item);   // never left held by nobody
         if (why) *why = "giveItem refused (inventory full?)";
         return false;
@@ -5852,8 +5967,7 @@ void KeepSelection(const std::function<void()>& fn) {
 void UnselectObject(void* obj) {
     PlayerInterface* pi = Player();
     if (!pi || !obj) return;
-    using FnSel = void (*)(void*, void*, bool);
-    reinterpret_cast<FnSel>(FnAddr(FnObjectSelected))(pi, obj, false);
+    UnselectSeh(FnAddr(FnObjectSelected), pi, obj);
 }
 
 int PermajobCount(Character* c) {

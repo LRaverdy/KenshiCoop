@@ -1358,10 +1358,37 @@ static void TestWire() {
         ProgressMsg pm2; CHECK(Decode(pr, pm2));
         CHECK(pm2.hasMoney && pm2.money == 12345 && pm2.chars.size() == 1 && pm2.chars[0].netId == 9 &&
               pm2.chars[0].stats.size() == kStatCount && pm2.chars[0].stats[0] == 17.25f && pm2.chars[0].stats[kStatCount - 1] == 3.5f);
-        pm.chars[0].stats[3] = -5.0f;   // nonsense levels are refused
+        // 0.3.9: a level outside 0..1000 never loses the message (a 0.3.8 client dropped all 64
+        // characters of it): sent within 0..1000 (the game's -0.53 as 0, nonsense as 0 or 1000)
+        pm.chars[0].stats[3] = -0.53f;
+        pm.chars[0].stats[4] = std::nanf("");
+        pm.chars[0].stats[5] = 5000.0f;
+        pm.chars[0].stats[6] = -1.0e6f;
+        CharProgress cp2 = cp; cp2.netId = 10; cp2.stats[0] = 2.0f; pm.chars.push_back(cp2);
         Writer pw2; Encode(pw2, pm);
         Reader pr2(pw2.data(), pw2.size()); PeekType(pr2);
-        ProgressMsg pm3; CHECK(!Decode(pr2, pm3));
+        ProgressMsg pm3; CHECK(Decode(pr2, pm3));
+        CHECK(pm3.chars.size() == 2 && pm3.chars[0].stats[3] == 0.0f && pm3.chars[0].stats[4] == 0.0f && pm3.chars[0].stats[5] == 1000.0f &&
+              pm3.chars[0].stats[6] == 0.0f && pm3.chars[0].stats[0] == 17.25f && pm3.chars[1].netId == 10 && pm3.chars[1].stats[0] == 2.0f);
+        // what a 0.3.8 client reads: every value of the message within 0..1000
+        bool inRange = true;
+        {
+            Reader old(pw2.data(), pw2.size()); PeekType(old);
+            old.boolean(); old.i32(); const uint32_t n = uint32_t(old.varint());
+            for (uint32_t k = 0; k < n; ++k) {
+                old.varint();
+                for (size_t i = 0; i < kStatCount; ++i) { const float s = old.f32(); inRange = inRange && s >= 0.0f && s <= 1000.0f; }
+                old.u16(); old.u8(); old.str(64);
+            }
+        }
+        CHECK(inRange);
+        // a hand-made message with an out-of-range value (an older host's -1): read, value made 0
+        Writer pw3; pw3.u8(uint8_t(Msg::Progress)); pw3.boolean(false); pw3.varint(1); pw3.varint(7);
+        for (size_t i = 0; i < kStatCount; ++i) pw3.f32(i == 2 ? -1.0f : 4.0f);
+        pw3.u16(0); pw3.u8(0); pw3.str("");
+        Reader pr3(pw3.data(), pw3.size()); PeekType(pr3);
+        ProgressMsg pm4; CHECK(Decode(pr3, pm4));
+        CHECK(pm4.chars.size() == 1 && pm4.chars[0].stats[2] == 0.0f && pm4.chars[0].stats[3] == 4.0f);
     }
     {   // a player task with its subject
         Command tc; tc.netId = 3; tc.kind = CommandKind::Task; tc.via = TaskVia::TaskNearest; tc.task = 25; tc.shift = true;

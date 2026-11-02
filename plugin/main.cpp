@@ -33,7 +33,7 @@ namespace kcp {
 
 namespace {
 
-constexpr const char* kVersion = "0.3.8";
+constexpr const char* kVersion = "0.3.9";
 
 Config g_cfg;
 std::wstring g_iniPath;

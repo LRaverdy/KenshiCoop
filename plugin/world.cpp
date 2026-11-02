@@ -292,13 +292,13 @@ void KenshiWorld::ResetWorldBound() {
     loadFocus_ = {};
     focusRetakes_ = 0;
     navRefreshed_.clear();
+    sitesSeenOpen_.clear();
     reRagdoll_.clear();
     floorTry_.clear();
     floorCheckAt_.clear();
     headway_.clear();
     syncErr_.clear();
     syncMaxErr_ = 0;
-    remoteDialogs_.clear();
     turretCache_.clear();
     pickups_.clear();
     pendingTalks_.clear();
@@ -314,7 +314,7 @@ void KenshiWorld::ResetWorldBound() {
     { std::lock_guard<std::mutex> lk(doorMutex_); doorReqs_.clear(); doorCache_.clear(); doorTries_.clear(); }
     { std::lock_guard<std::mutex> lk(tradeMutex_); tradeReqs_.clear(); hostTradeLooter_ = {}; hostTradeTrader_ = {}; }
     { std::lock_guard<std::mutex> lk(buildMutex_); trackedBuildings_.clear(); localPlacements_.clear(); localBuildActions_.clear(); removedBuildings_.clear(); }
-    { std::lock_guard<std::mutex> lk(dialogMutex_); dialogEvents_.clear(); }
+    { std::lock_guard<std::mutex> lk(dialogMutex_); dialogEvents_.clear(); remoteDialogs_.clear(); }   // (0.3.9: remoteDialogs_ under its lock too)
     kenshi::ResetLookupCaches();
     kenshi::ForgetGodModes();
 }
@@ -362,6 +362,14 @@ void KenshiWorld::EndFrame() {
     if (dialogUnpausePending.exchange(false) && active_ && !client_ && !holding_ && kenshi::GetPaused() && kenshi::CallUserPause(false)) {
         ++hostDialogUnpaused;
         Log("the host's own conversation: the game is not paused in co-op");
+    }
+    if (buildUnpausePending.exchange(false) && active_ && !client_ && !holding_ && kenshi::GetPaused()) {
+        if (kenshi::CallTogglePause(false) && !kenshi::GetPaused()) {
+            ++hostBuildUnpaused;
+            Log("the host's build mode: the game is not paused in co-op");
+        } else {
+            Log("the host's build mode: the game stays paused (could not lift the build mode's pause)");
+        }
     }
     UpdateEditorStage(NowSeconds());   // night-join: the character editor's stage, paused or not
     // While players join, the host's world stays frozen even if someone presses unpause.
@@ -2504,7 +2512,19 @@ void KenshiWorld::UpdateReRagdolls() {
 
 bool KenshiWorld::ReadProgress(const kc::Handle& h, std::vector<float>& stats, uint16_t& modes, uint8_t& style) {
     kenshi::Character* c = Find(h);
-    if (!c || !kenshi::ReadStats(c, stats)) return false;
+    if (!c) return false;
+    int bad = -1;
+    float badValue = 0;
+    if (!kenshi::ReadStatsLenient(c, stats, bad, badValue)) {
+        // 0.3.9: said once per character (Oron's stats were never sent and nothing said why)
+        if (squad_.count(h) && statsToldBad_.insert(h).second)
+            Log("progress: %s (%s) has no readable skill block (CharStats missing or not its own): its skills and modes are not sent", CharacterNameOf(h).c_str(),
+                KeyOf(h).c_str());
+        return false;
+    }
+    if (bad >= 0 && statsToldBad_.insert(h).second)
+        Log("progress: %s (%s): skill %d (%s) reads %g, out of -100..1000: sent as 0 (sent as unknown), the other skills go", CharacterNameOf(h).c_str(), KeyOf(h).c_str(), bad,
+            kc::StatNameFr(size_t(bad)), badValue);
     modes = kenshi::ReadModes(c, style);
     // 0.3.5 (A_FAIRE 16/10 point 8): sneaking right now (not a standing order: the game's own state,
     // Character+0xE0 == 1), for the copies (hk_setStealthMode); a 0.3.4 client ignores the bit
@@ -2713,10 +2733,16 @@ void KenshiWorld::PurgeDestroyed() {
             v->replicated.erase(c);
             v->squadForeign.erase(c);
             v->sneaking.erase(c);
+            v->squadOwner.erase(c);
         }
         // keyed by their animation and movement objects (freed with them): rebuilt by the next EndFrame
+        // (0.3.9: orient and speedCap too: hk_moveUpdate wrote a rotation through a dead character's
+        // pointer when a new movement object came at the same address)
         v->anims.clear();
         v->facing.clear();
+        v->orient.clear();
+        v->speedCap.clear();
+        groupCaps_.clear();
         view_.store(std::shared_ptr<const HookView>(std::move(v)), std::memory_order_release);
     }
 }

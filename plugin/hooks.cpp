@@ -694,13 +694,8 @@ void hk_buildActivate(void* bm, bool levelEditor) {
     const bool before = kenshi::GetPaused();
     o_buildActivate(bm, levelEditor);
     if (!coop || before || !kenshi::GetPaused()) return;
-    KenshiWorld* w = TheWorld();
-    if (kenshi::CallTogglePause(false) && !kenshi::GetPaused()) {
-        if (w) ++w->hostBuildUnpaused;
-        Log("the host's build mode: the game is not paused in co-op");
-    } else {
-        Log("the host's build mode: the game stays paused (could not lift the build mode's pause)");
-    }
+    // 0.3.9: lifted by EndFrame, not inside the game's call (as the host's conversation, 0.3.8)
+    if (KenshiWorld* w = TheWorld()) w->buildUnpausePending = true;
 }
 using DialogFn = void (*)(void* d);
 DialogFn o_setResponses = nullptr, o_setReplyText = nullptr;
@@ -1877,20 +1872,49 @@ bool SwapVtableEntry(uintptr_t slotRva, uintptr_t from, uintptr_t to) {
     VirtualProtect(at, sizeof(uintptr_t), old, &old);
     return true;
 }
+// 0.3.9: every class deriving from Building without its own upgrade (a well, a farm...) has its own vtable
+// holding the same two entries: all of them are patched, found in the game's .rdata (slot 0x258 = entry A
+// and slot 0x260 = entry B side by side). Only the base vtable was in 0.3.8: a client's upgrade of a well
+// ran alone on its copy and never reached the host.
+std::vector<uintptr_t> g_upgradeVtables;   // RVA of each vtable patched
+void FindUpgradeVtables(uintptr_t a, uintptr_t b) {
+    g_upgradeVtables.clear();
+    const uintptr_t base = kenshi::Addr(0);
+    auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+    const IMAGE_SECTION_HEADER* s = IMAGE_FIRST_SECTION(nt);
+    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++s) {
+        if (memcmp(s->Name, ".rdata", 6) != 0) continue;
+        const uintptr_t lo = base + s->VirtualAddress, hi = lo + s->Misc.VirtualSize;
+        for (uintptr_t p = lo; p + 0x268 <= hi; p += 8) {
+            if (*reinterpret_cast<const uintptr_t*>(p + 0x258) == a && *reinterpret_cast<const uintptr_t*>(p + 0x260) == b)
+                g_upgradeVtables.push_back(p - base);
+        }
+    }
+    if (std::find(g_upgradeVtables.begin(), g_upgradeVtables.end(), kBuildingVtable) == g_upgradeVtables.end())
+        g_upgradeVtables.push_back(kBuildingVtable);
+}
 void PatchUpgradeSlots(bool on) {
     if (on == g_upgradeSlotsPatched) return;
     const uintptr_t a = kenshi::Addr(kUpgradeEntryA), b = kenshi::Addr(kUpgradeEntryB);
     const uintptr_t ha = reinterpret_cast<uintptr_t>(&hk_upgradeA), hb = reinterpret_cast<uintptr_t>(&hk_upgradeB);
-    bool ok = true;
-    if (on) {
-        ok = SwapVtableEntry(kBuildingVtable + 0x258, a, ha);
-        ok = SwapVtableEntry(kBuildingVtable + 0x260, b, hb) && ok;
-    } else {
-        SwapVtableEntry(kBuildingVtable + 0x258, ha, a);
-        SwapVtableEntry(kBuildingVtable + 0x260, hb, b);
+    if (on) FindUpgradeVtables(a, b);
+    int patched = 0;
+    for (uintptr_t vt : g_upgradeVtables) {
+        if (on) {
+            const bool okA = SwapVtableEntry(vt + 0x258, a, ha);
+            const bool okB = SwapVtableEntry(vt + 0x260, b, hb);
+            if (okA && okB) ++patched;
+        } else {
+            SwapVtableEntry(vt + 0x258, ha, a);
+            SwapVtableEntry(vt + 0x260, hb, b);
+        }
     }
     g_upgradeSlotsPatched = on;
-    if (on && !ok) Log("upgrade: the Building vtable does not hold the game's upgrade entries: UPGRADE left to the game");
+    if (on) {
+        if (patched) Log("upgrade: UPGRADE goes through the mod on %d building vtables", patched);
+        else Log("upgrade: no building vtable holds the game's upgrade entries: UPGRADE left to the game");
+    }
 }
 using BuildProgressFn = void (*)(void* building, float amount);
 BuildProgressFn o_addConstruction = nullptr;
@@ -2409,6 +2433,8 @@ bool InstallHooks(TickFn tick, std::string* err) {
         return false;
     }
     PatchUpgradeSlots(true);
+    Log(kenshi::PatchLimbZoneNullChecks() ? "severed limbs: the zone walk skips a zone with no content (crash 0xCDA22)"
+                                          : "severed limbs: the game's code is not as expected: zone walk left as it is");
     return true;
 }
 

@@ -859,6 +859,74 @@ def exp_progress(host, cli):
         log("pos", i, "host", cmd(host, f"pos {i}")[1], "client", cmd(cli, f"pos {i}")[1])
 
 
+def exp_clientxp(host, cli):
+    """0.3.9 (rob1's Oron, 26-30/10): the client's own character learns on the host (learning by doing
+    is the host's); every skill of every squad character reaches the client, the slightly negative
+    ones the game has (Engineering -0.53...) included, and none goes 'sent as unknown'."""
+    time.sleep(8)
+    cmd(cli, "editdone")
+    time.sleep(2)
+    def stats(pid, i):
+        ok, t = cmd(pid, f"stats {i}")
+        return [float(x) for x in t.split()[1].split(",")] if ok else None
+    def squad_size(pid):
+        n = 0
+        while stats(pid, n) is not None and n < 40:
+            n += 1
+        return n
+    logged = len(host_log())
+    own = own_index(host)
+    n = squad_size(host)
+    log("squad size host", n, "client", squad_size(cli), "| client's own character: index", own)
+    before = stats(host, own)
+    neg = [i for i, v in enumerate(before or []) if v < 0]
+    log("client's character on the host:", before, "| negative skills:", neg)
+    gains = [cmd(host, f"xp {own} 1 5"), cmd(host, f"xp {own} 9 5")]
+    if neg:
+        gains.append(cmd(host, f"xp {own} {neg[0]} 5"))
+    # every squad character learns (whichever is the client's: the index order may differ)
+    firsts = {i: stats(host, i) for i in range(n)}
+    for i in range(n):
+        if i != own:
+            gains.append(cmd(host, f"xp {i} 1 5"))
+    log("host xp:", gains[:4], "...")
+    check("xp client : l'hote donne de l'XP (perso du client et toute l'escouade)", all(g[0] for g in gains), gains[:4])
+    time.sleep(6)
+    # the game's values slightly below 0 go as 0 on the wire (0.3.9, what a 0.3.8 client accepts)
+    def same(a, b):
+        return abs(max(a, 0.0) - b) <= 1e-3 or abs(a - b) <= 1e-3
+    h, c = stats(host, own), stats(cli, own)
+    diff = [(i, h[i], c[i]) for i in range(len(h)) if not same(h[i], c[i]) and abs(h[i] - c[i]) > 0.05] if h and c else "no stats"
+    check("xp client : le client voit les memes competences que l'hote (perso du client)", diff == [], diff)
+    check("xp client : la competence a monte chez le client", bool(c and before) and c[1] > before[1], f"{before and before[1]} -> {c and c[1]}")
+    bad = []
+    negatives = 0
+    raised = 0
+    for i in range(n):
+        hi, ci = stats(host, i), stats(cli, i)
+        if not hi or not ci:
+            bad.append((i, "no stats"))
+            continue
+        negatives += sum(1 for v in hi if v < 0)
+        # the host's gain reached the client (a high level gains little from the same experience)
+        if firsts.get(i) and i != own:   # (own: its experience came before 'firsts', checked above)
+            gain = hi[1] - firsts[i][1]
+            raised += 1 if gain > 0.01 and ci[1] - firsts[i][1] >= gain * 0.9 else 0
+            if gain <= 0.01:
+                log("character", i, "gained nothing on the host:", firsts[i][1], "->", hi[1])
+        # (a character still training on the host may move on in the second between the two reads)
+        d = [(k, hi[k], ci[k]) for k in range(len(hi)) if not same(hi[k], ci[k]) and abs(hi[k] - ci[k]) > 0.05]
+        if d:
+            bad.append((i, d[:4]))
+    log("negative skill values in the squad (host):", negatives)
+    check("xp client : toute l'escouade identique (competences negatives comprises)", bad == [], bad[:5])
+    check("xp client : l'XP de chaque perso de l'escouade arrive chez le client", raised == n - 1, f"{raised}/{n - 1}")
+    new = host_log()[logged:]
+    check("xp client : aucune competence envoyee comme inconnue", "sent as unknown" not in new and "no readable skill block" not in new,
+          [l for l in new.splitlines() if "progress:" in l][:3])
+    summary()
+
+
 def exp_ranged(host, cli, shooter_key=None):
     """Lot C, ranged combat: a crossbowman of the host's world fires at the squad; each shot is fired
     again on the client (same weapon, same path); its aim follows; a turret near the squad turns the
@@ -10980,6 +11048,9 @@ def main():
     pg = sub.add_parser("progress")
     pg.add_argument("--save", default="kctest_base")
     pg.add_argument("--keep", action="store_true")
+    cx = sub.add_parser("clientxp")   # 0.3.9
+    cx.add_argument("--save", default="kctest_base")
+    cx.add_argument("--keep", action="store_true")
     gr = sub.add_parser("ground")
     gr.add_argument("--save", default="kctest_base")
     gr.add_argument("--keep", action="store_true")
@@ -11276,6 +11347,8 @@ def main():
             exp_tradepaths(host, cli, a.merchant)
         elif a.what == "progress":
             exp_progress(host, cli)
+        elif a.what == "clientxp":   # 0.3.9
+            exp_clientxp(host, cli)
         elif a.what == "clientpickup":
             exp_clientpickup(host, cli)
         elif a.what == "ground":
