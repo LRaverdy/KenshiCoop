@@ -5222,6 +5222,52 @@ def exp_beds(host, cli):
     summary()
 
 
+def exp_limbs(host, cli):
+    """0.3.12 (06/11 session: every 'unknown module' crash of the evening): a severed limb leaving the zones
+    (SeveredLimbItem vt+0x208, 0xCD870, the zone walk the mod patches) jumped to a wild address since 0.3.9.
+    A limb (102-limbs.mod) is made on the host's ground: the client gets its copy and destroys it (the ground
+    sync's removal of a copy), the host picks the limb up (giveItem), a second one is destroyed on the host.
+    Both games must stay alive through every step."""
+    time.sleep(6)
+    hl = host_log()
+    check("membres : le correctif s'installe chez l'hote (sauts verifies)", "zone walk skips a zone with no content" in hl and "jumps checked" in hl,
+          next((l for l in hl.splitlines() if "severed limbs:" in l), "no line"))
+    r = cmd(host, "groundmake 102-limbs.mod 0 6 0")
+    log("host: limb made", r)
+    check("membres : une jambe coupee creee au sol chez l'hote", r[0] and r[1].startswith("ok "), r[1])
+    if not (r[0] and r[1].startswith("ok ")):
+        summary()
+        return
+    key = r[1].split()[1]
+    copy = "ok none"
+    for _ in range(30):
+        time.sleep(1)
+        copy = cmd(cli, f"groundcopy {key}")[1]
+        if copy != "ok none":
+            break
+    log("client: copy", copy)
+    check("membres : le client a sa copie", copy.startswith("ok ") and copy != "ok none", copy)
+    if copy.startswith("ok ") and copy != "ok none":
+        ckey = copy.split()[1].split("|")[0]
+        r2 = cmd(cli, f"itemdestroy {ckey}")
+        log("client: copy destroyed", r2)
+        time.sleep(4)
+        check("membres : le client detruit sa copie sans planter", alive(cli) and r2[0] and r2[1] == "ok", r2[1])
+    r3 = cmd(host, f"pickup 0 {key}")
+    log("host: limb picked up", r3)
+    time.sleep(4)
+    check("membres : l'hote ramasse la jambe sans planter", alive(host) and r3[0], r3[1])
+    r4 = cmd(host, "groundmake 102-limbs.mod 0 -6 0")
+    if r4[0] and r4[1].startswith("ok "):
+        time.sleep(3)
+        r5 = cmd(host, f"itemdestroy {r4[1].split()[1]}")
+        log("host: second limb destroyed", r5)
+        time.sleep(4)
+        check("membres : l'hote detruit une jambe au sol sans planter", alive(host) and r5[0] and r5[1] == "ok", r5[1])
+    check("membres : les deux jeux tournent encore", alive(host) and alive(cli))
+    summary()
+
+
 def exp_tpdown(host, cli):
     """Admin TP of the client's character while it lies knocked out: it moves next to the host's squad
     member 0, lies down again there, and the client sees it there."""
@@ -10765,7 +10811,8 @@ def main():
                            ("teamtrade", "0.3.5 lot 4 (point 17): the 'loot' on a team mate opens its inventory here, no price-0 refusals"),
                            ("lootground", "0.3.5 lot 4 (point 14): an item from a downed NPC's loot window released over the ground"),
                            ("wornrebuild", "0.3.5 lot 4 (point 3): worn clothes rebuilt on the client, one reasoned line a minute at most"),
-                           ("nightitems", "0.3.5 lot 4: every experiment above in a row")):
+                           ("nightitems", "0.3.5 lot 4: every experiment above in a row"),
+                           ("limbs", "0.3.12: a severed limb made, its client copy destroyed, picked up by the host: nobody crashes")):
         np_ = sub.add_parser(name, help=helptext)
         np_.add_argument("--save", default="kctest_base")
         np_.add_argument("--keep", action="store_true")
@@ -11373,7 +11420,7 @@ def main():
             exp_trace(host, cli)
         elif a.what == "playerstats":   # 0.3.5
             exp_playerstats(host, cli)
-        elif a.what in ("storagetake", "storagejob", "storagetypes", "upgrade", "buildingpeek", "farmwater", "teampack", "teamtrade", "lootground", "wornrebuild", "nightitems"):
+        elif a.what in ("storagetake", "storagejob", "storagetypes", "upgrade", "buildingpeek", "farmwater", "teampack", "teamtrade", "lootground", "wornrebuild", "nightitems", "limbs"):
             globals()["exp_" + a.what](host, cli)   # 0.3.5 lot 4 (night-items)
         elif a.what == "walk":
             exp_walk(host, cli)

@@ -732,6 +732,44 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         snprintf(b, sizeof(b), "ok %s|%s|%d|%.1f,%.1f,%.1f", Key(h2).c_str(), st.templateSid.c_str(), st.quantity, p.x, p.y, p.z);
         return b;
     }
+    if (cmd == "groundmake") {   // groundmake <itemSid> [squadIndex] [dx] [dz]: (tests, 0.3.12) one item of that template made on the ground next to that squad member; the host announces it
+        std::string sid;
+        size_t sel = 0;
+        float dx = 4.0f, dz = 0.0f;
+        in >> sid;
+        if (!(in >> sel)) sel = 0;
+        if (!(in >> dx)) dx = 4.0f;
+        if (!(in >> dz)) dz = 0.0f;
+        auto squad = SortedSquad(w);
+        kc::Vec3 base;
+        if (sid.empty() || sel >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[sel]), base))
+            return "err usage: groundmake <itemSid> [squadIndex] [dx] [dz]";
+        kc::ItemState st;
+        st.templateSid = sid;
+        st.quantity = 1;
+        const kc::Vec3 p{base.x + dx, base.y + 1.0f, base.z + dz};
+        kc::Handle h;
+        std::string why;
+        void* item = nullptr;
+        {
+            HostCallScope scope;
+            item = kenshi::CreateGroundItem(st, p, h, &why);
+        }
+        if (!item) return "err " + why;
+        if (s.isHost()) w.NoteItemDropped(item);
+        return "ok " + Key(h);
+    }
+    if (cmd == "itemdestroy") {   // itemdestroy <itemKey>: (tests, 0.3.12) that loose item destroyed the way the ground sync removes a copy (kenshi::DestroyItem)
+        std::string k;
+        in >> k;
+        kc::Handle ih;
+        if (sscanf(k.c_str(), "%u:%u:%u:%u:%u", &ih.type, &ih.container, &ih.containerSerial, &ih.index, &ih.serial) != 5) return "err usage: itemdestroy <itemKey>";
+        void* item = kenshi::ResolveItem(ih);
+        if (!item) return "err no such item";
+        if (!kenshi::ItemLoose(item)) return "err not lying loose";
+        HostCallScope scope;
+        return kenshi::DestroyItem(item) ? "ok" : "err destroy failed";
+    }
     if (cmd == "groundstats") {   // groundstats: drop / pickup bookkeeping counters (plugin/ground.cpp)
         const auto g = w.GroundCounters();
         char b[360];

@@ -38,6 +38,10 @@ cause chez le client reste à reproduire.
    reproduire** (couper un membre en sandbox, le faire rouler, regarder le client) avant de corriger ; piste :
    ne jamais détruire/refaire un membre coupé chez le client, le déplacer, ou ne plus renvoyer un objet qui
    roule. Contournement en partie : l'hôte ramasse le membre et sauvegarde avant que les clients reviennent.
+**Cause commune trouvée (0.3.12)** : points 3, 4 et 7 = le saut mal encodé du correctif des membres coupés de
+la 0.3.9 (`PatchLimbZoneNullChecks`, voir CHANGELOG 0.3.12). À confirmer en jeu : `coop_test.py limbs`, puis en
+partie (membres coupés au sol, ramassés, zones déchargées).
+
 4. **L'hôte plante en ramassant la jambe coupée** (22:07 en 0.3.9, l'hôte seul, et 22:16 en 0.3.10 juste
    après le chargement ; dumps `kenshi_x64.exe.27856.dmp` et `.34576.dmp`). Même pile les deux fois :
    `hk_giveItem` (`hooks.cpp:1195`) → jeu 0x5CB43F → inventaire (0x74BDEF, 0x74BC4E, 0x74CD55, 0x75D649,

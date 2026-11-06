@@ -833,60 +833,132 @@ void* AllocNear(uintptr_t target, size_t size) {   // within rel32 reach of the 
     }
     return nullptr;
 }
-void PutRel32(uint8_t* at, uint8_t op, uintptr_t to) {
-    at[0] = op;
-    const int32_t rel = int32_t(intptr_t(to) - intptr_t(at + 5));
-    std::memcpy(at + 1, &rel, 4);
+// A `jmp rel32` (E9) that will execute at address `where`, to `to`, written into `buf` (which may be a
+// local buffer copied to `where` later). False when `to` is out of rel32 reach.
+// 0.3.12 (06/11 session, every "unknown module" crash of the evening): the 0.3.9 version took the
+// displacement from the buffer's own address, a local array on the stack, then copied the bytes onto the
+// game's code: the game jumped to (site + stub - stack buffer), a wild address, every time a severed limb
+// left the zones (picked up, a client's copy destroyed, a zone with a limb unloaded). All six crash
+// addresses of the evening end in 0xE: the 8-aligned stack buffer, the 64 KB-aligned cave.
+bool PutJmp(uint8_t* buf, uintptr_t where, uintptr_t to) {
+    const intptr_t rel = intptr_t(to) - intptr_t(where + 5);
+    if (rel < intptr_t(INT32_MIN) || rel > intptr_t(INT32_MAX)) return false;
+    const int32_t r = int32_t(rel);
+    buf[0] = 0xE9;
+    std::memcpy(buf + 1, &r, 4);
+    return true;
+}
+// Where the `jmp rel32` at `at` goes (0 when it is not one).
+uintptr_t JmpTarget(const uint8_t* at) {
+    if (at[0] != 0xE9) return 0;
+    int32_t r = 0;
+    std::memcpy(&r, at + 1, 4);
+    return reinterpret_cast<uintptr_t>(at) + 5 + intptr_t(r);
 }
 } // namespace
 
-bool PatchLimbZoneNullChecks() {
+bool PatchLimbZoneNullChecks(std::string* detail) {
     static int state = -1;   // 1 patched, 0 refused
-    if (state >= 0) return state == 1;
+    static std::string said;
+    if (state >= 0) {
+        if (detail) *detail = said;
+        return state == 1;
+    }
     state = 0;
+    auto refuse = [&](const char* why) {
+        said = why;
+        if (detail) *detail = said;
+        return false;
+    };
     // mov rdi,[rax]; movsxd r9,dword ptr [rbp-0x80]   (then cmp r9d,0Bh)
     static constexpr uint8_t kSite[7] = {0x48, 0x8B, 0x38, 0x4C, 0x63, 0x4D, 0x80};
     static constexpr uint8_t kInc[6] = {0x41, 0xFF, 0xC5, 0x49, 0x83, 0xC6};   // inc r13d; add r14,8
     struct Site { uintptr_t at, increment; bool setEbx; };
-    // the first loop's increment expects ebx = 0x9E3779C4 (set by its own skip path, 0xCDAB1)
+    // the first loop's increment expects ebx = 0x9E3779C4 (set by its own skip path, 0xCDAB1); both loop
+    // tails (0xCDAB6, 0xCDE8D) reload rsi from [rsp+38h] and r12d = 0x9E3779B9 themselves
     static constexpr Site kSites[2] = {{0xCD956, 0xCDAB6, true}, {0xCDD36, 0xCDE8D, false}};
     for (const auto& st : kSites)
         if (std::memcmp(reinterpret_cast<void*>(g_base + st.at), kSite, 7) != 0 || std::memcmp(reinterpret_cast<void*>(g_base + st.increment), kInc, 6) != 0)
-            return false;
+            return refuse("the game's code is not as expected");
     auto* cave = static_cast<uint8_t*>(AllocNear(g_base + 0xCD000, 0x1000));
-    if (!cave) return false;
+    if (!cave) return refuse("no memory within reach of the game's code");
+    // 1. both stubs in the cave, and both sites' new bytes, every jump checked in reach, before any
+    // byte of the game's code changes
     uint8_t* c = cave;
-    for (const auto& st : kSites) {
-        uint8_t* stub = c;
+    uint8_t patches[2][7] = {};
+    uint8_t* stubs[2] = {};
+    for (int i = 0; i < 2; ++i) {
+        const Site& st = kSites[i];
+        stubs[i] = c;
         const uint8_t head[] = {0x48, 0x8B, 0x38,                        // mov rdi,[rax]
                                 0x48, 0x85, 0xFF,                        // test rdi,rdi
-                                0x74, 0x09,                              // jz skip
+                                0x74, 0x09,                              // jz skip (the 5-byte jmp below)
                                 0x4C, 0x63, 0x4D, 0x80};                 // movsxd r9,[rbp-0x80]
         std::memcpy(c, head, sizeof(head));
         c += sizeof(head);
-        PutRel32(c, 0xE9, g_base + st.at + 7);   // back after the two instructions
+        if (!PutJmp(c, reinterpret_cast<uintptr_t>(c), g_base + st.at + 7)) {   // back after the two instructions
+            VirtualFree(cave, 0, MEM_RELEASE);
+            return refuse("the way back is out of reach");
+        }
         c += 5;
         if (st.setEbx) {                         // skip:
             const uint8_t ebx[] = {0xBB, 0xC4, 0x79, 0x37, 0x9E};   // mov ebx,9E3779C4h
             std::memcpy(c, ebx, sizeof(ebx));
             c += sizeof(ebx);
         }
-        PutRel32(c, 0xE9, g_base + st.increment);   // the loop's next zone
+        if (!PutJmp(c, reinterpret_cast<uintptr_t>(c), g_base + st.increment)) {   // the loop's next zone
+            VirtualFree(cave, 0, MEM_RELEASE);
+            return refuse("the loop's increment is out of reach");
+        }
         c += 5;
         c = reinterpret_cast<uint8_t*>((reinterpret_cast<uintptr_t>(c) + 15) & ~uintptr_t(15));
-        auto* at = reinterpret_cast<uint8_t*>(g_base + st.at);
-        DWORD old = 0;
-        if (!VirtualProtect(at, 7, PAGE_EXECUTE_READWRITE, &old)) return false;
-        uint8_t patch[7];
-        PutRel32(patch, 0xE9, reinterpret_cast<uintptr_t>(stub));
-        patch[5] = patch[6] = 0x90;
-        std::memcpy(at, patch, 7);
-        VirtualProtect(at, 7, old, &old);
-        FlushInstructionCache(GetCurrentProcess(), at, 7);
+        // the site's jmp, its displacement from the site's own address (where it runs)
+        if (!PutJmp(patches[i], g_base + st.at, reinterpret_cast<uintptr_t>(stubs[i]))) {
+            VirtualFree(cave, 0, MEM_RELEASE);
+            return refuse("the stub is out of reach of the game's code");
+        }
+        patches[i][5] = patches[i][6] = 0x90;
+    }
+    // every jump decoded back to where it must go before the game's code is touched
+    for (int i = 0; i < 2; ++i) {
+        const uint8_t* s = stubs[i];
+        const uintptr_t back = JmpTarget(s + 12);
+        const uintptr_t next = JmpTarget(s + 17 + (kSites[i].setEbx ? 5 : 0));
+        if (back != g_base + kSites[i].at + 7 || next != g_base + kSites[i].increment) {
+            VirtualFree(cave, 0, MEM_RELEASE);
+            return refuse("a stub's jumps do not decode right");
+        }
     }
     DWORD old = 0;
     VirtualProtect(cave, 0x1000, PAGE_EXECUTE_READ, &old);
     FlushInstructionCache(GetCurrentProcess(), cave, 0x1000);
+    // 2. the sites: each written, read back, decoded: its jmp must land on its stub, or the game's own
+    // bytes are put back
+    for (int i = 0; i < 2; ++i) {
+        auto* at = reinterpret_cast<uint8_t*>(g_base + kSites[i].at);
+        if (!VirtualProtect(at, 7, PAGE_EXECUTE_READWRITE, &old)) return refuse("cannot write the game's code");
+        std::memcpy(at, patches[i], 7);
+        const bool right = JmpTarget(at) == reinterpret_cast<uintptr_t>(stubs[i]);
+        if (!right) std::memcpy(at, kSite, 7);
+        VirtualProtect(at, 7, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), at, 7);
+        if (!right) {
+            if (i == 1) {   // the first site is patched and right: put it back too, all or nothing
+                auto* first = reinterpret_cast<uint8_t*>(g_base + kSites[0].at);
+                if (VirtualProtect(first, 7, PAGE_EXECUTE_READWRITE, &old)) {
+                    std::memcpy(first, kSite, 7);
+                    VirtualProtect(first, 7, old, &old);
+                    FlushInstructionCache(GetCurrentProcess(), first, 7);
+                }
+            }
+            return refuse("a site's jump did not land on its stub: the game's bytes put back");
+        }
+    }
+    char b[160];
+    snprintf(b, sizeof(b), "stubs at %p and %p, jumps checked (sites 0x%llX, 0x%llX)", static_cast<void*>(stubs[0]), static_cast<void*>(stubs[1]),
+             static_cast<unsigned long long>(g_base + kSites[0].at), static_cast<unsigned long long>(g_base + kSites[1].at));
+    said = b;
+    if (detail) *detail = said;
     state = 1;
     return true;
 }

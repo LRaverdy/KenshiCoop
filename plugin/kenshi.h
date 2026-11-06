@@ -974,7 +974,9 @@ bool SetBuildingFloorVisible(void* building, int floor, bool visible);   // Buil
 // mod's start alike). On while hosting: that jump is replaced by a NOP; off: the game's bytes back.
 // Main thread only. False if the bytes there are not the expected ones (another game version).
 bool SetFarTalk(bool on);
-bool PatchLimbZoneNullChecks();   // 0.3.9: the game's severed-limb zone walk skips a zone with no content (crash 0xCDA22)
+// 0.3.9: the game's severed-limb zone walk skips a zone with no content (crash 0xCDA22). 0.3.12: its jumps
+// are encoded from the game's own addresses and checked (detail: where the stubs are, or why refused).
+bool PatchLimbZoneNullChecks(std::string* detail = nullptr);
 // MedicalSystem::addWound skips its whole visual part (damage numbers included) when the wounded one
 // is more than 4000 units from the camera (0x651348: squaredDistance > 16e6 at 0x16EAC6C, jbe
 // 0x651359 -> 0x651F69). hk_addWound lifts it for the call, for characters near a client player's

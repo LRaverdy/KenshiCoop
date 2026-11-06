@@ -4,6 +4,25 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
+## v0.3.12 (6 novembre 2026, même soir)
+
+Protocole inchangé (36). **Tout le monde installe cette version.** Corrige la vraie cause des plantages de la
+soirée ; publiée à la demande de l'utilisateur avant le test en jeu (`coop_test.py limbs`), lancé juste après.
+
+- **Tous les plantages « module inconnu » de la soirée** (clients 22:01, 22:02, 22:06, 22:22, 22:25, 22:27,
+  22:34 ; hôte 22:07 et 22:15 en ramassant une jambe coupée) : le correctif des membres coupés de la 0.3.9
+  (`PatchLimbZoneNullChecks`, crash 0xCDA22) écrivait dans le code du jeu un saut dont le déplacement était
+  calculé depuis l'adresse d'un tampon local (sur la pile) au lieu de celle du jeu. À chaque fois qu'un membre
+  coupé quittait les zones (ramassé, copie d'un client détruite, zone déchargée avec un membre dedans), le jeu
+  sautait à une adresse au hasard. Preuve : les six adresses de plantage connues finissent toutes par `E` (tampon
+  aligné sur 8, code de déviation aligné sur 64 Ko). Les sauts sont maintenant calculés depuis leur vraie adresse,
+  vérifiés avant d'écrire, relus après ; au moindre écart, les octets du jeu sont remis (journal « severed limbs:
+  … stubs at …, jumps checked »).
+- Le correctif « pas de lit » de la 0.3.11 est retiré : la cause était le point précédent ; les dormeurs sont de
+  nouveau couchés dans leur lit chez les clients.
+- Commandes de test `groundmake` et `itemdestroy`, expérience `coop_test.py limbs` (jambe coupée créée, copie du
+  client détruite, ramassée par l'hôte).
+
 ## v0.3.11 (6 novembre 2026, même soir)
 
 Protocole inchangé (36). Correctif côté client : **chaque joueur installe cette version** (l'hôte aussi,

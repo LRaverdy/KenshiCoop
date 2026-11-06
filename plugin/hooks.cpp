@@ -2476,8 +2476,13 @@ bool InstallHooks(TickFn tick, std::string* err) {
         return false;
     }
     PatchUpgradeSlots(true);
-    Log(kenshi::PatchLimbZoneNullChecks() ? "severed limbs: the zone walk skips a zone with no content (crash 0xCDA22)"
-                                          : "severed limbs: the game's code is not as expected: zone walk left as it is");
+    {
+        std::string detail;
+        if (kenshi::PatchLimbZoneNullChecks(&detail))
+            Log("severed limbs: the zone walk skips a zone with no content (crash 0xCDA22): %s", detail.c_str());
+        else
+            Log("severed limbs: zone walk left as it is (%s)", detail.c_str());
+    }
     return true;
 }
 
