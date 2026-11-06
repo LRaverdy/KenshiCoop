@@ -4,6 +4,20 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
+## v0.3.11 (6 novembre 2026, même soir)
+
+Protocole inchangé (36). Correctif côté client : **chaque joueur installe cette version** (l'hôte aussi,
+pour le numéro de version). Compilé et publié à la demande de l'utilisateur sans données de plantage :
+correctif par déduction, ni tests unitaires ni test en jeu.
+
+- **rob1 et nass4 plantaient à la base** (22:22:50 tous les deux, 22:25:24 rob1 en tournant la caméra),
+  sans aucun rapport de plantage, quelques secondes après « captivity: … put in its bed as on the host » :
+  le jeu de l'hôte venait de mettre des prisonniers dans des lits de la base. plopette, loin de là, recevait
+  les mêmes messages sans rien. Un prisonnier dans un lit chez l'hôte n'est plus couché dans le lit chez
+  les clients : il reste allongé là où est son corps (journal « left out of the bed here »). Les cages ne
+  changent pas.
+- La DLL affiche son vrai numéro de version (`kVersion` était resté à « 0.3.9 » en 0.3.10).
+
 ## v0.3.10 (6 novembre 2026)
 
 Protocole inchangé (36), compatible avec la 0.3.9. Correctifs faits pendant la partie du 6/11 et publiés à

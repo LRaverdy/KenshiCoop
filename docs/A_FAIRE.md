@@ -38,7 +38,25 @@ cause chez le client reste à reproduire.
    reproduire** (couper un membre en sandbox, le faire rouler, regarder le client) avant de corriger ; piste :
    ne jamais détruire/refaire un membre coupé chez le client, le déplacer, ou ne plus renvoyer un objet qui
    roule. Contournement en partie : l'hôte ramasse le membre et sauvegarde avant que les clients reviennent.
-4. **Une tâche refaite chez un client toutes les secondes** : chez rob1 et plopette, « jobs:
+4. **L'hôte plante en ramassant la jambe coupée** (22:07 en 0.3.9, l'hôte seul, et 22:16 en 0.3.10 juste
+   après le chargement ; dumps `kenshi_x64.exe.27856.dmp` et `.34576.dmp`). Même pile les deux fois :
+   `hk_giveItem` (`hooks.cpp:1195`) → jeu 0x5CB43F → inventaire (0x74BDEF, 0x74BC4E, 0x74CD55, 0x75D649,
+   0x75E1FD, 0x749A00, 0x745C59) → saut vers une adresse hors de tout module (rip 0x7FF6D080F83E,
+   exécution refusée). Sur la pile : un `hand` (vtable 0x16852D0) et un `lektor<ZoneMap*>` (0x16857A8),
+   hachage boost (0x9E3779B9) en cours : le jeu cherche la zone de l'objet. Lien probable avec les membres
+   coupés et les zones (crash 0xCDA22, `PatchLimbZoneNullChecks` de la 0.3.9). À faire : vérifier sans le mod
+   (un membre coupé se ramasse-t-il en solo ?), puis suivre la recherche de zone. Contournement : ne pas
+   ramasser de membre coupé.
+5. **La DLL 0.3.10 s'annonce « 0.3.9 »** (`kVersion` dans `plugin/main.cpp`) : corrigé en 0.3.11.
+7. **rob1 et nass4 plantent à la base, sans rapport de plantage** (22:22:50 les deux en même temps, 22:25:24
+   rob1 en tournant la caméra, 17 s après être revenu). Juste avant à chaque fois : « captivity: … put in its
+   bed as on the host » (Barth, Guerrier Shek…, le jeu de l'hôte met des prisonniers dans des lits de la
+   base depuis 22:20). plopette, loin de la base, reçoit les mêmes messages et ne plante pas. **Correctif par
+   déduction en 0.3.11** : plus de `SetInBed` pour un captif chez les clients. À confirmer : plus de plantage
+   à la base ; sinon récupérer `KenshiCoop.log` et le `.dmp` de `%LOCALAPPDATA%\CrashDumps` de rob1 (aucun
+   rapport n'arrive : le gestionnaire de plantage du mod n'a rien vu, gel ou mort brutale). Piste si c'est
+   bien le lit : deux persos dans le même lit chez le client (occupant écrasé, puis libéré).
+6. **Une tâche refaite chez un client toutes les secondes** : chez rob1 et plopette, « jobs:
    1:26:3554077184:7:1926879872 made like the host's: 1 removed, 1 added » à chaque liste de l'hôte, toute la
    soirée. La comparaison (`same` dans `ApplyJobList`, `squads.cpp`) ne reconnaît jamais cette tâche comme
    celle de l'hôte : sa cible ne correspond pas. À voir quelle tâche et quelle cible ; chaque tour détruit et

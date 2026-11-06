@@ -90,6 +90,12 @@ void KenshiWorld::ApplyCaptive(const kc::Handle& h, const kc::CaptiveState& s) {
         const int want = bed ? 1 : 2;
         if (!cage) {
             if (captiveMissing_.insert(h).second) Log("captivity: furniture %s not found here for %s", s.cageSid.c_str(), Key(h).c_str());
+        } else if (bed) {
+            // 0.3.11 (06/11 22:22:50 and 22:25:24: rob1 and nass4, at the base where the host's game was
+            // putting prisoners in beds, died seconds after "put in its bed as on the host", with no crash
+            // report; plopette, far away, got the same messages and lived): a captive is no longer laid in
+            // a bed on a client. It lies where its body is; the posture code leaves it (hostCaptive_).
+            if (captiveMissing_.insert(h).second) Log("captivity: %s is in a bed on the host: left out of the bed here", Key(h).c_str());
         } else if (local.inSomething != want || local.cage != cage) {
             leave("first");
             const bool ok = bed ? kenshi::SetInBed(c, true, cage) : kenshi::SetPrisonMode(c, true, cage);
