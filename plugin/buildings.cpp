@@ -124,9 +124,6 @@ void* PlayerFaction() {
     return pi && Rd(pi, PI_faction, f) ? f : nullptr;
 }
 
-// the base Building's vtable entries of the two upgrade functions (thunks to 0x2A49E0 and 0x2A4DB0)
-constexpr uintptr_t kUpgradeSlotA = 0x27EDA, kUpgradeSlotB = 0x1D791;
-
 bool IsBuilding(const void* obj) {
     kc::Handle h;
     return obj && !kenshi::IsCharacter(obj) && kenshi::ObjectHandle(obj, h) && h.type == 0;
@@ -881,8 +878,8 @@ bool KenshiWorld::ExecuteBuildAction(const kc::BuildAction& a, std::string& refu
             refused = "Ce bâtiment ne s'améliore pas ainsi.";
             return false;
         }
-        HostCallScope scope;   // the game's entry itself, not ours in the vtable
-        return VoidSeh(reinterpret_cast<void*>(kenshi::Addr(a.arg == 2 ? kUpgradeSlotB : kUpgradeSlotA)), b);
+        HostCallScope scope;   // the game's entry itself, not ours in the vtable: the class's own (a farm rescales its plants)
+        return VoidSeh(GameUpgradeEntry(b, a.arg == 2 ? 2 : 1), b);
     }
     HostCallScope scope;
     return IntArgSeh(kenshi::FnAddr(kenshi::FnConfirmDismantle), b, a.arg ? a.arg : kAnswerYes);

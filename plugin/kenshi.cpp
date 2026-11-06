@@ -5983,7 +5983,55 @@ int PermajobType(Character* c, int slot) {
 }
 
 bool RemovePermajob(Character* c, int slot) {
-    return slot >= 0 && slot < PermajobCount(c) && CallInt(FnAddr(FnCharRemovePermajob), c, slot);
+    if (slot < 0 || slot >= PermajobCount(c)) return false;
+    if (PermajobBroken(c, slot)) return DropBrokenPermajob(c, slot);
+    return CallInt(FnAddr(FnCharRemovePermajob), c, slot);
+}
+
+// 0.3.10 (06/11 session: rob1's client crashed removing a job of Khalid's from the Tâches panel,
+// kenshi_x64+0x507378: the list's removal deletes the job through its vtable, and that job's object had
+// been freed, its vtable word garbage). The permanent jobs are the lektor at AI (+0x650) -> orders
+// (+0x20): count +0x90, Task* array +0x98 (what 0x507300, removePermajob's body, walks).
+namespace {
+constexpr uintptr_t OR_jobCount = 0x90, OR_jobArray = 0x98;
+void* PermajobList(Character* c) {
+    void* ai = nullptr;
+    void* orders = nullptr;
+    return HasOrdersReceiver(c) && Rd(c, 0x650, ai) && Rd(ai, 0x20, orders) ? orders : nullptr;
+}
+} // namespace
+
+bool PermajobBroken(Character* c, int slot) {
+    void* orders = PermajobList(c);
+    uint32_t n = 0;
+    void* arr = nullptr;
+    if (!orders || !Rd(orders, OR_jobCount, n) || slot < 0 || uint32_t(slot) >= n || n > 256 || !Rd(orders, OR_jobArray, arr) || !arr) return false;
+    void* job = nullptr;
+    void* vt = nullptr;
+    if (!ReadRaw(arr, uintptr_t(slot) * sizeof(void*), &job, sizeof(job))) return true;
+    if (!job) return false;   // the game's removal skips a null one
+    return !Rd(job, 0, vt) || !InGameImage(vt);
+}
+
+bool DropBrokenPermajob(Character* c, int slot) {
+    void* orders = PermajobList(c);
+    uint32_t n = 0;
+    void* arr = nullptr;
+    if (!orders || !Rd(orders, OR_jobCount, n) || slot < 0 || uint32_t(slot) >= n || n > 256 || !Rd(orders, OR_jobArray, arr) || !arr) return false;
+    // taken out as the game's removal does (the later ones moved down one), never deleted: leaked
+    for (uint32_t i = uint32_t(slot); i + 1 < n; ++i) {
+        void* next = nullptr;
+        if (!ReadRaw(arr, uintptr_t(i + 1) * sizeof(void*), &next, sizeof(next)) || !WriteRaw(arr, uintptr_t(i) * sizeof(void*), &next, sizeof(next))) return false;
+    }
+    const uint32_t left = n - 1;
+    return WriteRaw(orders, OR_jobCount, &left, sizeof(left));
+}
+
+int DropBrokenPermajobs(Character* c) {
+    int dropped = 0;
+    for (int i = PermajobCount(c) - 1; i >= 0; --i)
+        if (PermajobBroken(c, i) && DropBrokenPermajob(c, i)) ++dropped;
+    return dropped;
 }
 
 bool MovePermajob(Character* c, int from, int to) {

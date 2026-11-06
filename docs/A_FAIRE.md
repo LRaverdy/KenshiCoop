@@ -2,6 +2,48 @@
 
 Remontés par les parties entre amis. Chaque entrée garde la date et ce qu'on a vu.
 
+## 6 novembre 2026, soir : partie en v0.3.9 avec rob1, plopette et nass4 (journal de l'hôte `KenshiCoop.log`, 21:05-)
+
+Correctifs des points 1, 2 et 3 publiés en **v0.3.10** le soir même (à la demande de l'utilisateur, pour un
+test direct en jeu avec ses amis) : compilés, **ni tests unitaires ni test en jeu avant**. À vérifier pendant
+et après la partie. Point 3 : correctif côté hôte seulement (le membre n'est plus repris aux clients), la
+cause chez le client reste à reproduire.
+
+1. **UPGRADE d'une ferme impossible pour un client, et invisible chez les clients quand l'hôte le fait**.
+   Aucune ligne « upgrade … clicked » ni chez rob1 ni chez l'hôte : le clic ne passe jamais par le mod. La
+   ferme (`FarmBuilding`, vtable 0x1689948) a ses propres entrées d'amélioration (0x36C1E → 0xDEF10,
+   0x1967D → 0xDF020 : appellent celles du bâtiment de base puis recalculent les plantations) ; le mur
+   (`WallBuilding`, 0x16EDFC8) a la sienne pour l'entrée A (0x26C97 → 0x2A5E20). `FindUpgradeVtables` ne
+   cherchait que les entrées de base. Correctif : ces vtables patchées aussi, l'entrée propre à la classe
+   retenue et lancée (hôte et clients). **À tester en jeu** : upgrade d'une ferme et d'un mur par un client
+   et par l'hôte, plantations correctes des deux côtés. En attendant : l'hôte améliore, sauvegarde, les
+   clients se reconnectent.
+2. **Plantage de rob1 en retirant une tâche de Khalid** (21:51:23, `kenshi_x64+0x507378` appelé par
+   `hk_removePermajob`, `hooks.cpp:459`) : la suppression du jeu détruit la tâche par sa vtable, et l'objet de
+   la tâche en case 1 était déjà libéré (vtable illisible, type lu 125 = builder). Juste avant : ordre de
+   construction (tâche 2) avec Shift sur une ferme, montré tout de suite chez rob1, refusé par l'hôte
+   (« wrong target », sans doute la ferme améliorée chez rob1 seul, point 1), puis « 1 removed » par la liste
+   de l'hôte. Correctif défensif : une tâche dont la vtable n'est plus celle du jeu est retirée de la liste
+   sans être détruite (au clic, dans `kenshi::RemovePermajob`, au début de `ApplyJobList`). **Reste à
+   trouver** qui libère cet objet sans le retirer de la liste (reproduire : Shift + construire sur un
+   bâtiment refusé par l'hôte, puis retirer la tâche dans le panneau).
+3. **Membre coupé qui roule : tous les clients plantent (ou gèlent)**. 22:01:12, un `102-limbs.mod` tombe au
+   sol pendant un combat (vers -67676, 18058) et chaque client place sa copie sans souci. Comme il roule sur
+   une pente, l'hôte le renvoie toutes les ~6 s (« ground: … announced again » : `PickedUp` puis `Dropped`,
+   le client détruit sa copie (`kenshi::DestroyItem`) et en refait une). Les trois clients se taisent à
+   22:01:17, juste avant le premier renvoi (22:01:17.59), puis sont déconnectés à 22:01:24-25 (l'hôte, lui,
+   tourne). plopette revient à 22:02:20, reçoit le membre à 22:02:23, se tait à 22:02:28.0 juste avant le
+   renvoi de 22:02:28.87, déconnectée à 22:02:36. Son jeu ne signale pas de plantage au retour : peut-être un
+   gel plutôt qu'un crash. Suspect : la destruction de la copie d'un membre coupé chez le client. **À
+   reproduire** (couper un membre en sandbox, le faire rouler, regarder le client) avant de corriger ; piste :
+   ne jamais détruire/refaire un membre coupé chez le client, le déplacer, ou ne plus renvoyer un objet qui
+   roule. Contournement en partie : l'hôte ramasse le membre et sauvegarde avant que les clients reviennent.
+4. **Une tâche refaite chez un client toutes les secondes** : chez rob1 et plopette, « jobs:
+   1:26:3554077184:7:1926879872 made like the host's: 1 removed, 1 added » à chaque liste de l'hôte, toute la
+   soirée. La comparaison (`same` dans `ApplyJobList`, `squads.cpp`) ne reconnaît jamais cette tâche comme
+   celle de l'hôte : sa cible ne correspond pas. À voir quelle tâche et quelle cible ; chaque tour détruit et
+   recrée l'objet de la tâche (lien possible avec le point 2).
+
 ## 26 octobre 2026, soir : première partie en 0.3.6 avec rob1, plopette et nass4 (journal de l'hôte `KenshiCoop.log`, 20:55-)
 
 Les journaux des clients sont maintenant dans `KenshiCoop-clients\<nom>-<date>.log` (dossier de Kenshi).

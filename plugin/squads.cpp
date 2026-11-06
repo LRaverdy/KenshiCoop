@@ -365,6 +365,9 @@ bool KenshiWorld::ReadJobList(const kc::Handle& h, std::vector<kc::JobEntry>& jo
 void KenshiWorld::ApplyJobList(const kc::Handle& h, const std::vector<kc::JobEntry>& jobs) {
     kenshi::Character* c = FindSquad(h);
     if (!c || JobEditPending(h)) return;   // a job removed or moved here a moment ago: the host's list is not there yet
+    // 0.3.10: a freed job object left in the list crashes the game's next removal (rob1, 06/11): out first
+    if (const int broken = kenshi::DropBrokenPermajobs(c))
+        Log("jobs: %s had %d freed job object(s) in its list: taken out without the game's delete", KeyOf(h).c_str(), broken);
     auto readLocal = [&] {
         std::vector<LocalJob> v;
         for (int i = 0, n = kenshi::PermajobCount(c); i < n; ++i) {

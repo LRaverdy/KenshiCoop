@@ -6,9 +6,12 @@
 
 #include <intrin.h>
 
+#include <algorithm>
 #include <atomic>
+#include <iterator>
 #include <cmath>
 #include <mutex>
+#include <unordered_map>
 #include <vector>
 
 #include "kc/copy_rules.h"
@@ -456,6 +459,12 @@ void hk_removePermajob(void* c, int slot) {
     kc::Vec3 at;
     kenshi::PermajobTarget(static_cast<kenshi::Character*>(c), slot, removed.subject, at);
     if (ClientJobChange(c, kc::TaskVia::RemovePermajob, task, slot, 0)) {
+        // 0.3.10: a job whose object was freed (rob1's crash at kenshi_x64+0x507378): taken out, not deleted
+        if (kenshi::PermajobBroken(static_cast<kenshi::Character*>(c), slot)) {
+            const bool ok = kenshi::DropBrokenPermajob(static_cast<kenshi::Character*>(c), slot);
+            Log("jobs: slot %d (task %d) held a freed job object: taken out of the list without the game's delete (%s)", slot, task, ok ? "ok" : "failed");
+            return;
+        }
         o_removePermajob(c, slot);
         JobRemoved(c, removed.type, removed.subject, "removed from its job list");
     }
@@ -1851,15 +1860,40 @@ void hk_confirmDismantle(void* building, int answer) {
 // here (see KenshiWorld::NoteUiUpgrade); the game's own direct calls (0xDEF25, 0xDF035, 0x2A5ECA) do not.
 using UpgradeFn = void (*)(void* self, void* widget);
 constexpr uintptr_t kBuildingVtable = 0x16EA4A8, kUpgradeEntryA = 0x27EDA, kUpgradeEntryB = 0x1D791;
+// 0.3.10 (06/11 session: rob1 could not upgrade a farm, and the host's farm upgrade never reached the
+// clients): two classes have upgrade entries of their own, which call the base ones directly and then
+// fix their own state. FarmBuilding (vtable 0x1689948): A 0x36C1E -> 0xDEF10, B 0x1967D -> 0xDF020
+// (the plants' growth rescaled to the new plot count). WallBuilding (0x16EDFC8): A 0x26C97 -> 0x2A5E20.
+// Their vtables are patched too; the class's own entry is what runs (here, on the host, on each client).
+constexpr uintptr_t kKnownUpgradeA[] = {kUpgradeEntryA, 0x36C1E, 0x26C97};
+constexpr uintptr_t kKnownUpgradeB[] = {kUpgradeEntryB, 0x1967D};
+bool IsKnownUpgrade(uintptr_t rva, int variant) {
+    if (variant == 2) return std::find(std::begin(kKnownUpgradeB), std::end(kKnownUpgradeB), rva) != std::end(kKnownUpgradeB);
+    return std::find(std::begin(kKnownUpgradeA), std::end(kKnownUpgradeA), rva) != std::end(kKnownUpgradeA);
+}
+struct UpgradeOriginals {
+    uintptr_t a = 0, b = 0;   // RVAs of the game's entries this vtable held
+};
+std::unordered_map<uintptr_t, UpgradeOriginals> g_upgradeOriginals;   // vtable RVA -> its own entries
+// The game's own upgrade entry for this object's class (an RVA turned into an address), the base one
+// when its vtable is not one we patched.
+uintptr_t OriginalUpgrade(const void* self, int variant) {
+    uintptr_t vt = 0;
+    if (self && kenshi::ReadRaw(self, 0, &vt, sizeof(vt)) && vt) {
+        auto it = g_upgradeOriginals.find(vt - kenshi::Addr(0));
+        if (it != g_upgradeOriginals.end()) return kenshi::Addr(variant == 2 ? it->second.b : it->second.a);
+    }
+    return kenshi::Addr(variant == 2 ? kUpgradeEntryB : kUpgradeEntryA);
+}
 void hk_upgradeA(void* self, void* widget) {
     KenshiWorld* w = TheWorld();
     if (!g_hostCall && KenshiWorld::View()->active && w && self && w->NoteUiUpgrade(self, 1)) return;
-    reinterpret_cast<UpgradeFn>(kenshi::Addr(kUpgradeEntryA))(self, widget);
+    reinterpret_cast<UpgradeFn>(OriginalUpgrade(self, 1))(self, widget);
 }
 void hk_upgradeB(void* self, void* widget) {
     KenshiWorld* w = TheWorld();
     if (!g_hostCall && KenshiWorld::View()->active && w && self && w->NoteUiUpgrade(self, 2)) return;
-    reinterpret_cast<UpgradeFn>(kenshi::Addr(kUpgradeEntryB))(self, widget);
+    reinterpret_cast<UpgradeFn>(OriginalUpgrade(self, 2))(self, widget);
 }
 bool g_upgradeSlotsPatched = false;
 // write `to` over the vtable entry when it holds `from` (the vtable is in .rdata: read-only)
@@ -1877,8 +1911,9 @@ bool SwapVtableEntry(uintptr_t slotRva, uintptr_t from, uintptr_t to) {
 // and slot 0x260 = entry B side by side). Only the base vtable was in 0.3.8: a client's upgrade of a well
 // ran alone on its copy and never reached the host.
 std::vector<uintptr_t> g_upgradeVtables;   // RVA of each vtable patched
-void FindUpgradeVtables(uintptr_t a, uintptr_t b) {
+void FindUpgradeVtables() {
     g_upgradeVtables.clear();
+    g_upgradeOriginals.clear();
     const uintptr_t base = kenshi::Addr(0);
     auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
     auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
@@ -1887,24 +1922,32 @@ void FindUpgradeVtables(uintptr_t a, uintptr_t b) {
         if (memcmp(s->Name, ".rdata", 6) != 0) continue;
         const uintptr_t lo = base + s->VirtualAddress, hi = lo + s->Misc.VirtualSize;
         for (uintptr_t p = lo; p + 0x268 <= hi; p += 8) {
-            if (*reinterpret_cast<const uintptr_t*>(p + 0x258) == a && *reinterpret_cast<const uintptr_t*>(p + 0x260) == b)
-                g_upgradeVtables.push_back(p - base);
+            const uintptr_t a = *reinterpret_cast<const uintptr_t*>(p + 0x258), b = *reinterpret_cast<const uintptr_t*>(p + 0x260);
+            if (a < base || b < base || !IsKnownUpgrade(a - base, 1) || !IsKnownUpgrade(b - base, 2)) continue;
+            g_upgradeVtables.push_back(p - base);
+            g_upgradeOriginals[p - base] = {a - base, b - base};
         }
     }
-    if (std::find(g_upgradeVtables.begin(), g_upgradeVtables.end(), kBuildingVtable) == g_upgradeVtables.end())
+    if (std::find(g_upgradeVtables.begin(), g_upgradeVtables.end(), kBuildingVtable) == g_upgradeVtables.end()) {
         g_upgradeVtables.push_back(kBuildingVtable);
+        g_upgradeOriginals[kBuildingVtable] = {kUpgradeEntryA, kUpgradeEntryB};
+    }
 }
 void PatchUpgradeSlots(bool on) {
     if (on == g_upgradeSlotsPatched) return;
-    const uintptr_t a = kenshi::Addr(kUpgradeEntryA), b = kenshi::Addr(kUpgradeEntryB);
     const uintptr_t ha = reinterpret_cast<uintptr_t>(&hk_upgradeA), hb = reinterpret_cast<uintptr_t>(&hk_upgradeB);
-    if (on) FindUpgradeVtables(a, b);
-    int patched = 0;
+    if (on) FindUpgradeVtables();
+    int patched = 0, own = 0;
     for (uintptr_t vt : g_upgradeVtables) {
+        const UpgradeOriginals& o = g_upgradeOriginals[vt];
+        const uintptr_t a = kenshi::Addr(o.a), b = kenshi::Addr(o.b);
         if (on) {
             const bool okA = SwapVtableEntry(vt + 0x258, a, ha);
             const bool okB = SwapVtableEntry(vt + 0x260, b, hb);
-            if (okA && okB) ++patched;
+            if (okA && okB) {
+                ++patched;
+                if (o.a != kUpgradeEntryA || o.b != kUpgradeEntryB) ++own;
+            }
         } else {
             SwapVtableEntry(vt + 0x258, ha, a);
             SwapVtableEntry(vt + 0x260, hb, b);
@@ -1912,7 +1955,7 @@ void PatchUpgradeSlots(bool on) {
     }
     g_upgradeSlotsPatched = on;
     if (on) {
-        if (patched) Log("upgrade: UPGRADE goes through the mod on %d building vtables", patched);
+        if (patched) Log("upgrade: UPGRADE goes through the mod on %d building vtables (%d with an upgrade of their own: farms, walls)", patched, own);
         else Log("upgrade: no building vtable holds the game's upgrade entries: UPGRADE left to the game");
     }
 }
@@ -2447,10 +2490,13 @@ void RemoveHooks() {
 }
 
 // 0.3.8: a vtable slot holding the game's upgrade entry or ours in its place (see PatchUpgradeSlots)
+// 0.3.10: or a class's own (farm, wall)
 bool IsBaseUpgradeEntry(const void* fn, int variant) {
     const uintptr_t f = reinterpret_cast<uintptr_t>(fn);
-    return variant == 2 ? f == kenshi::Addr(kUpgradeEntryB) || f == reinterpret_cast<uintptr_t>(&hk_upgradeB)
-                        : f == kenshi::Addr(kUpgradeEntryA) || f == reinterpret_cast<uintptr_t>(&hk_upgradeA);
+    if (f == reinterpret_cast<uintptr_t>(variant == 2 ? &hk_upgradeB : &hk_upgradeA)) return true;
+    return f >= kenshi::Addr(0) && IsKnownUpgrade(f - kenshi::Addr(0), variant == 2 ? 2 : 1);
 }
+
+void* GameUpgradeEntry(const void* building, int variant) { return reinterpret_cast<void*>(OriginalUpgrade(building, variant == 2 ? 2 : 1)); }
 
 } // namespace kcp

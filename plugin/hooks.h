@@ -15,7 +15,8 @@ using TickFn = void (*)(bool live);
 
 bool InstallHooks(TickFn tick, std::string* err);
 void RemoveHooks();
-bool IsBaseUpgradeEntry(const void* fn, int variant);   // 0.3.8: the base Building's upgrade (the game's entry, or ours patched in)
+bool IsBaseUpgradeEntry(const void* fn, int variant);   // 0.3.8: the base Building's upgrade (the game's entry, or ours patched in); 0.3.10: or a farm's / wall's own
+void* GameUpgradeEntry(const void* building, int variant);   // 0.3.10: the game's upgrade entry of this building's class (farm, wall or base)
 // Runs the tick with exception barriers; never lets an exception reach game code.
 void RunTick(bool live);
 double LastLiveTick();   // NowSeconds() of the last main-loop tick

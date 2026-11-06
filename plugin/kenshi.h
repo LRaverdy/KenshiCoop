@@ -783,7 +783,11 @@ void UnselectObject(void* obj);   // PlayerInterface::objectSelected(obj, false)
 // The job list of a character (the Tâches panel: follow, operate a machine...), by kind, in order.
 int PermajobCount(Character* c);
 int PermajobType(Character* c, int slot);              // TaskType, -1: none
-bool RemovePermajob(Character* c, int slot);
+bool RemovePermajob(Character* c, int slot);            // a broken slot (below) is taken out without the game's delete
+// 0.3.10: a job slot whose object is not a live game object (its vtable outside the game's image: freed)
+bool PermajobBroken(Character* c, int slot);
+bool DropBrokenPermajob(Character* c, int slot);         // taken out of the list, never deleted (leaked)
+int DropBrokenPermajobs(Character* c);                   // every broken one; how many
 bool MovePermajob(Character* c, int from, int to);
 bool RemoveJobKind(Character* c, int task);            // every job of that kind
 // The Tâches panel (the job list under the squad bar) against the list of the character it shows

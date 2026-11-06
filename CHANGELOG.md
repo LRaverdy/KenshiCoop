@@ -4,6 +4,33 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
+## v0.3.10 (6 novembre 2026)
+
+Protocole inchangé (36), compatible avec la 0.3.9. Correctifs faits pendant la partie du 6/11 et publiés à
+la demande de l'utilisateur pour être testés tout de suite en jeu avec ses amis : compilés, **ni tests
+unitaires ni test en jeu préalable**.
+
+- **Jambe coupée qui roule : tous les clients plantaient** (22:01:17 et 22:02:28, juste quand l'hôte
+  renvoyait le membre `102-limbs.mod` qui roulait sur une pente : le client détruit sa copie pour la refaire,
+  et son jeu mourait). Côté hôte seulement : un membre coupé déjà annoncé n'est plus jamais repris aux
+  clients, ni quand il roule ni quand il est ramassé (leur copie reste jusqu'au prochain chargement du monde ;
+  journal « severed limb … not sent »). La cause exacte chez le client reste à reproduire.
+
+- **UPGRADE d'une ferme** (rob1 n'y arrivait pas, et l'amélioration faite par l'hôte n'arrivait pas chez les
+  clients) : la ferme (`FarmBuilding`, vtable 0x1689948) a ses propres entrées d'amélioration (0x36C1E et
+  0x1967D, qui appellent celles du bâtiment de base puis recalculent les plantations), le mur (`WallBuilding`)
+  la sienne pour la première (0x26C97). `FindUpgradeVtables` ne cherchait que les deux entrées de base : ces
+  vtables n'étaient pas patchées, aucun clic n'y passait par le mod (aucune ligne « upgrade … clicked » dans
+  les journaux). Elles le sont maintenant ; l'entrée propre à la classe est retenue par vtable et c'est elle
+  qui tourne chez l'hôte comme chez chaque client (`GameUpgradeEntry`).
+- **Plantage d'un client en retirant une tâche** (rob1, 06/11 21:51, `kenshi_x64+0x507378` depuis
+  `hk_removePermajob`) : la liste des tâches permanentes de Khalid gardait une tâche dont l'objet était déjà
+  libéré, et la suppression du jeu l'efface par sa vtable. Juste avant : un ordre de construction avec Shift
+  sur une ferme que son jeu avait améliorée seul (point précédent), montré tout de suite chez lui puis refusé
+  par l'hôte (« wrong target »). Une tâche dont la vtable n'est plus celle du jeu est maintenant retirée de la
+  liste sans la détruire (fuite plutôt que plantage) : au clic, dans `kenshi::RemovePermajob` et au début de
+  chaque mise à jour des tâches venue de l'hôte (journal « freed job object »).
+
 ## v0.3.9 (31 octobre 2026)
 
 Protocole inchangé (36). Corrections de l'audit du 30/10 (détails : [docs/AUDIT_2026-10-30.md](docs/AUDIT_2026-10-30.md)).
