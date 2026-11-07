@@ -4,6 +4,30 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
+## v0.3.13 (7 novembre 2026)
+
+Protocole inchangé (36). Corrections issues de l'audit des plantages (7 auditeurs, chaque point contre-vérifié
+par deux relecteurs indépendants). Testé en jeu : `coop_test.py limbs` 7/7 deux fois, fermeture normale d'un
+client sans plantage ; tests unitaires 55 574/55 574.
+
+- **Plantage en retirant une tâche (rob1, 21:51)** : la vraie cause. Le `movePermajob` du jeu lit la tâche à
+  déplacer avant de vérifier son numéro, et la remet dans la liste même hors limites ; or une tâche retirée reste
+  en mémoire juste après la fin de la liste. Un glisser-déposer dans le panneau Tâches avec un numéro de ligne
+  d'avant un retrait remettait la tâche détruite dans la liste. Un déplacement hors de la liste est refusé
+  (journal « jobs: move … refused »).
+- **Plantage à la fermeture du jeu** (hôte 22:27, 22:34 : `tier0_s64.dll_unloaded`, `crashhandler64.dll_unloaded`) :
+  Kenshi n'appelle jamais `dllStopPlugin` ; à la fin il décharge Steam pendant que le relais Steam du mod
+  l'interroge encore. `SteamAPI_Shutdown` est intercepté : les fils du mod (relais Steam, ENet, console)
+  s'arrêtent d'abord, puis le processus se termine juste après l'arrêt de Steam (les destructeurs du jeu
+  plantaient aussi : `kenshi_x64+0x6C7F8`). « Quitter le jeu » fait pareil (plus d'`ExitProcess` en plein tick ;
+  refusé pendant une sauvegarde). Le filtre de plantage n'appelle plus celui de Steam une fois déchargé.
+- **Plantage de nass4 `kenshi_x64+0x3AE88B`** (07/11 00:15, fil « NavMeshMain ») : les clients ne régénèrent plus
+  la carte de navigation des bâtiments (l'hôte déplace tous les persos).
+- **Membres coupés** : le troisième parcours des zones (0xCE087, « membre encore dans une zone ») est protégé
+  comme les deux autres ; installation tout ou rien des trois points, sauts vérifiés.
+- **Hôte** : une requête de client qui plantait était rejouée à chaque image avec toute sa file (ordres,
+  escouades, réponses de dialogue, apparences) ; chaque file est vidée avant d'être traitée.
+
 ## v0.3.12 (6 novembre 2026, même soir)
 
 Protocole inchangé (36). **Tout le monde installe cette version.** Corrige la vraie cause des plantages de la

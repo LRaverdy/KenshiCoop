@@ -391,7 +391,7 @@ bool KenshiWorld::ExecutePlacement(const kc::BuildPlace& p, kc::Handle& created,
             // what build mode does to a fresh building
             if (void* fn = Slot(b, BV_setupMiningResourceLevel)) VoidSeh(fn, b);
             VoidSeh(kenshi::FnAddr(kenshi::FnClearUsageNodes), b);
-            RefreshNavmesh(b);   // and what its queue does later (RefreshNavmesh)
+            if (!client_) RefreshNavmesh(b);   // and what its queue does later (RefreshNavmesh); 0.3.13: never on a client (0x3AE88B)
             // every floor shown: build mode sets the new building's floors to the view's; created
             // here, a cabin's roof (its floor 1) stayed hidden for good, on the host too (11 October)
             for (int f = 0; f < 6; ++f) kenshi::SetBuildingFloorVisible(b, f, true);
@@ -710,7 +710,10 @@ void KenshiWorld::ApplyBuildState(const kc::Handle& h, float progress, uint8_t f
     // 0.3.9: only a building that was finished here just now (nass4 31/10 00:19, a resync: the 8 finished
     // buildings of the save regenerated as the world loaded, and the game's navmesh thread crashed 1.3 s
     // later adding an instance, kenshi_x64+0x3AE88B "NavMeshMain"); one finished in the save has its own
-    if ((flags & kc::kSiteComplete) && !(flags & kc::kSiteDismantling) && navRefreshed_.insert(h).second && !wasComplete && RefreshNavmesh(b)) {
+    // 0.3.13 (nass4 07/11 00:15:02, the same kenshi_x64+0x3AE88B in "NavMeshMain" 1.6 s after 4 walls were
+    // regenerated in one frame; the audit: NavMesh::generate queues work for the navmesh thread with no lock):
+    // never on a client. The host moves every character; a client's navmesh only serves local idle wandering.
+    if (!client_ && (flags & kc::kSiteComplete) && !(flags & kc::kSiteDismantling) && navRefreshed_.insert(h).second && !wasComplete && RefreshNavmesh(b)) {
         std::string sid;
         kenshi::ObjectTemplate(b, sid);
         Log("building %s finished here: the navigation mesh around it regenerated", sid.c_str());

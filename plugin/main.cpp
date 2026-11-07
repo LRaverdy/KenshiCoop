@@ -33,7 +33,7 @@ namespace kcp {
 
 namespace {
 
-constexpr const char* kVersion = "0.3.12";
+constexpr const char* kVersion = "0.3.13";
 
 Config g_cfg;
 std::wstring g_iniPath;
@@ -501,9 +501,21 @@ void HandleOverlayActions() {
             ConsoleCommand(a.text);
             break;
         case OverlayAction::Kind::QuitGame:
+            // 0.3.13 (audit 07/11): ExitProcess killed every thread mid-call and then ran the game's static
+            // destructors and ours under the loader lock, hooks still live (freed world, heap corruption).
+            // An orderly leave while the world is alive, the mod's threads stopped, then TerminateProcess:
+            // no DLL_PROCESS_DETACH, no static destructor. Never in the middle of a save.
+            if (kenshi::SaveManagerBusy()) {
+                Toast("Une sauvegarde est en cours : réessaie dans un instant.");
+                break;
+            }
             Log("the player quits the game from the Multijoueur window");
+            g_session->Leave();
+            ExitCleanupNow();
+            Log("exit: the process ends now");
             LogClose();
-            ExitProcess(0);
+            TerminateProcess(GetCurrentProcess(), 0);
+            break;
         case OverlayAction::Kind::EditCharacter:
             if (!g_session->EditOwnCharacter()) Toast("Ton personnage n'est pas encore là.");
             break;
@@ -1208,7 +1220,26 @@ namespace {
 
 LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep) {
     ReportCrash(ep, "unhandled");
-    return g_prevFilter ? g_prevFilter(ep) : EXCEPTION_CONTINUE_SEARCH;
+    // 0.3.13: the filter saved at start is Steam's crash handler: never called once its DLL is unloaded
+    HMODULE m = nullptr;
+    if (g_prevFilter && GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                           reinterpret_cast<LPCWSTR>(g_prevFilter), &m))
+        return g_prevFilter(ep);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+// 0.3.13: the process is about to end (SteamAPI_Shutdown at the end of the game's WinMain, or "Quitter le
+// jeu"): the mod's threads and sockets stop now, with no game call (the world may be gone). The world and
+// the session are then left alive (released, never destroyed): no destructor of theirs runs at
+// DLL_PROCESS_DETACH, and TheWorld() answers null to any hook the game's teardown still reaches.
+void ExitCleanup() {
+    Log("exit: stopping the mod's threads before the process ends");
+    if (g_session) g_session->CloseNetForExit();
+    steam::ShutdownForExit();
+    HostConsoleShutdown();
+    (void)g_session.release();
+    (void)g_world.release();
+    Log("exit: threads stopped");
 }
 
 bool Start() {
@@ -1216,6 +1247,7 @@ bool Start() {
     LogOpen(dir + L"KenshiCoop.log");
     Log("KenshiCoop %s starting", kVersion);
     g_prevFilter = SetUnhandledExceptionFilter(&CrashFilter);
+    SetExitCleanup(&ExitCleanup);
 
     // Never patch a game build we have not analysed.
     std::string sha;

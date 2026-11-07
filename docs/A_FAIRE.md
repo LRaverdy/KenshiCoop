@@ -60,6 +60,21 @@ partie (membres coupés au sol, ramassés, zones déchargées).
    à la base ; sinon récupérer `KenshiCoop.log` et le `.dmp` de `%LOCALAPPDATA%\CrashDumps` de rob1 (aucun
    rapport n'arrive : le gestionnaire de plantage du mod n'a rien vu, gel ou mort brutale). Piste si c'est
    bien le lit : deux persos dans le même lit chez le client (occupant écrasé, puis libéré).
+**Audit du 7 novembre (0.3.13)** : corrigés : point 2 (cause : `movePermajob` hors limites), point 9 (navmesh
+côté client), plantage à la fermeture, 3e lecture des membres coupés, file de requêtes rejouée. Restent de l'audit
+(non corrigés) : la garde des tâches libérées peut viser un pointeur recyclé ; `hk_groupSpeed` déclare un
+pointeur en int ; placements de bâtiments et apparences d'un client appliqués sans contrôle (GameData, ville,
+quaternion) ; `HostInvOps` en O(n^4) ; `SquadMove` crée une escouade par message ; les autres files Host*
+(conteneurs, portes, ateliers…) se vident encore après traitement. Détails : sortie de l'audit (journal du
+workflow wf_02e47111-0f0).
+
+8. **Les clients ne peuvent pas démanteler** (signalé par l'utilisateur en partie, 0.3.12). À reproduire :
+   `hk_confirmDismantle` / `NoteLocalBuildAction` / `ExecuteBuildAction` (buildings.cpp), journal de l'hôte.
+9. **nass4 : plantage `kenshi_x64+0x3AE88B` le 07/11 à 00:15:02** (en 0.3.12, rapport Windows `kenshi_crash (1).txt`
+   dans Téléchargements). Même adresse que le plantage de nass du 31/10 00:19 (fil « NavMeshMain », régénération de
+   la carte de navigation juste après un chargement) que la 0.3.9 croyait corrigé : ce n'est pas le bug des membres
+   coupés. À voir avec son log du mod (`KenshiCoop-logs`) : que se passait-il juste avant (resynchro, chargement,
+   bâtiment fini ?).
 6. **Une tâche refaite chez un client toutes les secondes** : chez rob1 et plopette, « jobs:
    1:26:3554077184:7:1926879872 made like the host's: 1 removed, 1 added » à chaque liste de l'hôte, toute la
    soirée. La comparaison (`same` dans `ApplyJobList`, `squads.cpp`) ne reconnaît jamais cette tâche comme

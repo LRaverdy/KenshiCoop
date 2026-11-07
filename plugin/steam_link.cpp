@@ -501,6 +501,12 @@ void Stop() {
     delete l;
 }
 
+void ShutdownForExit() {
+    Stop();
+    std::lock_guard<std::recursive_mutex> lk(g_apiMutex);
+    g_apiBroken = true;
+}
+
 bool Active() {
     std::lock_guard<std::mutex> lk(g_linkMutex);
     return g_link != nullptr;

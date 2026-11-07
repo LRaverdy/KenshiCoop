@@ -15,6 +15,10 @@ using TickFn = void (*)(bool live);
 
 bool InstallHooks(TickFn tick, std::string* err);
 void RemoveHooks();
+// 0.3.13: what must stop before the process exits (main.cpp: the mod's threads and sockets, no game call); run
+// once, from the SteamAPI_Shutdown detour or ExitCleanupNow ("Quitter le jeu").
+void SetExitCleanup(void (*fn)());
+void ExitCleanupNow();
 bool IsBaseUpgradeEntry(const void* fn, int variant);   // 0.3.8: the base Building's upgrade (the game's entry, or ours patched in); 0.3.10: or a farm's / wall's own
 void* GameUpgradeEntry(const void* building, int variant);   // 0.3.10: the game's upgrade entry of this building's class (farm, wall or base)
 // Runs the tick with exception barriers; never lets an exception reach game code.

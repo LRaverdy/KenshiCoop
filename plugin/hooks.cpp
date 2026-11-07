@@ -470,6 +470,19 @@ void hk_removePermajob(void* c, int slot) {
     }
 }
 void hk_movePermajob(void* c, int from, int to) {
+    // 0.3.13 (audit 07/11, the root cause of rob1's 21:51:23 crash at 0x507378): the game's movePermajob
+    // (0x5078A0) reads data[from] BEFORE checking `from` and re-inserts it even when from >= count. Removals
+    // only shift the array down, so data[count] still holds the job just deleted: a drag in the Tâches panel
+    // with a row index from before a removal (the panel is not rebuilt while the button is down) put the
+    // freed job back in the list, and the next removal deleted it again. A move outside the list is refused,
+    // on every machine. to == -1 (append) stays the game's.
+    if (kenshi::IsCharacter(c)) {
+        const int n = kenshi::PermajobCount(static_cast<kenshi::Character*>(c));
+        if (from < 0 || from >= n || to < -1 || to >= n || from == to) {
+            Log("jobs: move %d -> %d refused: the list has %d job(s) (a stale panel row)", from, to, n);
+            return;
+        }
+    }
     const int task = kenshi::PermajobType(static_cast<kenshi::Character*>(c), from);
     if (ClientJobChange(c, kc::TaskVia::MovePermajob, task, from, to)) o_movePermajob(c, from, to);
 }
@@ -2296,6 +2309,37 @@ extern void (*o_power)(void*, void*);
 extern void (*o_batt)(void*, void*);
 } // namespace workshophooks
 
+// 0.3.13 (audit 07/11, the host's crash at every game exit, 22:27:58 and 22:34:44: tier0_s64.dll_unloaded
+// +0xc387, crashhandler64.dll_unloaded +0x468d): Kenshi never calls dllStopPlugin; its WinMain ends with
+// SteamAPI_Shutdown, which unloads Steam's DLLs while the mod's relay thread still polls Steam P2P. The
+// export is detoured: the mod's own threads stop first (exit cleanup, set by main.cpp), then Steam.
+namespace {
+using SteamShutdownFn = void (*)();
+SteamShutdownFn o_steamShutdown = nullptr;
+void (*g_exitCleanup)() = nullptr;
+std::atomic<bool> g_exitDone{false};
+void ExitCleanupSeh() {
+    __try { g_exitCleanup(); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+void hk_steamShutdown() {
+    ExitCleanupNow();
+    o_steamShutdown();
+    // Its only call site is the very end of WinMain (0x74559D, after the app object's deletion): nothing is
+    // left but the CRT's exit, whose static destructors crashed on their own (07/11 test, a client closed
+    // normally: kenshi_x64+0x6C7F8 reading [0+0xF8] 0.2 s after the mod's threads stopped). The process ends
+    // here instead, as "Quitter le jeu" does: saves are written when made, Steam is already shut down.
+    Log("exit: Steam shut down: the process ends here");
+    LogClose();
+    TerminateProcess(GetCurrentProcess(), 0);
+}
+} // namespace
+
+void SetExitCleanup(void (*fn)()) { g_exitCleanup = fn; }
+void ExitCleanupNow() {
+    if (g_exitDone.exchange(true)) return;
+    if (g_exitCleanup) ExitCleanupSeh();
+}
+
 bool InstallHooks(TickFn tick, std::string* err) {
     g_tick = tick;
     const HookDef defs[] = {
@@ -2467,6 +2511,12 @@ bool InstallHooks(TickFn tick, std::string* err) {
             return false;
         }
         g_installed.push_back(target);
+    }
+    if (HMODULE steamApi = GetModuleHandleW(L"steam_api64.dll")) {
+        if (void* f = reinterpret_cast<void*>(GetProcAddress(steamApi, "SteamAPI_Shutdown"))) {
+            if (MH_CreateHook(f, reinterpret_cast<void*>(&hk_steamShutdown), reinterpret_cast<void**>(&o_steamShutdown)) == MH_OK) g_installed.push_back(f);
+            else Log("exit: SteamAPI_Shutdown could not be hooked: the mod's threads are not stopped before Steam unloads");
+        }
     }
     // Enable all at once: MinHook suspends other threads while patching.
     const MH_STATUS en = MH_EnableHook(MH_ALL_HOOKS);

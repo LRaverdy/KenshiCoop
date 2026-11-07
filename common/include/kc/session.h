@@ -641,6 +641,9 @@ public:
     bool Host(std::string* err);
     bool Join(const std::string& address, uint16_t port, std::string* err, uint32_t mtu = 0);
     void Leave();
+    // 0.3.13: process exit (SteamAPI_Shutdown, "Quitter le jeu"): the network only (ENet disconnect, keep-alive
+    // thread joined), no game call: the world may already be gone.
+    void CloseNetForExit();
 
     // Call once per frame. `worldLive`: the game world is loaded and safe to touch this frame.
     void Tick(bool worldLive = true);

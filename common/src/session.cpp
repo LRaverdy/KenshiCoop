@@ -2,6 +2,7 @@
 
 #include "kc/pack.h"
 
+#include <utility>
 #include <algorithm>
 #include <cmath>
 
@@ -140,6 +141,8 @@ bool Session::Join(const std::string& address, uint16_t port, std::string* err, 
     log_("connecting to " + address + ":" + std::to_string(port));
     return true;
 }
+
+void Session::CloseNetForExit() { net_.Close(); }
 
 void Session::Leave() {
     const bool wasActive = state_ != SessionState::Idle && state_ != SessionState::Failed;
@@ -327,22 +330,20 @@ void Session::HostTick(double now, bool live) {
         for (const auto& [pid, p] : players_) back |= PlayerKey(p) == key;
         if (!back) RetireEditorChar(key, why, true);
     }
-    for (const Handle& h : haltQueue_) {   // characters of a player gone: they stay put
+    // 0.3.13 (audit 07/11): every queue is taken out BEFORE it is run. The tick runs under an SEH barrier: a
+    // request that faulted used to skip the .clear() below it, and the whole queue ran again every frame
+    // (moves and placements done twice, the faulting one again, the session frozen). Now a fault drops it.
+    for (const Handle& h : std::exchange(haltQueue_, {})) {   // characters of a player gone: they stay put
         Entity* e = entityByHandle(h);
         if (e && e->squad) world_.HaltCharacter(h);   // (even if already theirs again: they are still loading)
     }
-    haltQueue_.clear();
-    for (auto& [from, c] : pendingCommands_) ApplyCommand(from, c);
-    pendingCommands_.clear();
-    for (auto& [from, q] : pendingSquadReqs_) HostSquadRequest(from, q);   // one at a time, in arrival order: the last one wins
-    pendingSquadReqs_.clear();
+    for (auto& [from, c] : std::exchange(pendingCommands_, {})) ApplyCommand(from, c);
+    for (auto& [from, q] : std::exchange(pendingSquadReqs_, {})) HostSquadRequest(from, q);   // one at a time, in arrival order: the last one wins
     HostInvOps();
     if (!pendingInvOps_.empty()) nextInventory_ = 0;   // show the result right away
     pendingInvOps_.clear();
-    for (const auto& a : pendingAnswers_) world_.DialogAnswer(a.dialogId, a.index);
-    pendingAnswers_.clear();
-    for (uint32_t id : pendingDialogEnds_) world_.EndDialog(id);   // walked away, or their player left
-    pendingDialogEnds_.clear();
+    for (const auto& a : std::exchange(pendingAnswers_, {})) world_.DialogAnswer(a.dialogId, a.index);
+    for (uint32_t id : std::exchange(pendingDialogEnds_, {})) world_.EndDialog(id);   // walked away, or their player left
     HostContainers(now);
     HostContainerPeeks(now);   // 0.3.5: building panels looked at without walking
     HostTakenWatch(now);       // 0.3.5: items the host's game put back where a player took them from
@@ -364,7 +365,7 @@ void Session::HostTick(double now, bool live) {
     HostJobs(now);   // fix G5
     HostStats(now);   // player statistics
     // A player's new looks: applied here, then shown to everyone else.
-    for (auto& [from, m] : pendingLooks_) {
+    for (auto& [from, m] : std::exchange(pendingLooks_, {})) {
         auto it = entities_.find(m.netId);
         if (!AdmitActor(from, m.netId, "new looks", Msg::Appearance)) continue;
         world_.ApplyAppearance(it->second.handle, m);

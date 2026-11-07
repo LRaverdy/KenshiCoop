@@ -38,6 +38,9 @@ bool Join(kc::Session& s, uint64_t hostId, std::string* err);
 // Either kind of address: Steam id or IP.
 bool JoinAddress(kc::Session& s, const std::string& address, uint16_t port, std::string* err);
 void Stop();
+// 0.3.13: the game is about to unload Steam (SteamAPI_Shutdown): the relay thread joined, sessions closed,
+// and no Steam call is made afterwards by anyone (the relay used to call into the unloaded Steam DLLs).
+void ShutdownForExit();
 bool Active();
 // The last address joined (IP or steam:<id>) and port: a resync joins it again.
 bool LastJoin(std::string& address, uint16_t& port);

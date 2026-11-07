@@ -870,32 +870,51 @@ bool PatchLimbZoneNullChecks(std::string* detail) {
         if (detail) *detail = said;
         return false;
     };
-    // mov rdi,[rax]; movsxd r9,dword ptr [rbp-0x80]   (then cmp r9d,0Bh)
-    static constexpr uint8_t kSite[7] = {0x48, 0x8B, 0x38, 0x4C, 0x63, 0x4D, 0x80};
-    static constexpr uint8_t kInc[6] = {0x41, 0xFF, 0xC5, 0x49, 0x83, 0xC6};   // inc r13d; add r14,8
-    struct Site { uintptr_t at, increment; bool setEbx; };
-    // the first loop's increment expects ebx = 0x9E3779C4 (set by its own skip path, 0xCDAB1); both loop
-    // tails (0xCDAB6, 0xCDE8D) reload rsi from [rsp+38h] and r12d = 0x9E3779B9 themselves
-    static constexpr Site kSites[2] = {{0xCD956, 0xCDAB6, true}, {0xCDD36, 0xCDE8D, false}};
-    for (const auto& st : kSites)
-        if (std::memcmp(reinterpret_cast<void*>(g_base + st.at), kSite, 7) != 0 || std::memcmp(reinterpret_cast<void*>(g_base + st.increment), kInc, 6) != 0)
+    // Each site: mov <reg>,[rax]; movsxd r9,dword ptr [rbp-0x80] (then cmp r9d,0Bh), and its loop's increment.
+    // 0.3.13 (audit 07/11): a third walk, the "limb still in a zone" recount (0xCE070, reached only when the
+    // removal left the limb in a zone), reads the content into rsi at 0xCE087 with no null check either.
+    struct Site {
+        uintptr_t at, increment;
+        bool setEbx;
+        uint8_t load[3], test[3];   // mov reg,[rax] / test reg,reg
+        uint8_t inc[6];             // the increment's first bytes (inc r..d; add r..,8)
+    };
+    // the first loop's increment expects ebx = 0x9E3779C4 (set by its own skip path, 0xCDAB1); the loop tails
+    // 0xCDAB6 and 0xCDE8D reload rsi from [rsp+38h] and r12d = 0x9E3779B9 themselves; the third loop's
+    // (0xCE263: inc r14d; add r13,8) needs only r13, r14d, r15 and [rsp+50h], which no stub touches
+    static constexpr Site kSites[3] = {
+        {0xCD956, 0xCDAB6, true, {0x48, 0x8B, 0x38}, {0x48, 0x85, 0xFF}, {0x41, 0xFF, 0xC5, 0x49, 0x83, 0xC6}},
+        {0xCDD36, 0xCDE8D, false, {0x48, 0x8B, 0x38}, {0x48, 0x85, 0xFF}, {0x41, 0xFF, 0xC5, 0x49, 0x83, 0xC6}},
+        {0xCE087, 0xCE263, false, {0x48, 0x8B, 0x30}, {0x48, 0x85, 0xF6}, {0x41, 0xFF, 0xC6, 0x49, 0x83, 0xC5}},
+    };
+    constexpr int kN = 3;
+    static constexpr uint8_t kMovsxd[4] = {0x4C, 0x63, 0x4D, 0x80};
+    auto siteBytes = [](const Site& st, uint8_t out[7]) {
+        std::memcpy(out, st.load, 3);
+        std::memcpy(out + 3, kMovsxd, 4);
+    };
+    for (const auto& st : kSites) {
+        uint8_t want[7];
+        siteBytes(st, want);
+        if (std::memcmp(reinterpret_cast<void*>(g_base + st.at), want, 7) != 0 || std::memcmp(reinterpret_cast<void*>(g_base + st.increment), st.inc, 6) != 0)
             return refuse("the game's code is not as expected");
+    }
     auto* cave = static_cast<uint8_t*>(AllocNear(g_base + 0xCD000, 0x1000));
     if (!cave) return refuse("no memory within reach of the game's code");
-    // 1. both stubs in the cave, and both sites' new bytes, every jump checked in reach, before any
-    // byte of the game's code changes
+    // 1. every stub in the cave, and every site's new bytes, every jump checked in reach, before any byte of
+    // the game's code changes
     uint8_t* c = cave;
-    uint8_t patches[2][7] = {};
-    uint8_t* stubs[2] = {};
-    for (int i = 0; i < 2; ++i) {
+    uint8_t patches[kN][7] = {};
+    uint8_t* stubs[kN] = {};
+    for (int i = 0; i < kN; ++i) {
         const Site& st = kSites[i];
         stubs[i] = c;
-        const uint8_t head[] = {0x48, 0x8B, 0x38,                        // mov rdi,[rax]
-                                0x48, 0x85, 0xFF,                        // test rdi,rdi
-                                0x74, 0x09,                              // jz skip (the 5-byte jmp below)
-                                0x4C, 0x63, 0x4D, 0x80};                 // movsxd r9,[rbp-0x80]
-        std::memcpy(c, head, sizeof(head));
-        c += sizeof(head);
+        std::memcpy(c, st.load, 3);              // mov reg,[rax]
+        std::memcpy(c + 3, st.test, 3);          // test reg,reg
+        c[6] = 0x74;                             // jz skip (past the 5-byte jmp below)
+        c[7] = 0x09;
+        std::memcpy(c + 8, kMovsxd, 4);          // movsxd r9,[rbp-0x80]
+        c += 12;
         if (!PutJmp(c, reinterpret_cast<uintptr_t>(c), g_base + st.at + 7)) {   // back after the two instructions
             VirtualFree(cave, 0, MEM_RELEASE);
             return refuse("the way back is out of reach");
@@ -920,10 +939,10 @@ bool PatchLimbZoneNullChecks(std::string* detail) {
         patches[i][5] = patches[i][6] = 0x90;
     }
     // every jump decoded back to where it must go before the game's code is touched
-    for (int i = 0; i < 2; ++i) {
-        const uint8_t* s = stubs[i];
-        const uintptr_t back = JmpTarget(s + 12);
-        const uintptr_t next = JmpTarget(s + 17 + (kSites[i].setEbx ? 5 : 0));
+    for (int i = 0; i < kN; ++i) {
+        const uint8_t* st = stubs[i];
+        const uintptr_t back = JmpTarget(st + 12);
+        const uintptr_t next = JmpTarget(st + 17 + (kSites[i].setEbx ? 5 : 0));
         if (back != g_base + kSites[i].at + 7 || next != g_base + kSites[i].increment) {
             VirtualFree(cave, 0, MEM_RELEASE);
             return refuse("a stub's jumps do not decode right");
@@ -932,31 +951,39 @@ bool PatchLimbZoneNullChecks(std::string* detail) {
     DWORD old = 0;
     VirtualProtect(cave, 0x1000, PAGE_EXECUTE_READ, &old);
     FlushInstructionCache(GetCurrentProcess(), cave, 0x1000);
-    // 2. the sites: each written, read back, decoded: its jmp must land on its stub, or the game's own
-    // bytes are put back
-    for (int i = 0; i < 2; ++i) {
+    // 2. the sites: each written, read back, decoded: its jmp must land on its stub, or every site gets the
+    // game's own bytes back (all or nothing)
+    auto restore = [&](int upTo) {
+        for (int j = 0; j <= upTo; ++j) {
+            auto* at = reinterpret_cast<uint8_t*>(g_base + kSites[j].at);
+            uint8_t orig[7];
+            siteBytes(kSites[j], orig);
+            DWORD o = 0;
+            if (!VirtualProtect(at, 7, PAGE_EXECUTE_READWRITE, &o)) continue;
+            std::memcpy(at, orig, 7);
+            VirtualProtect(at, 7, o, &o);
+            FlushInstructionCache(GetCurrentProcess(), at, 7);
+        }
+    };
+    for (int i = 0; i < kN; ++i) {
         auto* at = reinterpret_cast<uint8_t*>(g_base + kSites[i].at);
-        if (!VirtualProtect(at, 7, PAGE_EXECUTE_READWRITE, &old)) return refuse("cannot write the game's code");
+        if (!VirtualProtect(at, 7, PAGE_EXECUTE_READWRITE, &old)) {
+            restore(i - 1);
+            return refuse("cannot write the game's code: the game's bytes put back");
+        }
         std::memcpy(at, patches[i], 7);
         const bool right = JmpTarget(at) == reinterpret_cast<uintptr_t>(stubs[i]);
-        if (!right) std::memcpy(at, kSite, 7);
         VirtualProtect(at, 7, old, &old);
         FlushInstructionCache(GetCurrentProcess(), at, 7);
         if (!right) {
-            if (i == 1) {   // the first site is patched and right: put it back too, all or nothing
-                auto* first = reinterpret_cast<uint8_t*>(g_base + kSites[0].at);
-                if (VirtualProtect(first, 7, PAGE_EXECUTE_READWRITE, &old)) {
-                    std::memcpy(first, kSite, 7);
-                    VirtualProtect(first, 7, old, &old);
-                    FlushInstructionCache(GetCurrentProcess(), first, 7);
-                }
-            }
+            restore(i);
             return refuse("a site's jump did not land on its stub: the game's bytes put back");
         }
     }
-    char b[160];
-    snprintf(b, sizeof(b), "stubs at %p and %p, jumps checked (sites 0x%llX, 0x%llX)", static_cast<void*>(stubs[0]), static_cast<void*>(stubs[1]),
-             static_cast<unsigned long long>(g_base + kSites[0].at), static_cast<unsigned long long>(g_base + kSites[1].at));
+    char b[200];
+    snprintf(b, sizeof(b), "3 stubs at %p, jumps checked (sites 0x%llX, 0x%llX, 0x%llX)", static_cast<void*>(stubs[0]),
+             static_cast<unsigned long long>(g_base + kSites[0].at), static_cast<unsigned long long>(g_base + kSites[1].at),
+             static_cast<unsigned long long>(g_base + kSites[2].at));
     said = b;
     if (detail) *detail = said;
     state = 1;
