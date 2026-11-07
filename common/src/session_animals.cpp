@@ -11,6 +11,8 @@
 // conversation) and go into their squad.
 #include "kc/session.h"
 
+#include <utility>
+
 #include <algorithm>
 
 namespace kc {
@@ -109,7 +111,7 @@ void Session::HostAnimalShops(double now) {
     scratchAnimalOffers_.clear();
 
     // the players' answers: sold by the host's game, with the offer it kept
-    for (auto& [from, b] : pendingAnimalBuys_) {
+    for (auto& [from, b] : std::exchange(pendingAnimalBuys_, {})) {
         auto pl = players_.find(from);
         if (pl == players_.end()) continue;
         const std::string who = pl->second.name;

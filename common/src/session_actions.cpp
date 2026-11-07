@@ -36,6 +36,8 @@
 
 #include "kc/session.h"
 
+#include <utility>
+
 namespace kc {
 
 namespace {
@@ -162,7 +164,7 @@ void Session::HostSlaveShops(double now) {
     scratchSlaveOffers_.clear();
 
     // the players' answers: run by the host's game with the offer it kept
-    for (auto& [from, b] : pendingSlaveTrades_) {
+    for (auto& [from, b] : std::exchange(pendingSlaveTrades_, {})) {
         auto pl = players_.find(from);
         if (pl == players_.end()) continue;
         const std::string who = pl->second.name;

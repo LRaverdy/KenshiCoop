@@ -12,6 +12,8 @@
 
 #include "kc/session.h"
 
+#include <utility>
+
 namespace kc {
 
 namespace {
@@ -159,7 +161,7 @@ void Session::HostBuildings(double now) {
             if (PlayerStats* st = StatsOf(hostId_)) ++st->buildings;   // player statistics
         }
     // Clients' placements: built here first, then everywhere.
-    for (auto& [pid, p] : pendingPlaces_) {
+    for (auto& [pid, p] : std::exchange(pendingPlaces_, {})) {
         Handle created;
         Vec3 wpos;
         // the checks build mode makes before it accepts a spot: a placement it would have refused
@@ -183,7 +185,7 @@ void Session::HostBuildings(double now) {
     pendingPlaces_.clear();
     // Buying and dismantling asked by clients: the host's game does it; a purchase is replayed by
     // every client (ownership, doors), a dismantling comes back through the construction state.
-    for (auto& [pid, a] : pendingBuildActions_) {
+    for (auto& [pid, a] : std::exchange(pendingBuildActions_, {})) {
         std::string refused;
         const char* what = a.kind == BuildActionKind::Buy ? "buys" : (a.kind == BuildActionKind::Upgrade ? "upgrades" : "dismantles");
         if (!world_.ExecuteBuildAction(a, refused)) {

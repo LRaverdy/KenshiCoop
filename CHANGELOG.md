@@ -8,7 +8,7 @@ parenthèses). L'état détaillé de chaque fonctionnalité est dans
 
 Protocole inchangé (36). Corrections issues de l'audit des plantages (7 auditeurs, chaque point contre-vérifié
 par deux relecteurs indépendants). Testé en jeu : `coop_test.py limbs` 7/7 deux fois, fermeture normale d'un
-client sans plantage ; tests unitaires 55 574/55 574.
+client sans plantage, démontage par un client, membres coupés 8/8 ; tests unitaires 55 574/55 574.
 
 - **Plantage en retirant une tâche (rob1, 21:51)** : la vraie cause. Le `movePermajob` du jeu lit la tâche à
   déplacer avant de vérifier son numéro, et la remet dans la liste même hors limites ; or une tâche retirée reste
@@ -25,8 +25,24 @@ client sans plantage ; tests unitaires 55 574/55 574.
   la carte de navigation des bâtiments (l'hôte déplace tous les persos).
 - **Membres coupés** : le troisième parcours des zones (0xCE087, « membre encore dans une zone ») est protégé
   comme les deux autres ; installation tout ou rien des trois points, sauts vérifiés.
-- **Hôte** : une requête de client qui plantait était rejouée à chaque image avec toute sa file (ordres,
-  escouades, réponses de dialogue, apparences) ; chaque file est vidée avant d'être traitée.
+- **Hôte** : une requête de client qui plantait était rejouée à chaque image avec toute sa file ; toutes les
+  files (ordres, escouades, dialogues, apparences, conteneurs, aperçus, bâtiments, portes, ateliers, tirs,
+  animaux, esclaves) sont vidées avant d'être traitées, et celles d'un joueur parti sont abandonnées.
+- **Tâches** : la garde des tâches détruites repère aussi une tâche listée deux fois ; après chaque retrait la case
+  juste après la liste est vidée (le jeu y laissait la tâche détruite). Une tâche dont la cible ne correspond pas
+  chez le client est gardée comme celle de l'hôte (même tâche, même genre de cible) au lieu d'être détruite et
+  refaite à chaque liste (« 1 removed, 1 added » toute la soirée du 6/11).
+- **Membres coupés** : informations de déroulement de pile enregistrées pour le code de déviation (une faute
+  dedans remonte jusqu'aux gardes du mod) ; retour au comportement normal au sol (la copie d'un client suit
+  l'hôte quand le membre roule ou est ramassé : `coop_test.py limbs` 8/8).
+- **Contrôles côté hôte** (audit) : ville d'un placement vérifiée (vtable TownBase), modèle de type bâtiment
+  seulement, rotation normalisée ; apparences d'un client limitées aux clés existantes et aux références du même
+  genre ; 32 déplacements d'objets en attente par joueur, tri des déplacements borné ; l'ancienne commande
+  `SquadMove` refusée ; `hk_groupSpeed` déclare son second argument comme pointeur.
+- **Démontage par un client** (signalé le 6/11) : vérifié en jeu (`coop_test.py dismantle`). Le bouton de la
+  fenêtre du bâtiment (confirmation) le démonte tout de suite partout ; l'ordre « démanteler » du clic droit le
+  démonte peu à peu, à la vitesse de construction du perso (avec un perso débutant : ~10 % en 2 min), comme dans
+  le jeu seul.
 
 ## v0.3.12 (6 novembre 2026, même soir)
 

@@ -75,22 +75,9 @@ KenshiWorld::GroundStats KenshiWorld::GroundCounters() {
 
 // ---------------------------------------------------------------- host
 
-// 0.3.10 hotfix (06/11 22:01 and 22:02: every client stopped as the host re-announced a rolling severed
-// leg, "102-limbs.mod": the client destroys its copy to place it again, and that killed the game). A
-// severed limb, once announced, is never taken back from the clients: no re-announce when it rolls, no
-// pickup (their copy stays until the next world load).
-static bool SeveredLimb(const kc::ItemState& st) { return st.templateSid.find("limbs.mod") != std::string::npos; }
-
+// 0.3.13: the 0.3.10 hotfix that never took a severed limb back from the clients is gone: the clients' crash was
+// the limb patch's wild jump (fixed in 0.3.12, coop_test.py limbs: a client destroys its copy safely).
 void KenshiWorld::GroundOutLocked(kc::GroundEvent e) {
-    if (e.kind != kc::GroundKind::Dropped) {
-        auto t = groundTrack_.find(e.item);
-        if ((t != groundTrack_.end() && SeveredLimb(t->second.st)) || SeveredLimb(e.state)) {
-            if (t != groundTrack_.end()) groundTrack_.erase(t);
-            ++groundStats_.repeatsSkipped;
-            Log("ground: severed limb %u:%u gone here: not sent (a client's game dies destroying its copy)", e.item.index, e.item.serial);
-            return;
-        }
-    }
     if (e.kind == kc::GroundKind::Dropped) {
         auto t = groundTrack_.find(e.item);
         if (t != groundTrack_.end() && t->second.announced && SameStack(t->second.st, e.state) && Dist(t->second.pos, e.pos) < kMoved) {
@@ -189,11 +176,6 @@ void KenshiWorld::GroundScan(double now) {
         g.last = s.pos;
         if (away && !still && !changed) {
             ++groundStats_.scanRolling;
-            g.seen = now;
-            continue;
-        }
-        if (away && !changed && SeveredLimb(s.st)) {   // 0.3.10 hotfix: a rolled limb stays where the clients have it
-            g.pos = s.pos;
             g.seen = now;
             continue;
         }

@@ -124,6 +124,8 @@ void* PlayerFaction() {
     return pi && Rd(pi, PI_faction, f) ? f : nullptr;
 }
 
+constexpr uintptr_t kVtTownBase = 0x1735BA8;   // TownBase's vtable (workshop.cpp kVtTown)
+
 bool IsBuilding(const void* obj) {
     kc::Handle h;
     return obj && !kenshi::IsCharacter(obj) && kenshi::ObjectHandle(obj, h) && h.type == 0;
@@ -365,7 +367,17 @@ bool KenshiWorld::ExecutePlacement(const kc::BuildPlace& p, kc::Handle& created,
         }
     }
     void* indoors = p.indoorsSid.empty() ? nullptr : BuildingAt(p.indoorsSid, p.indoorsPos);
+    // 0.3.13 (audit 07/11): the town is handed to createBuilding as a TownBase (its virtual slots are called):
+    // anything else a handle names (a character, an item) is never passed; the building is then simply not tied
+    // to a town
     void* town = p.town.valid() ? kenshi::ResolveObject(p.town) : nullptr;
+    if (town) {
+        void* vt = nullptr;
+        if (!Rd(town, 0, vt) || reinterpret_cast<uintptr_t>(vt) != kenshi::Addr(kVtTownBase)) {
+            Log("building placement: the town it names is not a town here: placed without one");
+            town = nullptr;
+        }
+    }
     void* callback = pi;
     void* snapCb = nullptr;
     if (!p.snapSid.empty()) {
@@ -381,7 +393,12 @@ bool KenshiWorld::ExecutePlacement(const kc::BuildPlace& p, kc::Handle& created,
         }
     }
     const float pos[3] = {p.pos.x, p.pos.y, p.pos.z};
-    const float rot[4] = {p.rot.w, p.rot.x, p.rot.y, p.rot.z};   // Ogre::Quaternion
+    // 0.3.13 (audit): a unit quaternion only (normalised; none at all: no rotation)
+    float qw = p.rot.w, qx = p.rot.x, qy = p.rot.y, qz = p.rot.z;
+    const float qn = std::sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
+    if (!std::isfinite(qn) || qn < 1e-3f) qw = 1.0f, qx = qy = qz = 0.0f;
+    else qw /= qn, qx /= qn, qy /= qn, qz /= qn;
+    const float rot[4] = {qw, qx, qy, qz};   // Ogre::Quaternion
     void* b = nullptr;
     {
         HostCallScope scope;
@@ -426,6 +443,13 @@ bool KenshiWorld::CheckPlacement(const kc::BuildPlace& p, std::string& why, std:
     if (!data) {
         why = "unknown template";
         whyFr = "modèle de bâtiment inconnu.";
+        return false;
+    }
+    // 0.3.13 (audit 07/11): only a building template (itemType BUILDING, 0) reaches createBuilding
+    int type = -1;
+    if (!Rd(data, kenshi::off::GD_type, type) || type != 0) {
+        why = "not a building template";
+        whyFr = "ce modèle n'est pas un bâtiment.";
         return false;
     }
     if (!p.parentSid.empty()) return true;   // furniture

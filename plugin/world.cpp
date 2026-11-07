@@ -2998,6 +2998,15 @@ bool KenshiWorld::Order(const kc::Handle& h, const kc::Command& cmd) {
         return CallPlayerMoveOrder(c, cmd.pos);
     }
     case kc::CommandKind::SquadMove: {
+        // 0.3.13 (audit 07/11): no client sends it any more (the squad window goes through SquadRequest, with its
+        // squad limit); this path made a new squad for every message, without a limit. Refused.
+        if (client_ == false) {
+            ++targetRefusals_;
+            Log("refused: client squad change by the old SquadMove command (the squad window's requests are used now)");
+            orderRefusal_ = "Action refusée : mets à jour le mod (changement d'escouade d'une ancienne version).";
+            orderRefusalReason_ = kc::ResultReason::WrongTarget;
+            return false;
+        }
         // the squad to join: another member of the player faction's squads, never an NPC's squad
         kenshi::Character* other = cmd.subject.valid() ? FindSquad(cmd.subject) : nullptr;
         if (cmd.subject.valid() && !other) {

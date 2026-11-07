@@ -8,6 +8,8 @@
 // ranged combat aims at (its upper body turns there) and where each turret near the players points.
 #include "kc/session.h"
 
+#include <utility>
+
 #include <algorithm>
 #include <cmath>
 #include <unordered_set>
@@ -149,7 +151,7 @@ void Session::ClientRangedPacket(Msg type, Reader& r) {
 
 void Session::ClientRanged(double now) {
     (void)now;
-    for (const auto& s : pendingShots_) {
+    for (const auto& s : std::exchange(pendingShots_, {})) {
         auto shooter = entities_.find(s.shooterNetId);
         if (shooter == entities_.end() || !shooter->second.present) { ++rangedStats_.shotsFailed; continue; }
         IWorld::WorldShot w;
@@ -170,7 +172,7 @@ void Session::ClientRanged(double now) {
         }
     }
     pendingShots_.clear();
-    for (uint32_t id : pendingStopped_)
+    for (uint32_t id : std::exchange(pendingStopped_, {}))
         if (auto e = entities_.find(id); e != entities_.end() && e->second.present) world_.ApplyRangedAim(e->second.handle, false, IWorld::WorldAim{});
     pendingStopped_.clear();
     // the host's aim, every tick: the local game would otherwise turn them toward its own idea
@@ -188,7 +190,7 @@ void Session::ClientRanged(double now) {
         }
         ++it;
     }
-    for (const auto& [key, t] : pendingTurrets_) {
+    for (const auto& [key, t] : std::exchange(pendingTurrets_, {})) {
         world_.ApplyTurret(t);
         ++rangedStats_.turretsApplied;
     }

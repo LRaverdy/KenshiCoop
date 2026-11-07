@@ -60,13 +60,10 @@ partie (membres coupés au sol, ramassés, zones déchargées).
    à la base ; sinon récupérer `KenshiCoop.log` et le `.dmp` de `%LOCALAPPDATA%\CrashDumps` de rob1 (aucun
    rapport n'arrive : le gestionnaire de plantage du mod n'a rien vu, gel ou mort brutale). Piste si c'est
    bien le lit : deux persos dans le même lit chez le client (occupant écrasé, puis libéré).
-**Audit du 7 novembre (0.3.13)** : corrigés : point 2 (cause : `movePermajob` hors limites), point 9 (navmesh
-côté client), plantage à la fermeture, 3e lecture des membres coupés, file de requêtes rejouée. Restent de l'audit
-(non corrigés) : la garde des tâches libérées peut viser un pointeur recyclé ; `hk_groupSpeed` déclare un
-pointeur en int ; placements de bâtiments et apparences d'un client appliqués sans contrôle (GameData, ville,
-quaternion) ; `HostInvOps` en O(n^4) ; `SquadMove` crée une escouade par message ; les autres files Host*
-(conteneurs, portes, ateliers…) se vident encore après traitement. Détails : sortie de l'audit (journal du
-workflow wf_02e47111-0f0).
+**Tout est traité en 0.3.13** (voir CHANGELOG) : points 1 à 9 de cette soirée et tous les points de l'audit du
+7 novembre. Point 8 (démontage) : pas de bug, vérifié en jeu (`coop_test.py dismantle`) ; le clic droit démonte
+peu à peu, le bouton de la fenêtre du bâtiment tout de suite. Points 1 (UPGRADE des fermes, 0.3.10) et le
+glisser-déposer périmé du panneau Tâches : corrigés mais pas encore vus en partie réelle.
 
 8. **Les clients ne peuvent pas démanteler** (signalé par l'utilisateur en partie, 0.3.12). À reproduire :
    `hk_confirmDismantle` / `NoteLocalBuildAction` / `ExecuteBuildAction` (buildings.cpp), journal de l'hôte.

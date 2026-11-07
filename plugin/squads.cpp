@@ -420,6 +420,29 @@ void KenshiWorld::ApplyJobList(const kc::Handle& h, const std::vector<kc::JobEnt
             drop.push_back(i);
         }
     }
+    // 0.3.13 (06/11: "1:26:...:7 made like the host's: 1 removed, 1 added" every second all evening, the job
+    // object deleted and recreated each time): a job whose target does not match here (furniture of the same
+    // kind a little farther than 40 units, a character known under another handle) is kept as the host's job
+    // of the same task and the same kind of target. The host's game runs the job: ours only shows it.
+    {
+        std::vector<int> still;
+        for (int i : drop) {
+            const LocalJob& l = local[size_t(i)];
+            bool kept = false;
+            for (size_t k = 0; k < jobs.size() && !kept; ++k) {
+                if (used[k] || jobs[k].task != l.task) continue;
+                const bool sameKind = jobs[k].subjectSid.empty() ? l.sid.empty() : l.sid == jobs[k].subjectSid;
+                if (sameKind) used[k] = kept = true;
+            }
+            if (kept) {
+                if (jobKeptTold_.insert(CharKey(h) + ":" + std::to_string(l.task)).second)
+                    Log("jobs: %s: job %d kept as the host's (its target is not the same one here)", KeyOf(h).c_str(), l.task);
+            } else {
+                still.push_back(i);
+            }
+        }
+        drop.swap(still);
+    }
     for (auto it = drop.rbegin(); it != drop.rend(); ++it) kenshi::RemovePermajob(c, *it);
     // 2. the host's we lack: added (the same subject here: a character by its handle, furniture by kind and place)
     int added = 0, missing = 0, wrong = 0;

@@ -12,6 +12,8 @@
 
 #include "kc/session.h"
 
+#include <utility>
+
 namespace kc {
 
 namespace {
@@ -27,7 +29,7 @@ bool Session::Peeked(const Entity& e, double now) const { return e.peekedAt >= 0
 // ---------------------------------------------------------------- host
 
 void Session::HostContainerPeeks(double now) {
-    for (auto& [from, m] : peekAsks_) {
+    for (auto& [from, m] : std::exchange(peekAsks_, {})) {
         auto pl = players_.find(from);
         if (pl == players_.end() || !AdmitActor(from, m.looterNetId, "look at a building's inventory", Msg::ContainerPeek)) continue;
         Handle h;

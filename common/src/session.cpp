@@ -1371,7 +1371,7 @@ size_t Session::RequestResync(uint8_t playerId) {
 // container gets a netId and its items go to that player; it closes when they close it.
 void Session::HostContainers(double now) {
     constexpr float kReach = 80.0f;   // big buildings (mines, farms): one cannot stand on their centre
-    for (auto& [from, ask] : containerAsks_) {
+    for (auto& [from, ask] : std::exchange(containerAsks_, {})) {
         auto pl = players_.find(from);
         auto looter = entities_.find(ask.looterNetId);
         if (pl == players_.end() || !AdmitActor(from, ask.looterNetId, "look into a container", Msg::ContainerOpen)) continue;
@@ -2553,7 +2553,9 @@ void Session::HostPacket(PeerId peer, Msg type, Reader& r) {
         break;
     case Msg::InvOp: {
         InvOp op;
-        if (pl->inGame && Decode(r, op) && pendingInvOps_.size() < 256) pendingInvOps_.emplace_back(pl->id, op);
+        // 0.3.13 (audit): at most 32 moves of one player waiting per tick (a client sends a few every 0.2 s)
+        const auto mine = std::count_if(pendingInvOps_.begin(), pendingInvOps_.end(), [&](const auto& e) { return e.first == pl->id; });
+        if (pl->inGame && Decode(r, op) && pendingInvOps_.size() < 256 && mine < 32) pendingInvOps_.emplace_back(pl->id, op);
         break;
     }
     case Msg::Chat: {
@@ -2636,7 +2638,9 @@ bool FreesPlaceFor(const InvOp& first, const InvOp& later) {
 // Reorder so a move into a place another move empties comes after it (cycles keep their order).
 template <class Get>
 void FreeingFirst(std::vector<size_t>& idx, Get get) {
-    for (size_t guard = 0; guard < idx.size() * idx.size() + 1; ++guard) {
+    // 0.3.13 (audit): moves freeing each other's cells in a ring rotated until an n*n+1 guard (seconds with 256
+    // crafted moves): a linear bound; acyclic chains still end in order, a ring keeps its arrival order
+    for (size_t guard = 0; guard < 2 * idx.size() + 1; ++guard) {
         bool moved = false;
         for (size_t i = 0; i < idx.size() && !moved; ++i)
             for (size_t j = i + 1; j < idx.size() && !moved; ++j)
@@ -4445,6 +4449,9 @@ void Session::ForgetPlayer(uint8_t id) {
     drop(pendingDoorReqs_);
     drop(pendingResearchReqs_);
     drop(pendingMachineReqs_);
+    drop(peekAsks_);              // 0.3.13 (audit): these were left running for a player gone
+    drop(pendingAnimalBuys_);
+    drop(pendingSlaveTrades_);
     walkingToContainers_.erase(std::remove_if(walkingToContainers_.begin(), walkingToContainers_.end(), [id](const PendingContainer& c) { return c.player == id; }),
                                walkingToContainers_.end());
     // containers and trade windows they had open are free again

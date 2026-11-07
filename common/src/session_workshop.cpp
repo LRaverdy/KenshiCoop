@@ -16,6 +16,8 @@
 // crafting windows' buttons and the building panel's power switches become requests.
 #include "kc/session.h"
 
+#include <utility>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -131,7 +133,7 @@ void Session::HostWorkshopRequests() {
         SendResult(player, res);
         ++(ok ? workshop_.requestsDone : workshop_.requestsRefused);
     };
-    for (const auto& [from, req] : pendingResearchReqs_) {
+    for (const auto& [from, req] : std::exchange(pendingResearchReqs_, {})) {
         if (!AdmitActor(from, req.actorNetId, "research request", Msg::ResearchRequest, req.seq)) continue;
         auto pl = players_.find(from);
         const std::string who = pl != players_.end() ? pl->second.name : "player " + std::to_string(from);
@@ -145,7 +147,7 @@ void Session::HostWorkshopRequests() {
         nextInventory_ = 0;   // artifacts or a blueprint consumed
     }
     pendingResearchReqs_.clear();
-    for (const auto& [from, req] : pendingMachineReqs_) {
+    for (const auto& [from, req] : std::exchange(pendingMachineReqs_, {})) {
         if (!AdmitActor(from, req.actorNetId, "machine request", Msg::MachineRequest, req.seq)) continue;
         auto pl = players_.find(from);
         const std::string who = pl != players_.end() ? pl->second.name : "player " + std::to_string(from);

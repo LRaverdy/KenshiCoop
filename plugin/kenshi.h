@@ -788,6 +788,7 @@ bool RemovePermajob(Character* c, int slot);            // a broken slot (below)
 bool PermajobBroken(Character* c, int slot);
 bool DropBrokenPermajob(Character* c, int slot);         // taken out of the list, never deleted (leaked)
 int DropBrokenPermajobs(Character* c);                   // every broken one; how many
+void ClearPermajobTail(Character* c);                     // 0.3.13: the slot after the last job nulled (the game leaves the deleted job's pointer there)
 bool MovePermajob(Character* c, int from, int to);
 bool RemoveJobKind(Character* c, int task);            // every job of that kind
 // The Tâches panel (the job list under the squad bar) against the list of the character it shows

@@ -466,6 +466,7 @@ void hk_removePermajob(void* c, int slot) {
             return;
         }
         o_removePermajob(c, slot);
+        kenshi::ClearPermajobTail(static_cast<kenshi::Character*>(c));   // 0.3.13: no deleted job left past the end
         JobRemoved(c, removed.type, removed.subject, "removed from its job list");
     }
 }
@@ -1150,19 +1151,20 @@ void StorageClickGaveNoOrder(void* building, bool shift) {
 // frame. A member whose movement is gone (destroyed with its zone, or the world reloaded) makes it read
 // null + 0x50 in Havok's vector code (kenshi_x64+0x14B286, via 0x7F592C): plopette 23/10 23:35 in a fight,
 // rob1 26/10 22:15 when the host loaded another save. The game goes on without a limit then.
-using GroupSpeedFn = float (*)(void* group, int flag);
+// 0.3.13 (audit): the second argument is an object pointer (0x660043: mov rdx,[rsi+3A8h]; 0x7F599A uses it as one)
+using GroupSpeedFn = float (*)(void* group, void* other);
 GroupSpeedFn o_groupSpeed = nullptr;
-float GroupSpeedSeh(void* group, int flag, bool* failed) {
+float GroupSpeedSeh(void* group, void* other, bool* failed) {
     __try {
-        return o_groupSpeed(group, flag);
+        return o_groupSpeed(group, other);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         *failed = true;
         return 999.0f;   // no limit (the value an unlimited movement keeps)
     }
 }
-float hk_groupSpeed(void* group, int flag) {
+float hk_groupSpeed(void* group, void* other) {
     bool failed = false;
-    const float r = GroupSpeedSeh(group, flag, &failed);
+    const float r = GroupSpeedSeh(group, other, &failed);
     if (failed) {
         static kc::LogLimiter limit{3, 60.0};
         uint32_t held = 0;

@@ -948,9 +948,38 @@ bool PatchLimbZoneNullChecks(std::string* detail) {
             return refuse("a stub's jumps do not decode right");
         }
     }
+    // 0.3.13 (audit 07/11): unwind information for the stubs. They run inside 0xCD870's frame, fully built: a
+    // fault there (a bad zone pointer) must unwind through that frame to the callers' handlers (CallDestroy's
+    // __except) instead of escaping with an unwalkable stack. 0xCD870's own unwind codes are copied (its handlers
+    // left out, prolog size 0: every code applies) and registered for the cave.
+    std::string unwindNote = "no unwind info";
+    PRUNTIME_FUNCTION caveFn = nullptr;
+    {
+        DWORD64 imageBase = 0;
+        PRUNTIME_FUNCTION rf = RtlLookupFunctionEntry(g_base + kSites[0].at, &imageBase, nullptr);
+        const uint8_t* ui = rf ? reinterpret_cast<const uint8_t*>(imageBase + rf->UnwindData) : nullptr;
+        if (ui && (ui[0] & 7) == 1 && !((ui[0] >> 3) & 4)) {   // version 1, not chained
+            const uint8_t codes = ui[2];
+            const size_t slots = (size_t(codes) + 1) & ~size_t(1);   // the array is padded to an even count
+            uint8_t* u = reinterpret_cast<uint8_t*>((reinterpret_cast<uintptr_t>(c) + 3) & ~uintptr_t(3));
+            uint8_t* fnAt = reinterpret_cast<uint8_t*>((reinterpret_cast<uintptr_t>(u + 4 + slots * 2) + 3) & ~uintptr_t(3));
+            if (fnAt + sizeof(RUNTIME_FUNCTION) <= cave + 0x1000) {
+                u[0] = 1;            // version 1, flags 0
+                u[1] = 0;            // prolog size 0
+                u[2] = codes;
+                u[3] = ui[3];        // frame register and offset
+                std::memcpy(u + 4, ui + 4, slots * 2);
+                caveFn = reinterpret_cast<PRUNTIME_FUNCTION>(fnAt);
+                caveFn->BeginAddress = 0;
+                caveFn->EndAddress = DWORD(c - cave);
+                caveFn->UnwindData = DWORD(u - cave);
+            }
+        }
+    }
     DWORD old = 0;
     VirtualProtect(cave, 0x1000, PAGE_EXECUTE_READ, &old);
     FlushInstructionCache(GetCurrentProcess(), cave, 0x1000);
+    if (caveFn && RtlAddFunctionTable(caveFn, 1, reinterpret_cast<DWORD64>(cave))) unwindNote = "unwind info registered";
     // 2. the sites: each written, read back, decoded: its jmp must land on its stub, or every site gets the
     // game's own bytes back (all or nothing)
     auto restore = [&](int upTo) {
@@ -980,8 +1009,8 @@ bool PatchLimbZoneNullChecks(std::string* detail) {
             return refuse("a site's jump did not land on its stub: the game's bytes put back");
         }
     }
-    char b[200];
-    snprintf(b, sizeof(b), "3 stubs at %p, jumps checked (sites 0x%llX, 0x%llX, 0x%llX)", static_cast<void*>(stubs[0]),
+    char b[320];
+    snprintf(b, sizeof(b), "3 stubs at %p, jumps checked, %s (sites 0x%llX, 0x%llX, 0x%llX)", static_cast<void*>(stubs[0]), unwindNote.c_str(),
              static_cast<unsigned long long>(g_base + kSites[0].at), static_cast<unsigned long long>(g_base + kSites[1].at),
              static_cast<unsigned long long>(g_base + kSites[2].at));
     said = b;
@@ -1571,8 +1600,18 @@ bool WriteAppearance(Character* c, const kc::AppearanceMsg& m) {
     if (!gd) return false;
     using T = kc::AppearanceType;
     int written = 0;
+    // 0.3.13 (audit 07/11): only keys the character's appearance data already has are written (the game's
+    // operator[] used to insert any key a client sent, up to 1024 per message, into the shared GameData)
+    std::unordered_set<std::string> have[6];
+    const uintptr_t maps[6] = {GDM_bool, GDM_int, GDM_float, GDM_string, GDM_vec, GDM_quat};
+    for (int i = 0; i < 6; ++i) ForEachNode(gd, maps[i], [&](const std::string& k, const uint8_t*) { have[i].insert(k); });
+    auto known = [&](T t, const std::string& k) {
+        const int i = t == T::Bool ? 0 : t == T::Int ? 1 : t == T::Float ? 2 : t == T::String ? 3 : t == T::Vec3 ? 4 : t == T::Quat ? 5 : -1;
+        return i >= 0 && have[i].count(k) > 0;
+    };
     for (const auto& f : m.fields) {
         uint8_t* v = nullptr;
+        if (f.type != T::Refs && !known(f.type, f.key)) continue;
         switch (f.type) {
         case T::Bool: if ((v = ValueSlot(gd, GDM_bool, FnMapBool, f.key))) { const uint8_t b = f.key == "in editor" ? 0 : f.b; Wr(v, 0, b); } break;
         case T::Int: if ((v = ValueSlot(gd, GDM_int, FnMapInt, f.key))) Wr(v, 0, f.i); break;
@@ -1591,6 +1630,10 @@ bool WriteAppearance(Character* c, const kc::AppearanceMsg& m) {
                     uint8_t* r = b + i * kRefSize;
                     void* target = FindGameData(f.refs[i]);
                     if (!target) continue;
+                    // 0.3.13 (audit): a reference keeps its kind (the race stays a race: never an item or a building)
+                    void* was = nullptr;
+                    int tWas = -1, tNew = -2;
+                    if (!Rd(r, 0x38, was) || !was || !Rd(was, off::GD_type, tWas) || !Rd(target, off::GD_type, tNew) || tWas != tNew) continue;
                     AssignGameString(r + 0x10, f.refs[i]);
                     Wr(r, 0x38, target);
                 }
@@ -6109,7 +6152,25 @@ bool PermajobBroken(Character* c, int slot) {
     void* vt = nullptr;
     if (!ReadRaw(arr, uintptr_t(slot) * sizeof(void*), &job, sizeof(job))) return true;
     if (!job) return false;   // the game's removal skips a null one
-    return !Rd(job, 0, vt) || !InGameImage(vt);
+    if (!Rd(job, 0, vt) || !InGameImage(vt)) return true;
+    // 0.3.13 (audit 07/11): the same job listed twice (a stale move re-inserted a live one): deleting this copy
+    // would leave the other one dangling
+    for (uint32_t i = 0; i < n; ++i) {
+        void* other = nullptr;
+        if (i != uint32_t(slot) && ReadRaw(arr, uintptr_t(i) * sizeof(void*), &other, sizeof(other)) && other == job) return true;
+    }
+    return false;
+}
+
+void ClearPermajobTail(Character* c) {
+    void* orders = PermajobList(c);
+    uint32_t n = 0;
+    void* arr = nullptr;
+    if (!orders || !Rd(orders, OR_jobCount, n) || n >= 256 || !Rd(orders, OR_jobArray, arr) || !arr) return;
+    uint32_t cap = 0;   // the lektor's capacity (+0x94): the slot right after the last job exists only below it
+    if (!Rd(orders, OR_jobCount + 4, cap) || n >= cap) return;
+    void* none = nullptr;
+    WriteRaw(arr, uintptr_t(n) * sizeof(void*), &none, sizeof(none));
 }
 
 bool DropBrokenPermajob(Character* c, int slot) {
@@ -6123,7 +6184,10 @@ bool DropBrokenPermajob(Character* c, int slot) {
         if (!ReadRaw(arr, uintptr_t(i + 1) * sizeof(void*), &next, sizeof(next)) || !WriteRaw(arr, uintptr_t(i) * sizeof(void*), &next, sizeof(next))) return false;
     }
     const uint32_t left = n - 1;
-    return WriteRaw(orders, OR_jobCount, &left, sizeof(left));
+    if (!WriteRaw(orders, OR_jobCount, &left, sizeof(left))) return false;
+    void* none = nullptr;   // 0.3.13: no stale pointer left after the end of the list
+    WriteRaw(arr, uintptr_t(left) * sizeof(void*), &none, sizeof(none));
+    return true;
 }
 
 int DropBrokenPermajobs(Character* c) {

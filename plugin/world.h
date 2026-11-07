@@ -541,6 +541,7 @@ private:
     std::mutex shotsMutex_;
     std::vector<WorldShot> shotsOut_;                                  // host, under shotsMutex_
     std::unordered_map<std::string, std::vector<std::pair<int, unsigned long long>>> localJobs_;   // client: key -> (task, kept until GetTickCount64)
+    std::unordered_set<std::string> jobKeptTold_;   // 0.3.13: client: "job kept as the host's" said once per character and task
     kc::ModePredictions modePredict_;                                  // client: toggles set here, not yet the host's (by KeyOf)
     std::unordered_map<std::string, double> jobEdits_;                 // client: KeyOf -> host job lists not applied before (NowSeconds)
     bool JobEditPending(const kc::Handle& h);

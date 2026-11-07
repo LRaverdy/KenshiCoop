@@ -9,6 +9,8 @@
 // clicks go to the host.
 #include "kc/session.h"
 
+#include <utility>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -53,7 +55,7 @@ void Session::HostDoorPacket(uint8_t from, Reader& r) {
 }
 
 void Session::HostDoors(double now) {
-    for (const auto& [from, req] : pendingDoorReqs_) {
+    for (const auto& [from, req] : std::exchange(pendingDoorReqs_, {})) {
         auto pl = players_.find(from);
         const std::string who = pl != players_.end() ? pl->second.name : "player " + std::to_string(from);
         const bool ok = world_.ExecuteDoorRequest(req);

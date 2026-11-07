@@ -5257,6 +5257,26 @@ def exp_limbs(host, cli):
     log("host: limb picked up", r3)
     time.sleep(4)
     check("membres : l'hote ramasse la jambe sans planter", alive(host) and r3[0], r3[1])
+    # 0.3.13: the pickup reaches the client again (the 0.3.10 hotfix kept a ghost limb there): a second limb, the
+    # client keeps its copy, the host picks it up, the client's copy goes
+    r6 = cmd(host, "groundmake 102-limbs.mod 0 0 6")
+    if r6[0] and r6[1].startswith("ok "):
+        k6 = r6[1].split()[1]
+        c6 = "ok none"
+        for _ in range(20):
+            time.sleep(1)
+            c6 = cmd(cli, f"groundcopy {k6}")[1]
+            if c6 != "ok none":
+                break
+        log("client: copy of the second limb", c6)
+        log("host: second limb picked up", cmd(host, f"pickup 0 {k6}"))
+        gone6 = False
+        for _ in range(15):
+            time.sleep(1)
+            if cmd(cli, f"groundcopy {k6}")[1] == "ok none":
+                gone6 = True
+                break
+        check("membres : ramassee chez l'hote, la copie du client disparait (sans planter)", c6 != "ok none" and gone6 and alive(cli), c6)
     r4 = cmd(host, "groundmake 102-limbs.mod 0 -6 0")
     if r4[0] and r4[1].startswith("ok "):
         time.sleep(3)
@@ -5265,6 +5285,66 @@ def exp_limbs(host, cli):
         time.sleep(4)
         check("membres : l'hote detruit une jambe au sol sans planter", alive(host) and r5[0] and r5[1] == "ok", r5[1])
     check("membres : les deux jeux tournent encore", alive(host) and alive(cli))
+    summary()
+
+
+def exp_dismantle(host, cli, kinds=("Lit", "Feu", "Coffre")):
+    """0.3.13 (06/11: 'les clients ne peuvent pas demanteler'): a building placed by the client and finished is
+    dismantled by the client's own character, first the right-click way (order 96 alone: plopette's path, no
+    confirmation), then, if it still stands, with the building window's confirmation first."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own_c = own_index(cli)
+    sid = None
+    for k in kinds:
+        t = cmd(host, f"buildtypes {k}")[1]
+        parts = t.split()
+        if t.startswith("ok") and len(parts) > 2:
+            sid = parts[2].split("=")[0]
+            break
+    check("demontage : un modele trouve", sid is not None, sid)
+    if not sid:
+        summary()
+        return
+
+    def built(pid):
+        t = cmd(pid, f"buildlist {sid} 3000 {own_c}")[1]
+        return [e for e in t.split()[2:] if e.startswith(sid + "@")]
+
+    log("open desert:", go_to_open_desert(host, sid))
+    cmd(cli, f"camto {own_c}")
+    time.sleep(3)
+    before_h, before_c = len(built(host)), len(built(cli))
+    log("client places", sid, place_valid(cli, sid, own_c, 25, 0))
+    for _ in range(20):
+        time.sleep(0.5)
+        if len(built(host)) > before_h and len(built(cli)) > before_c:
+            break
+    check("demontage : batiment du client pose partout", len(built(host)) > before_h and len(built(cli)) > before_c, f"{built(host)} / {built(cli)}")
+    log("host finishes it", cmd(host, f"buildprogress {sid} 100000"))
+    time.sleep(3)
+    log("finished:", built(host), "/", built(cli))
+
+    def wait_gone(label, seconds=90):
+        for i in range(seconds // 2):
+            time.sleep(2)
+            bh, bc = built(host), built(cli)
+            if i % 5 == 0:
+                log(f"[{label}] host {bh} client {bc} | orders {cmd(host, f'orders {own_c}')[1][:120]}")
+            if len(bh) <= before_h and len(bc) <= before_c:
+                return True
+        return False
+
+    log("client: dismantle order, right click", cmd(cli, f"buildreq {own_c} 96 {sid}"))
+    ok = wait_gone("clic droit")
+    check("demontage : ordre du clic droit, le batiment disparait partout", ok, f"{built(host)} / {built(cli)}")
+    if not ok:
+        log("client: building window's confirmation", cmd(cli, f"builddismantle {sid} {own_c}"))
+        time.sleep(2)
+        log("client: dismantle order again", cmd(cli, f"buildreq {own_c} 96 {sid}"))
+        ok2 = wait_gone("confirmation")
+        check("demontage : confirmation puis ordre, disparait partout", ok2, f"{built(host)} / {built(cli)}")
     summary()
 
 
@@ -10812,7 +10892,8 @@ def main():
                            ("lootground", "0.3.5 lot 4 (point 14): an item from a downed NPC's loot window released over the ground"),
                            ("wornrebuild", "0.3.5 lot 4 (point 3): worn clothes rebuilt on the client, one reasoned line a minute at most"),
                            ("nightitems", "0.3.5 lot 4: every experiment above in a row"),
-                           ("limbs", "0.3.12: a severed limb made, its client copy destroyed, picked up by the host: nobody crashes")):
+                           ("limbs", "0.3.12: a severed limb made, its client copy destroyed, picked up by the host: nobody crashes"),
+                           ("dismantle", "0.3.13: the client dismantles its own building, right-click order then with confirmation")):
         np_ = sub.add_parser(name, help=helptext)
         np_.add_argument("--save", default="kctest_base")
         np_.add_argument("--keep", action="store_true")
@@ -11420,7 +11501,7 @@ def main():
             exp_trace(host, cli)
         elif a.what == "playerstats":   # 0.3.5
             exp_playerstats(host, cli)
-        elif a.what in ("storagetake", "storagejob", "storagetypes", "upgrade", "buildingpeek", "farmwater", "teampack", "teamtrade", "lootground", "wornrebuild", "nightitems", "limbs"):
+        elif a.what in ("storagetake", "storagejob", "storagetypes", "upgrade", "buildingpeek", "farmwater", "teampack", "teamtrade", "lootground", "wornrebuild", "nightitems", "limbs", "dismantle"):
             globals()["exp_" + a.what](host, cli)   # 0.3.5 lot 4 (night-items)
         elif a.what == "walk":
             exp_walk(host, cli)
