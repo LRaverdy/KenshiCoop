@@ -251,7 +251,7 @@ hk_medKnockout) ; `ReadOperatorCount` +0x3E0 ; CharBody +0x648 / Tasker +0x68 / 
 - **Factions** : factions, factionsync, relation, setrelation, bounty, givebounty.
 - **Prisons** : cage, chain, captive, enslave.
 - **Construction** : buildtypes, buildlist, buildcount, buildplace, buildprogress, buildbuy,
-  buildforsale, builddismantle, furnplace, furnparent, buildreq, buildinfo, givemoney, itemtypes,
+  buildforsale, builddismantle, buildpause, furnplace, furnparent, buildreq, buildinfo, givemoney, itemtypes,
   giveitem, invcount.
 - **Divers** : robuststats.
 

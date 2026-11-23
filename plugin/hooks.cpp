@@ -1974,6 +1974,16 @@ void PatchUpgradeSlots(bool on) {
         else Log("upgrade: no building vtable holds the game's upgrade entries: UPGRADE left to the game");
     }
 }
+// 0.3.14: the PAUSE CONSTRUCTION button of a site's panel (a MyGUI delegate on Building vt 0x2A8, one entry
+// for every building class: 0x546F40 only flips ConstructionState +1). A client's click flipped its own copy
+// alone, the host's workers went on building: it is asked of the host instead (KenshiWorld::NoteUiPause).
+using TogglePauseFn = void (*)(void* building, void* widget);
+TogglePauseFn o_togglePause = nullptr;
+void hk_togglePause(void* building, void* widget) {
+    KenshiWorld* w = TheWorld();
+    if (!g_hostCall && KenshiWorld::View()->active && w && building && w->NoteUiPause(building)) return;
+    o_togglePause(building, widget);
+}
 using BuildProgressFn = void (*)(void* building, float amount);
 BuildProgressFn o_addConstruction = nullptr;
 void hk_addConstruction(void* building, float amount) {
@@ -2459,6 +2469,7 @@ bool InstallHooks(TickFn tick, std::string* err) {
         {kenshi::FnConfirmDismantle, reinterpret_cast<void*>(&hk_confirmDismantle), reinterpret_cast<void**>(&o_confirmDismantle)},
         {kenshi::FnAddConstructionProgress, reinterpret_cast<void*>(&hk_addConstruction), reinterpret_cast<void**>(&o_addConstruction)},
         {kenshi::FnAddDismantleProgress, reinterpret_cast<void*>(&hk_addDismantle), reinterpret_cast<void**>(&o_addDismantle)},
+        {kenshi::FnTogglePauseConstruction, reinterpret_cast<void*>(&hk_togglePause), reinterpret_cast<void**>(&o_togglePause)},
         {kenshi::FnWorldDestroy, reinterpret_cast<void*>(&hk_worldDestroy), reinterpret_cast<void**>(&o_worldDestroy)},
         {kenshi::FnSaveManagerSave, reinterpret_cast<void*>(&hk_saveManagerSave), reinterpret_cast<void**>(&o_saveManagerSave)},
         // ---- map markers: the squad bar's portraits

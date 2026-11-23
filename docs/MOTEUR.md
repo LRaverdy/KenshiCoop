@@ -250,6 +250,7 @@ et le clic du mode construction ; prologues relevés dans `kenshi_x64.exe` et v�
 | machine | `FnOperatorSetInsert` | `std::set<hand>::insert(pair* ret, const hand&, bool)` | `0xF7D90` | — | l'insertion qu'appelle `UseableStuff::tryOperate` (`0xF8030`, vt 0x4F8) |
 | énergie | `FnUpdatePowerGrid` | `Town::updatePowerGrid()` | `0x92CD60` | oui | vt 0x2B8 de `Town` : remet à zéro puis répartit l'énergie des générateurs et batteries de la ville (totaux à `Town+0x470`…`+0x490`) |
 | énergie | `FnTogglePowerButton` | `UseableStuff::togglePowerButton(DataPanelLine*)` | `0x297A60` | oui | bouton marche / arrêt du panneau : `switchPowerOn(!powerOn)` (vt 0x318, `0x2973F0`) ; la ligne n'est pas lue |
+| chantier | `FnTogglePauseConstruction` | `Building::<togglePauseConstruction>(Widget*)` (nom du mod) | `0x546F40` | oui | bouton « PAUSE CONSTRUCTION » (vt 0x2A8 de toutes les classes de bâtiments) : son, puis `ConstructionState+1 = !…` ; client : demandé à l'hôte |
 | énergie | `FnToggleBattButton` | `UseableStuff::toggleBattButton(DataPanelLine*)` | `0x297AE0` | oui | inverse `+0x3B4` (reçoit l'énergie des batteries) |
 | recherche | `FnRefreshResearchList` | `ManagementScreen::refreshResearchList()` | `0x49A4C0` | — | redessine la fenêtre Recherche après un changement imposé |
 
@@ -767,6 +768,16 @@ Emplacements de vtable :
   pause quand d'autres joueurs sont là (voir FONCTIONNALITES « Dialogues »). **Pas dans `setInDialog`** :
   `userPause(false)` appelé là, pendant la création de la fenêtre, a fait planter le rendu de l'hôte trois
   fois (26 et 30/10) ; depuis la 0.3.8 c'est `EndFrame` qui le fait, sur le fil principal.
+- **Bouton « PAUSE CONSTRUCTION »** (0.3.14) : le panneau d'un bâtiment (`0x2FEA10`, qui pose aussi
+  « Dismantle ») l'ajoute quand le chantier n'est pas fini (vt 0x228 → +0 à 0), libellé « [PAUSED] » si
+  état+1, et lui donne un délégué sur le thunk `0x313D70` (`mov rax,[rcx]; jmp [rax+2A8h]`, atteint par
+  `0x469A7`). L'entrée 0x2A8 est la même pour les 17 vtables de bâtiments (`0x1F1BD` → **`0x546F40`**,
+  `FnTogglePauseConstruction`, nom du mod) : un son (`0xA86F90`, 0x6E), puis `getBuildState()+1 =
+  !getBuildState()+1`. Rien d'autre : pas d'appel direct ailleurs dans l'exe (références : ces vtables
+  seulement). Le mod crochète `0x546F40` même (une vraie fonction, pas le thunk partagé). Trouvé par la
+  chaîne « PAUSE CONSTRUCTION » (RVA `0x16BA5E0`, lue à `0x2FEC97`), puis le délégué créé juste après
+  (`lea r12` à `0x2FEFE6`). `0x547FF0` / `0x548090`, qui écrivent / lisent un octet +0x161, sont le
+  `setVisible` / `isVisible` de `BuildingItemGroup` (vtable `0x16E8738`), pas la pause.
 - **Bouton UPGRADE** : les thunks `0x313D50` / `0x313D90` (`mov rax,[rcx]; jmp [rax+258h/260h]`) servent à
   tous les délégués sur une fonction virtuelle à ces places, pas seulement aux bâtiments : ne pas les
   crocheter. Depuis la 0.3.8 le mod remplace les entrées `0x258` / `0x260` de la vtable du `Building` de base

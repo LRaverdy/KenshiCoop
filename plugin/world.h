@@ -439,6 +439,7 @@ public:
         return false;
     }
     void UpdatePendingPickups();   // host: characters walking to an item a client asked them to take
+    bool NoteUiPause(void* building);   // 0.3.14: a PAUSE CONSTRUCTION click on a site of ours: client = asked of the host (true: not run here)
     bool NoteUiUpgrade(void* building, int variant);   // 0.3.7: a UPGRADE click on a building (the delegate thunks): client = asked of the host (true: not run here); host = replayed by every client
     void UpdateGroupSpeed();       // host (0.3.6): "run at the same pace" for the characters of each player that the game's own group does not cover
     bool HostBodyPos(const kc::Handle& local, kc::Vec3& out) const;   // client: the host's position of that character (last state)

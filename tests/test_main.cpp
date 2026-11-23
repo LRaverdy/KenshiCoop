@@ -757,6 +757,11 @@ struct FakeWorld : IWorld {
             return true;
         }
         if (!b.ours) return false;
+        if (a.kind == BuildActionKind::Pause) {
+            if (b.flags & kSiteComplete) { refused = "termine"; return false; }
+            b.flags = uint8_t(a.arg ? b.flags | kSitePaused : b.flags & ~kSitePaused);
+            return true;
+        }
         b.flags |= kSiteDismantling;
         return true;
     }
@@ -1716,6 +1721,14 @@ static void TestWire() {
         Writer baw; Encode(baw, ba);
         Reader bar(baw.data(), baw.size()); CHECK(PeekType(bar) == Msg::BuildAction);
         BuildAction ba2; CHECK(Decode(bar, ba2) && ba2.kind == BuildActionKind::Dismantle && ba2.arg == 2 && ba2.pos.z == 3);
+        // 0.3.14: pause / resume a site; a kind this build does not know is refused whole
+        ba.kind = BuildActionKind::Pause; ba.arg = 1;
+        Writer bpw; Encode(bpw, ba);
+        Reader bpr(bpw.data(), bpw.size()); CHECK(PeekType(bpr) == Msg::BuildAction);
+        CHECK(Decode(bpr, ba2) && ba2.kind == BuildActionKind::Pause && ba2.arg == 1 && ba2.sid == "hut");
+        ba.kind = BuildActionKind(5);
+        Writer bxw; Encode(bxw, ba);
+        Reader bxr(bxw.data(), bxw.size()); CHECK(PeekType(bxr) == Msg::BuildAction && !Decode(bxr, ba2));
     }
     {   // fix G5: job lists, and the Tâches panel's commands
         JobListMsg jl; jl.entries = {{3, {16, 87, 16}}, {4, {}}};
@@ -3936,6 +3949,34 @@ static void TestBuildings() {
     if (auto* b = findSid(hw, "hut")) b->progress = 40;
     Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { auto* c = findSid(cw, "hut"); return c && c->progress == 40; });
     CHECK(findSid(cw, "hut") && findSid(cw, "hut")->progress == 40);
+    // 0.3.14: the client's PAUSE CONSTRUCTION click: shown on its copy at once, done by the host; then resumed
+    auto paused = [&](FakeWorld& w) { auto* b = findSid(w, "hut"); return b && (b->flags & kSitePaused); };
+    auto askPause = [&](int on) { cw.bldgActions.push_back({BuildActionKind::Pause, on, "hut", findSid(cw, "hut") ? findSid(cw, "hut")->pos : Vec3{}}); };
+    askPause(1);
+    Run({{&host, &hw}, {&cli, &cw}}, 0.05);
+    CHECK(paused(cw));
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return paused(hw); });
+    CHECK(paused(hw) && paused(cw) && !(findSid(hw, "hut")->flags & kSiteComplete));
+    Run({{&host, &hw}, {&cli, &cw}}, 1.5);   // the host's state of it came back: still paused here
+    CHECK(paused(cw));
+    askPause(0);
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return !paused(hw) && !paused(cw); });
+    CHECK(!paused(hw) && !paused(cw));
+    // the host player pauses the site itself (its game flips the byte): seen on the client; and resumes
+    findSid(hw, "hut")->flags |= kSitePaused;
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return paused(cw); });
+    CHECK(paused(cw));
+    findSid(hw, "hut")->flags &= uint8_t(~kSitePaused);
+    Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { return !paused(cw); });
+    CHECK(!paused(cw));
+    // a pause the host refuses (not the players' site there): the client's copy goes back to the host's state
+    findSid(hw, "hut")->ours = false;
+    askPause(1);
+    Run({{&host, &hw}, {&cli, &cw}}, 0.05);
+    CHECK(paused(cw));
+    Run({{&host, &hw}, {&cli, &cw}}, 13.0, [&] { return !paused(cw); });
+    CHECK(!paused(hw) && !paused(cw));
+    findSid(hw, "hut")->ours = true;
     if (auto* b = findSid(hw, "hut")) { b->progress = 100; b->flags = kSiteComplete; }
     Run({{&host, &hw}, {&cli, &cw}}, 4.0, [&] { auto* c = findSid(cw, "hut"); return c && c->flags == kSiteComplete; });
     CHECK(findSid(cw, "hut") && findSid(cw, "hut")->flags == kSiteComplete && findSid(cw, "hut")->progress == 100);

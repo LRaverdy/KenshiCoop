@@ -1043,6 +1043,14 @@ la fenêtre du client.
   10 s). Le jeu d'un client ne fait jamais avancer ni démonter un chantier de lui-même. L'ordre
   « construire » d'un client part à l'hôte comme les autres ordres (le chantier y est retrouvé par
   type et endroit).
+- **Suspendre / reprendre un chantier** (bouton « PAUSE CONSTRUCTION » du panneau, branche
+  `fix-client-suspend-build`, **à tester en jeu**) : chez l'hôte, son jeu le fait et l'état part avec
+  les états de chantier. Chez un client, le clic est demandé à l'hôte (`BuildAction` genre `Pause`,
+  l'état voulu : 1 en pause, 0 repris) ; son panneau le montre tout de suite, l'hôte l'écrit (chantier
+  à nous et pas fini, sinon « Ce chantier est déjà terminé. » / « Ce bâtiment n'est pas à nous. ») et
+  l'envoie à tous dans l'instant. Un refus est défait chez le client au prochain envoi complet (10 s
+  au plus). Jusqu'à la 0.3.13 le clic d'un client ne changeait que sa copie : les ouvriers de l'hôte
+  continuaient. Avec un hôte 0.3.13 ou plus ancien, la demande est ignorée.
 - **Démontage** : un client qui confirme « démonter » le demande à l'hôte, dont le jeu le fait ;
   un bâtiment détruit pour de bon chez l'hôte (démonté, détruit) disparaît chez tout le monde.
 - **Achat** : un client qui confirme l'achat d'un bâtiment à vendre le demande à l'hôte, qui vérifie

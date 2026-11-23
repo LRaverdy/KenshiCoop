@@ -3517,7 +3517,8 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         return "ok " + std::to_string(n) + out;
     }
     if (cmd == "buildcount") return "ok followed=" + std::to_string(s.buildingCount()) + " found=" + std::to_string(s.buildingsResolved());
-    if (cmd == "buildprogress" || cmd == "buildbuy" || cmd == "builddismantle" || cmd == "buildforsale") {
+    if (cmd == "buildprogress" || cmd == "buildbuy" || cmd == "builddismantle" || cmd == "buildforsale" || cmd == "buildpause") {
+        // buildpause <name part> [squadIndex]: the PAUSE CONSTRUCTION button of the nearest unfinished building of ours (a client asks the host)
         // buildprogress <name part> <amount>: (host) workers' progress on the nearest unfinished building of ours
         // buildbuy <name part>: confirm buying the nearest building for sale (as its window does)
         // builddismantle <name part>: confirm dismantling the nearest building of ours (as its window does)
@@ -3527,13 +3528,13 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         float amount = 0;
         size_t nearIdx = 0;
         in >> part;
-        if (cmd == "builddismantle") { if (!(in >> nearIdx)) nearIdx = 0; }
+        if (cmd == "builddismantle" || cmd == "buildpause") { if (!(in >> nearIdx)) nearIdx = 0; }
         else in >> amount;
         std::replace(part.begin(), part.end(), '_', ' ');
         auto squad = SortedSquad(w);
         kc::Vec3 me;
         if (nearIdx >= squad.size() || !kenshi::GetPosition(w.FindSquad(squad[nearIdx]), me)) return "err no squad";
-        const int want = cmd == "buildprogress" ? 3 : (cmd == "builddismantle" ? 2 : 1);
+        const int want = cmd == "buildprogress" || cmd == "buildpause" ? 3 : (cmd == "builddismantle" ? 2 : 1);
         void* b = w.NearestBuilding(me, part, 3000.0f, want);
         std::string sid;
         kc::Vec3 p;
@@ -3547,6 +3548,10 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
             if (!s.isHost()) return "err host only";
             HostCallScope scope;
             reinterpret_cast<AmountFn>(kenshi::FnAddr(kenshi::FnAddConstructionProgress))(b, amount);
+            return std::string("ok ") + where;
+        }
+        if (cmd == "buildpause") {   // no HostCallScope: the button's own function, through our hook
+            reinterpret_cast<void (*)(void*, void*)>(kenshi::FnAddr(kenshi::FnTogglePauseConstruction))(b, nullptr);
             return std::string("ok ") + where;
         }
         if (cmd == "buildforsale") return "ok " + std::string(where) + " price=" + std::to_string(reinterpret_cast<PriceFn>(kenshi::FnAddr(kenshi::FnCalculateSaleValue))(b));

@@ -187,13 +187,15 @@ void Session::HostBuildings(double now) {
     // every client (ownership, doors), a dismantling comes back through the construction state.
     for (auto& [pid, a] : std::exchange(pendingBuildActions_, {})) {
         std::string refused;
-        const char* what = a.kind == BuildActionKind::Buy ? "buys" : (a.kind == BuildActionKind::Upgrade ? "upgrades" : "dismantles");
+        const char* what = a.kind == BuildActionKind::Buy ? "buys" : a.kind == BuildActionKind::Upgrade ? "upgrades" :
+                           a.kind == BuildActionKind::Pause ? (a.arg ? "pauses the construction of" : "resumes the construction of") : "dismantles";
         if (!world_.ExecuteBuildAction(a, refused)) {
             log_("[" + nameOf(pid) + "] " + what + " " + world_.TemplateName(a.sid) + ": refused (" + (refused.empty() ? "not found" : refused) + ")");
             tell(pid, refused.empty() ? "Ce bâtiment est introuvable chez l'hôte." : refused);
             continue;
         }
         log_("[" + nameOf(pid) + "] " + what + " " + world_.TemplateName(a.sid));
+        if (a.kind == BuildActionKind::Pause) nextBuildStates_ = 0;   // its new state goes out now, not within the second
         if (a.kind == BuildActionKind::Buy || a.kind == BuildActionKind::Upgrade) {   // replayed by every client on its copy
             Writer w;
             Encode(w, a);
@@ -306,8 +308,19 @@ void Session::ClientBuildings(double now) {
         Writer w;
         Encode(w, a);
         SendReliable(net_.serverPeer(), w);
-        log_(std::string(a.kind == BuildActionKind::Buy ? "purchase" : (a.kind == BuildActionKind::Upgrade ? "upgrade" : "dismantling")) + " of " +
-             world_.TemplateName(a.sid) + " asked of the host");
+        log_(std::string(a.kind == BuildActionKind::Buy ? "purchase" : a.kind == BuildActionKind::Upgrade ? "upgrade" :
+                         a.kind == BuildActionKind::Pause ? (a.arg ? "construction pause" : "construction resume") : "dismantling") +
+             " of " + world_.TemplateName(a.sid) + " asked of the host");
+        // Pause: shown here at once (the button's caption); the host's next state of this site confirms it, or
+        // puts ours back when the host refused (its full round, 10 s at most)
+        Handle h;
+        if (a.kind != BuildActionKind::Pause || !world_.FindBuilding(a.sid, a.pos, h)) continue;
+        for (auto& [id, b] : buildings_)
+            if (b.resolved && b.handle == h && b.flags != 0xFF) {
+                b.haveWant = true;
+                b.wantProgress = b.progress;
+                b.wantFlags = uint8_t(a.arg ? b.flags | kSitePaused : b.flags & ~kSitePaused);
+            }
     }
     // The host's new buildings: built here the same way (unless we already have it: a save).
     for (const auto& p : hostPlaces_) {

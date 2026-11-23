@@ -5348,6 +5348,65 @@ def exp_dismantle(host, cli, kinds=("Lit", "Feu", "Coffre")):
     summary()
 
 
+def exp_suspend(host, cli, kinds=("Lit", "Feu", "Coffre")):
+    """0.3.14 ('le client ne peut pas suspendre la construction'): the PAUSE CONSTRUCTION button of a site's
+    panel (buildpause: the button's own function, through the mod's hook). The client pauses and resumes its
+    site, then the host pauses it and the client resumes it: the same state on both sides every time."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own_c = own_index(cli)
+    sid = None
+    for k in kinds:
+        parts = cmd(host, f"buildtypes {k}")[1].split()
+        if parts[:1] == ["ok"] and len(parts) > 2:
+            sid = parts[2].split("=")[0]
+            break
+    check("suspendre : un modele trouve", sid is not None, sid)
+    if not sid:
+        summary()
+        return
+
+    def sites(pid):
+        t = cmd(pid, f"buildlist {sid} 3000 {own_c}")[1]
+        return [e for e in t.split()[2:] if e.startswith(sid + "@")]
+
+    def paused(pid):
+        """The nearest one's paused bit (flags 2), None when there is none or it is finished (flags 1)."""
+        s = sites(pid)
+        flags = int(s[0].rsplit("/", 1)[1]) if s else 1
+        return None if flags & 1 else bool(flags & 2)
+
+    def both(want, label, seconds=5):
+        for _ in range(seconds * 4):
+            if paused(host) is want and paused(cli) is want:
+                break
+            time.sleep(0.25)
+        check(f"suspendre : {label}", paused(host) is want and paused(cli) is want, f"host {sites(host)[:1]} / client {sites(cli)[:1]}")
+
+    log("open desert:", go_to_open_desert(host, sid))
+    cmd(cli, f"camto {own_c}")
+    time.sleep(3)
+    before = len(sites(host))
+    log("client places", sid, place_valid(cli, sid, own_c, 25, 0))
+    for _ in range(20):
+        time.sleep(0.5)
+        if len(sites(host)) > before and sites(cli):
+            break
+    both(False, "chantier du client pose partout, pas en pause")
+    log("client: pause button", cmd(cli, f"buildpause {sid} {own_c}"))
+    both(True, "le client suspend, en pause chez l'hote et chez lui")
+    time.sleep(12)   # past the host's full round of states: still paused everywhere
+    both(True, "toujours en pause apres 12 s")
+    log("client: pause button again", cmd(cli, f"buildpause {sid} {own_c}"))
+    both(False, "le client reprend, repris partout")
+    log("host: pause button", cmd(host, f"buildpause {sid} {own_c}"))
+    both(True, "l'hote suspend, vu chez le client")
+    log("client: pause button", cmd(cli, f"buildpause {sid} {own_c}"))
+    both(False, "le client reprend le chantier suspendu par l'hote")
+    summary()
+
+
 def exp_tpdown(host, cli):
     """Admin TP of the client's character while it lies knocked out: it moves next to the host's squad
     member 0, lies down again there, and the client sees it there."""
@@ -10893,7 +10952,8 @@ def main():
                            ("wornrebuild", "0.3.5 lot 4 (point 3): worn clothes rebuilt on the client, one reasoned line a minute at most"),
                            ("nightitems", "0.3.5 lot 4: every experiment above in a row"),
                            ("limbs", "0.3.12: a severed limb made, its client copy destroyed, picked up by the host: nobody crashes"),
-                           ("dismantle", "0.3.13: the client dismantles its own building, right-click order then with confirmation")):
+                           ("dismantle", "0.3.13: the client dismantles its own building, right-click order then with confirmation"),
+                           ("suspend", "0.3.14: the client pauses and resumes a construction site (PAUSE CONSTRUCTION button), then the host")):
         np_ = sub.add_parser(name, help=helptext)
         np_.add_argument("--save", default="kctest_base")
         np_.add_argument("--keep", action="store_true")
@@ -11501,7 +11561,7 @@ def main():
             exp_trace(host, cli)
         elif a.what == "playerstats":   # 0.3.5
             exp_playerstats(host, cli)
-        elif a.what in ("storagetake", "storagejob", "storagetypes", "upgrade", "buildingpeek", "farmwater", "teampack", "teamtrade", "lootground", "wornrebuild", "nightitems", "limbs", "dismantle"):
+        elif a.what in ("storagetake", "storagejob", "storagetypes", "upgrade", "buildingpeek", "farmwater", "teampack", "teamtrade", "lootground", "wornrebuild", "nightitems", "limbs", "dismantle", "suspend"):
             globals()["exp_" + a.what](host, cli)   # 0.3.5 lot 4 (night-items)
         elif a.what == "walk":
             exp_walk(host, cli)

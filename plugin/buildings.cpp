@@ -860,6 +860,24 @@ bool KenshiWorld::NoteUiUpgrade(void* b, int variant) {
     return client_;
 }
 
+// 0.3.14: the PAUSE CONSTRUCTION button (Building vt 0x2A8, 0x546F40) only flips ConstructionState +1 of the
+// copy it is clicked on. A client asks the host for the state it wants (the opposite of what it shows, not a
+// toggle: a click repeated before the answer asks for the same thing); the session shows it here at once.
+// The host's own click runs in its game and goes out with the construction states.
+bool KenshiWorld::NoteUiPause(void* b) {
+    if (!client_ || !IsBuilding(b) || !IsOurs(b)) return false;
+    void* st = BuildState(b);
+    uint8_t paused = 0;
+    kc::BuildAction a;
+    a.kind = kc::BuildActionKind::Pause;
+    if (!st || !Rd(st, CS_paused, paused) || !KindAndPlace(b, a.sid, a.pos)) return false;
+    a.arg = paused ? 0 : 1;
+    Log("construction %s of %s clicked here: asked of the host", a.arg ? "pause" : "resume", a.sid.c_str());
+    std::lock_guard<std::mutex> lk(buildMutex_);
+    if (localBuildActions_.size() < 32) localBuildActions_.push_back(std::move(a));
+    return true;
+}
+
 void KenshiWorld::NoteHostBought(void* building) {
     if (ForSale(building)) return;   // the purchase did not go through (not enough cats)
     NoteLocalBuildAction(building, kc::BuildActionKind::Buy, kAnswerYes);
@@ -898,6 +916,15 @@ bool KenshiWorld::ExecuteBuildAction(const kc::BuildAction& a, std::string& refu
     if (!IsOurs(b)) {
         refused = "Ce bâtiment n'est pas à nous.";
         return false;
+    }
+    if (a.kind == kc::BuildActionKind::Pause) {   // what the game's button writes (0x546F40), without its click sound
+        void* st = BuildState(b);
+        uint8_t complete = 1;
+        if (!st || !Rd(st, CS_complete, complete) || complete) {
+            refused = "Ce chantier est déjà terminé.";
+            return false;
+        }
+        return Wr(st, CS_paused, uint8_t(a.arg ? 1 : 0));
     }
     if (a.kind == kc::BuildActionKind::Upgrade) {
         void* fn = UpgradeSlot(b, a.arg == 2 ? 0x260 : 0x258);

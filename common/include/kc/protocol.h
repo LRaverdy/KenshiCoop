@@ -973,7 +973,9 @@ struct BuildRemove {
     std::string sid;
     Vec3 pos;
 };
-enum class BuildActionKind : uint8_t { Buy = 1, Dismantle = 2, Upgrade = 3 };   // Upgrade (0.3.7): arg = 1 or 2, the building's upgrade function (vtable slot 0x258 or 0x260)
+// Upgrade (0.3.7): arg = 1 or 2, the building's upgrade function (vtable slot 0x258 or 0x260).
+// Pause (0.3.14): arg = 1 pause / 0 resume a construction site (client -> host only; a host before 0.3.14 drops it).
+enum class BuildActionKind : uint8_t { Buy = 1, Dismantle = 2, Upgrade = 3, Pause = 4 };
 struct BuildAction {
     BuildActionKind kind = BuildActionKind::Buy;
     int32_t arg = 0;             // the confirmation dialog's answer

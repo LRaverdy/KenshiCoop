@@ -915,7 +915,7 @@ const MessageRule kMessageRules[] = {
     {Msg::DialogReply, AuthRole::InGame, AuthSubject::OwnConversation, "answer in a conversation"},
     {Msg::InvOp, AuthRole::InGame, AuthSubject::Inventory, "move an item"},
     {Msg::BuildPlace, AuthRole::InGame, AuthSubject::None, "place a building"},
-    {Msg::BuildAction, AuthRole::InGame, AuthSubject::None, "buy or dismantle a building"},
+    {Msg::BuildAction, AuthRole::InGame, AuthSubject::None, "buy, dismantle, upgrade or pause a building"},
     {Msg::DoorRequest, AuthRole::InGame, AuthSubject::None, "door button"},
     {Msg::EditState, AuthRole::Connected, AuthSubject::None, "character editor open/closed"},
     {Msg::ClientLog, AuthRole::Connected, AuthSubject::None, "log lines"},
@@ -1882,7 +1882,7 @@ void Encode(Writer& w, const BuildAction& m) {
 }
 bool Decode(Reader& r, BuildAction& m) {
     const uint8_t k = r.u8();
-    if (k < 1 || k > 3) return false;
+    if (k < 1 || k > 4) return false;
     m.kind = BuildActionKind(k);
     m.arg = r.i32();
     m.sid = r.str(kMaxSidLen);

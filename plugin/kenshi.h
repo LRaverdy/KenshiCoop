@@ -340,6 +340,8 @@ enum Fn : int {
     FnGroupSpeed,               // float <movement group>::slowestWalkingSpeed(bool)   (our name, 0x7F5740: "run at the same pace" = the smallest +0xB4 of the group's members; a member whose movement is gone is a null read at 0x14B286, the crash of 23/10 and 26/10)
     FnUpgradeThunkA,            // void <delegate thunk>(Building*, Widget*)   (our name, 0x313D50: `mov rax,[rcx]; jmp [rax+258h]`, what a MyGUI delegate on a virtual member calls: for a Building, its upgrade (0x2A49E0))
     FnUpgradeThunkB,            // the same <delegate thunk> for vtable slot 0x260 (0x313D90, a Building's second upgrade function 0x2A4DB0)
+    // ---- 0.3.14: a site's PAUSE CONSTRUCTION button
+    FnTogglePauseConstruction,  // void Building::<togglePauseConstruction>(Widget*)   (our name, 0x546F40, vt 0x2A8 of every building class: a click sound, then ConstructionState +1 = !paused)
     FnCount
 };
 extern const FunctionSig kFunctions[FnCount];

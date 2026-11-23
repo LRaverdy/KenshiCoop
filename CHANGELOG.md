@@ -4,6 +4,21 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
+## Non publié (branche `fix-client-suspend-build`)
+
+Protocole inchangé (36). Compilé, tests unitaires 55 585/55 585 ; **pas encore testé en jeu** (`coop_test.py suspend`).
+
+- **Un client ne pouvait pas suspendre une construction** (signalé le 23/11) : le bouton « PAUSE CONSTRUCTION »
+  du panneau d'un chantier n'inversait l'octet « en pause » que sur la copie du client (`Building` vt 0x2A8,
+  `0x546F40`) ; les ouvriers de l'hôte continuaient, et l'état de l'hôte ne revenait jamais corriger le client.
+  Le clic d'un client est maintenant demandé à l'hôte (`BuildAction`, nouveau genre `Pause` = 4, l'état voulu
+  et non une bascule) ; son panneau le montre tout de suite, l'hôte l'exécute et l'envoie à tout le monde dans
+  l'instant. Une demande refusée par l'hôte (chantier fini, pas à nous) est défaite chez le client au plus tard
+  10 s après. La pause mise par l'hôte était déjà envoyée aux clients. Avec un hôte plus ancien, la demande est
+  ignorée (comme avant).
+- Tests : `TestWire` (genre `Pause`, genre inconnu refusé), `TestBuildings` (pause et reprise par le client,
+  par l'hôte, demande refusée défaite) ; commande de test `buildpause`, expérience `suspend`.
+
 ## v0.3.13 (7 novembre 2026)
 
 Protocole inchangé (36). Corrections issues de l'audit des plantages (7 auditeurs, chaque point contre-vérifié

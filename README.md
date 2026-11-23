@@ -91,7 +91,8 @@ Raccourcis (Kenshi au premier plan) :
 
 Chacun ne peut commander que ses personnages. Côté client, **tous les ordres** sont transmis à
 l'hôte, qui les fait exécuter par le personnage concerné : déplacement, fouille, premiers soins,
-porter, dormir, portes, machines et mines (avec leur fenêtre de production), démonter, parler…
+porter, dormir, portes, machines et mines (avec leur fenêtre de production), démonter, suspendre
+ou reprendre un chantier, parler…
 Exceptions pour l'instant : le **commerce** et le
 recrutement au centre d'emploi, refusés avec un message.
 

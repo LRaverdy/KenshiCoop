@@ -441,7 +441,7 @@ Chaque numéro n'apparaît qu'une fois. Les numéros libres (42, 45, 48, 50, 51,
 | 53 | BuildState | H→C | lot E : avancement des chantiers suivis (terminé, en pause, en démontage), avec type et endroit |
 | 54 | BuildRemove | H→C | lot E : un bâtiment suivi a été détruit pour de bon chez l'hôte |
 | 87 | BuildMaterials | H→C | 0.3.1 : matériaux apportés aux chantiers suivis (dans l'ordre de la liste du jeu), ce que montre la jauge ; ignoré par un client 0.3.0 (type inconnu), sans changement de version du protocole |
-| 55 | BuildAction | ⇄ | lot E : acheter / démonter (client : demande ; hôte : rejeu d'un achat chez tous) |
+| 55 | BuildAction | ⇄ | lot E : acheter / démonter / améliorer / suspendre ou reprendre un chantier (genre 4, client → hôte seulement) (client : demande ; hôte : rejeu d'un achat ou d'une amélioration chez tous) |
 | 56 | Research | H→C | atelier (protocole 34) : la recherche de la faction du joueur : technologies connues (plans lus compris), file dans l'ordre et avancement, niveau du banc |
 | 57 | ResearchRequest | C→H | atelier : mettre en file / retirer une technologie, apprendre un plan (acteur : le perso du joueur ; règle `OwnCharacter`) |
 | 58 | Machines | H→C | atelier : machines des joueurs près d'eux (et celles qu'un perso de joueur travaille) : opérateurs, marche / batterie, énergie, charge, barre de progression, production, ordres de fabrication et « répéter », netId de leur inventaire, cultures d'une ferme (`kMachFarm` : étape, plants, récoltés, pousse, pourriture, nettoyage ; protocole 36) ; totaux d'énergie de leur ville |
