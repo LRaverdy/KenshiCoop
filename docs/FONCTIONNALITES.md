@@ -1457,7 +1457,7 @@ la fenêtre du client.
   refusé par l'hôte (cible absente chez lui…) ne l'annule plus (0.3.4) ; le marchand d'une ville chargée après l'arrivée du client reçoit le
   bâtiment de ses comptoirs (`GiveShopHome`, cherché autour des comptoirs).
 
-### Recherche, fabrication, mines et machines, énergie 🟡 (implémenté, protocole 34, tests unitaires ; à vérifier en jeu)
+### Recherche, fabrication, mines et machines, énergie 🟢 (protocole 34 ; fabrication vérifiée en jeu le 23/11)
 - **Ce qui existait avant** : rien de propre à la recherche ni à la fabrication. Les ordres
   (travailler une machine, miner) passaient déjà par l'hôte, et l'inventaire d'un établi n'était
   synchronisé que pendant qu'un joueur l'avait ouvert. Chez le client, les opérateurs d'une mine
@@ -1496,7 +1496,14 @@ la fenêtre du client.
   bâtiment de production autre qu'un établi (les bâtiments de production de Kenshi ont un produit
   fixe).
 - Expérience `research` (« recherche : … », « fabrication : … », « mine : … », « energie : … »),
-  test unitaire `TestWorkshop`. Pas encore lancé en jeu.
+  test unitaire `TestWorkshop`.
+- **Vérifié en jeu le 23/11** (expérience `craft`, copie de la partie du 16/11, 25/28, voir docs/TESTS.md) :
+  ordres mis en file par le client ; arme, armure de cuir et cuir tanné faits par ses persos, vêtement et
+  armure lourde par ceux de l'hôte ; ouvrier, avancement, courant et contenu des établis identiques des deux
+  côtés (modèle, matériau, fabricant, niveau, qualité) ; objet pris par le perso du client. Une arme se commande
+  avec son modèle (ce que passe la fenêtre du jeu). Reste à voir : le clic réel dans la fenêtre Fabrication d'un
+  client, arbalètes et robotique, et la ligne « ville » des totaux d'énergie (`machine … town=` absente même
+  dans la vraie base, alors que chaque établi reçoit bien son courant).
 
 ### Travaux de base aux persos de chaque joueur (postes) 🟡 (v0.3.2, protocole 36 ; corrigé dans le code, à tester en jeu)
 - **Comment l'ordre arrive** : clic droit sur le poste (tâche 87 « utiliser », ou 152 sans place

@@ -1080,11 +1080,29 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
         if (const kc::MachineState* known = s.knownMachine(key); known && !s.isHost()) o << " host=" << CropText(known->crop);
         return o.str();
     }
+    if (cmd == "invfull") {   // invfull <squadIndex>: that member's items, sid/material/manufacturer/level/quality:qty (sorted; 23/11, crafted items)
+        size_t idx = 0;
+        in >> idx;
+        kc::Vec3 p;
+        kenshi::Character* c = squadAt(idx, p);
+        std::vector<kc::ItemState> items;
+        if (!c || !kenshi::ReadInventory(c, items)) return "err no such squad member";
+        std::map<std::string, int> by;
+        char q[32];
+        for (const auto& it : items) {
+            std::snprintf(q, sizeof(q), "%.1f", double(it.quality));
+            by[it.templateSid + "/" + it.materialSid + "/" + it.manufacturerSid + "/" + std::to_string(it.level) + "/" + q] += it.quantity;
+        }
+        std::string list;
+        for (const auto& [k, n] : by) list += (list.empty() ? "" : ",") + k + ":" + std::to_string(n);
+        return "ok items=" + list;
+    }
     if (cmd == "storage") {
         // storage <part>: the object with an inventory (storage, chest, machine) nearest to squad member
         // 0 whose name or sid holds part: "ok key stacks=n total=q ih=hash items=sid:qty,..." (sorted)
-        std::string part;
-        in >> part;
+        // "full" (23/11, crafted items): each stack as sid/material/manufacturer/level/quality@section:qty
+        std::string part, opt;
+        in >> part >> opt;
         std::replace(part.begin(), part.end(), '_', ' ');
         kc::Vec3 me;
         if (!squadAt(0, me)) return "err no squad";
@@ -1109,6 +1127,14 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
         for (const auto& it : items) {
             bySid[it.templateSid] += it.quantity;
             total += it.quantity;
+        }
+        if (opt == "full") {
+            bySid.clear();
+            char q[32];
+            for (const auto& it : items) {
+                std::snprintf(q, sizeof(q), "%.1f", double(it.quality));
+                bySid[it.templateSid + "/" + it.materialSid + "/" + it.manufacturerSid + "/" + std::to_string(it.level) + "/" + q + "@" + it.section] += it.quantity;
+            }
         }
         std::string list;
         for (const auto& [k, q] : bySid) {
@@ -1205,7 +1231,9 @@ std::string WorkshopCommand(kc::Session& s, KenshiWorld& w, std::istringstream& 
         std::string why;
         // 0.3.4: every section of the machine, not only the first one (13/10 workstations and
         // machineout runs: "no room" for the stove, whose first section did not take that item)
-        const std::vector<std::string> sections = kenshi::SectionNames(b);
+        std::vector<std::string> sections = kenshi::SectionNames(b);
+        // 23/11: inputs first: "out" takes anything, and a bench whose output is full of fabric does not work
+        std::stable_partition(sections.begin(), sections.end(), [](const std::string& x) { return x != "out"; });
         // 17/10: made right in the machine's section (kenshi::GiveNewItemInto), never through member 0's
         // bag: a full bag left the new item where the game's give put it and the host crashed
         for (const auto& sid : cands) {

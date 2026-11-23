@@ -10281,6 +10281,218 @@ def exp_research(host, cli):
     summary()
 
 
+# ---- crafting by the players' characters: weapons, armour, clothes, fabric, leather (23 November)
+WEAPON_SMITH = "2033-gamedata.base"       # Armurerie (Weapon Smith I)
+HEAVY_ARMOUR_SMITH = "2257-gamedata.base"
+LEATHER_ARMOUR_BENCH = "2262-gamedata.base"
+CLOTHING_BENCH = "2929-gamedata.base"
+TANNING_BENCH = "2927-gamedata.base"
+HEMP_LOOM = "2016-gamedata.base"
+IRON_PLATES, LEATHER, HEMP, ARMOUR_PLATING = "42159-gamedata.base", "2292-gamedata.base", "1965-gamedata.base", "2288-gamedata.base"
+ANIMAL_SKINS = ("42241-rebirth.mod", "Peau_Animal", "Animal_Skin")
+# label, bench, (dx, dz) around squad member 0, materials (each: the first that goes in), order (base, material) or
+# None for a production bench, product sid, who works it
+CRAFT_POSTS = (
+    ("arme", WEAPON_SMITH, (-200, -150), ((IRON_PLATES,),), ("1020-gamedata.base", "1058-gamedata.base"), "1020-gamedata.base", "client"),   # Wakizashi, Catun No.1
+    ("armure cuir", LEATHER_ARMOUR_BENCH, (0, -150), ((LEATHER,), (FABRICS,)), ("2283-gamedata.base", ""), "2283-gamedata.base", "client"),
+    ("cuir", TANNING_BENCH, (-100, 150), (ANIMAL_SKINS,), None, LEATHER, "client"),
+    ("tissu", HEMP_LOOM, (-200, 150), ((HEMP,),), None, FABRICS, "client"),
+    ("vetement", CLOTHING_BENCH, (100, -150), ((FABRICS,),), ("1168-gamedata.base", ""), "1168-gamedata.base", "hote"),
+    ("armure lourde", HEAVY_ARMOUR_SMITH, (-100, -150), ((ARMOUR_PLATING,), (LEATHER,), (FABRICS,)), ("2148-gamedata.base", ""), "2148-gamedata.base", "hote"),
+)
+
+
+def stock(pid, sid):
+    """{item sid: quantity} of that bench here (debug 'storage')."""
+    t = cmd(pid, f"storage {sid}")[1]
+    d = {}
+    for x in t.split("items=")[-1].split(",") if "items=" in t else ():
+        k, _, q = x.rpartition(":")
+        if k:
+            d[k] = int(q)
+    return d
+
+
+def kill_npcs_near(host, radius=3000):
+    """Sandbox: every living character near the squad that is not a squad member is killed on the host
+    (23/11: starving slaves and beak things kept pulling the workers off their benches), squad healed."""
+    d = dump(host, "npc_sweep", radius=radius)
+    n = 0
+    for k, v in d["char"].items():
+        if k in d["squad"] or int(v.get("vflags", "0") or 0) & 2:
+            continue
+        n += cmd(host, f"kill {k}")[0]
+    if n:
+        log(f"   sandbox: {n} character(s) near the squad killed")
+        cmd(host, "console heal all")
+    return n
+
+
+def exp_craft(host, cli, minutes=8.0, inplace=False):
+    """Crafting by every player's characters, as the host's: the host unlocks every technology, places a
+    weapon smith, armour benches, a clothing bench, a tanning bench and a hemp loom, and fills them.
+    The CLIENT queues the orders (the crafting window's request) and its own characters (its own and
+    three given to it) work the weapon smith, the leather armour bench, the tanning bench and the loom;
+    the host's work the clothing bench and the heavy armour smith. At x3 until each has made its
+    product: the worker shows on both sides, the product is in the bench on the host, the bench holds
+    the same items on both sides (template, material, manufacturer, level), then each client character
+    takes its product: same inventory on both sides.
+    inplace (--inplace, with a save standing in a real player base): everything is placed where the squad
+    stands and nobody near is killed. In open desert the benches belong to no town: no power, "efficacité
+    0 %", every order stays at 0.00 (23/11 runs 2 and 3); only the hand loom works there."""
+    time.sleep(6)
+    cmd(cli, "editdone")
+    time.sleep(3)
+    own = own_index(host)
+    SANDBOX["home"] = None
+    log("heal, god mode, skills:", cmd(host, "console heal all"), cmd(host, "console god all"), cmd(host, "console xp all 60"))
+    time.sleep(4)
+    if not inplace:
+        out = move_squad_out_of_town(host)
+        check("craft : escouade hors des villes", out, "")
+        if not out:
+            summary()
+            return
+        kill_npcs_near(host)
+    n = squad_size(host)
+    # three more characters for the client: four benches worked by a client at once
+    given = [i for i in range(1, n) if i != own][-3:]
+    for i in given:
+        log("host gives member", i, "to the client:", cmd(host, f"give 2 {i}"))
+    cli_workers = [own] + given
+    host_workers = [i for i in range(n) if i not in cli_workers]
+    log("client's characters:", cli_workers, "| host's:", host_workers)
+    # ---- every technology on the host: known by the client too (crafting lists unlocked)
+    log("host completes every technology:", cmd(host, "researchall"))
+    same = False
+    rh = rc = ch = cc = ""
+    for _ in range(20):
+        time.sleep(1.5)
+        rh, rc = cmd(host, "research")[1], cmd(cli, "research")[1]
+        ch, cc = cmd(host, "craftlist 0")[1], cmd(cli, "craftlist 0")[1]
+        if rh == rc and ch == cc:
+            same = True
+            break
+    check("craft : recherche et liste de fabrication identiques chez le client", same, f"{rh[:70]} / {rc[:70]} | {ch} / {cc}")
+    # ---- the benches (host sandbox), their materials
+    posts = []
+    for label, sid, (dx, dz), materials, order, product, who in CRAFT_POSTS:
+        if not sandbox_building(host, sid, dx, dz, label):
+            check(f"craft : {label} : etabli pose", False, sid)
+            continue
+        for whats in materials:
+            for what in whats:
+                r = cmd(host, f"machinegive {sid} {what} 8")
+                log("   into", label, what, r)
+                if r[0]:
+                    break
+        posts.append({"label": label, "sid": sid, "order": order, "product": product, "who": who, "seen": False, "done": False, "retries": 0})
+    # ---- power (23/11: without it every bench but the hand loom stood at "efficacité 0 %", orders at 0.00)
+    for i, (dx, dz) in enumerate(((-250, 0), (-150, 0), (150, 0), (250, 0))):
+        sandbox_building(host, WIND_GENERATOR, dx, dz, f"generator {i + 1}")
+    sandbox_building(host, BATTERY_BANK, 60, 60, "battery")
+    time.sleep(6)
+    for pst in posts:   # what the bench held before any work (leather and fabric are inputs elsewhere)
+        pst["before"] = stock(host, pst["sid"]).get(pst["product"], 0)
+    # ---- the client queues every order (its crafting window's request), the host's game takes them
+    for pst in posts:
+        if pst["order"]:
+            base, mat = pst["order"]
+            log(f"client orders {base} on {pst['label']}:", cmd(cli, f"machinereq {pst['sid']} addcraft {base} {mat}".strip()))
+    time.sleep(5)
+    for pst in posts:
+        if pst["order"]:
+            mh = mfields(cmd(host, f"machine {pst['sid']}")[1])
+            okq = pst["order"][0] in mh.get("crafts", "")
+            ok, last = machine_both(host, cli, pst["sid"], pst["label"])
+            check(f"craft : {pst['label']} : ordre du client dans la file de l'hote, meme file partout", okq and ok, f"{mh.get('crafts')} | {last[2] if len(last) > 2 else ''}")
+    # ---- to work: a right click on the bench (task 87), each by its player
+    cw, hw = list(cli_workers), list(host_workers[::-1])   # member 0 (the anchor) last
+    for pst in posts:
+        pool, pid = (cw, cli) if pst["who"] == "client" else (hw, host)
+        pst["worker"] = pool.pop(0) if pool else None
+        pst["pid"] = pid
+        if pst["worker"] is not None:
+            log(f"{pst['who']}: member {pst['worker']} works {pst['label']}:", cmd(pid, f"workreq {pst['worker']} {pst['sid']}"))
+    log("speed x3:", cmd(host, "speed 3"))
+    start = time.time()
+    powered = False
+    while time.time() - start < minutes * 60 and not all(p_["done"] for p_ in posts if p_["worker"] is not None):
+        time.sleep(6)
+        if not inplace:
+            kill_npcs_near(host)
+        if not powered:   # a bench draws power once someone works it
+            ok, last = machine_both(host, cli, WEAPON_SMITH, "weapon smith power", tries=1)
+            powered = ok and float(mfields(last[0]).get("power", 0)) > 0
+        for pst in posts:
+            if pst["done"] or pst["worker"] is None:
+                continue
+            mh, mc = mfields(cmd(host, f"machine {pst['sid']}")[1]), mfields(cmd(cli, f"machine {pst['sid']}")[1])
+            if mh.get("ops", "0").startswith("1") and mh.get("ops") == mc.get("ops") and mh.get("names") == mc.get("names"):
+                pst["seen"] = True
+            have = stock(host, pst["sid"]).get(pst["product"], 0)
+            if have > pst["before"] and (not pst["order"] or not mh.get("crafts")):
+                pst["done"] = True
+                log(f"{pst['label']}: made on the host ({pst['before']} -> {have}) after {int(time.time() - start)} s")
+            elif mh.get("ops", "0").startswith("0") and "tasks=0" in cmd(host, f"charstate {pst['worker']}")[1] and pst["retries"] < 6:
+                pst["retries"] += 1   # pulled off its bench (a fight): the same right click again
+                log(f"   {pst['label']}: member {pst['worker']} has no task, ordered again:", cmd(pst["pid"], f"workreq {pst['worker']} {pst['sid']}"))
+            else:
+                log(f"   {pst['label']}: host ops={mh.get('ops')} names={mh.get('names')} crafts={mh.get('crafts')} prod={mh.get('prod')} power={mh.get('power')} | client ops={mc.get('ops')} crafts={mc.get('crafts')}")
+    log("speed x1:", cmd(host, "speed 1"))
+    time.sleep(4)
+    check("craft : etabli alimente, meme courant chez l'hote et le client", powered, cmd(host, f"machine {WEAPON_SMITH}")[1][:160])
+    # ---- what was made, on both sides
+    for pst in posts:
+        lab = f"craft : {pst['label']} ({pst['who']})"
+        if pst["worker"] is None:
+            continue
+        check(f"{lab} : le perso au travail, vu pareil chez l'hote et le client", pst["seen"], cmd(host, f"machine {pst['sid']}")[1][:160])
+        check(f"{lab} : objet fabrique chez l'hote", pst["done"], cmd(host, f"storage {pst['sid']} full")[1][:300])
+        sh = sc = ""
+        for _ in range(8):
+            sh, sc = cmd(host, f"storage {pst['sid']} full")[1], cmd(cli, f"storage {pst['sid']} full")[1]
+            if sh == sc:
+                break
+            time.sleep(1.5)
+        log(f"{pst['label']}: bench on the host:", sh.split("items=")[-1][:400])
+        check(f"{lab} : meme contenu de l'etabli partout (objet, materiau, fabricant, niveau)", sh == sc and sh.startswith("ok"), f"{sh[-300:]} / {sc[-300:]}")
+        if pst["who"] != "client" or not pst["done"]:
+            continue
+        # the client's character takes its product out of the bench (the window's move, asked of the host)
+        w = pst["worker"]
+        # (a worker of a real base goes back to its permanent jobs once the order is made: it walks back, at x3)
+        cmd(host, "speed 3")
+        log(f"client opens {pst['label']}:", cmd(cli, f"containerreq {w} {pst['sid']}"))
+        opened = False
+        for _ in range(60):
+            time.sleep(1)
+            if "windows=0" not in cmd(cli, "tradestate")[1]:
+                opened = True
+                break
+        cmd(host, "speed 1")
+        took = cmd(cli, f"contake {w} {pst['sid']} {pst['product']}") if opened else (False, "window not opened: " + cmd(cli, "tradestate")[1])
+        if "no room" in took[1]:   # a miner's full bag: nothing to conclude about the take
+            log(f"NOT TESTED: {lab} : take ({took[1]})")
+            cmd(cli, "closewindows")
+            continue
+        ih = ic = ""
+        for _ in range(8):
+            time.sleep(1.5)
+            ih, ic = cmd(host, f"invfull {w}")[1], cmd(cli, f"invfull {w}")[1]
+            if ih == ic and pst["product"] in ih:
+                break
+        cmd(cli, "closewindows")
+        mine = [x for x in ih.split("items=")[-1].split(",") if x.startswith(pst["product"])]
+        theirs = [x for x in ic.split("items=")[-1].split(",") if x.startswith(pst["product"])]
+        log(f"{pst['label']}: in the client's character on the host:", mine)
+        check(f"{lab} : le perso du client prend l'objet, meme inventaire partout", took[0] and ih == ic and bool(mine), f"{took[1]} | {mine} | {theirs}")
+    sh, sc = cmd(host, f"stats {own}")[1].split()[1], cmd(cli, f"stats {own}")[1].split()[1]
+    check("craft : competences du perso du client identiques partout", sh == sc, f"{sh[:120]} / {sc[:120]}")
+    check("craft : l'hote et le client tournent toujours", alive(host) and alive(cli), "")
+    summary()
+
+
 def exp_playerstats(host, cli):
     """0.3.5 player statistics: the host counts the client's walk and play time, the client gets
     them, the world's file is written (KenshiCoop_stats) and read back when the client comes back
@@ -11233,6 +11445,11 @@ def main():
     rs = sub.add_parser("research", help="workshop: research, crafting benches, mines, power (sandbox set up by the host)")
     rs.add_argument("--save", default="kctest_base")
     rs.add_argument("--keep", action="store_true")
+    cr = sub.add_parser("craft", help="23/11: weapons, armour, clothes, fabric and leather crafted by the client's and the host's characters, compared")
+    cr.add_argument("--save", default="kctest_base")
+    cr.add_argument("--keep", action="store_true")
+    cr.add_argument("--minutes", type=float, default=8.0)
+    cr.add_argument("--inplace", action="store_true", help="in a real base (a save standing in one): no teleport, nobody killed")
     pg = sub.add_parser("progress")
     pg.add_argument("--save", default="kctest_base")
     pg.add_argument("--keep", action="store_true")
@@ -11503,6 +11720,8 @@ def main():
             exp_tradeswap(host, cli, a.merchant)
         elif a.what == "research":
             exp_research(host, cli)
+        elif a.what == "craft":
+            exp_craft(host, cli, minutes=a.minutes, inplace=a.inplace)
         elif a.what == "clientjobs":
             exp_clientjobs(host, cli)
         elif a.what == "admin":

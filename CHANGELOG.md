@@ -4,9 +4,10 @@ Du plus récent au plus ancien. Chaque entrée correspond à un commit (son iden
 parenthèses). L'état détaillé de chaque fonctionnalité est dans
 [docs/FONCTIONNALITES.md](docs/FONCTIONNALITES.md).
 
-## Non publié (branche `fix-client-suspend-build`)
+## v0.3.14 (23 novembre 2026)
 
-Protocole inchangé (36). Compilé, tests unitaires 55 585/55 585 ; **pas encore testé en jeu** (`coop_test.py suspend`).
+Protocole inchangé (36). Tests unitaires 55 585/55 585. Testé en jeu le 23/11 : `coop_test.py suspend` 7/7,
+`coop_test.py craft --save kctest_live --inplace` 25/28 (les 3 échecs viennent du test, voir docs/TESTS.md).
 
 - **Un client ne pouvait pas suspendre une construction** (signalé le 23/11) : le bouton « PAUSE CONSTRUCTION »
   du panneau d'un chantier n'inversait l'octet « en pause » que sur la copie du client (`Building` vt 0x2A8,
@@ -16,6 +17,19 @@ Protocole inchangé (36). Compilé, tests unitaires 55 585/55 585 ; **pas encore
   l'instant. Une demande refusée par l'hôte (chantier fini, pas à nous) est défaite chez le client au plus tard
   10 s après. La pause mise par l'hôte était déjà envoyée aux clients. Avec un hôte plus ancien, la demande est
   ignorée (comme avant).
+- **Fabrication par les persos des clients, vérifiée en jeu** (demande du 23/11 : armes, armures, tissu, cuir ;
+  aucun changement du mod, seulement le test) : nouvelle expérience `craft`. Dans une copie de la partie du
+  16/11 (vraie base, courant), le client met en file un wakizashi, une armure de cuir, une chemise et une plaque
+  de mercenaire ; ses persos forgent l'arme (168 s en x3), l'armure de cuir (219 s) et tannent le cuir (42 s),
+  ceux de l'hôte font la chemise (59 s) et l'armure lourde (235 s). Même ouvrier, même avancement, même courant
+  et même contenu d'établi chez l'hôte et le client (modèle, matériau, fabricant, niveau, qualité) ; l'armure
+  prise par le perso du client est la même dans son inventaire des deux côtés. Les 384 technologies terminées
+  chez l'hôte sont connues du client (253 objets fabricables des deux côtés).
+  Non couvert : le vrai clic de souris sur les boutons de la fenêtre Fabrication d'un client (le test envoie la
+  demande que le crochet de la fenêtre met en file), les établis d'arbalètes et de robotique, la vitesse x1.
+- Commandes de test : `storage <nom> full` et `invfull <i>` (modèle/matériau/fabricant/niveau/qualité),
+  `contake <i> <nom> <objet>` (cet objet et non le premier), `machinegive` remplit les entrées avant la sortie
+  (du tissu dans la sortie d'un établi : « machine pleine », personne n'y travaille).
 - Tests : `TestWire` (genre `Pause`, genre inconnu refusé), `TestBuildings` (pause et reprise par le client,
   par l'hôte, demande refusée défaite) ; commande de test `buildpause`, expérience `suspend`.
 

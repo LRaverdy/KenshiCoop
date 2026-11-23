@@ -2016,6 +2016,12 @@ std::string Execute(kc::Session& s, KenshiWorld& w, bool live, std::istringstrea
         std::vector<kc::ItemState> items;
         kenshi::ReadInventory(best, items);
         if (items.empty()) return "err the container is empty";
+        // 23/11: contake <i> <part> <item sid>: that item (a bench's product, not its first input)
+        if (!wantSid.empty()) {
+            auto it = std::find_if(items.begin(), items.end(), [&](const kc::ItemState& x) { return x.templateSid == wantSid; });
+            if (it == items.end()) return "err no " + wantSid + " in " + bestName;
+            std::swap(items[0], *it);
+        }
         kc::InvOp mv;
         mv.kind = kc::InvOpKind::Move;
         mv.item = items[0];

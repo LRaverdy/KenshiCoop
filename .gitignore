@@ -6,3 +6,4 @@ test_out/
 __pycache__/
 dist/
 .claude/
+.discord-webhook
